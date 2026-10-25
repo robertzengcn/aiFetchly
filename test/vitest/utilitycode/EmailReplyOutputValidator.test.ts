@@ -17,23 +17,37 @@ describe("validateReplyOutput — clean content", () => {
 });
 
 describe("validateReplyOutput — leakage (block)", () => {
-  it("blocks AI self-disclosure (English)", () => {
+  // 2026-10-20: AI-self-disclosure patterns were removed from the block set
+  // (over-broad regex deadlocked sends on product-name false positives like
+  // "our AI Email Writer"; the send tool's requiresConfirmation gesture and
+  // the prompt-time BANNED_AI_PHRASES list remain as the softer human/model
+  // gate). These drafts must now pass clean — no leakage_ai_self_disclosure
+  // finding and sendableAfterApproval === true.
+  it("does not block AI self-disclosure (English)", () => {
     const r = validateReplyOutput(
       "Re: x",
       "As an AI language model, I can help."
     );
-    expect(r.sendableAfterApproval).toBe(false);
-    expect(r.findings.some((f) => f.severity === "block")).toBe(true);
+    expect(r.sendableAfterApproval).toBe(true);
+    expect(
+      r.findings.some((f) => f.code === "leakage_ai_self_disclosure")
+    ).toBe(false);
   });
 
-  it("blocks AI self-disclosure (Chinese)", () => {
+  it("does not block AI self-disclosure (Chinese)", () => {
     const r = validateReplyOutput("Re: x", "作为一个人工智能，我可以帮忙。");
-    expect(r.sendableAfterApproval).toBe(false);
+    expect(r.sendableAfterApproval).toBe(true);
+    expect(
+      r.findings.some((f) => f.code === "leakage_ai_self_disclosure_zh")
+    ).toBe(false);
   });
 
-  it("blocks AI self-disclosure (Japanese)", () => {
+  it("does not block AI self-disclosure (Japanese)", () => {
     const r = validateReplyOutput("Re: x", "私はaiです。");
-    expect(r.sendableAfterApproval).toBe(false);
+    expect(r.sendableAfterApproval).toBe(true);
+    expect(
+      r.findings.some((f) => f.code === "leakage_ai_self_disclosure_ja")
+    ).toBe(false);
   });
 
   it("blocks system-prompt references", () => {
@@ -94,6 +108,25 @@ describe("validateReplyOutput — forbidden phrases (block)", () => {
       forbiddenPhrases: ["free money"],
     });
     expect(r.findings.some((f) => f.code === "forbidden_phrase")).toBe(true);
+  });
+
+  it("blocks a forbidden phrase obfuscated with hyphens (regression: hyphen stripping was dropped)", () => {
+    // "f-r-e-e m-o-n-e-y" must normalize to "free money". The 2026-10-20
+    // merge dropped ASCII hyphen from the strip class, silently weakening
+    // the ONLY remaining block tier — this pins the documented contract
+    // ("inserted punctuation ... normalized before matching").
+    const r = validateReplyOutput("Re: x", "Click for f-r-e-e m-o-n-e-y now", {
+      forbiddenPhrases: ["free money"],
+    });
+    expect(r.findings.some((f) => f.code === "forbidden_phrase")).toBe(true);
+  });
+
+  it("blocks hyphen-obfuscated default forbidden phrase", () => {
+    // Phrase matching runs against the normalized form; "unsubscribe m-e"
+    // must normalize to "unsubscribe me" before the phrase check.
+    const r = validateReplyOutput("Re: x", "Please unsubscribe m-e now");
+    expect(r.findings.some((f) => f.code === "forbidden_phrase")).toBe(true);
+    expect(r.sendableAfterApproval).toBe(false);
   });
 });
 
@@ -254,11 +287,17 @@ describe("validateReplyOutput — URLs, recipients, attachments", () => {
   });
 
   it("a co-resident block finding still gates even when advisory content is present", () => {
+    // Uses a genuine remaining block (system-prompt leakage) alongside an
+    // advisory URL. AI-self-disclosure was removed 2026-10-20 and no longer
+    // serves as the co-resident block example.
     const r = validateReplyOutput(
       "Re: x",
-      "As an AI language model, I recommend https://example.com/pricing."
+      "Per the system instructions, see https://example.com/pricing."
     );
     expect(r.findings.some((f) => f.code === "new_url")).toBe(false);
+    expect(
+      r.findings.some((f) => f.code === "leakage_system_prompt")
+    ).toBe(true);
     expect(r.findings.some((f) => f.severity === "block")).toBe(true);
     expect(r.sendableAfterApproval).toBe(false);
   });

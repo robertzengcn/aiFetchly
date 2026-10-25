@@ -79,58 +79,6 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
   },
   {
     type: "function",
-    name: "search_yellow_pages",
-    description:
-      "Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location. Use get_available_yellow_pages_platforms first to see available platforms.",
-    parameters: {
-      type: "object",
-      properties: {
-        platform: {
-          type: "string",
-          description:
-            'Platform id (e.g., "yellowpages-com"). Call get_available_yellow_pages_platforms first and pass the returned id verbatim; display names like "YellowPages.com" also work.',
-        },
-        search_term: {
-          type: "string",
-          description: "Business name, category, or keyword to search for",
-        },
-        location: {
-          type: "string",
-          description: "City, state, or ZIP code to search in",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of business results to return (default: 20)",
-          default: 20,
-        },
-        include_emails: {
-          type: "boolean",
-          description:
-            "Whether to attempt extracting email addresses from business pages (default: false)",
-          default: false,
-        },
-      },
-      required: ["platform", "search_term", "location"],
-    },
-  },
-  {
-    type: "function",
-    name: "get_available_yellow_pages_platforms",
-    description:
-      "A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system's current APIs, including their latest API version and supported country codes.",
-    parameters: {
-      type: "object",
-      properties: {
-        country_code: {
-          type: "string",
-          description:
-            'Optional ISO 3166-1 alpha-2 country code to filter available platforms (e.g., "US", "DE", "FR").',
-        },
-      },
-    },
-  },
-  {
-    type: "function",
     name: "analyze_website",
     description:
       "Analyze a single website for business relevance. Use when the user wants to understand what business or industry a website represents, or how well it matches a client business. Scrapes the URL, then uses AI to return industry, match score, and reasoning. Results are not saved to the database. For multiple URLs use analyze_websites instead.",

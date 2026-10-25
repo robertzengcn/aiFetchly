@@ -34,14 +34,13 @@ const V1_BLOCKED_PATTERNS: ReadonlyArray<{
  * Mandatory infrastructure tools auto-injected into every agent's exposed
  * tool set (as long as the agent has at least one tool of its own).
  *
- * Rationale: the async-tool polling architecture requires the inner agent
- * to be able to poll/cancel any job it spawns. If a tool routes to "async"
- * (run_subagent, extract_contact_info with 8+ URLs, etc.), the agent
- * receives a { async: true, job_id } envelope and must call
- * check_tool_job_status to observe progress and cancel_tool_job to give up.
- * Declaring these per-agent was fragile — an omission was silent and the
- * inner agent stalled. Listing them here makes the contract structural:
- * any present or future agent with any tool access can poll its own jobs.
+ * Rationale: async tool jobs may outlive a single tool round (run_subagent,
+ * extract_contact_info with 8+ URLs, etc.). Managed async returns the real
+ * final result to the model, but the agent may still need to observe prior
+ * job state or cancel a still-running job (cancel_tool_job). Declaring
+ * these per-agent was fragile — an omission was silent and the inner agent
+ * stalled. Listing them here makes the contract structural: any present or
+ * future agent with any tool access can inspect/cancel its own jobs.
  *
  * These tools are conversation-scoped and read-only/cleanup, so exposing
  * them broadly carries no privilege-escalation risk. They still pass

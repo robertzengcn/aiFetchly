@@ -32,6 +32,11 @@ export interface ResolverFs {
   existsSync(path: string): boolean;
   isFileSync(path: string): boolean;
   realpathSync(path: string): string;
+  /**
+   * Lists directory entries (file/dir names) sorted; TESTS inject a stub.
+   * Returns an empty list for missing/unreadable directories.
+   */
+  listDirSync?(dir: string): readonly string[];
 }
 
 export interface BrowserExecutableResolverOptions {
@@ -104,7 +109,7 @@ function defaultReadExecutableVersion(path: string): string | null {
   }
 }
 
-function defaultFs(): ResolverFs {
+export function defaultFs(): ResolverFs {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const fs = require("node:fs") as typeof import("node:fs");
   return {
@@ -117,7 +122,104 @@ function defaultFs(): ResolverFs {
       }
     },
     realpathSync: (p) => fs.realpathSync(p),
+    listDirSync: (dir) => {
+      try {
+        return fs
+          .readdirSync(dir, { withFileTypes: true })
+          .map((e) => e.name)
+          .sort();
+      } catch {
+        return [];
+      }
+    },
   };
+}
+
+/**
+ * The managed Chrome-for-Testing cache location used by the legacy browser
+ * stack (`BrowserManager.getCacheDir`): `~/.cache/puppeteer`, with the
+ * standard `PUPPETEER_CACHE_DIR` env override.
+ */
+export function defaultManagedChromeCacheDir(): string {
+  // Lazy require keeps static imports puppeteer-free.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("node:path") as typeof import("node:path");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("node:os") as typeof import("node:os");
+  const env = process.env.PUPPETEER_CACHE_DIR;
+  if (env && env.length > 0 && !env.includes("\0")) {
+    return env;
+  }
+  return path.join(os.homedir(), ".cache", "puppeteer");
+}
+
+/**
+ * Enumerate installed Chrome-for-Testing executables under the managed
+ * puppeteer cache (`<cacheDir>/chrome/<buildId>/<platformLayout>`),
+ * newest build first (B11/HOST-15). Resolution order inside
+ * `BrowserExecutableResolver` treats the list as its "managed" tier.
+ */
+export function enumerateManagedChromeCandidates(
+  fs: ResolverFs,
+  cacheDir: string
+): readonly string[] {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("node:path") as typeof import("node:path");
+  const platformLayouts: Record<string, readonly string[]> = {
+    win32: [
+      path.join("chrome-win64", "chrome.exe"),
+      path.join("chrome-win", "chrome.exe"),
+    ],
+    linux: [path.join("chrome-linux64", "chrome"), path.join("chrome-linux", "chrome")],
+    darwin: [
+      path.join(
+        "chrome-mac64",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing"
+      ),
+      path.join(
+        "chrome-mac-arm64",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing"
+      ),
+      path.join(
+        "chrome-mac",
+        "Google Chrome for Testing.app",
+        "Contents",
+        "MacOS",
+        "Google Chrome for Testing"
+      ),
+    ],
+  };
+  const layouts = platformLayouts[process.platform] ?? [];
+  if (layouts.length === 0) {
+    return [];
+  }
+  const versionDir = path.join(cacheDir, "chrome");
+  const builds = (fs.listDirSync ? fs.listDirSync(versionDir) : []).filter(
+    (name) => parseChromeVersion(name) !== null
+  );
+  // Descending build id: the newest installed candidate wins.
+  builds.sort((a, b) => {
+    const va = parseChromeVersion(a);
+    const vb = parseChromeVersion(b);
+    if (!va || !vb) return 0;
+    if (vb.majorVersion !== va.majorVersion) {
+      return vb.majorVersion - va.majorVersion;
+    }
+    return b.localeCompare(a);
+  });
+  const candidates: string[] = [];
+  for (const build of builds) {
+    for (const layout of layouts) {
+      candidates.push(path.join(versionDir, build, layout));
+    }
+  }
+  return candidates;
 }
 
 /** Reject filesystem roots, empty values, and null-byte smuggling. */

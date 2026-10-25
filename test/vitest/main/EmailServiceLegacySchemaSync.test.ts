@@ -4,6 +4,7 @@ import {
   snapshotLegacyServiceTags,
   replayLegacyServiceTags,
   dropLegacyServiceTagColumn,
+  repairEmailServicePrimaryKey,
 } from "@/modules/migrations/emailServiceTagMigration";
 import path from "node:path";
 import os from "node:os";
@@ -201,5 +202,99 @@ describe("Legacy schema synchronization (§6.5)", () => {
     expect(row.smtpUsername).toBeNull();
     expect(row.replyTo).toBeNull();
     reopened.close();
+  });
+
+  it("keeps email_service.id as a primary key when DROP COLUMN is blocked by the tag foreign key", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const db = SqliteDb.getInstance(tmpDir).connection;
+
+    await db.query(`PRAGMA foreign_keys = OFF`);
+    await db.query(`DROP TABLE email_service`);
+    await db.query(`
+      CREATE TABLE email_service (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name VARCHAR(255) NOT NULL,
+        "from" VARCHAR(255) NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        host VARCHAR(255) NOT NULL,
+        port VARCHAR(10) NOT NULL,
+        ssl INTEGER DEFAULT 1,
+        status INTEGER DEFAULT 1,
+        tagId INTEGER,
+        FOREIGN KEY (tagId) REFERENCES email_service_tag (id)
+      )
+    `);
+    await db.query(
+      `INSERT INTO email_service (id, name, "from", password, host, port, ssl, status)
+       VALUES (7, 'Kept', 'kept@example.com', 'pw', 'smtp.example.com', '465', 1, 1)`
+    );
+    await db.query(`PRAGMA foreign_keys = ON`);
+
+    expect(await dropLegacyServiceTagColumn(db)).toBe(true);
+
+    const dbPath = path.join(tmpDir, "scraper.db");
+    const reopened = new Database(dbPath, { readonly: true });
+    const columns = reopened
+      .prepare(`PRAGMA table_info(email_service)`)
+      .all() as Array<{ name: string; pk: number }>;
+    const kept = reopened
+      .prepare(`SELECT id, name FROM email_service WHERE id = 7`)
+      .get() as { id: number; name: string };
+    reopened.close();
+
+    expect(columns.find((column) => column.name === "id")?.pk).toBe(1);
+    expect(columns.map((column) => column.name)).not.toContain("tagId");
+    expect(kept).toEqual({ id: 7, name: "Kept" });
+
+    await db.query(`INSERT INTO buckemail_task (type, status) VALUES (1, 0)`);
+    const taskRows = (await db.query(
+      `SELECT id FROM buckemail_task ORDER BY id DESC LIMIT 1`
+    )) as Array<{ id: number }>;
+    await db.query(
+      `INSERT INTO email_service_task_relation ("emailServiceId", "buckemailTaskId", status) VALUES (7, ?, 1)`,
+      [taskRows[0].id]
+    );
+  });
+
+  it("restores a stripped email_service primary key so a task relation can be inserted", async () => {
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const db = SqliteDb.getInstance(tmpDir).connection;
+
+    await db.query(`PRAGMA foreign_keys = OFF`);
+    await db.query(`
+      CREATE TABLE email_service_broken (
+        id INTEGER,
+        name VARCHAR(255),
+        "from" VARCHAR(255)
+      )
+    `);
+    await db.query(
+      `INSERT INTO email_service_broken (id, name, "from") VALUES (4, 'Broken', 'broken@example.com')`
+    );
+    await db.query(`DROP TABLE email_service`);
+    await db.query(`ALTER TABLE email_service_broken RENAME TO email_service`);
+    await db.query(`PRAGMA foreign_keys = ON`);
+
+    expect(await repairEmailServicePrimaryKey(db)).toBe(true);
+    expect(await repairEmailServicePrimaryKey(db)).toBe(false);
+
+    const dbPath = path.join(tmpDir, "scraper.db");
+    const reopened = new Database(dbPath, { readonly: true });
+    const columns = reopened
+      .prepare(`PRAGMA table_info(email_service)`)
+      .all() as Array<{ name: string; pk: number }>;
+    reopened.close();
+    expect(columns.find((column) => column.name === "id")?.pk).toBe(1);
+
+    await db.query(`INSERT INTO buckemail_task (type, status) VALUES (1, 0)`);
+    const taskRows = (await db.query(
+      `SELECT id FROM buckemail_task ORDER BY id DESC LIMIT 1`
+    )) as Array<{ id: number }>;
+    await db.query(
+      `INSERT INTO email_service_task_relation ("emailServiceId", "buckemailTaskId", status) VALUES (4, ?, 1)`,
+      [taskRows[0].id]
+    );
   });
 });

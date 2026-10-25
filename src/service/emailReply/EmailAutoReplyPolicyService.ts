@@ -79,6 +79,42 @@ const SENSITIVE_KEYWORDS: readonly string[] = [
 ];
 
 /**
+ * Rule guardrails a CONFIRMED send (draft approval / pre-send) must still
+ * honor after {@link classificationForConfirmedSend} strips a stored
+ * `unknown` to null.
+ *
+ * The evaluator itself bypasses the allowlist for null classification
+ * because the PRE-DRAFT gate also feeds null while classification
+ * refinement is pending — enforcing it there would deadlock refinement.
+ * This helper closes the confirmed-send side only: an owner-typed
+ * allowlist is an explicit restriction, so an unclassified message must be
+ * LISTED (allow "unknown" explicitly) to pass.
+ *
+ * The rule's confidence threshold is deliberately NOT enforced here: it
+ * defaults to 0.7 on every row, so enforcing it for stripped-unknown would
+ * refuse every unclassified confirmed send on rule-bearing mailboxes and
+ * recreate the send deadlock the unknown exemption fixed.
+ *
+ * Returns a refusal reason, or null when the rule permits the send.
+ */
+export function confirmedSendRuleRefusal(
+  rule: EmailAutoReplyRuleEntity | null | undefined,
+  storedClassification: string | null | undefined
+): string | null {
+  if (!rule || rule.enabled !== 1) return null;
+  const allowed = parseStringArray(rule.allowedClassificationsJson);
+  if (allowed.length === 0) return null;
+  const effective =
+    storedClassification == null || storedClassification === "unknown"
+      ? "unknown"
+      : storedClassification;
+  if (!allowed.includes(effective)) {
+    return `Classification '${effective}' is not allowed by rule '${rule.name}'`;
+  }
+  return null;
+}
+
+/**
  * Evaluates whether an inbound message may be auto-replied to. Pure function —
  * no DB writes; the caller writes the {@link EmailAutoReplyAuditLog} row.
  *
@@ -121,21 +157,45 @@ export function evaluateAutoReplyPolicy(
   }
 
   // 4. Rule-driven checks (only when a rule exists).
+  // NOTE: a null classification legitimately bypasses the allowlist and the
+  // confidence threshold here — the pre-draft gate feeds null while
+  // classification refinement is pending (a hard block would deadlock the
+  // refinement flow), and confirmed-send callers enforce their own rule
+  // guardrails via confirmedSendRuleRefusal instead.
   if (rule && rule.enabled === 1) {
     const allowed = parseStringArray(rule.allowedClassificationsJson);
     if (classification && allowed.length > 0 && !allowed.includes(classification)) {
       return skipped(`Classification '${classification}' is not allowed by rule '${rule.name}'`);
     }
 
+    // Blocked patterns test BOTH the From address and the address the reply
+    // would actually go to (Reply-To when present) — a blocked sender can
+    // otherwise redirect replies past the blocklist via Reply-To.
     const blockedSenders = parseStringArray(rule.blockedSenderPatternsJson);
-    if (blockedSenders.some((p) => matchesPattern(message.fromAddress, p))) {
-      return blocked(`Sender matches a blocked pattern in rule '${rule.name}'`);
+    const fromAddress = message.fromAddress ?? "";
+    if (
+      blockedSenders.some(
+        (p) => matchesPattern(fromAddress, p) || matchesPattern(recipient, p)
+      )
+    ) {
+      return blocked(
+        `Sender or reply recipient matches a blocked pattern in rule '${rule.name}'`
+      );
     }
 
     const blockedDomains = parseStringArray(rule.blockedDomainPatternsJson);
-    const domain = (message.fromAddress.split("@")[1] ?? "").toLowerCase();
-    if (domain && blockedDomains.some((p) => matchesPattern(domain, p))) {
-      return blocked(`Domain '${domain}' is blocked by rule '${rule.name}'`);
+    if (blockedDomains.length > 0) {
+      const domains = [fromAddress, recipient]
+        .map((addr) => (addr.split("@")[1] ?? "").toLowerCase())
+        .filter((d) => d.length > 0);
+      const hit = domains.find((d) =>
+        blockedDomains.some((p) => matchesPattern(d, p))
+      );
+      if (hit) {
+        return blocked(
+          `Domain '${hit}' is blocked by rule '${rule.name}'`
+        );
+      }
     }
 
     // 5. Limits.

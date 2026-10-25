@@ -17,7 +17,6 @@ import { TaskStatus } from "@/entityTypes/commonType";
 import type { SearchTaskModule } from "@/modules/SearchTaskModule";
 import type { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import type { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
-import type { YellowPagesModule } from "@/modules/YellowPagesModule";
 import type { SearchModule } from "@/modules/SearchModule";
 import type { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import type { YandexMapsModule } from "@/modules/YandexMapsModule";
@@ -32,7 +31,6 @@ function makeFakeDeps(
     buckEmailTaskModel: {} as unknown as BuckEmailTaskModule,
     searchModel: {} as unknown as SearchModule,
     emailSeachTaskModule: {} as unknown as EmailSearchTaskModule,
-    yellowPagesModule: {} as unknown as YellowPagesModule,
     googleMapsModule: {} as unknown as GoogleMapsModule,
     yandexMapsModule: {} as unknown as YandexMapsModule,
     aiMessageTaskModule: {} as unknown as AiMessageTaskModule,
@@ -73,21 +71,5 @@ describe("TaskExecutorService DI (R5.1)", () => {
 
     expect(fakeRead).toHaveBeenCalledWith(7);
     expect(status).toBe(TaskStatus.Processing);
-  });
-
-  it("maps YellowPages numeric status (2 = Completed) to TaskStatus.Complete", async () => {
-    const fakeGetStatus = vi.fn().mockResolvedValue(2); // 2 = Completed
-    const svc = new TaskExecutorService(
-      makeFakeDeps({
-        yellowPagesModule: {
-          getTaskStatus: fakeGetStatus,
-        } as unknown as YellowPagesModule,
-      })
-    );
-
-    const status = await svc.getTaskStatus(99, TaskType.YELLOW_PAGES);
-
-    expect(fakeGetStatus).toHaveBeenCalledWith(99);
-    expect(status).toBe(TaskStatus.Complete);
   });
 });

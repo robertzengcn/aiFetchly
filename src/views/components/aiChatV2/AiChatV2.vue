@@ -926,8 +926,10 @@ import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
   extractArtifactMetadata,
   extractToolOutputDescriptors,
+  extractPluginArtifacts,
   ensureArtifactMetadata,
   ensureToolOutputMetadata,
+  ensurePluginArtifactMetadata,
 } from "./artifactMetadata";
 import {
   extractFileOperationsFromMessages,
@@ -1811,8 +1813,30 @@ function handleAgentTaskCancel(agentTaskId: string): void {
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
   toolApprovalMode.value = mode;
   if (!activeConversationId.value) return;
+  await writeToolApprovalMode(activeConversationId.value, mode);
+}
+
+/**
+ * Persist a non-default selector mode once a conversation id exists.
+ *
+ * The selector can show Full access before a conversation id exists, and
+ * that choice is only kept in memory. A scheduled run reads the persisted
+ * mode, so the id must be saved before the loop is created.
+ */
+async function persistCurrentToolApprovalMode(
+  conversationId: string
+): Promise<void> {
+  if (toolApprovalMode.value === "ask_for_approval") return;
+  await writeToolApprovalMode(conversationId, toolApprovalMode.value);
+}
+
+async function writeToolApprovalMode(
+  conversationId: string,
+  mode: ChatToolApprovalMode
+): Promise<void> {
+  if (!conversationId) return;
   try {
-    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    const saved = await setChatV2ToolApprovalMode(conversationId, mode);
     toolApprovalMode.value = saved;
   } catch (err) {
     console.error("[AiChatV2] failed to save tool approval mode:", err);
@@ -2910,6 +2934,7 @@ async function runScheduledLoopCreate(
   }
 ): Promise<boolean> {
   const conversationId = ensureWorkspaceConversationId();
+  await persistCurrentToolApprovalMode(conversationId);
   try {
     const created = await createScheduledLoop({
       conversationId,
@@ -4170,8 +4195,13 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // live under `metadata.toolResult` in persisted rows but are read at the
     // top level by `AiChatV2Message.vue`. Lifting them on load keeps the
     // receipt card visible after a restart (PRD §11 cross-restart durability).
+    // Host-registered plugin result artifacts (design §13.4) nest under
+    // `metadata.toolResult` the same way; without the lift the result-file
+    // card disappears on conversation reopen.
     const persistedMessages = (resp?.messages ?? []).map((m) =>
-      ensureToolOutputMetadata(ensureArtifactMetadata(m))
+      ensurePluginArtifactMetadata(
+        ensureToolOutputMetadata(ensureArtifactMetadata(m))
+      )
     );
     // Seed pending bubbles from the durable queue (FR-43).
     patchConversationRuntimeState(conversationId, {
@@ -4532,6 +4562,7 @@ const upsertToolResultMessage = (
     typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
       ? chunk.fullContent
       : JSON.stringify(toolResult, null, 2);
+  const pluginArtifactsMetadata = extractPluginArtifacts(toolResult);
   const existingIdx = chunk.replacesPermissionPromptForToolId
     ? currentMessages.findIndex(
         (message) =>
@@ -4566,6 +4597,10 @@ const upsertToolResultMessage = (
     // renders during a live stream — the descriptors are present but nested
     // under `metadata.toolResult`, where `preservedOutput` does not read.
     ...(extractToolOutputDescriptors(toolResult) ?? {}),
+    // Host-registered plugin result artifacts (design §13.4): same live
+    // boundary — the host attaches validated `pa_…` descriptors to the tool
+    // payload, so lift them to the top-level slot the result-file card reads.
+    ...(pluginArtifactsMetadata ? { pluginArtifacts: pluginArtifactsMetadata } : {}),
   };
 
   if (existingIdx !== -1) {

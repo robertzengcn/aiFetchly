@@ -81,11 +81,6 @@ import {
 import { EmailReplyGuardModule } from "@/modules/EmailReplyGuardModule";
 import type { ReservationAcquireResult } from "@/model/EmailReplyGuard.model";
 import { canonicalReplyKey } from "@/service/emailReceive/EmailReplyIdentity";
-import {
-  EmailReplyDetectionService,
-  getSharedEmailReplyDetectionService,
-  type ReplyDetectionResult,
-} from "@/service/emailReceive/EmailReplyDetectionService";
 import { randomBytes } from "node:crypto";
 
 /** Input to {@link EmailReplyDraftGenerationService.createDraft}. */
@@ -520,16 +515,6 @@ export class EmailReplyDraftGenerationService {
   private guardModule: EmailReplyGuardModule | null = null;
   private readonly guardModuleFactory: () => EmailReplyGuardModule;
   /**
-   * T04/FR-031 §8.1: shared mailbox-detection service. Resolved lazily through
-   * a memoized getter (never at module top level — BaseModule TDZ under vi.mock)
-   * so production callers get the real default ports while tests inject a
-   * custom-built service through the constructor seam.
-   */
-  private detectionService: EmailReplyDetectionService | null = null;
-  private readonly detectionServiceFactory:
-    | (() => EmailReplyDetectionService)
-    | null;
-  /**
    * The live reservation for the CURRENT createDraft invocation (T07/FR-035).
    * Acquired after the pre-draft guard allows and before classification; held
    * across the model calls; released on every failure path and on reuse. Null
@@ -569,12 +554,6 @@ export class EmailReplyDraftGenerationService {
     /** T07: injectable guard module factory (test seam). */
     readonly guardModuleFactory?: () => EmailReplyGuardModule;
     /**
-     * T04/FR-031 §8.1: injectable reply-detection service (test seam). Tests
-     * pass a custom-built service with fake ports; production leaves it
-     * undefined → the lazy getter constructs the real default service.
-     */
-    readonly detectionServiceFactory?: () => EmailReplyDetectionService;
-    /**
      * D7.1: injectable audit-module factories (test seam). Tests substitute
      * in-memory stubs to capture audit payloads or drive write failure
      * without a real DB. Production leaves them undefined → the real
@@ -603,7 +582,6 @@ export class EmailReplyDraftGenerationService {
       options?.resolveModelContextWindow ?? (async () => undefined);
     this.guardModuleFactory =
       options?.guardModuleFactory ?? (() => new EmailReplyGuardModule());
-    this.detectionServiceFactory = options?.detectionServiceFactory ?? null;
     this.replyAuditModuleFactory =
       options?.replyAuditModuleFactory ??
       (() => new EmailReplyAuditLogModule());
@@ -891,30 +869,9 @@ export class EmailReplyDraftGenerationService {
           // cluster state.
           return vanishedReusableRefusal;
         }
-        // §8.1: never silently return a newly sent/unknown draft as editable.
-        // Run the same mailbox detection that gates fresh generation; a
-        // positive/inconclusive outcome refuses the reuse with the typed
-        // detection code (the existing reusable draft is surfaced as
-        // existing_draft_id so the UI can route to approval/review). The
-        // reusable branch holds NO reservation lease (it returned `reusable`,
-        // not `acquired`), so releaseReservationSafely is a no-op here.
-        const reuseDetectionRefusal = await this.runPreDraftDetection(
-          message,
-          requestCorrelationId
-        );
-        if (reuseDetectionRefusal !== null) {
-          return reuseDetectionRefusal;
-        }
-        // R15: `reusedDraftSnapshot` was read BEFORE the awaited mailbox probe.
-        // While detection ran, another request could have claimed or finalized
-        // the draft (sending/sent/delivery_unknown) or flipped the cluster
-        // (positive evidence, an in-flight send attempt, a second live draft).
-        // Returning the stale snapshot would hand back a draft that is no
-        // longer eligible as if it were editable. Re-read the draft row and
-        // the canonical cluster evidence in ONE short transaction so the reuse
-        // decision is made against coherent CURRENT state; on denial, return
-        // the current typed code (with exactly one owned refusal audit), never
-        // the earlier snapshot.
+        // Mailbox reply detection is check_email_replied, not this tool.
+        // Re-read the draft and cluster so a draft that moved to
+        // sending/sent/delivery_unknown since the reservation is not reused.
         const revalidated =
           await this.guardModuleForNow().revalidateReusableDraft({
             draftId: reservation.draftId,
@@ -1245,7 +1202,7 @@ export class EmailReplyDraftGenerationService {
 
   /**
    * R16: the acquired section of {@link createDraft} — everything after the
-   * reservation is held (detection, reuse re-read, classification, profile
+   * reservation is held (reuse re-read, classification, profile
    * load, knowledge, LLM attempt, post-generation recheck, race-reuse, late-
    * output guard, envelope binding, and the atomic commit). The caller wraps
    * this in an owner-fenced `try/finally` so an unexpected exception (a
@@ -1260,34 +1217,10 @@ export class EmailReplyDraftGenerationService {
     input: CreateDraftInput,
     requestCorrelationId: string
   ): Promise<CreateDraftOutcome> {
-    // 2c-det. T04/FR-031 §8.1 — fresh mailbox evidence check BEFORE knowledge
-    //     retrieval, classification, or any model call. The reservation
-    //     guarantees no sibling is generating into the same cluster; this
-    //     probe asks the shared detector whether the inbound message already
-    //     has a reply in the mailbox (or in local state), so we never pay for
-    //     a model call — or persist a draft — for a message that has already
-    //     been answered. `forceRefresh: false` consumes the 60s negative cache
-    //     (§7.3, landed with the T05 cache layer).
-    //
-    //     A `replied` OR `unknown` outcome is a hard refusal: write exactly ONE
-    //     `reply_skipped` audit row (stage `pre_draft`, code = the detection
-    //     outcome code — `already_replied` for a positive, the typed unknown
-    //     code otherwise), release the reservation, and return the typed
-    //     failure. NO model call. A `not_replied` outcome proceeds to the
-    //     reuse read and classification. The detection service owns ONLY
-    //     evidence/cache writes — this outer service owns the refusal audit
-    //     (one-audit-owner rule §9.2/§10).
-    const detectionResult = await this.runPreDraftDetection(
-      message,
-      requestCorrelationId
-    );
-    if (detectionResult !== null) {
-      // detectionResult is the typed refusal outcome; return it directly.
-      // The reservation was already released inside runPreDraftDetection on
-      // every refusal path (§8.2 — the lease must not outlive a failed
-      // invocation).
-      return detectionResult;
-    }
+    // Mailbox reply detection belongs to check_email_replied. This path
+    // writes the draft without probing IMAP. send_email_reply still detects
+    // before SMTP. Local policy (already sent, bounce, unsubscribe) ran
+    // before the reservation.
 
     // 2c-legacy. Reuse an eligible existing draft instead of regenerating
     //     (FR-028) — only reachable when the reservation returned `acquired`
@@ -3019,25 +2952,6 @@ export class EmailReplyDraftGenerationService {
   }
 
   /**
-   * T04/FR-031 §8.1: the reply-detection service for THIS invocation. Lazily
-   * constructed (never at module top level — BaseModule TDZ under vi.mock).
-   * Tests inject a custom service via the constructor seam; production gets
-   * the real default ports (Modules + IMAP client) on first use.
-   */
-  private detectionServiceForNow(): EmailReplyDetectionService {
-    if (!this.detectionService) {
-      // D6: route the production fallback through the process-wide shared
-      // singleton so the in-memory cache/single-flight/mailbox-lock state
-      // survives across per-request outer-service instances. Injected test
-      // factories keep precedence.
-      this.detectionService = this.detectionServiceFactory
-        ? this.detectionServiceFactory()
-        : getSharedEmailReplyDetectionService();
-    }
-    return this.detectionService;
-  }
-
-  /**
    * D7.1: the reply-audit module for THIS invocation. Lazily constructed
    * through the injectable factory (never at module top level — BaseModule
    * TDZ under vi.mock). Tests substitute an in-memory stub.
@@ -3072,143 +2986,6 @@ export class EmailReplyDraftGenerationService {
     return this.now();
   }
 
-  /**
-   * T04/FR-031 §8.1 — run the shared mailbox detector before any model work.
-   * Returns a typed refusal {@link CreateDraftOutcome} (failure side) when the
-   * detector finds a reply OR cannot rule one out; returns null when the
-   * detector settled `not_replied` and generation may proceed.
-   *
-   * The reservation (if held) is released on every refusal path — the lease
-   * must not outlive a failed invocation (§8.2). The ONE `reply_skipped` audit
-   * row (stage `pre_draft`, code = detection outcome code) is written here, by
-   * THIS outer service — the detection service returns decisions only (§9.2).
-   * Audit persistence failure STOPS the work and surfaces as a failed outcome
-   * (an unrecorded refusal must never be followed by proceeding to draft).
-   *
-   * FR-039: telemetry carries only the low-cardinality detection state/code —
-   * never bodies, raw provider errors, or credentials.
-   */
-  private async runPreDraftDetection(
-    message: EmailReceivedMessageEntity,
-    requestCorrelationId: string
-  ): Promise<Extract<CreateDraftOutcome, { success: false }> | null> {
-    let result: ReplyDetectionResult;
-    try {
-      result = await this.detectionServiceForNow().detect({
-        messageId: message.id,
-        forceRefresh: false,
-      });
-    } catch (error) {
-      // Detection threw — treat as an inconclusive probe failure. The
-      // reservation is released and a `probe_failed` audit is written.
-      // Surfaces the sanitized error text; the leading bracket signals the
-      // category to the AI tool without parsing English.
-      await this.releaseReservationSafely();
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const code: EmailReplyPolicyCode = "probe_failed";
-      incrementReplyMetric("detection_outcome", {
-        stage: "pre_draft",
-        state: "unknown",
-        code,
-      });
-      try {
-        await this.recordFailure(
-          message.emailServiceId,
-          message.id,
-          requestCorrelationId,
-          `[${code}] Detection probe threw: ${errMsg}`,
-          { stage: "pre_draft", code }
-        );
-      } catch (auditError) {
-        incrementReplyMetric("audit_failure", { stage: "pre_draft" });
-        const auditErrMsg =
-          auditError instanceof Error ? auditError.message : String(auditError);
-        return {
-          success: false,
-          error: `Detection audit persistence failed: ${auditErrMsg}`,
-          requestCorrelationId,
-        };
-      }
-      return {
-        success: false,
-        error: `[${code}] Reply detection probe failed: ${errMsg}`,
-        requestCorrelationId,
-        code,
-        next_action: nextActionForCode(code),
-      };
-    }
-
-    if (result.state === "not_replied") {
-      incrementReplyMetric("detection_outcome", {
-        stage: "pre_draft",
-        state: "not_replied",
-      });
-      return null; // proceed to classification + generation
-    }
-
-    // replied OR unknown → hard refusal. The detection service already wrote
-    // evidence (positive or none for unknown); the refusal audit is written
-    // here. Map the detection outcome to the EmailReplyPolicyCode:
-    //  - replied → already_replied
-    //  - unknown → the typed unknown code (probe_timeout / probe_failed / etc.)
-    const code: EmailReplyPolicyCode =
-      result.state === "replied" ? "already_replied" : result.reasonCode;
-    incrementReplyMetric("detection_outcome", {
-      stage: "pre_draft",
-      state: result.state,
-      code,
-    });
-
-    // Surface an existing live draft when one exists, as CONTEXT only
-    // (R22 — the refusal is a denial; its next_action never suggests
-    // approving the surfaced draft). The detection service does not read
-    // drafts; this read is bounded to the message's draft list.
-    let existingDraftId: number | undefined;
-    try {
-      const drafts = await this.draftModule.listByMessage(message.id);
-      const reusable = pickReusableDraft(drafts);
-      existingDraftId = reusable?.id;
-    } catch {
-      // Draft-list read failure does not block the refusal — the refusal
-      // stands; existing_draft_id simply stays undefined.
-      existingDraftId = undefined;
-    }
-
-    await this.releaseReservationSafely();
-    const reason = `[${code}] Reply detection ${
-      result.state === "replied"
-        ? "found an existing reply"
-        : "was inconclusive"
-    }; no draft generated`;
-    try {
-      await this.recordFailure(
-        message.emailServiceId,
-        message.id,
-        requestCorrelationId,
-        reason,
-        { stage: "pre_draft", code }
-      );
-    } catch (auditError) {
-      incrementReplyMetric("audit_failure", { stage: "pre_draft" });
-      const auditErrMsg =
-        auditError instanceof Error ? auditError.message : String(auditError);
-      return {
-        success: false,
-        error: `Detection audit persistence failed: ${auditErrMsg}`,
-        requestCorrelationId,
-        existing_draft_id: existingDraftId,
-      };
-    }
-
-    return {
-      success: false,
-      error: reason,
-      requestCorrelationId,
-      code,
-      existing_draft_id: existingDraftId,
-      next_action: nextActionForCode(code),
-    };
-  }
 
   /**
    * T07/FR-035: release the current invocation's reservation on a failure

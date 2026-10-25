@@ -31,6 +31,7 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "fetch_unread_emails",
       "list_email_services",
       "start_email_send_task",
+      "check_email_replied",
       "create_email_reply_draft",
       "send_email_reply",
       "list_schedules",

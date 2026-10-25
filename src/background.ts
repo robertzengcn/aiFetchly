@@ -89,7 +89,6 @@ import { LOGIN_STATUS } from "@/config/channellist";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { BackgroundScheduler } from "@/modules/BackgroundScheduler";
 import { runafterbootup } from "@/modules/bootuprun";
-import { YellowPagesController } from "./controller/YellowPagesController";
 import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
@@ -1798,8 +1797,11 @@ function initialize() {
       // already-migrated DB. Fire-and-forget so it never blocks startup,
       // but awaited in tests via migrateEmailServiceTagsToManyToMany.
       try {
-        const { replayLegacyServiceTags, dropLegacyServiceTagColumn } =
-          await import("@/modules/migrations/emailServiceTagMigration");
+        const {
+          replayLegacyServiceTags,
+          dropLegacyServiceTagColumn,
+          repairEmailServicePrimaryKey,
+        } = await import("@/modules/migrations/emailServiceTagMigration");
         const backfilled = await replayLegacyServiceTags(
           appDataSource.connection,
           legacyTagSnapshot
@@ -1807,9 +1809,12 @@ function initialize() {
         const columnDropped = await dropLegacyServiceTagColumn(
           appDataSource.connection
         );
-        if (backfilled > 0 || columnDropped) {
+        const primaryKeyRepaired = await repairEmailServicePrimaryKey(
+          appDataSource.connection
+        );
+        if (backfilled > 0 || columnDropped || primaryKeyRepaired) {
           log.info(
-            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}`
+            `[email-service-tag-migration] backfilled ${backfilled} tag assignment(s), column dropped=${columnDropped}, primary key repaired=${primaryKeyRepaired}`
           );
         }
       } catch (err) {
@@ -1933,6 +1938,43 @@ function initialize() {
         );
       }
 
+      // H6: plugin artifact startup sweep — journal executions interrupted by
+      // a crash before promotion, quarantine their orphan staging, and age
+      // out stale retained staging. Runs before any plugin can start, so no
+      // live execution can race the sweep. Fire-and-forget, never fatal.
+      try {
+        const { getPluginFileArtifactService } = await import(
+          "@/service/PluginFileArtifactService"
+        );
+        const sweep = getPluginFileArtifactService().recoverStartupExecutions();
+        if (sweep.interrupted.length > 0 || sweep.agedPromotedStaging.length > 0) {
+          log.info(
+            `[plugin-artifacts] startup sweep: interrupted=${sweep.interrupted.length} aged=${sweep.agedPromotedStaging.length}`
+          );
+        }
+      } catch (err) {
+        log.warn(
+          "[plugin-artifacts] startup sweep failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
+      // B12: retention actually runs — the startup expiry sweep plus a
+      // periodic interval sweep remove expired promoted artifacts and age
+      // out quarantine/journals while the app stays open. Fire-and-forget,
+      // never fatal, and the interval never keeps the process alive.
+      try {
+        const { initializePluginArtifactStore } = await import(
+          "@/modules/PluginFileArtifactModule"
+        );
+        void initializePluginArtifactStore();
+      } catch (err) {
+        log.warn(
+          "[plugin-artifacts] retention setup failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Task completion policy (T24, PRD NFR-05/AC-13): finalize executions
       // left unfinalized by a crash/kill as interrupted.
       // G02: await a bounded recovery barrier BEFORE scheduler/effect
@@ -1979,7 +2021,6 @@ function initialize() {
           err instanceof Error ? err.message : String(err)
         );
       }
-
       // Preserved tool outputs: install the persistent cursor key and run the
       // reconciliation sweep (technical design §12.2). Without this the cursor
       // key is ephemeral per process, so every cursor a model received before a
@@ -2087,33 +2128,6 @@ function initialize() {
           log.info("Schedulers initialized with auto-start functionality");
         } catch (error) {
           log.error("Failed to initialize schedulers:", error);
-        }
-      }
-
-      // Check for orphaned Yellow Pages processes on startup
-      if (startupPolicy.inspectOrphanedTasks) {
-        try {
-          const yellowPagesCtrl = YellowPagesController.getInstance();
-
-          // Handle tasks from previous session first
-          const previousSessionCount =
-            await yellowPagesCtrl.handleTasksFromPreviousSession();
-          log.info(
-            `Yellow Pages previous session tasks handled: ${previousSessionCount} tasks marked as failed`
-          );
-
-          // Then check for orphaned processes
-          const orphanedCheckResult =
-            await yellowPagesCtrl.checkForOrphanedProcesses();
-          log.info(
-            "Yellow Pages orphaned process check completed:",
-            orphanedCheckResult
-          );
-        } catch (error) {
-          log.error(
-            "Failed to check for orphaned Yellow Pages processes:",
-            error
-          );
         }
       }
 

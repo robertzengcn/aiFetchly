@@ -11,12 +11,12 @@
 **Execution location:** Desktop work in git worktree `.worktrees/yellow-pages-plugin` (branch `yellow-pages-plugin`, off `dev`). Plugin work in the **independent** repository `/home/robertzeng/project/yellow-pages-scraper-plugin` (own git repo, own node_modules — never the desktop's, per PRD §19.9/§19.11).
 
 **Explicitly deferred (documented, not silently dropped):**
-- HUB-01/HUB-02 Hub publication + managed/ticket install (PRD Phase 3b) — needs Hub deployment + release infra.
-- Legacy removal (PRD Phase 4 / AC-18) — gated on Hub delivery acceptance by PRD §27.
-- In-session AI recovery broker (HOST-12, Phase 5) — optional phase per PRD §15.
-- Renderer artifact UI (design §13.4 frontend + i18n) — IPC layer ships; UI wiring follows.
-- Plugin full 11-adapter migration matrix — v1 ships `yellowpages-com` adapter + catalog; others staged as fixture-driven follow-ups (design §11.3).
-- Playwright E2E for the plugin flow.
+- HUB-01/HUB-02 Hub publication + managed/ticket install (PRD Phase 3b) — needs Hub deployment + release infra. **Status 2026-10-21: still open** — rides the R01 release gate (see `docs/prd/aifetchly-desktop-yellow-pages-plugin-todo.md` §R01).
+- Legacy removal (PRD Phase 4 / AC-18) — gated on Hub delivery acceptance by PRD §27. **Status 2026-10-21: removal is code-complete on the desktop branch** (worker/IPC/UI/persistence graph removed; seeded legacy-upgrade test `test/vitest/main/migrations/yellowPagesCutoverUpgrade.test.ts` and `yellowPagesLegacyRemoval.test.ts` in place, executor refuses `yellow_pages`) — gate still held: NOT acceptance until R01/AC-16 per R03.
+- In-session AI recovery broker (HOST-12, Phase 5) — optional phase per PRD §15. **Status 2026-10-21: unchanged** (D01).
+- Renderer artifact UI (design §13.4 frontend + i18n) — IPC layer ships; UI wiring follows. **Status 2026-10-21: shipped** — `PluginArtifactCard.vue` + six-language translations + component suite (G03/G04; PLUGIN_ARTIFACT IPC).
+- Plugin full 11-adapter migration matrix — v1 ships `yellowpages-com` adapter + catalog; others staged as fixture-driven follow-ups (design §11.3). **Status 2026-10-21: unchanged** — the desktop branch RETIRES legacy directory adapters (R03 record); the plugin repo decision stands.
+- Playwright E2E for the plugin flow. **Status 2026-10-21: partially shipped** — `test/e2e/specs/unifiedPluginDiscovery.test.ts` covers Hub install → enable → recoverable failure/retry → garbage archive → disable/re-enable (11 tests). Execution-flow legs need a fixture MCP server — recorded at G04/R01.
 
 ---
 

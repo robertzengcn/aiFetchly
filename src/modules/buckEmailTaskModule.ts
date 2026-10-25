@@ -435,8 +435,77 @@ export class BuckEmailTaskModule extends BaseModule {
     return taskId;
   }
 
+  /**
+   * Positive integer ids, in request order, with duplicates removed.
+   * Non-numeric values are skipped so a bad entry does not become id 0.
+   */
+  private uniquePositiveIds(rawIds: readonly unknown[]): number[] {
+    const ids: number[] = [];
+    const seen = new Set<number>();
+    for (const raw of rawIds) {
+      const id = typeof raw === "number" ? raw : Number(raw);
+      if (!Number.isInteger(id) || id <= 0 || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  /**
+   * Resolve the service ids that will be stored on the task.
+   * All requested ids that exist are kept. If every requested id is missing
+   * and exactly one mailbox is active, that mailbox is used. Several active
+   * mailboxes and no match is an error so the caller can pick an id.
+   */
+  private async resolveEmailServiceIds(
+    rawIds: readonly unknown[]
+  ): Promise<number[]> {
+    const requested = this.uniquePositiveIds(rawIds);
+    if (requested.length === 0) {
+      return [];
+    }
+    const emailServiceModule = new EmailServiceModule();
+    const existing: number[] = [];
+    for (const id of requested) {
+      if (await emailServiceModule.emailServiceExists(id)) {
+        existing.push(id);
+      }
+    }
+    if (existing.length === requested.length) {
+      return existing;
+    }
+    if (existing.length > 0) {
+      const missing = requested.filter((id) => !existing.includes(id));
+      console.warn(
+        `Ignoring email service ids that do not exist: ${missing.join(", ")}`
+      );
+      return existing;
+    }
+    const available = await emailServiceModule.listActiveEmailServiceIds();
+    if (available.length === 1) {
+      console.warn(
+        `Email service ids ${requested.join(", ")} do not exist. Using the only active email service ${available[0]}.`
+      );
+      return available;
+    }
+    if (available.length === 0) {
+      throw new Error(
+        `Email service not found: ${requested.join(", ")}. No email service is configured.`
+      );
+    }
+    throw new Error(
+      `Email service not found: ${requested.join(", ")}. Available service ids: ${available.join(", ")}.`
+    );
+  }
+
   //create buck email task from struct (IPC/AI tool input)
   public async createBuckEmailTask(param: Buckemailstruct): Promise<number> {
+    const emailServiceIds = await this.resolveEmailServiceIds(
+      param.EmailServicelist ?? []
+    );
+    param.EmailServicelist = emailServiceIds;
     const buckentity = new BuckemailTaskEntity();
     buckentity.type = param.EmailBtype;
     buckentity.status = TaskStatus.Notstart;
@@ -480,16 +549,14 @@ export class BuckEmailTaskModule extends BaseModule {
       }
     }
 
-    if (param.EmailServicelist) {
-      for (let i = 0; i < param.EmailServicelist.length; i++) {
-        const relation = new EmailServiceTaskRelationEntity();
-        relation.emailServiceId = param.EmailServicelist[i];
-        relation.buckemailTaskId = taskId;
-        relation.status = 1;
-        await this.emailServiceTaskRelationModule.createEmailServiceTaskRelation(
-          relation
-        );
-      }
+    for (const emailServiceId of emailServiceIds) {
+      const relation = new EmailServiceTaskRelationEntity();
+      relation.emailServiceId = emailServiceId;
+      relation.buckemailTaskId = taskId;
+      relation.status = 1;
+      await this.emailServiceTaskRelationModule.createEmailServiceTaskRelation(
+        relation
+      );
     }
 
     return taskId;

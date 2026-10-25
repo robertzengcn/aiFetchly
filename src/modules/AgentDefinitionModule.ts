@@ -265,6 +265,25 @@ export class AgentDefinitionModule extends BaseModule {
     void pluginName;
   }
 
+  /**
+   * B06: re-restore previously persisted plugin agents from management
+   * views (an undo of the row deletion during a failed overwrite update).
+   * Keeps the ORIGINAL enablement state except for explicitly-preserved
+   * disabled ids (the same preservation contract as `upsertPluginAgents`).
+   */
+  async restorePluginAgents(
+    pluginName: string,
+    saved: readonly AgentDefinitionView[],
+    preservedDisabledIds: ReadonlySet<string> = new Set()
+  ): Promise<void> {
+    await this.ensureConnection();
+    for (const view of saved) {
+      const initiallyEnabled = !preservedDisabledIds.has(view.id);
+      await this.model.upsertPluginAgent(view, initiallyEnabled);
+    }
+    void pluginName;
+  }
+
   async findAgentsByPluginName(
     pluginName: string
   ): Promise<AgentDefinitionView[]> {

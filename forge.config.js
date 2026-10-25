@@ -1132,14 +1132,6 @@ module.exports = {
             config: "vite.taskCode.config.mjs",
           },
           {
-            entry: "src/childprocess/YellowPagesScraper.ts",
-            config: "vite.yellowPages.config.mjs",
-          },
-          {
-            entry: "src/childprocess/YellowPagesScraperProcess.ts",
-            config: "vite.yellowPagesScraperProcess.config.mjs",
-          },
-          {
             entry: "src/childprocess/websiteContentScraper.ts",
             config: "vite.websiteContentScraper.config.mjs",
           },

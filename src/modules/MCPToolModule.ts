@@ -53,6 +53,19 @@ export class MCPToolModule extends BaseModule {
     );
   }
 
+  /**
+   * Enable or disable every MCP server owned by a plugin in one update
+   * (HOST-04 activation gate).
+   */
+  public async setPluginServersEnabled(
+    pluginName: string,
+    enabled: boolean
+  ): Promise<number> {
+    return this.withConnection(() =>
+      this.mcpToolModel.setEnabledByPluginName(pluginName, enabled)
+    );
+  }
+
   /** Find all MCP servers owned by a plugin. (Design §5.3) */
   public async findMcpByPluginName(
     pluginName: string
@@ -60,6 +73,29 @@ export class MCPToolModule extends BaseModule {
     return this.withConnection(() =>
       this.mcpToolModel.findByPluginName(pluginName)
     );
+  }
+
+  /**
+   * Find a plugin's HOST-disabled rows (B11/HOST-15): rows disabled by the
+   * import flow while the declared browser dependency was unresolved —
+   * NOT rows a user disabled manually.
+   */
+  public async findBrowserDisabledByPluginName(
+    pluginName: string
+  ): Promise<MCPToolEntity[]> {
+    return this.withConnection(() =>
+      this.mcpToolModel.findBrowserDisabledByPluginName(pluginName)
+    );
+  }
+
+  /**
+   * Re-enable a HOST-disabled server row and clear its
+   * `hostDisabledReason` marker (B11 browser repair).
+   */
+  public async clearBrowserDisabledMarker(id: number): Promise<void> {
+    return this.withConnection(() =>
+      this.mcpToolModel.clearBrowserDisabledMarker(id)
+    ).then(() => undefined);
   }
 
   /**

@@ -149,42 +149,6 @@ describe("database-backed module connection guards", () => {
     expect(events).toEqual(["ensure", "list"]);
   });
 
-  test("YellowPagesResultModule initializes before counting task results", async () => {
-    vi.spyOn(SqliteDb, "getInstance").mockReturnValue({
-      connection: {
-        isInitialized: false,
-        getRepository: vi.fn().mockReturnValue({}),
-      },
-    } as unknown as SqliteDb);
-
-    const { YellowPagesResultModule } = await import(
-      "@/modules/YellowPagesResultModule"
-    );
-    const { YellowPagesResultModel } = await import(
-      "@/model/YellowPagesResult.model"
-    );
-    const events: string[] = [];
-
-    vi.spyOn(
-      YellowPagesResultModule.prototype,
-      "ensureConnection"
-    ).mockImplementation(async (): Promise<void> => {
-      events.push("ensure");
-    });
-    vi.spyOn(
-      YellowPagesResultModel.prototype,
-      "getResultCountByTaskId"
-    ).mockImplementation(async () => {
-      events.push("count");
-      return 0;
-    });
-
-    const module = new YellowPagesResultModule();
-    await module.getResultsCountByTaskId(1);
-
-    expect(events).toEqual(["ensure", "count"]);
-  });
-
   test("EmailSearchTaskModule initializes before reading task details", async () => {
     vi.spyOn(SqliteDb, "getInstance").mockReturnValue({
       connection: {

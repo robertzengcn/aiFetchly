@@ -4,6 +4,7 @@ import { AIChatModule } from "@/modules/AIChatModule";
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIArtifactModule } from "@/modules/AIArtifactModule";
+import { PluginFileArtifactModule } from "@/modules/PluginFileArtifactModule";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
@@ -468,6 +469,18 @@ export class AIChatV2Module extends BaseModule {
     } catch (err) {
       log.error("[ai-chat-v2] clearConversation: artifact clear failed:", err);
     }
+    // B12: plugin-owned file artifacts are conversation-scoped too — the
+    // confirmed deletion removes them (Module-mediated, best-effort).
+    try {
+      await new PluginFileArtifactModule().removeForConversation(
+        conversationId
+      );
+    } catch (err) {
+      log.error(
+        "[ai-chat-v2] clearConversation: plugin artifact clear failed:",
+        err
+      );
+    }
     return deleted;
   }
 
@@ -494,6 +507,17 @@ export class AIChatV2Module extends BaseModule {
       } catch (err) {
         log.error(
           "[ai-chat-v2] clearAllV2History: artifact clear failed:",
+          err
+        );
+      }
+      // B12: plugin-owned file artifacts follow the conversation delete.
+      try {
+        await new PluginFileArtifactModule().removeForConversation(
+          s.conversationId
+        );
+      } catch (err) {
+        log.error(
+          "[ai-chat-v2] clearAllV2History: plugin artifact clear failed:",
           err
         );
       }

@@ -905,12 +905,22 @@ async function executeViaToolExecutor(
         skipPermissionCheck: context.skipPermissionCheck,
         emitProgress: context.emitProgress,
         signal: context.signal,
+        deadlineEpochMs: context.deadlineEpochMs,
+        deadlinePerfMs: context.deadlinePerfMs,
       }
     );
+    // Preserve a plugin domain envelope's `success: false` instead of
+    // wrapping every returned record in an outer success (PRD §14.2/§21.7):
+    // only an explicit boolean false flips the verdict — legacy records
+    // without a `success` field keep the historical success behavior.
+    const executorReportedFailure =
+      typeof result === "object" &&
+      result !== null &&
+      (result as Record<string, unknown>).success === false;
     const execResult: ToolExecutionResult = {
       tool_call_id: context.toolCallId,
       tool_name: name,
-      success: true,
+      success: executorReportedFailure ? false : true,
       result,
       execution_time_ms: Date.now() - startTime,
     };

@@ -333,68 +333,6 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
       ],
     },
     {
-      path: "/yellowpages",
-      name: "Yellow_Pages",
-      meta: {
-        visible: true,
-        title: computed(() => t("router.yellow_pages")),
-        icon: "mdi-database-search",
-      },
-      component: Layout,
-      children: [
-        {
-          path: "list",
-          component: () => import("@/views/pages/yellowpages/list.vue"),
-          name: "YellowPagesList",
-          meta: {
-            visible: true,
-            title: computed(() => t("router.yellow_pages_list")),
-            icon: "mdi-format-list-bulleted",
-          },
-        },
-        {
-          path: "create",
-          component: () => import("@/views/pages/yellowpages/create.vue"),
-          name: "CreateYellowPagesTask",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.create_yellow_pages_task")),
-            icon: "mdi-plus",
-          },
-        },
-        {
-          path: "edit/:id(\\d+)",
-          component: () => import("@/views/pages/yellowpages/create.vue"),
-          name: "EditYellowPagesTask",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.edit_yellow_pages_task")),
-            icon: "mdi-pencil",
-          },
-        },
-        {
-          path: "detail/:id(\\d+)",
-          component: () => import("@/views/pages/yellowpages/create.vue"),
-          name: "YellowPagesTaskDetail",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.yellow_pages_task_detail")),
-            icon: "mdi-file-document-outline",
-          },
-        },
-        {
-          path: "results/:id(\\d+)",
-          component: () => import("@/views/pages/yellowpages/results.vue"),
-          name: "YellowPagesResults",
-          meta: {
-            visible: false,
-            title: computed(() => t("router.yellow_pages_results")),
-            icon: "mdi-chart-bar",
-          },
-        },
-      ],
-    },
-    {
       path: "/emailmarketing",
       name: "Email_Marketing",
       meta: {

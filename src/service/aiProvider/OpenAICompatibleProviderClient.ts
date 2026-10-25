@@ -345,12 +345,18 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     const bodyTimeout = Number.isFinite(remaining)
       ? Math.min(remaining, this.bodyTimeoutMs)
       : this.bodyTimeoutMs;
-    let bodyTimer: ReturnType<typeof setTimeout> | undefined;
-    if (bodyTimeout <= 0) {
-      controller.abort();
-    } else {
-      bodyTimer = setTimeout(() => controller.abort(), bodyTimeout);
-    }
+    // An already-spent call budget still goes through the timer (0ms) rather
+    // than a bare synchronous abort: the armed-but-not-yet-fired timer keeps
+    // the catches below classifying the abort as the stalled-body network
+    // timeout. A bare abort() left `bodyTimer` unset, so the raw `AbortError`
+    // ("The operation was aborted.") escaped whenever the budget expired
+    // exactly at the headers→body transition — on loaded CI runners with
+    // event-loop stalls, and in production whenever callBudgetMs is tighter
+    // than the provider's headers timing.
+    const bodyTimer = setTimeout(
+      () => controller.abort(),
+      Math.max(0, bodyTimeout)
+    );
     try {
       if (!res.ok) {
         // toProviderError reads res.text(), which rejects on abort but is

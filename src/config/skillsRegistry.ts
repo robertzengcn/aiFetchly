@@ -14,6 +14,7 @@ import type { ToolFunction } from "@/api/aiChatApi";
 import { log } from "@/modules/Logger";
 import type {
   SkillDefinition,
+  SkillExecutionContext,
   SkillExecutionResult,
   SkillManifest,
 } from "@/entityTypes/skillTypes";
@@ -161,6 +162,108 @@ function getAttachLocalImagesDestinationLabel(): string {
     }
   }
   return "the configured AI server";
+}
+
+/** Saved tool-result ids (`out_` + 32 hex chars). Not staged attachment refs. */
+const SAVED_TOOL_OUTPUT_ID = /^out_[0-9a-f]{32}$/;
+
+/**
+ * Surface a tool-executor payload without reporting a failed read as success,
+ * and without forwarding stacks or telemetry into the model transcript.
+ */
+function attachmentReadResult(
+  result: Record<string, unknown>
+): SkillExecutionResult {
+  if (result.success === true) {
+    return { success: true, result };
+  }
+  const error =
+    typeof result.error === "string" && result.error.trim().length > 0
+      ? result.error
+      : "Failed to read attachment content";
+  const failure: Record<string, unknown> = { success: false, error };
+  if (typeof result.recovery === "string" && result.recovery.length > 0) {
+    failure.recovery = result.recovery;
+  }
+  return { success: false, result: failure };
+}
+
+/**
+ * `read_attachment_content` entry.
+ *
+ * Staged uploads use a timestamp-uuid ref. Models also pass saved tool-result
+ * ids (`out_...`) here; those are not attachment files, so they are read
+ * through `tool_result_read` instead of being rejected as malformed refs.
+ */
+async function executeReadAttachmentContentSkill(
+  args: Record<string, unknown>,
+  context: SkillExecutionContext
+): Promise<SkillExecutionResult> {
+  const attachmentRef =
+    typeof args.attachment_ref === "string" ? args.attachment_ref.trim() : "";
+
+  if (SAVED_TOOL_OUTPUT_ID.test(attachmentRef)) {
+    const { handleToolResultRead } = await import(
+      "@/service/agentTools/toolResultReadTool"
+    );
+    const readArgs: Record<string, unknown> = { output_id: attachmentRef };
+    if (
+      typeof args.max_length === "number" &&
+      Number.isInteger(args.max_length) &&
+      args.max_length >= 1 &&
+      args.max_length <= 32000
+    ) {
+      readArgs.max_tokens = args.max_length;
+    }
+    const read = await handleToolResultRead(readArgs, context);
+    if (!read.success) {
+      return attachmentReadResult({
+        success: false,
+        error:
+          typeof read.result.error === "string"
+            ? read.result.error
+            : "Failed to read saved tool result",
+        recovery: read.result.recovery,
+      });
+    }
+    const text = typeof read.result.text === "string" ? read.result.text : "";
+    const complete = read.result.complete === true;
+    return {
+      success: true,
+      result: {
+        success: true,
+        fileName: attachmentRef,
+        content: text,
+        truncated: !complete,
+        output_id: attachmentRef,
+        next_cursor:
+          typeof read.result.next_cursor === "string"
+            ? read.result.next_cursor
+            : null,
+        complete,
+        read_via: "tool_result_read",
+        ...(complete
+          ? {}
+          : {
+              hint:
+                "This page is incomplete. Call tool_result_read with this output_id and next_cursor. Do not call read_attachment_content again with the same id.",
+            }),
+      },
+    };
+  }
+
+  const result = await ToolExecutor.execute(
+    "read_attachment_content",
+    args,
+    context.conversationId,
+    {
+      toolCallId: context.toolCallId,
+      skipPermissionCheck: context.skipPermissionCheck,
+      emitProgress: context.emitProgress,
+      signal: context.signal,
+    }
+  );
+  return attachmentReadResult(result);
 }
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
@@ -446,61 +549,6 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
   },
   {
-    name: "search_yellow_pages",
-    description:
-      "Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location. Use get_available_yellow_pages_platforms first to see available platforms.",
-    parameters: {
-      type: "object",
-      properties: {
-        platform: {
-          type: "string",
-          description:
-            'Platform name (e.g., "yellowpages.com"). Use get_available_yellow_pages_platforms to see available options.',
-        },
-        search_term: {
-          type: "string",
-          description: "Business name, category, or keyword to search for",
-        },
-        location: {
-          type: "string",
-          description: "City, state, or ZIP code to search in",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of business results to return (default: 20)",
-          default: 20,
-        },
-        include_emails: {
-          type: "boolean",
-          description:
-            "Whether to attempt extracting email addresses from business pages (default: false)",
-          default: false,
-        },
-      },
-      required: ["platform", "search_term", "location"],
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    timeoutClass: "network",
-    supportsPartialResult: true,
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "search_yellow_pages",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
-  },
-  {
     name: "search_maps_businesses",
     description:
       "Search map platforms (Google Maps or Yandex Maps) for local businesses by keyword and location. Returns structured business data including name, rating, review count, category, address, phone, website, and map URL. Use 'google' for global search or 'yandex' for Russian and CIS markets.",
@@ -576,39 +624,6 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     execute: async (args, context) => {
       const result = await ToolExecutor.execute(
         "search_maps_businesses",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
-  },
-  {
-    name: "get_available_yellow_pages_platforms",
-    description:
-      "A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system's current APIs, including their latest API version and supported country codes.",
-    parameters: {
-      type: "object",
-      properties: {
-        country_code: {
-          type: "string",
-          description:
-            'Optional ISO 3166-1 alpha-2 country code to filter available platforms (e.g., "US", "DE", "FR").',
-        },
-      },
-    },
-    tier: "main",
-    requiresConfirmation: false,
-    permissionCategory: "network",
-    source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "get_available_yellow_pages_platforms",
         args,
         context.conversationId,
         {
@@ -810,14 +825,19 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "read_attachment_content",
     description:
-      "Read staged markdown content from a chat attachment file path. Use this when the user message includes attachment references and you need full file content.",
+      "Read a file the user attached to this chat, or a saved tool result when attachment_ref is an out_ id. " +
+      "For an upload, copy attachment_ref from the Attached files block (timestamp-uuid, hyphens only). " +
+      "Do not pass a file path or file name. " +
+      "A saved tool-result id (out_...) is not an attachment: prefer tool_result_read with output_id. " +
+      "If an out_ id is passed here, this tool reads that saved result and returns its text plus next_cursor.",
     parameters: {
       type: "object",
       properties: {
         attachment_ref: {
           type: "string",
           description:
-            "Conversation-scoped reference ID of the staged attachment content to read.",
+            "Exact attachment_ref from an Attached files block, or a saved tool-result id (out_...). " +
+            "Copy it verbatim. Not a file path or file name.",
         },
         max_length: {
           type: "number",
@@ -832,20 +852,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     requiresConfirmation: false,
     permissionCategory: "pure",
     source: "built-in",
-    execute: async (args, context) => {
-      const result = await ToolExecutor.execute(
-        "read_attachment_content",
-        args,
-        context.conversationId,
-        {
-          toolCallId: context.toolCallId,
-          skipPermissionCheck: context.skipPermissionCheck,
-          emitProgress: context.emitProgress,
-          signal: context.signal,
-        }
-      );
-      return { success: true, result };
-    },
+    execute: executeReadAttachmentContentSkill,
   },
   {
     name: "generate_keywords",
@@ -900,7 +907,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
       "IMPORTANT: To avoid timeouts and get fast synchronous results, call this tool in SMALL BATCHES of about 5 URLs or fewer per call. For a larger URL list, make multiple sequential calls (around 5 URLs each) instead of one large call. " +
       "When the urls array contains 8 or more entries, this tool runs as a background job internally: the call blocks until extraction finishes and returns the real result directly (large batches can take several minutes — do not retry while waiting). " +
-      "You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id. Never invent or guess a job_id — job ids only ever come from tool results, and a fabricated id always returns not_found. " +
+      "Progress updates stream to the user while it runs. You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id. Never invent or guess a job_id — job ids only ever come from tool results, and a fabricated id always returns not_found. " +
       "If a batch hits the extraction timeout, any contacts already collected are returned with partial: true plus a note listing the URLs that were NOT processed — retry those remaining URLs in a smaller batch. " +
       EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
@@ -929,8 +936,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     //   the model gets the full result in one turn.
     // - >= ASYNC_URL_THRESHOLD → route to the async ToolJobRegistry path
     //   (resolveTimeoutMs("async") === null, no synchronous ceiling). The
-    //   loop registers the job and blocks on pollAsyncJobToCompletion, so
-    //   the model sees the real result in one turn. This matches the
+    //   loop registers the job, emits progress, waits locally via
+    //   pollAsyncJobToCompletion, and returns the REAL final result — the
+    //   model never polls (managed async). This matches the
     //   search_maps_businesses pattern (see lines ~329).
     //
     // Before this routing, large URL batches hit the 240s browser ceiling
@@ -2482,12 +2490,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "create_email_reply_draft",
     description:
-      "Create a knowledge-grounded reply draft for one inbound message. Searches the " +
-      "knowledge library by default, then writes the draft in the mailbox owner's voice. " +
-      "Does NOT send the reply and does NOT mention AI, retrieval, or confidence in the body. " +
-      "Include a URL when the user supplied one. A URL in the body is allowed and is not a " +
-      "safety finding, a block, or a reason to ask for extra confirmation. " +
-      "AI must be enabled. Returns the persisted draft for human review.",
+      "Create a knowledge-grounded reply draft for one inbound message. " +
+      "Call check_email_replied with the same message_id first. If that check " +
+      "returns state replied, do not call this tool. This tool does not probe " +
+      "the mailbox and does not decide whether a reply already exists. " +
+      "Searches the knowledge library by default, then writes the draft in the " +
+      "mailbox owner's voice. Does NOT send the reply and does NOT mention AI, " +
+      "retrieval, or confidence in the body. Include a URL when the user " +
+      "supplied one. A URL in the body is allowed and is not a safety finding, " +
+      "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
+      "Returns the persisted draft for human review. send_email_reply still " +
+      "checks reply state before sending.",
     parameters: {
       type: "object",
       properties: {
@@ -2558,6 +2571,13 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     },
     tier: "main",
     requiresConfirmation: true,
+    // Request-scoped action, mirroring the outbound send tools: this sends
+    // REAL email to an external recipient, so a chat approval mode alone
+    // (approve_for_me / full_access) must never auto-approve it. The user's
+    // in-chat confirmation is the request-scoped authorization the tool gate
+    // resolves (§14.1) — without this policy the auto-approve path could send
+    // advisory-tier content (links, payment references) with no human review.
+    confirmationPolicy: "request_scoped_action",
     permissionCategory: "automation",
     source: "built-in",
     execute: async (args) => {
@@ -2571,14 +2591,18 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "check_email_replied",
     description:
-      "Diagnostic tool: check whether an inbound message already has a reply. Returns a three-state " +
-      "typed result — `replied` (a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
-      "complete negative across all required sources within the cache window), or `unknown` (inconclusive: " +
-      "POP3, config-unavailable, missing identity, partial/failed search, folder-auth error, timeout, " +
-      "exhausted bounds). An unknown is NEVER a negative. Read-only — does not mutate the mailbox and " +
-      "needs no confirmation; the local detection cache/read audit may update. The same detector enforces " +
-      "reply safety before draft generation and before SMTP, so tool invocation is not a prerequisite for " +
-      "safety. AI must be enabled. Requires message_id.",
+      "Check whether an inbound message already has a reply. Call this before " +
+      "create_email_reply_draft. Returns a three-state typed result — `replied` " +
+      "(a reply was sent or the mailbox shows \\Answered), `not_replied` (a " +
+      "complete negative across all required sources within the cache window), or " +
+      "`unknown` (inconclusive: POP3, config-unavailable, missing identity, " +
+      "partial/failed search, folder-auth error, timeout, exhausted bounds). An " +
+      "unknown is NEVER a negative. When state is replied, do not draft. When " +
+      "state is not_replied, call create_email_reply_draft; that tool does not " +
+      "repeat this check. Read-only — does not mutate the mailbox and needs no " +
+      "confirmation; the local detection cache/read audit may update. " +
+      "send_email_reply still runs this detector before SMTP. AI must be enabled. " +
+      "Requires message_id.",
     parameters: {
       type: "object",
       properties: {

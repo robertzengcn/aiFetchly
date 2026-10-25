@@ -11,6 +11,7 @@
 //   --oversize            answer tools/call with a >cap line
 //   --structured          answer tools/call with structuredContent
 //   --multi-block         answer tools/call with text+image blocks
+//   --env-report          tools/call reports sanitized child env as structuredContent
 //   --die-after-init      exit(0) right after initialize completes
 
 let delayMs = 0;
@@ -109,6 +110,22 @@ function handleMessage(line) {
       break;
     case "tools/call": {
       const respond = () => {
+        if (behaviors.has("--env-report")) {
+          // Trusted-launch tests: report the sanitized child environment as
+          // structuredContent (ELECTRON_RUN_AS_NODE injection + allowlist).
+          send({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              content: [{ type: "text", text: "env" }],
+              structuredContent: {
+                runAsNode: process.env.ELECTRON_RUN_AS_NODE ?? null,
+                myVar: process.env.MY_VAR ?? null,
+              },
+            },
+          });
+          return;
+        }
         if (behaviors.has("--oversize")) {
           const padding = "x".repeat(9 * 1024 * 1024);
           send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: padding }] } });

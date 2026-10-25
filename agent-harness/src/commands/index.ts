@@ -11,7 +11,6 @@ import { registerEmailMarketingCommands } from './email-marketing';
 import { registerScheduleCommands } from './schedule';
 import { registerProxyCommands } from './proxy';
 import { registerSocialAccountCommands } from './social-account';
-import { registerYellowPagesCommands } from './yellow-pages';
 import { registerMapsCommands } from './maps';
 import { registerKnowledgeCommands } from './knowledge';
 import { registerDashboardCommands } from './dashboard';

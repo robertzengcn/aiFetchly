@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
+import type { PluginCapabilities } from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Plugin Management System — shared type contracts.
@@ -47,6 +48,8 @@ export interface PluginManifest {
   readonly dependencies?: readonly PluginDependency[];
   readonly homepage?: string;
   readonly repository?: string;
+  /** Declared host capability surface (browser execution, file artifacts). */
+  readonly capabilities?: PluginCapabilities;
   readonly agents?: PluginAgentDeclaration;
   /** Unknown top-level fields are allowed but preserved under diagnostics only. */
   readonly [extra: string]: unknown;
@@ -113,6 +116,15 @@ export interface PluginMcpServerDeclaration {
   readonly description?: string;
   readonly authType?: "none" | "api_key" | "bearer_token" | "custom";
   readonly metadata?: Record<string, unknown>;
+  /**
+   * Host-managed JavaScript runtime (plugin PRD §19.5). When set, the host
+   * launches its own embedded Node runtime (`process.execPath` in Node mode)
+   * instead of a plugin-supplied OS command. Mutually exclusive with
+   * `command`/`args`.
+   */
+  readonly runtime?: "aifetchly-node";
+  /** Plugin-relative path to the built entry file (requires `runtime`). */
+  readonly entry?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +169,7 @@ export type PluginErrorCode =
   | "skill-import-failed"
   | "mcp-config-invalid"
   | "mcp-server-conflict"
+  | "mcp-discovery-failed"
   | "permission-denied"
   | "dependency-unsatisfied"
   | "install-io-failed"

@@ -175,8 +175,9 @@ import {
   CREATE_SEARCH_TASK_ONLY,
   EXPORT_SEARCH_RESULTS,
   KILL_SEARCH_PROCESS,
-  // Yellow Pages Management Channels
-  YELLOW_PAGES_PLATFORMS,
+  // Platform Management Channels (PRD §28.1: shared platform registry —
+  // R9-preceding allowlist fix d23b41884; the yellow-pages-only channels
+  // were removed with the yellow-pages feature per PRD §17.2)
   PLATFORM_LIST,
   PLATFORM_DETAIL,
   PLATFORM_CREATE,
@@ -185,23 +186,6 @@ import {
   PLATFORM_VALIDATE,
   PLATFORM_STATISTICS,
   PLATFORM_TOGGLE,
-  YELLOW_PAGES_LIST,
-  YELLOW_PAGES_DETAIL,
-  YELLOW_PAGES_CREATE,
-  YELLOW_PAGES_UPDATE,
-  YELLOW_PAGES_DELETE,
-  YELLOW_PAGES_START,
-  YELLOW_PAGES_STOP,
-  YELLOW_PAGES_PAUSE,
-  YELLOW_PAGES_RESUME,
-  YELLOW_PAGES_PROGRESS,
-  YELLOW_PAGES_RESULTS,
-  YELLOW_PAGES_EXPORT,
-  YELLOW_PAGES_BULK,
-  YELLOW_PAGES_HEALTH,
-  YELLOW_PAGES_STATISTICS,
-  YELLOW_PAGES_KILL_PROCESS,
-  YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
   // Language Preference Channels
   LANGUAGE_PREFERENCE_GET,
   LANGUAGE_PREFERENCE_UPDATE,
@@ -374,6 +358,11 @@ import {
   AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
   AI_ARTIFACT_GET,
   AI_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_PREVIEW,
+  PLUGIN_ARTIFACT_EXPORT,
+  PLUGIN_ARTIFACT_DELETE,
+  PLUGIN_ARTIFACT_LIST_JOURNAL,
   // Dashboard Channels
   DASHBOARD_SUMMARY,
   DASHBOARD_TRENDS,
@@ -1131,8 +1120,9 @@ contextBridge.exposeInMainWorld("api", {
       CREATE_SEARCH_TASK_ONLY,
       EXPORT_SEARCH_RESULTS,
       KILL_SEARCH_PROCESS,
-      // Yellow Pages Management Channels
-      YELLOW_PAGES_PLATFORMS,
+      // Platform Management Channels (PRD §28.1: shared platform registry —
+      // R9-preceding allowlist fix d23b41884; the yellow-pages-only channels
+      // were removed with the yellow-pages feature per PRD §17.2)
       PLATFORM_LIST,
       PLATFORM_DETAIL,
       PLATFORM_CREATE,
@@ -1141,24 +1131,6 @@ contextBridge.exposeInMainWorld("api", {
       PLATFORM_VALIDATE,
       PLATFORM_STATISTICS,
       PLATFORM_TOGGLE,
-      YELLOW_PAGES_LIST,
-      YELLOW_PAGES_DETAIL,
-      YELLOW_PAGES_CREATE,
-      YELLOW_PAGES_UPDATE,
-      YELLOW_PAGES_DELETE,
-      YELLOW_PAGES_START,
-      YELLOW_PAGES_STOP,
-      YELLOW_PAGES_PAUSE,
-      YELLOW_PAGES_RESUME,
-      YELLOW_PAGES_PROGRESS,
-      YELLOW_PAGES_RESULTS,
-      YELLOW_PAGES_EXPORT,
-      YELLOW_PAGES_BULK,
-      YELLOW_PAGES_HEALTH,
-      YELLOW_PAGES_STATISTICS,
-      YELLOW_PAGES_KILL_PROCESS,
-      YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
-      "yellow_pages:get_process_status",
       // Language Preference Channels
       LANGUAGE_PREFERENCE_GET,
       LANGUAGE_PREFERENCE_UPDATE,
@@ -1297,6 +1269,12 @@ contextBridge.exposeInMainWorld("api", {
       // AI Artifact Channels
       AI_ARTIFACT_GET,
       AI_ARTIFACT_LIST,
+      // Plugin file artifacts
+      PLUGIN_ARTIFACT_LIST,
+      PLUGIN_ARTIFACT_PREVIEW,
+      PLUGIN_ARTIFACT_EXPORT,
+      PLUGIN_ARTIFACT_DELETE,
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
       AI_KEYWORDS_GENERATE,
       // AI Provider (Local/Custom) Settings Channels
       AI_PROVIDER_SETTINGS_GET,

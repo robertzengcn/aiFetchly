@@ -22,6 +22,10 @@ import type {
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
 import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
+import {
+  buildDeadlineExceededResult,
+  buildTurnCancelledResult,
+} from "@/service/AIChatBackgroundJobResults";
 import type { ChatProviderStreamEvent } from "@/service/aiProvider/ChatProviderClient";
 import { runToolWithProgress } from "@/service/aiChat/runToolWithProgress";
 import type {
@@ -97,6 +101,31 @@ import { BudgetReservationResult } from "@/service/aiTaskExecution/TaskRunBudget
 export const OUTBOUND_EMAIL_SEND_TOOL = "start_email_send_task";
 /** Outbound-email draft tool name (never send-gated; skipPermissionCheck). */
 export const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
+
+/**
+ * Whether this tool call should skip SkillExecutor's generic permission card.
+ *
+ * Drafts never contact recipients, so they skip. An allowed outbound-email
+ * gate is the request-scoped authorization for `start_email_send_task`
+ * (design §14.2): that exact call must not also show the generic approval
+ * card. Chat Full access does not fabricate this authorization by itself;
+ * only an allowed gate does. An explicit user denial is not skipped, so the
+ * normal permission path can still refuse the call.
+ */
+export function shouldSkipGenericToolPermission(input: {
+  readonly toolName: string;
+  readonly outboundSendGateAllowed: boolean;
+  readonly explicitlyDenied: boolean;
+}): boolean {
+  if (input.toolName === OUTBOUND_EMAIL_DRAFT_TOOL) {
+    return true;
+  }
+  return (
+    input.toolName === OUTBOUND_EMAIL_SEND_TOOL &&
+    input.outboundSendGateAllowed &&
+    !input.explicitlyDenied
+  );
+}
 import {
   inferTimeoutClassByName,
   resolveTimeoutMs,
@@ -111,7 +140,28 @@ import {
   stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
 import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
-import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import {
+  AdmissionSealedError,
+  ToolConversationConcurrencyError,
+  getDefaultToolJobRegistry,
+  type ToolJobSpawnHandle,
+} from "@/service/ToolJobRegistry";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  envelopeErrorIdentity,
+  logToolExecutionDiagnostics,
+} from "@/service/ToolExecutionDiagnostics";
+import {
+  getPluginRecoveryLedger,
+  jobFingerprintFromArgs,
+  searchIdentityFromArgs,
+  validatePublicSearchInput,
+} from "@/service/PluginRecoveryLedger";
+import {
+  getPluginFileArtifactService,
+  type RegisteredPluginArtifact,
+} from "@/service/PluginFileArtifactService";
+import { HOST_MAX_RUN_MS } from "@/entityTypes/pluginExecutionTypes";
 import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
 import {
   evaluateSkillInstallationToolPolicy,
@@ -517,6 +567,12 @@ interface PreparedToolCall {
     authorizationId: number;
     batchHash: string;
   };
+  /**
+   * True only when `start_email_send_task` passed the outbound gate for this
+   * exact call. That allowed decision is the request-scoped authorization, so
+   * the generic permission card must not be shown again (§14.2).
+   */
+  outboundSendGateAllowed?: boolean;
 }
 
 /**
@@ -1114,6 +1170,118 @@ function isToolExecutionResultLike(
     record.result !== null &&
     typeof record.execution_time_ms === "number"
   );
+}
+
+/** Narrow object guard for plugin payloads living in `result.result`. */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Bounded in-message preview row cap for plugin tool results. */
+const PLUGIN_PREVIEW_ROW_LIMIT = 5;
+
+/** Bounded warning merge: keeps at most `max` string warnings. */
+function toReadonlyStringArray(
+  value: unknown
+): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((w): w is string => typeof w === "string")
+    .slice(0, 8);
+}
+
+/** Preview passthrough: keep the plugin's bounded preview rows verbatim. */
+function toReadonlyStringArraySafeRecords(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, PLUGIN_PREVIEW_ROW_LIMIT);
+}
+
+/**
+ * Host-attached artifact reference (design §13.4): id + descriptor only —
+ * never a path, never the plugin's own bookkeeping fields.
+ */
+/**
+ * Host-attached artifact reference (design §13.4): id + descriptor only —
+ * never a path, never the plugin's own bookkeeping fields.
+ */
+interface PluginArtifactPromotionOutcome {
+  /** Staging directory finalized for the execution. */
+  stagingExists: boolean;
+  /** Candidates listed in the staging `candidates.json` (if any). */
+  candidateCount: number;
+  /** Files actually promoted into the host-owned artifact store. */
+  registeredCount: number;
+  /** Per-candidate promotion errors (partial-failure warnings). */
+  errors: readonly string[];
+  /**
+   * B03: a success payload was degraded to a truthful failure because
+   * nothing was registered while the tool was graded on artifacts.
+   */
+  degradedToFailure: boolean;
+  /**
+   * G03: opaque host artifact references for every PROMOTED artifact — the
+   * crash path needs them (the tool result never returned). No paths.
+   */
+  artifacts?: readonly RegisteredPluginArtifact[];
+}
+
+function toArtifactRef(
+  artifact: RegisteredPluginArtifact
+): Record<string, unknown> {
+  return {
+    id: artifact.id,
+    format: artifact.format,
+    recordCount: artifact.recordCount,
+    sizeBytes: artifact.sizeBytes,
+    createdAt: artifact.createdAt,
+    expiresAt: artifact.expiresAt,
+  };
+}
+
+/**
+ * Remove every staging/candidate reference from a plugin payload (H2): the
+ * model payload and the persisted message must expose host-registered ids
+ * only — never host filesystem paths.
+ */
+function stripPluginPayloadStagingRefs(
+  payload: Record<string, unknown>
+): void {
+  for (const key of [
+    "candidates",
+    "candidatePath",
+    "candidatesPath",
+    "stagingDir",
+    "stagingDirectory",
+    "outputDirectory",
+  ]) {
+    if (key in payload) delete payload[key];
+  }
+  const partial = payload.partial;
+  if (isRecordLike(partial)) {
+    for (const key of [
+      "candidates",
+      "candidatePath",
+      "candidatesPath",
+      "stagingDir",
+      "stagingDirectory",
+      "outputDirectory",
+    ]) {
+      if (key in partial) delete partial[key];
+    }
+  }
+}
+
+/**
+ * Extract the owning plugin name from a canonical plugin MCP tool name
+ * (`mcp__<plugin>__<server>__<tool>`, PRD §9.3). Returns null for every
+ * other tool-name shape (built-ins, legacy `mcp_<serverId>_<tool>`).
+ */
+function parsePluginNameFromCanonicalTool(name: string): string | null {
+  if (!name.startsWith("mcp__")) return null;
+  const parts = name.split("__");
+  if (parts.length !== 4) return null;
+  const plugin = parts[1];
+  return plugin.length > 0 ? plugin : null;
 }
 
 export function buildAssistantToolCallMessage(
@@ -4145,6 +4313,9 @@ export class AIChatQueryLoop {
                 batchHash: string;
               }
             | undefined;
+          // Set only after the gate allows this exact send. The generic
+          // permission card is then skipped; a blocked gate never reaches it.
+          let outboundSendGateAllowed = false;
           if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
             const gateDecision = await this.evaluateOutboundEmailGate(
               input,
@@ -4196,6 +4367,7 @@ export class AIChatQueryLoop {
                 batchHash: gateDecision.batchHash,
               };
             }
+            outboundSendGateAllowed = true;
           }
 
           // T23d (§10.2): durable operation fence for the consequential send.
@@ -4434,7 +4606,8 @@ export class AIChatQueryLoop {
           const preparedCall = await this.prepareToolCall(
             input,
             executableCall,
-            outboundAuthorization
+            outboundAuthorization,
+            outboundSendGateAllowed
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           yield buildToolCallEvent(effectiveArguments);
@@ -5361,8 +5534,13 @@ export class AIChatQueryLoop {
       authorizationId: number;
       batchHash: string;
     } | undefined,
-    onProgress?: ToolProgressEmitter
-  ): Promise<{ jobId: string }> {
+    outboundSendGateAllowed = false,
+    onProgress?: ToolProgressEmitter,
+    deadlineMs?: number
+  ): Promise<
+    | { kind: "job"; jobId: string; deadlinePerfMs: number }
+    | { kind: "rejected"; result: ToolExecutionResult }
+  > {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
     // Throw on failure: the run() outer try/catch at line ~797 catches this
@@ -5372,11 +5550,266 @@ export class AIChatQueryLoop {
       throw new Error("AI features are not enabled on this plan.");
     }
 
+    // One authoritative deadline for the whole job (HOST-07): the clamped
+    // plugin tool policy ceiling (or the host default). Every inner MCP
+    // timeout derives from the remaining budget; progress can never extend
+    // it, and pollAsyncJobToCompletion enforces the same bound.
+    //
+    // H5: the EPOCH deadline is the observable contract (host context file,
+    // registry snapshots, user-facing copy); the AUTHORITATIVE expiry checks
+    // use a monotonic clock anchored here (`deadlinePerfMs`), so wall-clock
+    // changes can never extend or truncate the job.
+    const deadlineBudgetMs = deadlineMs ?? HOST_MAX_RUN_MS;
+    const deadlineEpochMs = Date.now() + deadlineBudgetMs;
+    const deadlinePerfMs = performance.now() + deadlineBudgetMs;
+
     // T05 (FR-08/10/23, AC-27): record this tool execution against the
     // execution budget before dispatching (fail-closed gate per B13a).
     await this.reserveToolExecutionBudget(input, call);
-
     const registry = getDefaultToolJobRegistry();
+
+    // ---- HOST-10 / HOST-16 admission (plugin async MCP tools only) ----
+    // Generic, policy-driven: no tool-specific branch lives here.
+    const args = call.arguments ?? {};
+    const pluginName = parsePluginNameFromCanonicalTool(call.name);
+    if (pluginName) {
+      // G01 (design §10.1, HOST-10): the host validates the public input
+      // contract BEFORE admission — bad shapes never reach the ledger,
+      // the registry or the plugin process.
+      const inputIssues = validatePublicSearchInput(args);
+      if (inputIssues.length > 0) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error: "The search input was rejected by the host schema check.",
+              code: "TOOL_INPUT_INVALID",
+              issues: inputIssues.map((issue) => ({
+                code: issue.code,
+                field: issue.field,
+                message: issue.message,
+              })),
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      const ledger = getPluginRecoveryLedger();
+      const identity = searchIdentityFromArgs(args);
+      const fingerprint = jobFingerprintFromArgs(
+        input.conversationId,
+        call.name,
+        args
+      );
+
+      // Duplicate suppression: an equivalent scrape already queued/running in
+      // this conversation returns the existing job identity, never a second
+      // live job (PRD §11.9).
+      const duplicate = registry.findActiveJobByFingerprint(
+        input.conversationId,
+        fingerprint
+      );
+      if (duplicate) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "An identical job is already running in this conversation.",
+              code: "JOB_ALREADY_RUNNING",
+              job_id: duplicate.jobId,
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      // Recovery budget: the model may propose, the ledger disposes. Retry
+      // after a failure requires the host-minted error reference plus an
+      // allowed strategy, inside the attempt budget and cooldown window.
+      const recoveryArg =
+        typeof args.recovery === "object" && args.recovery !== null
+          ? (args.recovery as {
+              previousErrorId?: unknown;
+              strategy?: unknown;
+            })
+          : undefined;
+      // B08: the ledger binds this scope to the HOST-verified request
+      // generation (sourceUserMessageId) so forged recovery fields cannot
+      // mint attempt 1 on a fresh scope and an explicit NEW user message
+      // resets the budget without a model bypass.
+      const validation = ledger.validateAndReserve({
+        conversationId: input.conversationId,
+        pluginName,
+        searchIdentity: identity,
+        previousErrorId: recoveryArg?.previousErrorId,
+        strategy: recoveryArg?.strategy,
+        userTurnId: input.sourceUserMessageId,
+      });
+      if (!validation.ok) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "Recovery request was rejected by the host retry policy.",
+              code: "INVALID_RECOVERY_REQUEST",
+              reason: validation.reason,
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      // G03: artifact-quota preflight BEFORE a job exists — an artifact-
+      // capable plugin cannot consume a slot to write staging it could
+      // never legally promote. The reserved attempt is released because an
+      // admission rejection never counts a usable run.
+      if (
+        getPluginToolPolicyRegistry().getPluginArtifactFormats(pluginName)
+          .length > 0
+      ) {
+        const quota = getPluginFileArtifactService().preflightArtifactQuota(
+          pluginName
+        );
+        if (!quota.ok) {
+          ledger.completeAttempt(
+            input.conversationId,
+            pluginName,
+            identity,
+            "failed"
+          );
+          return {
+            kind: "rejected",
+            result: {
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: false,
+              result: {
+                error:
+                  "The local result-file storage is full. Export or delete old result files, free disk space, and retry.",
+                code: "ARTIFACT_QUOTA_EXCEEDED",
+                quota: quota.code,
+              },
+              execution_time_ms: 0,
+            },
+          };
+        }
+      }
+
+      let startOutcome: { jobId: string; queued: boolean };
+      try {
+        startOutcome = registry.start(
+          call.name,
+          args,
+          { conversationId: input.conversationId, toolCallId: call.id },
+          (handle) => this.spawnPluginAsyncTool(input, call, handle, {
+            deadlineEpochMs,
+            deadlinePerfMs,
+            outboundAuthorization,
+            onProgress,
+            pluginName,
+            identity,
+          // H1/H3: the reservation (attempt, host strategy, owed delay) is the
+          // authority for this call's recovery — the model's arguments are
+          // never authoritative. Threading it through the host context file
+          // lets the plugin verify {errorId, strategy} and the owed delay.
+          authorizedRecovery:
+            validation.context.strategy && validation.context.errorRef
+              ? {
+                  errorId: validation.context.errorRef,
+                  strategy: validation.context.strategy,
+                  ...(validation.context.retryAfterMs !== null
+                    ? { retryAfterMs: validation.context.retryAfterMs }
+                    : {}),
+                }
+              : undefined,
+        }),
+        {
+          // G01: enforce the plugin's declared maxConcurrentPerConversation
+          // for this tool. Admission happens BEFORE a job exists — no slot
+          // and no ledger lock are committed when the limit is reached.
+          fingerprint,
+          conversationConcurrencyLimit:
+            getPluginToolPolicyRegistry().resolveByToolName(call.name)?.policy
+              .maxConcurrentPerConversation,
+        }
+        );
+      if (startOutcome.queued) {
+        // B08: a QUEUED job's spawn callback has not run, so the settle hook
+        // inside spawnPluginAsyncTool does not exist yet. Attach the
+        // reservation cleanup HERE, before queue admission can be undone by
+        // a queued cancellation (which never invokes the spawn).
+        registry.onSettledById(startOutcome.jobId, () => {
+          ledger.completeAttempt(
+            input.conversationId,
+            pluginName,
+            identity,
+            "failed"
+          );
+        });
+      }
+      } catch (err) {
+        // H5 (lifecycle): admission seals (disable/uninstall/update) reject
+        // with a stable, retryable structured result — no job is created.
+        // B08: the attempt was reserved BEFORE admission; a sealed rejection
+        // must RELEASE the reservation here so the scope never keeps a
+        // dangling in-flight lock (the next call cannot be deadlocked).
+        const sealedBy =
+          err instanceof AdmissionSealedError ? err.sealedBy : null;
+        ledger.completeAttempt(
+          input.conversationId,
+          pluginName,
+          identity,
+          "failed"
+        );
+        if (err instanceof ToolConversationConcurrencyError) {
+          return {
+            kind: "rejected",
+            result: {
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: false,
+              result: {
+                error:
+                  "This tool is already running the maximum number of searches allowed for this conversation. Retry after the current search finishes.",
+                code: "TOOL_CONCURRENCY_LIMIT",
+                limit: err.limit,
+              },
+              execution_time_ms: 0,
+            },
+          };
+        }
+        if (sealedBy === null) throw err;
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "This plugin is being updated or removed; retries will succeed once the operation completes.",
+              code: "TOOL_ADMISSION_SEALED",
+              sealed_by: sealedBy.slice(0, 96),
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+      return { kind: "job", jobId: startOutcome.jobId, deadlinePerfMs };
+    }
+
     const { jobId } = registry.start(
       call.name,
       call.arguments ?? {},
@@ -5395,6 +5828,10 @@ export class AIChatQueryLoop {
               // shutdown) reaches the actual underlying tool work instead of
               // only relabelling the registry entry (FR-36, design §17.2).
               signal: handle.signal,
+              // Authoritative managed-async deadline (HOST-07). Epoch rides
+              // the observable contract; the monotonic anchor drives clocks (H5).
+              deadlineEpochMs,
+              deadlinePerfMs,
               // Trusted intent context (technical design §9/§14.2): binds the
               // draft to the exact user message + persisted intent decision
               // so authorization is never derived from tool arguments.
@@ -5408,10 +5845,27 @@ export class AIChatQueryLoop {
               // Trusted gate-resolved authorization for an allowed send
               // (§15.1); threaded for uniformity with the foreground path.
               outboundAuthorization,
-              // Draft generation only persists reviewable local state; it
-              // does not contact recipients. The send tool remains gated.
-              skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+              // Drafts never contact recipients. An allowed send gate is the
+              // request-scoped authorization, so that exact call skips the
+              // generic permission card (§14.2). Explicit denial still prompts.
+              skipPermissionCheck: shouldSkipGenericToolPermission({
+                toolName: call.name,
+                outboundSendGateAllowed,
+                explicitlyDenied:
+                  SkillPermissionService.getPermissionStatus(call.name) ===
+                  "denied",
+              }),
               emitProgress: (event) => {
+                // HOST-04: map each progress event to BOTH destinations —
+                // the registry record (job snapshots / poll path) and the
+                // renderer tool_progress stream.
+                registry.updateProgress(handle.jobId, {
+                  phase: event.phase,
+                  message: event.message,
+                  progress: event.progress ?? null,
+                  partialCount: event.partialCount ?? null,
+                  expectedCount: event.expectedCount ?? null,
+                });
                 onProgress?.({
                   type: "tool_progress",
                   conversationId: input.conversationId,
@@ -5435,7 +5889,476 @@ export class AIChatQueryLoop {
       }
     );
 
-    return { jobId };
+    return { kind: "job", jobId, deadlinePerfMs };
+  }
+
+  /**
+   * Spawn callback for plugin-policy async tools: identical to the generic
+   * path, plus recovery-ledger settlement — a recoverable domain failure is
+   * recorded (minting the host error reference the model must echo back) and
+   * the reserved attempt settles when the job settles (HOST-16).
+   */
+  private async spawnPluginAsyncTool(
+    input: AIChatQueryGeneratorInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    },
+    handle: ToolJobSpawnHandle,
+    meta: {
+      deadlineEpochMs: number;
+      /** Monotonic anchor for every deadline-aware clock (H5). */
+      deadlinePerfMs: number;
+      outboundAuthorization:
+        | {
+            batchId: number;
+            authorizationId: number;
+            batchHash: string;
+          }
+        | undefined;
+      onProgress?: ToolProgressEmitter;
+      pluginName: string;
+      identity: string;
+      /** Ledger-authorized recovery for this call (H1/H3); undefined when this is attempt 1. */
+      authorizedRecovery?: {
+        errorId: string;
+        strategy: "fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay";
+        retryAfterMs?: number;
+      };
+    }
+  ): Promise<void> {
+    const ledger = getPluginRecoveryLedger();
+    // G02: host-measured duration for the execution diagnostic record.
+    const spawnStartedPerf = performance.now();
+    handle.onSettled(() => {
+      // Outcome is derived from the settled result below; cancellation and
+      // transport failures settle as "failed" (attempt consumed, in-flight
+      // reservation released — never a dangling lock).
+      ledger.completeAttempt(
+        input.conversationId,
+        meta.pluginName,
+        meta.identity,
+        "failed"
+      );
+    });
+    // H1: the registry job id IS the execution id — one id binds the host
+    // context file, the staging directory, the journal, and promotion.
+    const executionId = handle.jobId;
+    // G03: write a crash-safe spawn journal (status "running") so an
+    // execution interrupted by a host crash/restart stays conversation-linkable
+    // and can never be mistaken for a promoted one (0 registered artifacts).
+    try {
+      if (
+        getPluginToolPolicyRegistry()
+          .getPluginArtifactFormats(meta.pluginName)
+          .length > 0
+      ) {
+        getPluginFileArtifactService().beginExecutionJournal({
+          executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+        });
+      }
+    } catch {
+      // Best-effort — journal absence only affects interrupted-state
+      // surfacing, never execution correctness.
+    }
+    try {
+      const result = await this.deps.executeTool(call.name, call.arguments ?? {}, {
+        conversationId: input.conversationId,
+        toolCallId: call.id,
+        args: call.arguments,
+        model: input.request.model,
+        signal: handle.signal,
+        deadlineEpochMs: meta.deadlineEpochMs,
+        deadlinePerfMs: meta.deadlinePerfMs,
+        executionId,
+        authorizedRecovery: meta.authorizedRecovery,
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
+        ownerAgentId: input.ownerAgentId,
+        outboundAuthorization: meta.outboundAuthorization,
+        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+        emitProgress: (event) => {
+          getDefaultToolJobRegistry().updateProgress(handle.jobId, {
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+          });
+          meta.onProgress?.({
+            type: "tool_progress",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: call.id,
+            toolName: call.name,
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+            timestamp: Date.now(),
+          });
+        },
+      });
+
+      // B03: promote artifacts BEFORE final ledger settlement and verdict.
+      // A plugin result claiming success whose staged files failed to
+      // register is degraded inside `promotePluginArtifactsToPayload`; the
+      // OUTER verdict and the ledger must agree with the degraded payload
+      // instead of reporting success for nothing usable.
+      const promotion = isRecordLike(result.result)
+        ? this.promotePluginArtifactsToPayload({
+            conversationId: input.conversationId,
+            executionId,
+            pluginName: meta.pluginName,
+            payload: result.result,
+          })
+        : undefined;
+
+      // Recoverable domain failure → record + bind the host error reference
+      // BEFORE the result reaches the model (design §12.2: the plugin's
+      // diagnostic id is preserved as pluginErrorId; the authoritative id the
+      // model must echo is host-minted).
+      if (!result.success) {
+        const errorObj = (result.result as Record<string, unknown> | undefined)
+          ?.error;
+        if (
+          errorObj &&
+          typeof errorObj === "object" &&
+          typeof (errorObj as Record<string, unknown>).code === "string"
+        ) {
+          const err = errorObj as {
+            code: string;
+            category?: unknown;
+            allowedStrategies?: unknown;
+            retryAfterMs?: unknown;
+            recoverable?: unknown;
+            id?: unknown;
+          };
+          const allowed = Array.isArray(err.allowedStrategies)
+            ? (err.allowedStrategies.filter(
+                (s): s is "fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay" =>
+                  s === "fallback_adapter" ||
+                  s === "reduced_scope" ||
+                  s === "switch_platform" ||
+                  s === "retry_after_delay"
+              ) as readonly ("fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay")[])
+            : [];
+          // B08: the ledger independently enforces the recoverable/fatal
+          // policy (unknown strategies drop; fatal/user-intervention and an
+          // envelope that claims recoverable:false never give strategies).
+          const errorRef = ledger.recordFailure({
+            conversationId: input.conversationId,
+            pluginName: meta.pluginName,
+            searchIdentity: meta.identity,
+            code: err.code,
+            category:
+              typeof err.category === "string" ? err.category : "plugin_bug",
+            allowedStrategies: allowed,
+            retryAfterMs:
+              typeof err.retryAfterMs === "number" ? err.retryAfterMs : undefined,
+            recoverable: err.recoverable,
+            userTurnId: input.sourceUserMessageId,
+          });
+          const bound = ledger.bindPluginErrorId(errorRef, err.id);
+          (result.result as Record<string, unknown>).error = {
+            ...err,
+            ...bound,
+          };
+        } else {
+          // H3: a failure WITHOUT a structured error envelope is an invalid
+          // result — it cannot carry a recovery contract into the ledger.
+          // Charge the attempt (transport failure) so it cannot repeat for
+          // free; no automated retry may follow.
+          ledger.recordTransportFailure({
+            conversationId: input.conversationId,
+            pluginName: meta.pluginName,
+            searchIdentity: meta.identity,
+            userTurnId: input.sourceUserMessageId,
+          });
+        }
+      }
+      if (!result.success) {
+        // Ledger already settled as "failed" through its onSettled hook.
+        const errorIdentity = envelopeErrorIdentity(result.result);
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "failed",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: errorIdentity.code,
+          errorMessage: errorIdentity.message,
+          artifactsRegistered: promotion?.registeredCount ?? 0,
+          artifactErrors: promotion?.errors.length ?? 0,
+          resultRecordCount: errorIdentity.recordCount,
+          cleanupPending: null,
+        });
+      } else if (promotion?.degradedToFailure) {
+        // B03: success-with-no-usable-artifacts is a truthful failure for
+        // the ledger too — a repeat of the same run must consume budget
+        // instead of counting a phantom success.
+        result.success = false;
+        ledger.completeAttempt(
+          input.conversationId,
+          meta.pluginName,
+          meta.identity,
+          "failed"
+        );
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "degraded-promotion",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: null,
+          errorMessage: null,
+          artifactsRegistered: promotion.registeredCount,
+          artifactErrors: promotion.errors.length,
+          resultRecordCount: envelopeErrorIdentity(result.result).recordCount,
+          cleanupPending: null,
+        });
+      } else {
+        ledger.completeAttempt(
+          input.conversationId,
+          meta.pluginName,
+          meta.identity,
+          "succeeded"
+        );
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "succeeded",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: null,
+          errorMessage: null,
+          artifactsRegistered: promotion?.registeredCount ?? 0,
+          artifactErrors: promotion?.errors.length ?? 0,
+          resultRecordCount: envelopeErrorIdentity(result.result).recordCount,
+          cleanupPending: null,
+        });
+      }
+
+      handle.resolve(result);
+    } catch (err) {
+      // H3: crash/exit rejected the call — the FIRST arrival of this path
+      // cannot skip the budget either. The reservation created the entry, so
+      // this records a real transport failure against it; the model must
+      // report the problem to the user instead of silently re-rolling.
+      ledger.recordTransportFailure({
+        conversationId: input.conversationId,
+        pluginName: meta.pluginName,
+        searchIdentity: meta.identity,
+        userTurnId: input.sourceUserMessageId,
+      });
+      // Crash salvage: register whatever candidates were already finalized.
+      let crashArtifactsRegistered = 0;
+      let crashArtifactErrors = 0;
+      let crashSalvageResolved = false;
+      try {
+        const crashedPromotion = this.promotePluginArtifactsToPayload({
+          conversationId: input.conversationId,
+          executionId,
+          pluginName: meta.pluginName,
+          payload: undefined,
+        });
+        crashArtifactsRegistered = crashedPromotion.registeredCount;
+        crashArtifactErrors = crashedPromotion.errors.length;
+        // G03: a crash that salvaged finalized artifacts is surfaced
+        // TRUTHFULLY through the tool channel: a failed result that carries
+        // the opaque artifact references (never paths) + `interrupted`, so
+        // the model can tell the user the files exist even though the tool
+        // call itself died. Without salvage the rejection path applies.
+        if (crashedPromotion.artifacts && crashedPromotion.artifacts.length > 0) {
+          handle.resolve({
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error: {
+                code: "TRANSPORT_CRASHED",
+                category: "host_bug",
+                message:
+                  "The tool process crashed, but its finalized result files were registered by the host.",
+                recoverable: false,
+                allowedStrategies: [],
+                // H1-style host error id the model may echo.
+                id: `art_${executionId.slice(0, 12)}`,
+              },
+              artifacts: crashedPromotion.artifacts.map(toArtifactRef),
+              interrupted: true,
+              job_id: executionId,
+            },
+            execution_time_ms: Math.round(
+              performance.now() - spawnStartedPerf
+            ),
+          });
+          crashSalvageResolved = true;
+        }
+      } catch {
+        // Best-effort salvage on the crash path.
+      }
+      logToolExecutionDiagnostics({
+        toolName: call.name,
+        toolCallId: executionId,
+        conversationId: input.conversationId,
+        pluginName: meta.pluginName,
+        outcome: "crashed",
+        attempt: meta.authorizedRecovery?.strategy ?? "initial",
+        durationMs: performance.now() - spawnStartedPerf,
+        errorCode: err instanceof Error ? err.name : "UNKNOWN",
+        errorMessage: err instanceof Error ? err.message : String(err),
+        artifactsRegistered: crashArtifactsRegistered,
+        artifactErrors: crashArtifactErrors,
+        resultRecordCount: null,
+        cleanupPending: null,
+      });
+      if (!crashSalvageResolved) {
+        handle.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+  }
+
+  /**
+   * H2: production caller for `PluginFileArtifactService.promoteCandidates`.
+   *
+   * Read `candidates.json` from the execution's staging directory, promote
+   * only listed + finalized files into the host-owned artifact store, and
+   * rewrite the model payload: staging paths are stripped, `artifact` /
+   * `artifacts` carry id, format, record count, size, and timestamps.
+   * Idempotent per (executionId, candidate path) — retries never duplicate.
+   * On a failed promotion the caller must NOT return success:true.
+   */
+  private promotePluginArtifactsToPayload(input: {
+    conversationId: string;
+    executionId: string;
+    pluginName: string;
+    /** Model-facing payload when the tool produced one (undefined on crash). */
+    payload?: Record<string, unknown>;
+  }): PluginArtifactPromotionOutcome {
+    /** No-op outcome for missing execution id. */
+    const noop: PluginArtifactPromotionOutcome = {
+      stagingExists: false,
+      candidateCount: 0,
+      registeredCount: 0,
+      errors: [],
+      degradedToFailure: false,
+      artifacts: [],
+    };
+    if (!input.executionId) return noop;
+    const artifactsService = getPluginFileArtifactService();
+    const stagingOk = artifactsService.stagingExists(input.executionId);
+    const candidates = artifactsService.readCandidates(input.executionId);
+
+    let artifacts: RegisteredPluginArtifact[] = [];
+    let errors: string[] = [];
+    if (stagingOk && candidates.length > 0) {
+      // G03: identity + completion state recorded with the artifact
+      // metadata — the policy registry holds the ACTUAL manifest
+      // version/generation captured at registration (G02).
+      const registry = getPluginToolPolicyRegistry();
+      const pluginVersion = registry.getPluginVersion(input.pluginName) ?? undefined;
+      const pluginGeneration =
+        registry.getPluginGeneration(input.pluginName) ?? undefined;
+      const promotion = artifactsService.promoteCandidates({
+        executionId: input.executionId,
+        conversationId: input.conversationId,
+        pluginName: input.pluginName,
+        candidates,
+        ...(pluginVersion !== undefined ? { pluginVersion } : {}),
+        ...(pluginGeneration !== undefined ? { pluginGeneration } : {}),
+        resultStatus: input.payload
+          ? input.payload.success === false
+            ? "degraded"
+            : "complete"
+          : "interrupted",
+      });
+      artifacts = promotion.artifacts;
+      errors = promotion.errors;
+    }
+
+    const declined =
+      !stagingOk || candidates.length === 0 || errors.length > 0;
+    // B03: only a plugin that DECLARES fileArtifact capability (manifest
+    // `capabilities.fileArtifacts`) — or one that already staged candidates
+    // — is graded on registered artifacts. A generic async tool (e.g. a
+    // platform listing) legitimately returns success with no staging dir.
+    const requiresArtifacts =
+      getPluginToolPolicyRegistry().getPluginArtifactFormats(input.pluginName)
+        .length > 0;
+    let degradedToFailure = false;
+    if (input.payload) {
+      // Strip candidate/staging references — the renderer and the model see
+      // opaque artifact ids only (design §13: paths never leave the host).
+      stripPluginPayloadStagingRefs(input.payload);
+
+      if (artifacts.length > 0) {
+        input.payload.artifact = toArtifactRef(artifacts[0]);
+        input.payload.artifacts = artifacts.map(toArtifactRef);
+        if (errors.length > 0 && input.payload.success === true) {
+          // Partial promotion still yields durable artifacts for SOME files,
+          // but the user must see that not everything was promised.
+          input.payload.warnings = [
+            ...toReadonlyStringArray(input.payload.warnings),
+            `Artifact registration partially failed: ${errors.join("; ")}`,
+          ].slice(0, 8);
+        }
+      } else if (input.payload.success === true) {
+        // H2/B03: a success with NO durable, registered artifacts is NOT a
+        // success from the user's point of view when the plugin declared
+        // artifact capability or staged any candidates (nothing is
+        // previewable or exportable / the staging never finalized). Degrade
+        // to a truthful structured failure instead of advertising files
+        // that do not exist. A plugin WITHOUT declared artifact capability
+        // and WITHOUT staging keeps its legacy generic semantics.
+        if (requiresArtifacts || stagingOk || candidates.length > 0) {
+          const previewKey =
+            "preview" in input.payload ? input.payload.preview : [];
+          degradedToFailure = true;
+          input.payload = Object.assign(input.payload, {
+            status: "failed",
+            success: false,
+            summary: input.payload.summary,
+            error: {
+              id: `art_${input.executionId.slice(0, 12)}`,
+              code: "ARTIFACT_REGISTRATION_FAILED",
+              category: "host_bug",
+              stage: "artifacts",
+              message: !stagingOk
+                ? "The scrape reported success but its staging directory was not finalized."
+                : candidates.length === 0
+                  ? "The scrape reported success but registered no finalized result files."
+                  : "Result files could not be registered by the host.",
+              recoverable: false,
+              allowedStrategies: [],
+            },
+            // Preserve the in-message preview only; records stay host-side.
+            preview: toReadonlyStringArraySafeRecords(previewKey),
+          });
+          if (isRecordLike(input.payload.error)) {
+            input.payload.error.id = `art_${input.executionId.slice(0, 12)}`;
+          }
+        }
+      }
+    }
+    return {
+      stagingExists: stagingOk,
+      candidateCount: candidates.length,
+      registeredCount: artifacts.length,
+      errors,
+      degradedToFailure,
+      artifacts,
+    };
   }
 
   /**
@@ -5455,10 +6378,26 @@ export class AIChatQueryLoop {
     input: AIChatQueryGeneratorInput,
     call: { id: string; name: string },
     jobId: string,
-    onProgress?: ToolProgressEmitter
+    onProgress?: ToolProgressEmitter,
+    deadlineMs?: number,
+    /** H5: monotonic anchor shared with the execution path when provided. */
+    deadlinePerfMs?: number
   ): Promise<ToolExecutionResult> {
     const registry = getDefaultToolJobRegistry();
     const startedAt = Date.now();
+    const shortId = jobId.slice(0, 8);
+    // The poll cap enforces the SAME authoritative deadline the execution
+    // path uses (plugin policy maxRunMs, already clamped to the host ceiling
+    // and to the ASYNC_POLL_MAX_MS backstop).
+    //
+    // H5: expiry is decided on the MONOTONIC clock anchored when the job was
+    // admitted (`deadlinePerfMs`); a wall-clock change can never extend or
+    // truncate the job. `deadlineAt` (epoch) survives only for display.
+    const deadlinePerfAt =
+      deadlinePerfMs ??
+      performance.now() +
+        Math.min(deadlineMs ?? ASYNC_POLL_MAX_MS, ASYNC_POLL_MAX_MS);
+    const deadlineAt = startedAt + (deadlineMs ?? ASYNC_POLL_MAX_MS);
 
     const emitProgress = (
       phase: "queued" | "running" | "fetching" | "extracting" | "finalizing",
@@ -5538,7 +6477,15 @@ export class AIChatQueryLoop {
 
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
     while (true) {
-      await sleepUntilAbortOrTimeout(currentIntervalMs);
+      // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
+      // the poll interval is only a backstop; the absolute deadline governs
+      // the longest wait between wakes. The §10.3 backoff interval
+      // (currentIntervalMs) is capped by the remaining deadline so an
+      // adaptive interval can never overshoot the authoritative expiry.
+      const msUntilDeadline = deadlinePerfAt - performance.now();
+      await sleepUntilAbortOrTimeout(
+        Math.min(currentIntervalMs, Math.max(0, msUntilDeadline))
+      );
 
       if (input.abortController.signal.aborted) {
         try {
@@ -5546,29 +6493,36 @@ export class AIChatQueryLoop {
         } catch {
           // Best-effort; the turn is dead anyway.
         }
-        return {
-          tool_call_id: call.id,
-          tool_name: call.name,
-          success: false,
-          result: { error: "Turn cancelled" },
-          execution_time_ms: Date.now() - startedAt,
-        };
+        // B07: a user Stop must not return before cleanup is awaited (the
+        // deadline path already did) — the result carries the ACTUAL
+        // cleanup confirmation instead of assumed success.
+        const stopCleanedUp = await registry.waitForSettled(jobId, 5_000);
+        return buildTurnCancelledResult(
+          call,
+          jobId,
+          stopCleanedUp,
+          startedAt
+        );
       }
 
-      if (Date.now() - startedAt >= ASYNC_POLL_MAX_MS) {
-        return {
-          tool_call_id: call.id,
-          tool_name: call.name,
-          success: false,
-          result: {
-            error:
-              "Background job did not complete within 30 minutes. " +
-              "The job may still be running; ask the user whether to keep " +
-              "waiting or cancel via cancel_tool_job(job_id).",
-            job_id: jobId,
-          },
-          execution_time_ms: Date.now() - startedAt,
-        };
+      if (performance.now() >= deadlinePerfAt) {
+        // PRD §11.8: expiry must CANCEL the job and stop its browser before
+        // returning — never tell the model to retry while the original
+        // scraper may still be running. Bounded cleanup wait; the supervised
+        // transport escalates to SIGKILL independently of this wait, and the
+        // H5 process-group kill covers the plugin's browser descendants (the
+        // spawn continuation that closes the transport is exactly what the
+        // deferred H5 settlement waits for).
+        try {
+          registry.cancel(jobId);
+        } catch {
+          // Best-effort; report the deadline either way.
+        }
+        const cleanedUp = await registry.waitForSettled(jobId, 5_000);
+        // B07: the error text and payload must reflect what actually
+        // happened — an unconfirmed shutdown is reported as
+        // cleanup_pending, never as a definite stop.
+        return buildDeadlineExceededResult(call, jobId, cleanedUp, startedAt);
       }
 
       const snap = registry.getStatus(jobId);
@@ -5607,11 +6561,23 @@ export class AIChatQueryLoop {
             execution_time_ms: Date.now() - startedAt,
           };
         }
+        // Plugin domain envelopes carry their own success semantics (PRD
+        // §14.2): a recoverable application failure resolves the transport
+        // call normally but must surface as ToolExecutionResult.success =
+        // false so PostToolUseFailure hooks and the next model round see the
+        // structured error.
+        const envelope = snap.result as Record<string, unknown> | null;
+        const envelopeSuccess =
+          envelope !== null &&
+          typeof envelope === "object" &&
+          envelope.success === false
+            ? false
+            : true;
         return {
           tool_call_id: call.id,
           tool_name: call.name,
-          success: true,
-          result: (snap.result as Record<string, unknown>) ?? {},
+          success: envelopeSuccess,
+          result: envelope ?? {},
           execution_time_ms: Date.now() - startedAt,
         };
       }
@@ -5805,7 +6771,8 @@ export class AIChatQueryLoop {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    }
+    },
+    outboundSendGateAllowed = false
   ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
     const descriptor = this.resolveHookToolDescriptor(input, call);
@@ -5830,6 +6797,7 @@ export class AIChatQueryLoop {
           Date.now() - startedAt
         ),
         outboundAuthorization,
+        outboundSendGateAllowed,
       };
     }
 
@@ -5844,6 +6812,7 @@ export class AIChatQueryLoop {
       preAggregate,
       effectiveCall,
       outboundAuthorization,
+      outboundSendGateAllowed,
     };
   }
 
@@ -5885,13 +6854,20 @@ export class AIChatQueryLoop {
       preAggregate,
       startedAt,
       outboundAuthorization,
+      outboundSendGateAllowed,
     } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
-    // argument-driven resolver wins over static field; otherwise infer by name.
+    // argument-driven resolver wins over static field; then validated plugin
+    // MCP tool policy (HOST-02, canonical mcp__plugin__server__tool names);
+    // otherwise infer by name.
     const skill = input.skillRegistry?.getSkill(effectiveCall.name);
+    const pluginPolicy = getPluginToolPolicyRegistry().resolveByToolName(
+      effectiveCall.name
+    );
     const cls: ToolTimeoutClass =
       skill?.resolveTimeoutClass?.(effectiveCall.arguments ?? {}) ??
       skill?.timeoutClass ??
+      pluginPolicy?.policy.timeoutClass ??
       inferTimeoutClassByName(effectiveCall.name);
     const timeoutMs = resolveTimeoutMs(cls);
 
@@ -5901,18 +6877,29 @@ export class AIChatQueryLoop {
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(
+      const admission = await this.executeAsyncTool(
         input,
         effectiveCall,
         outboundAuthorization,
-        onProgress
+        outboundSendGateAllowed === true,
+        onProgress,
+        pluginPolicy?.policy.maxRunMs
       );
-      toolResult = await this.pollAsyncJobToCompletion(
-        input,
-        effectiveCall,
-        jobId,
-        onProgress
-      );
+      if (admission.kind === "rejected") {
+        // Admission failure (duplicate job / rejected recovery / sealed
+        // plugin admission): surface as the tool result directly — no job
+        // was created.
+        toolResult = admission.result;
+      } else {
+        toolResult = await this.pollAsyncJobToCompletion(
+          input,
+          effectiveCall,
+          admission.jobId,
+          onProgress,
+          pluginPolicy?.policy.maxRunMs,
+          admission.deadlinePerfMs
+        );
+      }
     } else {
       toolResult = await this.executeForegroundToolWithTimeout(
         input,
@@ -5921,6 +6908,7 @@ export class AIChatQueryLoop {
         timeoutMs,
         startedAt,
         outboundAuthorization,
+        outboundSendGateAllowed === true,
         onProgress
       );
     }
@@ -5967,8 +6955,9 @@ export class AIChatQueryLoop {
       authorizationId: number;
       batchHash: string;
     },
+    outboundSendGateAllowed = false,
     onProgress?: ToolProgressEmitter
-): Promise<ToolExecutionResult> {
+  ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
 
@@ -5993,9 +6982,15 @@ export class AIChatQueryLoop {
         // (§14.2/§15.1). The send tool claims the batch via this; never
         // sourced from tool arguments (AD-003).
         outboundAuthorization,
-        // Preparing reviewable local drafts must not create a second user
-        // decision before the separately protected outbound send action.
-        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+        // Drafts never contact recipients. An allowed send gate is the
+        // request-scoped authorization, so that exact call skips the generic
+        // permission card (§14.2). Explicit denial still prompts.
+        skipPermissionCheck: shouldSkipGenericToolPermission({
+          toolName: call.name,
+          outboundSendGateAllowed,
+          explicitlyDenied:
+            SkillPermissionService.getPermissionStatus(call.name) === "denied",
+        }),
         signal: token.signal,
         // Combined per-request image capacity: tell image-attaching tools how
         // many image_url parts and how many data-URL chars the outgoing

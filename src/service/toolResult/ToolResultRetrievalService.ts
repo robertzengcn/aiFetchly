@@ -399,7 +399,16 @@ export class ToolResultRetrievalService {
       return { ok: false, code: "OUTPUT_FORMAT_UNSUPPORTED" };
     }
     if (input.query.length === 0 || input.query.length > config.searchQueryMaxChars) {
-      return { ok: false, code: "INVALID_OUTPUT_CURSOR" as ToolResultErrorCode };
+      // Argument-shaped failure, NOT a cursor failure: the model-facing
+      // INVALID_OUTPUT_CURSOR code sends the model down cursor-recovery
+      // (re-copying cursors, restarting pages) when the query itself is bad.
+      // The schema layer rejects the same inputs with INVALID_OUTPUT_ARGUMENTS
+      // and recovery text about query length — this defense-in-depth check
+      // must agree with it.
+      return {
+        ok: false,
+        code: "INVALID_OUTPUT_ARGUMENTS" as ToolResultErrorCode,
+      };
     }
 
     const queryDigest = digestSearchQuery(input.query);

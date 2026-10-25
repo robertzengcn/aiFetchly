@@ -17,8 +17,6 @@ import type {
   OpenAIChatCompletionResponse,
   OpenAIToolCall,
 } from "@/api/aiChatApi";
-import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
-import type { ReplyDetectionResult } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
@@ -121,63 +119,41 @@ const validReplyJson = JSON.stringify({
 });
 
 /**
- * T04 step 7 (FR-031 §8.1): the generation service now runs the shared mailbox
- * detector BEFORE classification. The 80 existing positive-generation tests
- * predate detection and seed messages whose `emailServiceId` (4244, etc.) has
- * NO receive config — a real detector would return `unknown(receive_unavailable)`
- * and block every positive path. `buildService` injects a default fake detection
- * factory returning `not_replied`, so existing tests exercise the generation
- * path unchanged. New Step 7 spec tests pass a `detectionResult` override to
- * assert the wiring's refusal/proceed behavior.
- *
- * The factory returns a fresh stub per call (the service caches one instance
- * per `EmailReplyDraftGenerationService` via the lazy `detectionServiceForNow`
- * getter), so `detect` counts and `forceRefresh` flags stay per-service.
+ * Draft generation does not probe the mailbox. Reply state is
+ * `check_email_replied`; `send_email_reply` still detects before SMTP.
  */
 function buildService(
-  options: ConstructorParameters<typeof EmailReplyDraftGenerationService>[0] & {
-    /** Override the default `not_replied` detection outcome. */
-    detectionResult?: ReplyDetectionResult;
-    /**
-     * R15: side effect the detection stub performs BEFORE returning —
-     * simulates a sibling request mutating the draft/cluster while the
-     * awaited mailbox probe (or audit write) was in flight ("defer the
-     * detector, transition the draft/attempt, resume").
-     */
-    onDetect?: () => Promise<void> | void;
-  } = {}
+  options: ConstructorParameters<typeof EmailReplyDraftGenerationService>[0] = {}
 ): EmailReplyDraftGenerationService {
-  const detectionResult: ReplyDetectionResult =
-    options.detectionResult ?? {
-      state: "not_replied",
-      replied: false,
-      source: "sent_search",
-      matchedMessageId: null,
-      reasonCode: "no_reply_observed",
-      checkedAt: new Date().toISOString(),
-      fromCache: false,
-      coverage: "configured_imap",
-    };
-  const onDetect = options.onDetect;
-  // Strip the test-only override before forwarding to the real constructor.
-  // replyAuditModuleFactory / autoAuditModuleFactory / now flow through the
-  // spread (D7.1/D7.2 seams) — only detectionServiceFactory is overridden.
-  const forwarded: ConstructorParameters<
-    typeof EmailReplyDraftGenerationService
-  >[0] = options;
-  return new EmailReplyDraftGenerationService({
-    ...forwarded,
-    detectionServiceFactory: () => {
-      const svc = new EmailReplyDetectionService();
-      const spy = vi.spyOn(svc, "detect").mockImplementation(async () => {
-        if (onDetect) {
-          await onDetect();
-        }
-        return detectionResult;
-      });
-      return Object.assign(svc, { detectSpy: spy });
-    },
-  });
+  return new EmailReplyDraftGenerationService(options);
+}
+
+/**
+ * Flip cluster state while the reuse path reads the draft snapshot, before
+ * revalidation. Simulates a sibling request claiming the draft in that gap.
+ */
+function mutateDuringDraftRead(
+  draftId: number,
+  mutate: () => Promise<void>
+): () => void {
+  const original = EmailReplyDraftModule.prototype.read;
+  let armed = true;
+  const spy = vi
+    .spyOn(EmailReplyDraftModule.prototype, "read")
+    .mockImplementation(async function (
+      this: EmailReplyDraftModule,
+      id: number
+    ) {
+      const row = await original.call(this, id);
+      if (armed && row?.id === draftId) {
+        armed = false;
+        await mutate();
+      }
+      return row;
+    });
+  return () => {
+    spy.mockRestore();
+  };
 }
 
 /**
@@ -1521,40 +1497,21 @@ describe("next-action guidance separates refusal from eligible reuse (R22)", () 
     return saved.id;
   }
 
-  it("an already_replied refusal surfaces the stale draft id as context but routes to await_human_review", async () => {
-    // The todo's stated regression: already-replied WITH a draft ID provides
-    // a safe denial action — never approve guidance for the draft the
-    // refusal just vetoed. Use the reuse-path detection refusal (an eligible
-    // draft exists; the §8.1 reuse-path detection then finds a positive and
-    // refuses, surfacing the seeded draft as existing_draft_id — the path
-    // where the id is actually carried, not the policy-guard local-state
-    // short-circuit).
+  it("reuses an eligible draft without a mailbox reply probe", async () => {
+    // Mailbox reply state is check_email_replied. Draft creation reuses the
+    // existing draft and does not refuse because a detector would say replied.
     const messageId = await seedMessage();
     const draftId = await seedDraft(messageId, "draft");
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = buildService({
-      apiFactory: factory,
-      detectionResult: {
-        state: "replied",
-        replied: true,
-        source: "sent_search",
-        matchedMessageId: "sent-r22@example.com",
-        reasonCode: "already_replied",
-        checkedAt: new Date().toISOString(),
-        fromCache: false,
-        coverage: "configured_imap",
-      },
-    });
+    const svc = buildService({ apiFactory: factory });
     const result = await svc.createDraft({ messageId });
-    expect(result.success).toBe(false);
-    if (result.success) return;
+    expect(result.success).toBe(true);
+    if (!result.success) return;
     expect(requests).toHaveLength(0);
-    expect(result.code).toBe("already_replied");
-    expect(result.existing_draft_id).toBe(draftId);
-    expect(result.next_action).toBe("await_human_review");
-    expect(result.next_action).not.toBe("approve_existing_draft");
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
   });
 
   it("eligible reuse (reused: true) carries approve_existing_draft for a clean draft", async () => {
@@ -1782,30 +1739,21 @@ describe("raceWithDeadline bounds non-model awaited stages (G01/FR-035)", () => 
 });
 
 // ---------------------------------------------------------------------------
-// T04 step 7 (FR-031 §8.1): the shared mailbox detector runs BEFORE
-// classification. `replied`/`unknown` → no model call, reservation released,
-// one `reply_skipped` audit (stage `pre_draft`) with the typed detection code.
-// `not_replied` → proceeds to classification. The reuse path reruns detection
-// and reloads bindings afterward (a fresh positive appearing mid-reuse must
-// not surface a newly-sent draft as editable).
+// Draft creation does not probe the mailbox. Reply state is check_email_replied.
 // ---------------------------------------------------------------------------
-describe("createDraft pre-draft detection (T04 step 7, §8.1)", () => {
+describe("createDraft does not probe the mailbox", () => {
   const messageModule = new EmailReceivedMessageModule();
   const draftModule = new EmailReplyDraftModule();
-  const auditModule = new EmailReplyAuditLogModule();
-  const guardModule = new EmailReplyGuardModule();
 
-  async function seedMessage(
-    over: Partial<EmailReceivedMessageEntity> = {}
-  ): Promise<number> {
+  async function seedMessage(): Promise<number> {
     const msg = new EmailReceivedMessageEntity();
-    msg.emailServiceId = over.emailServiceId ?? 4244;
+    msg.emailServiceId = 4244;
     msg.providerUid = `det-${Math.random()}`;
     msg.messageId = `<m-${Math.random()}@x>`;
     msg.threadKey = msg.messageId;
     msg.inReplyTo = null;
     msg.referencesHeader = null;
-    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromAddress = "person@example.com";
     msg.fromName = "Person";
     msg.replyToAddress = null;
     msg.toAddressesJson = "[]";
@@ -1816,174 +1764,57 @@ describe("createDraft pre-draft detection (T04 step 7, §8.1)", () => {
     msg.snippet = null;
     msg.receivedAt = new Date();
     msg.isUnread = 1;
-    msg.classification = over.classification ?? "interested";
+    msg.classification = "interested";
     msg.classificationConfidence = 0.95;
-    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.replyStatus = "not_started";
     msg.processedAt = null;
     const saved = await messageModule.upsertByProviderUid(msg);
     return saved.id;
   }
 
-  async function seedDraft(
-    messageId: number,
-    status: EmailReplyDraftEntity["status"]
-  ): Promise<number> {
+  async function seedDraft(messageId: number): Promise<number> {
     const draft = new EmailReplyDraftEntity();
     draft.messageId = messageId;
     draft.emailServiceId = 4244;
     draft.subject = "Re: Hi";
     draft.bodyText = "draft body";
     draft.bodyHtml = null;
-    draft.status = status;
+    draft.status = "draft";
     draft.generationSource = "ai";
     const saved = await draftModule.create(draft);
     return saved.id;
   }
 
-  it("detection `replied` before classification → no model call, reservation released, code already_replied", async () => {
-    const messageId = await seedMessage();
-    // No seeded draft → reservation returns `acquired` → the pre-draft
-    // detection on the acquire path runs and refuses before classification.
-    const { factory, requests } = fakeApiFactory([
-      completionResponse(validReplyJson),
-    ]);
-    const svc = buildService({
-      apiFactory: factory,
-      detectionResult: {
-        state: "replied",
-        replied: true,
-        source: "sent_search",
-        matchedMessageId: "sent-123@example.com",
-        reasonCode: "already_replied",
-        checkedAt: new Date().toISOString(),
-        fromCache: false,
-        coverage: "configured_imap",
-      },
-    });
-    const result = await svc.createDraft({
-      messageId,
-      useKnowledgeLibrary: false,
-    });
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(requests).toHaveLength(0); // NO model call
-    expect(result.code).toBe("already_replied");
-    // No existing draft on a clean message → next_action routes to
-    // await_human_review (R-5 canonical mapping — approve_existing_draft
-    // requires an existing draft; no_action would hide the replied state).
-    expect(result.next_action).toBe("await_human_review");
-    // One `reply_skipped` audit row, stage pre_draft.
-    const { records: auditRecords } = await auditModule.list({
-      messageId,
-      page: 0,
-      size: 50,
-    });
-    const skipped = auditRecords.filter((a) => a.action === "reply_skipped");
-    expect(skipped).toHaveLength(1);
-    // Reservation released — the guard row is back to `idle`, not holding a
-    // `generating`/`draft_ready` lease.
-    const guardRow = await guardModule.findByReplyKey(
-      4244,
-      `row:${messageId}`
-    );
-    expect(guardRow).not.toBeNull();
-    expect(guardRow?.phase).toBe("idle");
-  });
-
-  it("detection `unknown` before classification → no model call, code = detection unknown code", async () => {
+  it("generates a draft without consulting mailbox reply detection", async () => {
     const messageId = await seedMessage();
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = buildService({
-      apiFactory: factory,
-      detectionResult: {
-        state: "unknown",
-        replied: null,
-        source: "unavailable",
-        matchedMessageId: null,
-        reasonCode: "probe_timeout",
-        checkedAt: new Date().toISOString(),
-        fromCache: false,
-        coverage: "partial",
-      },
-    });
-    const result = await svc.createDraft({
-      messageId,
-      useKnowledgeLibrary: false,
-    });
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(requests).toHaveLength(0);
-    expect(result.code).toBe("probe_timeout");
-    expect(result.next_action).toBe("discard_and_retry");
-    const { records: auditRecords } = await auditModule.list({
-      messageId,
-      page: 0,
-      size: 50,
-    });
-    const skipped = auditRecords.filter((a) => a.action === "reply_skipped");
-    expect(skipped).toHaveLength(1);
-  });
-
-  it("detection `not_replied` proceeds to classification and generation", async () => {
-    const messageId = await seedMessage();
-    const { factory, requests } = fakeApiFactory([
-      completionResponse(validReplyJson),
-    ]);
-    const svc = buildService({
-      apiFactory: factory,
-      // default detectionResult is `not_replied`
-    });
-    const result = await svc.createDraft({
+    const result = await buildService({ apiFactory: factory }).createDraft({
       messageId,
       useKnowledgeLibrary: false,
     });
     expect(result.success).toBe(true);
     if (!result.success) return;
-    expect(requests).toHaveLength(1); // model WAS called
+    expect(requests).toHaveLength(1);
     expect(result.reused).toBe(false);
   });
 
-  it("reuse path reruns detection and refuses when a positive appears before reuse", async () => {
-    // Seed an eligible draft for reuse (reservation returns `reusable`). The
-    // §8.1 reuse-path detection then runs BEFORE the draft is returned; a
-    // positive outcome refuses the reuse with `already_replied` and surfaces
-    // the seeded draft as `existing_draft_id` — never silently returning a
-    // replied draft as editable. NO model call.
+  it("reuses an eligible draft without a mailbox reply probe", async () => {
     const messageId = await seedMessage();
-    const draftId = await seedDraft(messageId, "draft");
-    expect(draftId).toBeGreaterThan(0);
+    const draftId = await seedDraft(messageId);
     const { factory, requests } = fakeApiFactory([
       completionResponse(validReplyJson),
     ]);
-    const svc = buildService({
-      apiFactory: factory,
-      detectionResult: {
-        state: "replied",
-        replied: true,
-        source: "sent_search",
-        matchedMessageId: "sent-456@example.com",
-        reasonCode: "already_replied",
-        checkedAt: new Date().toISOString(),
-        fromCache: false,
-        coverage: "configured_imap",
-      },
-    });
-    const result = await svc.createDraft({
+    const result = await buildService({ apiFactory: factory }).createDraft({
       messageId,
       useKnowledgeLibrary: false,
     });
-    // The reuse-path detection refused → no model call, code already_replied,
-    // existing_draft_id points at the seeded draft as CONTEXT (R22 — the
-    // refusal never routes to approval guidance; the stale draft is the one
-    // someone already replied around).
-    expect(result.success).toBe(false);
-    if (result.success) return;
+    expect(result.success).toBe(true);
+    if (!result.success) return;
     expect(requests).toHaveLength(0);
-    expect(result.code).toBe("already_replied");
-    expect(result.existing_draft_id).toBe(draftId);
-    expect(result.next_action).toBe("await_human_review");
+    expect(result.reused).toBe(true);
+    expect(result.draftId).toBe(draftId);
   });
 });
 
@@ -2278,6 +2109,61 @@ describe("createDraft refines a stored deterministic-unknown classification (FR-
     // Reuse (B01 ordering) settles the outcome before classification —
     // zero AI calls even for a persisted unknown classification.
     expect(requests).toHaveLength(0);
+  });
+
+  it("routes a model-sourced auto_reply verdict to review: persists needs_human_review, refuses sensitive_topic, never automated_sender", async () => {
+    // Regression (2026-10-21 incident, erx-req-1-bu11tp58): a human reply
+    // from estewaycom@gmail.com asked "what is feature of aifetchly" and
+    // quoted the recipient's own marketing email below the question. The
+    // stage-2 model answered auto_reply; the refined value was PERSISTED
+    // sticky, and the re-gate refused with "[automated_sender] Classification
+    // 'auto_reply' must not be auto-replied" — labeling a human sender as
+    // automated. A model verdict is not deterministic-grade evidence for a
+    // hard block: the deterministic rules already saw the headers/sender and
+    // found nothing. The verdict must route to review (needs_human_review,
+    // source review) so the refusal carries the honest sensitive_topic code
+    // and the DB never records a machine-asserted automated sender.
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({ classification: "auto_reply", confidence: 0.95 })
+      ),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    // The honest code — NOT the old automated_sender.
+    expect(result.code).toBe("sensitive_topic");
+    // The classification call was attempted; generation never fired.
+    expect(requests).toHaveLength(1);
+    // The sticky brick: the DB must NEVER hold a model-asserted hard block.
+    const stored = await messageModule.read(messageId);
+    expect(stored?.classification).toBe("needs_human_review");
+    expect(stored?.classificationSource).toBe("review");
+  });
+
+  it("routes a model-sourced bounce verdict to review the same way", async () => {
+    const messageId = await seedSyncedMessage({ classification: "unknown" });
+    const { factory } = fakeApiFactory([
+      completionResponse(
+        JSON.stringify({ classification: "bounce", confidence: 0.97 })
+      ),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("sensitive_topic");
+    const stored = await messageModule.read(messageId);
+    expect(stored?.classification).toBe("needs_human_review");
+    expect(stored?.classificationSource).toBe("review");
   });
 });
 
@@ -2664,49 +2550,6 @@ describe("createDraft reuse preserves stored warnings + audit (B09)", () => {
     expect(counters.get("audit_failure{stage=reuse}")).toBe(1);
   });
 
-  // ---------------------------------------------------------------------------
-  // T12/FR-039 — pre_draft audit-failure coverage. The runPreDraftDetection
-  // catch(auditError) site emits audit_failure{stage=pre_draft} when the
-  // `reply_skipped` audit row for a detection refusal cannot persist (§9.2 —
-  // an unrecorded draft refusal must never be followed by proceeding to
-  // draft). The detection outcome itself is faked via buildService's
-  // detectionResult override; the audit module's create is monkey-patched to
-  // throw, mirroring the reuse test above.
-  // ---------------------------------------------------------------------------
-  it("pre_draft audit persistence failure emits audit_failure{stage=pre_draft} + success:false (Detection audit persistence failed)", async () => {
-    const messageId = await seedMessage();
-    const { factory } = fakeApiFactory([completionResponse(validReplyJson)]);
-    const { module } = makeFailingReplyAuditModule(
-      "pre-draft audit DB write failed (simulated)"
-    );
-    const svc = buildService({
-      apiFactory: factory,
-      replyAuditModuleFactory: () => module,
-      detectionResult: {
-        state: "replied",
-        replied: true,
-        source: "sent_search",
-        matchedMessageId: "sent-123@example.com",
-        reasonCode: "already_replied",
-        checkedAt: new Date().toISOString(),
-        fromCache: false,
-        coverage: "configured_imap",
-      },
-    });
-    drainCountersForTest();
-    const result = await svc.createDraft({ messageId });
-    // The audit failure STOPS the work — the refusal is returned as a
-    // success:false carrying the persistence error (no code/next_action —
-    // the typed refusal never reached the return path).
-    expect(result.success).toBe(false);
-    if (result.success) return;
-    expect(result.error).toContain("Detection audit persistence failed");
-    expect(result.error).toContain(
-      "pre-draft audit DB write failed (simulated)"
-    );
-    const counters = drainCountersForTest();
-    expect(counters.get("audit_failure{stage=pre_draft}")).toBe(1);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -5094,11 +4937,9 @@ describe("createDraft acquires the generation reservation (T07)", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // R15: reuse re-validates the draft/cluster AFTER the awaited detection and
-  // audit work. The reservation's `reusable` verdict is a point-in-time
-  // snapshot; while the mailbox probe runs, another request can claim or
-  // finalize the draft. The service must return the CURRENT denial state —
-  // never the earlier snapshot as an editable reuse.
+  // R15: reuse re-validates the draft/cluster after the snapshot read.
+  // A sibling can claim or finalize the draft in that gap. The service must
+  // return the CURRENT denial state, never the earlier snapshot.
   // ---------------------------------------------------------------------------
   describe("R15: reuse revalidates after awaited checks", () => {
     it("draft transitioned to sending during detection refuses with reply_in_progress and ONE owned audit", async () => {
@@ -5113,11 +4954,16 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       const svc = buildService({
         apiFactory: factory,
         guardModuleFactory: () => guardModule,
-        onDetect: async () => {
-          await draftModule.updateStatus(draftId, "sending");
-        },
       });
-      const result = await svc.createDraft({ messageId });
+      const restoreRead = mutateDuringDraftRead(draftId, async () => {
+          await draftModule.updateStatus(draftId, "sending");
+      });
+      let result: Awaited<ReturnType<typeof svc.createDraft>>;
+      try {
+        result = await svc.createDraft({ messageId });
+      } finally {
+        restoreRead();
+      }
       expect(result.success).toBe(false);
       if (result.success) return;
       // The stale snapshot would have been returned as reused:true; the
@@ -5160,11 +5006,16 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       const svc = buildService({
         apiFactory: factory,
         guardModuleFactory: () => guardModule,
-        onDetect: async () => {
-          await draftModule.updateStatus(draftId, "sent");
-        },
       });
-      const result = await svc.createDraft({ messageId });
+      const restoreRead = mutateDuringDraftRead(draftId, async () => {
+          await draftModule.updateStatus(draftId, "sent");
+      });
+      let result: Awaited<ReturnType<typeof svc.createDraft>>;
+      try {
+        result = await svc.createDraft({ messageId });
+      } finally {
+        restoreRead();
+      }
       expect(result.success).toBe(false);
       if (result.success) return;
       expect(result.code).toBe("already_replied");
@@ -5194,11 +5045,16 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       const svc = buildService({
         apiFactory: factory,
         guardModuleFactory: () => guardModule,
-        onDetect: async () => {
-          await draftModule.updateStatus(draftId, "delivery_unknown");
-        },
       });
-      const result = await svc.createDraft({ messageId });
+      const restoreRead = mutateDuringDraftRead(draftId, async () => {
+          await draftModule.updateStatus(draftId, "delivery_unknown");
+      });
+      let result: Awaited<ReturnType<typeof svc.createDraft>>;
+      try {
+        result = await svc.createDraft({ messageId });
+      } finally {
+        restoreRead();
+      }
       expect(result.success).toBe(false);
       if (result.success) return;
       expect(result.code).toBe("delivery_unknown");
@@ -5226,7 +5082,8 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       const svc = buildService({
         apiFactory: factory,
         guardModuleFactory: () => guardModule,
-        onDetect: async () => {
+      });
+      const restoreRead = mutateDuringDraftRead(draftId, async () => {
           const attempt = new EmailReplySendAttemptEntity();
           attempt.idempotencyKey = `key-${Math.random()}`;
           attempt.draftId = draftId;
@@ -5245,9 +5102,13 @@ describe("createDraft acquires the generation reservation (T07)", () => {
           attempt.failureCode = null;
           attempt.sanitizedError = null;
           await attemptModule.create(attempt);
-        },
       });
-      const result = await svc.createDraft({ messageId });
+      let result: Awaited<ReturnType<typeof svc.createDraft>>;
+      try {
+        result = await svc.createDraft({ messageId });
+      } finally {
+        restoreRead();
+      }
       expect(result.success).toBe(false);
       if (result.success) return;
       expect(result.code).toBe("reply_in_progress");
@@ -5263,7 +5124,8 @@ describe("createDraft acquires the generation reservation (T07)", () => {
       const svc = buildService({
         apiFactory: factory,
         guardModuleFactory: () => guardModule,
-        onDetect: async () => {
+      });
+      const restoreRead = mutateDuringDraftRead(draftId, async () => {
           const { SqliteDb, getSqliteTestFallbackDir } = await import(
             "@/config/SqliteDb"
           );
@@ -5273,9 +5135,13 @@ describe("createDraft acquires the generation reservation (T07)", () => {
           await connection
             .getRepository(EmailReplyDraftEntity)
             .delete({ id: draftId });
-        },
       });
-      const result = await svc.createDraft({ messageId });
+      let result: Awaited<ReturnType<typeof svc.createDraft>>;
+      try {
+        result = await svc.createDraft({ messageId });
+      } finally {
+        restoreRead();
+      }
       expect(result.success).toBe(false);
       if (result.success) return;
       expect(result.code).toBe("reply_state_unknown");

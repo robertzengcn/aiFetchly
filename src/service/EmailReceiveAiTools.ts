@@ -456,22 +456,27 @@ export async function sendEmailReply(args: unknown): Promise<
           error: "A send for this draft is already in flight",
         };
       }
+      // Bulk-retire every active approval for this draft in one UPDATE — the
+      // hand-rolled bounded loop could exit with rows still active (CAS loss,
+      // >N rows) and silently proceed with stale approvals live.
       const approvalModule = new EmailReplyApprovalModule();
-      if (draft.currentRevisionId != null) {
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-          const active = await approvalModule.findActiveByDraft(
-            draft.id,
-            draft.currentRevisionId
-          );
-          if (!active) break;
-          await approvalModule.invalidate(
-            active.id,
-            "Re-confirming send after the previous attempt did not deliver",
-            new Date()
-          );
-        }
+      await approvalModule.invalidateAllForDraft(
+        draft.id,
+        "Re-confirmed send: retiring the previous confirmation before re-approval",
+        new Date()
+      );
+      // CAS fence: the status write only lands on a row still `approved`.
+      // A concurrent renderer approve+send or a late finalization moved the
+      // row → refuse instead of overwriting (an unfenced write here could
+      // resurrect a sending/sent draft as sendable and double-send).
+      const demoted = await draftModule.demoteApprovedToDraft(draft.id);
+      if (!demoted) {
+        return {
+          success: false,
+          error:
+            "Draft state changed while re-confirming (concurrent approve or send); retry the request",
+        };
       }
-      await draftModule.updateStatus(draft.id, "draft", null);
     } else if (draft.status !== "draft" && draft.status !== "failed") {
       return {
         success: false,

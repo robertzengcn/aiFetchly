@@ -147,6 +147,29 @@ export class EmailReplyDraftModel extends BaseDb {
     await this.repository.save(entity);
   }
 
+  /**
+   * Atomically return an APPROVED draft to `draft` for re-confirmation
+   * (sendEmailReply's approved-retry path). CAS on status='approved': a
+   * concurrent writer that moved the row (renderer approve+send racing this
+   * call, a late delivery finalizing to `sending`/`sent`) makes this a no-op
+   * returning false — the caller must REFUSE rather than overwrite. Without
+   * this fence the stale read→write window could resurrect an in-flight or
+   * already-delivered draft as sendable (duplicate SMTP submission).
+   * Mirrors markApproved's conditional-update shape.
+   */
+  async demoteApprovedToDraft(draftId: number): Promise<boolean> {
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(EmailReplyDraftEntity)
+      .set({ status: "draft", sendError: null })
+      .where("id = :draftId AND status = :status", {
+        draftId,
+        status: "approved" as EmailReplyDraftStatus,
+      })
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
   async updateBody(
     id: number,
     bodyText: string,

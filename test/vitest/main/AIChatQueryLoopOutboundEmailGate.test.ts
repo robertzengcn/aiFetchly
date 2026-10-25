@@ -86,7 +86,12 @@ vi.mock("@/config/usersetting", async (importOriginal) => {
   };
 });
 
-import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
+import {
+  AIChatQueryLoop,
+  OUTBOUND_EMAIL_DRAFT_TOOL,
+  OUTBOUND_EMAIL_SEND_TOOL,
+  shouldSkipGenericToolPermission,
+} from "@/service/AIChatQueryLoop";
 import { OutboundEmailIntentModel } from "@/model/OutboundEmailIntent.model";
 import { OutboundEmailDraftModel } from "@/model/OutboundEmailDraft.model";
 import { OutboundEmailAuthorizationService } from "@/service/outboundEmail/OutboundEmailAuthorizationService";
@@ -801,5 +806,47 @@ describe("AIChatQueryLoop outbound-email gate plumbing", () => {
     expect(result.allowed).toBe(false);
     expect(result.code).toBe("review_required");
     expect(result.batchId).toBe(batch.id);
+  });
+});
+
+describe("shouldSkipGenericToolPermission", () => {
+  it("skips the generic card for a gate-allowed send", () => {
+    expect(
+      shouldSkipGenericToolPermission({
+        toolName: OUTBOUND_EMAIL_SEND_TOOL,
+        outboundSendGateAllowed: true,
+        explicitlyDenied: false,
+      })
+    ).toBe(true);
+  });
+
+  it("keeps the generic card when the send gate has not allowed the call", () => {
+    expect(
+      shouldSkipGenericToolPermission({
+        toolName: OUTBOUND_EMAIL_SEND_TOOL,
+        outboundSendGateAllowed: false,
+        explicitlyDenied: false,
+      })
+    ).toBe(false);
+  });
+
+  it("does not skip an explicitly denied send even after the gate allows it", () => {
+    expect(
+      shouldSkipGenericToolPermission({
+        toolName: OUTBOUND_EMAIL_SEND_TOOL,
+        outboundSendGateAllowed: true,
+        explicitlyDenied: true,
+      })
+    ).toBe(false);
+  });
+
+  it("still skips the draft tool", () => {
+    expect(
+      shouldSkipGenericToolPermission({
+        toolName: OUTBOUND_EMAIL_DRAFT_TOOL,
+        outboundSendGateAllowed: false,
+        explicitlyDenied: false,
+      })
+    ).toBe(true);
   });
 });

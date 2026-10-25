@@ -120,6 +120,16 @@
             @open="(id: string) => emit('open-artifact', id)"
             @copy-html="(id: string) => emit('copy-artifact-html', id)"
           />
+          <!-- Host-registered plugin result artifacts (design §13.4): the
+               tool card can preview, save, and delete them without any AI
+               call; every action is ownership-verified in the main process. -->
+          <PluginArtifactCard
+            v-if="pluginArtifacts.length > 0 && !executionPending"
+            :conversation-id="String(message.conversationId)"
+            :artifacts="pluginArtifacts"
+            :disabled="disabled"
+            @deleted="onPluginArtifactDeleted"
+          />
           <OutboundEmailBatchCard
             v-if="outboundBatch"
             :batch-id="outboundBatch.batchId"
@@ -547,6 +557,7 @@ import type {
   ChatV2AttachmentMetadata,
   ChatV2GeneratedImage,
   ChatV2GeneratedImageReference,
+  ChatV2MessageMetadata,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
@@ -566,6 +577,8 @@ import {
 } from "@/views/components/outboundEmail/outboundBatchCardModel";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import AiChatToolResultViewer from "./AiChatToolResultViewer.vue";
+import PluginArtifactCard from "./PluginArtifactCard.vue";
+import type { PluginArtifactView } from "@/views/api/pluginArtifact";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
@@ -1021,6 +1034,61 @@ const preservedOutput = computed<PreservedOutputView | null>(() => {
 
   return { outputId, stateLabel, sizeLabel, preview };
 });
+
+// ---------------------------------------------------------------------------
+// Host-registered plugin result artifacts (design §13.4).
+//
+// The payload carries opaque `pa_…` ids from the host artifact store, never
+// filesystem paths. Preview/save/delete go through the plugin-artifact IPC,
+// which re-verifies conversation ownership in the main process. Only ids
+// shaped here are rendered; foreign shapes are dropped, never guessed.
+// ---------------------------------------------------------------------------
+const pluginArtifacts = computed<PluginArtifactView[]>(() => {
+  const rawList = props.message.metadata?.pluginArtifacts;
+  if (!Array.isArray(rawList) || rawList.length === 0) return [];
+  const out: PluginArtifactView[] = [];
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== "object") continue;
+    // Foreign shapes are dropped at runtime: traffic may be stale or hand-
+    // edited, so narrow through unknown instead of trusting the declared
+    // ChatV2PluginArtifactMetadata interface.
+    const rec = raw as unknown as Record<string, unknown>;
+    if (typeof rec.id !== "string" || !rec.id.startsWith("pa_")) continue;
+    if (rec.format !== "json" && rec.format !== "csv") continue;
+    if (
+      typeof rec.recordCount !== "number" ||
+      !Number.isFinite(rec.recordCount)
+    ) {
+      continue;
+    }
+    out.push({
+      id: rec.id,
+      format: rec.format,
+      recordCount: rec.recordCount,
+      ...(typeof rec.sizeBytes === "number" ? { sizeBytes: rec.sizeBytes } : {}),
+      ...(typeof rec.createdAt === "string" ? { createdAt: rec.createdAt } : {}),
+      ...(typeof rec.expiresAt === "string" ? { expiresAt: rec.expiresAt } : {}),
+    });
+  }
+  return out;
+});
+
+/**
+ * Best-effort bookkeeping after a plugin artifact was deleted through the
+ * card: drop the descriptor from this message's metadata lists. Card-local
+ * row hiding remains the visible part; this keeps live-state messages
+ * consistent where the message objects are reactive.
+ */
+function onPluginArtifactDeleted(artifactId: string): void {
+  const meta = props.message.metadata as
+    | (ChatV2MessageMetadata & Record<string, unknown>)
+    | undefined;
+  if (!meta) return;
+  if (Array.isArray(meta.pluginArtifacts)) {
+    const filtered = meta.pluginArtifacts.filter((a) => a.id !== artifactId);
+    meta.pluginArtifacts = filtered.length > 0 ? filtered : undefined;
+  }
+}
 
 /**
  * Open the paged viewer, honouring the `ui` rollout flag.

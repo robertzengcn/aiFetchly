@@ -25,6 +25,18 @@ const PLUGINS_URL = `${RENDERER_ORIGIN}/#/plugins/management`;
 const INSTALLABLE = "e2e-fixture-plugin";
 const INSTALLABLE_TAG_KEY = "e2e-tag";
 
+/** Install the hub fixture through the Discover flow and wait for the chip. */
+async function installFixtureFromDiscover(
+  mainWindow: import("@playwright/test").Page
+): Promise<void> {
+  await mainWindow
+    .getByTestId(`community-plugin-install-${INSTALLABLE}`)
+    .click();
+  await expect(
+    mainWindow.getByTestId(`community-plugin-status-${INSTALLABLE}`)
+  ).toBeVisible({ timeout: 20_000 });
+}
+
 test.describe("Unified Plugin discovery", () => {
   test("exposes one Plugins nav destination and no Community Plugins item", async ({
     pluginsApp,
@@ -136,6 +148,99 @@ test.describe("Unified Plugin discovery", () => {
     await expect(
       mainWindow.getByTestId(`community-plugin-install-${INSTALLABLE}`)
     ).toBeVisible({ timeout: 20_000 });
+  });
+
+  test("zip download failure is recoverable: error is surfaced, install action stays, retry succeeds", async ({
+    pluginsApp,
+    fakeHub,
+  }) => {
+    const { mainWindow } = pluginsApp;
+    await gotoRoute(mainWindow, "/plugins/management?tab=discover");
+    await expect(
+      mainWindow.getByTestId(`community-plugin-card-${INSTALLABLE}`)
+    ).toBeVisible();
+
+    // Script a deterministic hub-side HTTP failure, attempt the install.
+    fakeHub.setZipBehavior("http-error");
+    await mainWindow
+      .getByTestId(`community-plugin-install-${INSTALLABLE}`)
+      .click();
+    await expect(
+      mainWindow.getByTestId("community-plugins-install-error")
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      mainWindow.getByTestId("community-plugins-install-error")
+    ).toContainText(/could not be downloaded/i);
+    expect(fakeHub.primaryZipFailureCount()).toBeGreaterThanOrEqual(1);
+    // Recoverable leg: the install action remains available and no status
+    // chip appeared, so the user can retry once the hub recovers.
+    await expect(
+      mainWindow.getByTestId(`community-plugin-install-${INSTALLABLE}`)
+    ).toBeEnabled();
+    await expect(
+      mainWindow.getByTestId(`community-plugin-status-${INSTALLABLE}`)
+    ).toHaveCount(0);
+
+    // The hub recovers; a retry completes the critical flow.
+    fakeHub.setZipBehavior("ok");
+    await installFixtureFromDiscover(mainWindow);
+    expect(fakeHub.zipRequestCount()).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a truncated non-zip archive surfaces an install failure and leaves the catalog retryable", async ({
+    pluginsApp,
+    fakeHub,
+  }) => {
+    const { mainWindow } = pluginsApp;
+    await gotoRoute(mainWindow, "/plugins/management?tab=discover");
+    await expect(
+      mainWindow.getByTestId(`community-plugin-card-${INSTALLABLE}`)
+    ).toBeVisible();
+
+    fakeHub.setZipBehavior("garbage");
+    await mainWindow
+      .getByTestId(`community-plugin-install-${INSTALLABLE}`)
+      .click();
+    await expect(
+      mainWindow.getByTestId("community-plugins-install-error")
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(
+      mainWindow.getByTestId(`community-plugin-status-${INSTALLABLE}`)
+    ).toHaveCount(0);
+    expect(fakeHub.primaryZipFailureCount()).toBeGreaterThanOrEqual(1);
+
+    fakeHub.setZipBehavior("ok");
+    await installFixtureFromDiscover(mainWindow);
+  });
+
+  test("an installed plugin can be disabled and re-enabled from the Installed table", async ({
+    pluginsApp,
+  }) => {
+    const { mainWindow } = pluginsApp;
+    await gotoRoute(mainWindow, "/plugins/management?tab=discover");
+    await installFixtureFromDiscover(mainWindow);
+
+    await mainWindow.getByRole("tab", { name: /installed/i }).click();
+    await expect(mainWindow).toHaveURL(/tab=installed/);
+    const row = mainWindow.getByRole("row").filter({
+      hasText: "e2e-fixture-plugin",
+    });
+    await expect(row).toBeVisible();
+    await expect(
+      row.locator(".v-chip").filter({ hasText: /^\s*Healthy\s*$/i })
+    ).toBeVisible();
+
+    // Disable: the row's health chip flips to Disabled. Vuetify3 v-switch
+    // does not expose role=switch; the toggle element class is the stable seam.
+    await row.locator(".v-switch").click();
+    await expect(
+      row.locator(".v-chip").filter({ hasText: /^\s*Disabled\s*$/i })
+    ).toBeVisible({ timeout: 10_000 });
+    // Re-enable restores the healthy chip.
+    await row.locator(".v-switch").click();
+    await expect(
+      row.locator(".v-chip").filter({ hasText: /^\s*Healthy\s*$/i })
+    ).toBeVisible({ timeout: 10_000 });
   });
 
   test("restores sections across browser back/forward (AC-NAV-03)", async ({

@@ -338,6 +338,32 @@ describe("PluginMarketplaceService community catalog", () => {
     expect(installFromSource).not.toHaveBeenCalled();
   });
 
+  test("install diagnostics separate unsupported installer mode from subscription (R02)", async () => {
+    const { service } = makeService(
+      [
+        hubEntry("managed-only", {
+          access: { status: "allowed", installMode: "managed" },
+        }),
+        hubEntry("ticket-allowed", {
+          access: { status: "allowed", installMode: "ticket" },
+        }),
+      ],
+      { lastFetchedAt: new Date() }
+    );
+    // `managed` is an installer-capability gap of this release — requesting a
+    // ticket/plan would not fix it, so the wording must say capability.
+    await expect(service.installCommunityPlugin("managed-only")).rejects.toThrow(
+      /not supported in this desktop release/i
+    );
+    // An ALLOWED `ticket` entry still reports the subscription path, but the
+    // distinct diagnostic proves the mode produced that branch, not the
+    // earlier access.status reject.
+    await expect(service.installCommunityPlugin("ticket-allowed")).rejects.toThrow(
+      /subscription required/i
+    );
+    expect(installFromSource).not.toHaveBeenCalled();
+  });
+
   test("hides the built-in hub row from the Plugin Manager list", async () => {
     const { service } = makeService([hubEntry("pdf-tools")]);
     // Materialize the built-in row (lazily created on first community list).
