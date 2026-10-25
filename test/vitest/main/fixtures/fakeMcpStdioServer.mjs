@@ -72,6 +72,18 @@ function handleMessage(line) {
   }
   if (message.id === undefined) {
     // Notification (e.g. notifications/initialized) — no response.
+    // R9 T04: --die-after-init must die AFTER the SDK's initialized
+    // notification ARRIVES, not right after the initialize response: an
+    // immediate exit raced the notification write and turned the
+    // deterministic "rejects pending requests" contract into a coin-flip
+    // (the EPIPE could land on connect()'s awaited notification send and
+    // reject the handshake, or later on a pending call).
+    if (
+      behaviors.has("--die-after-init") &&
+      message.method === "notifications/initialized"
+    ) {
+      process.exit(0);
+    }
     return;
   }
   const { id, method, params } = message;
@@ -89,9 +101,9 @@ function handleMessage(line) {
           serverInfo: { name: "fake-mcp", version: "0.0.1" },
         },
       });
-      if (behaviors.has("--die-after-init")) {
-        process.exit(0);
-      }
+      // R9 T04: the exit moved to the notifications/initialized handler —
+      // dying here raced the SDK's awaited notification send (the EPIPE
+      // could reject connect() itself).
       break;
     case "tools/list":
       send({
