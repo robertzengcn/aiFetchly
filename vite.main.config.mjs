@@ -1,7 +1,6 @@
 /// <reference types="vitest" />
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
-import * as path from 'path';
 import ClosePlugin from './vite-plugin-close'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';

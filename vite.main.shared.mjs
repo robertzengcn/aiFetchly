@@ -13,7 +13,6 @@
 // derive the project root from `import.meta.url` so the aliases resolve the same
 // directory regardless of how the config is loaded.
 
-import alias from "@rollup/plugin-alias";
 import * as path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";

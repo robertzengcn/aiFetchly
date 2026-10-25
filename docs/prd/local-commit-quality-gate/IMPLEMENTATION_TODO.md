@@ -1,6 +1,11 @@
 # Local Commit Quality Gate — Implementation Audit
 
-> **SUPERSEDED as the active tracker — see [REQUIREMENTS_AUDIT_TODO.md](REQUIREMENTS_AUDIT_TODO.md).**
+> **SUPERSEDED as the active tracker — the current tracker is
+> [AUDIT_TODO_2026-10-24.md](AUDIT_TODO_2026-10-24.md)** (all B-defects fixed
+> and V03/V04 completed 2026-10-25; V01/V02 remain open as recorded
+> environment-gated execution items). The earlier
+> [REQUIREMENTS_AUDIT_TODO.md](REQUIREMENTS_AUDIT_TODO.md) remediation is
+> likewise historical — its resolution ledger stands.
 > A fresh requirements audit (2026-10-23, reviewed at HEAD `bb5948a4a`) found
 > that the resolution statement below was too broad: probes demonstrated
 > false passes, false rejections, coverage gaps, and a filesystem boundary

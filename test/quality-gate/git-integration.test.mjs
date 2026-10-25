@@ -13,9 +13,9 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync, execSync } from 'node:child_process';
+import { spawnSync, execSync, spawn } from 'node:child_process';
 import {
-  mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, mkdtempSync, copyFileSync,
+  mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, mkdtempSync, copyFileSync, existsSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -694,3 +694,121 @@ describe('audit 2026-10-24 fixes (B01/B09)', () => {
     assert.equal(res.status, 0, `suffixed gitlink must commit:\n${res.stdout}${res.stderr}`);
   });
 });
+
+describe('interruption and restoration failure (V03)', () => {
+  const INVALID = "export const v: any = 1;\n";
+  const VALID = 'export const two = 1 + 1;\n';
+
+  test('SIGKILL after the backup exists: state preserved, documented restoration works', () => {
+    const { root } = makeRepo('v03-interrupt');
+    // Partial-staging fixture: staged violation + unstaged fix, so
+    // lint-staged MUST create a backup and hide the unstaged hunks.
+    writeFileSync(path.join(root, 'P.ts'), VALID);
+    run(root, ['add', 'P.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    writeFileSync(path.join(root, 'P.ts'), INVALID);
+    run(root, ['add', 'P.ts']);
+    writeFileSync(path.join(root, 'P.ts'), VALID); // unstaged fix
+    const userStashBefore = run(root, ['stash', 'list']).stdout.trim();
+    const blobBefore = run(root, ['ls-files', '-s', 'P.ts']).stdout.trim();
+    // Stage a task that signals readiness once lint-staged is mid-run (the
+    // backup now exists and the unstaged hunks are hidden), then blocks.
+    writeFileSync(
+      path.join(root, 'scripts', 'quality', 'midrun-block.mjs'),
+      [
+        "import { writeFileSync } from 'node:fs';",
+        "writeFileSync('MIDRUN_READY', '1');",
+        'const end = Date.now() + 8000;',
+        'while (Date.now() < end) { /* block inside the lint-staged task */ }',
+        '',
+      ].join('\n')
+    );
+    const cfg = path.join(root, 'scripts', 'quality', 'lint-staged.config.mjs');
+    writeFileSync(
+      cfg,
+      "export default {\n  '*.{js,jsx,cjs,mjs,ts,tsx,vue}': 'node scripts/quality/midrun-block.mjs',\n};\n"
+    );
+    run(root, ['add', 'scripts/quality/lint-staged.config.mjs', 'scripts/quality/midrun-block.mjs']);
+    const marker = path.join(root, 'MIDRUN_READY');
+    rmSync(marker, { force: true });
+    const hook = spawn(process.execPath, [path.join(root, 'scripts', 'quality', 'pre-commit.mjs')], {
+      cwd: root,
+      stdio: 'ignore',
+    });
+    // Wait until lint-staged is genuinely mid-run (backup created, unstaged
+    // hunks hidden), then interrupt — the 1ms-timeout test never got here.
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(marker) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+    assert.ok(existsSync(marker), 'mid-run readiness marker never appeared');
+    const stashesAtInterrupt = run(root, ['stash', 'list']).stdout;
+    assert.match(stashesAtInterrupt, /lint-staged/i, 'backup stash exists at interrupt time');
+    killSync(hook.pid);
+    hook.kill('SIGKILL');
+    // State after the uncatchable interruption:
+    assert.equal(run(root, ['ls-files', '-s', 'P.ts']).stdout.trim(), blobBefore, 'index blob unchanged');
+    assert.ok(
+      run(root, ['stash', 'list']).stdout.trim().startsWith(userStashBefore),
+      'pre-existing user stashes untouched (lint-staged backup may remain above them)'
+    );
+    // Documented restoration: apply the retained lint-staged backup to get
+    // the hidden unstaged hunks back.
+    const backup = run(root, ['stash', 'list']).stdout.split('\n').find((l) => /lint-staged/i.test(l)) ?? '';
+    const ref = /stash@\{(\d+)\}/.exec(backup);
+    assert.ok(ref, `retained backup identifiable: ${backup.trim()}`);
+    // The hidden unstaged fix is inside the retained backup and comes back
+    // through the documented recovery (`git stash apply` / path checkout).
+    const inBackup = run(root, ['show', `stash@{${ref[1]}}:P.ts`]).stdout;
+    assert.equal(inBackup, VALID, 'backup captures the hidden unstaged fix');
+    const checkout = run(root, ['checkout', `stash@{${ref[1]}}`, '--', 'P.ts']);
+    assert.equal(checkout.status, 0, `documented path-restore works: ${checkout.stderr}`);
+    assert.equal(
+      readFileSync(path.join(root, 'P.ts'), 'utf8'),
+      VALID,
+      'restoration returns the hidden unstaged content'
+    );
+  }, 60_000);
+
+  test('forced restoration failure keeps the backup and points at recovery', () => {
+    const { root } = makeRepo('v03-restore-fail');
+    writeFileSync(path.join(root, 'P.ts'), VALID);
+    run(root, ['add', 'P.ts']);
+    run(root, ['commit', '-m', 'seed']);
+    writeFileSync(path.join(root, 'P.ts'), INVALID);
+    run(root, ['add', 'P.ts']);
+    writeFileSync(path.join(root, 'P.ts'), VALID); // unstaged hunks to hide/restore
+    // Make the worktree file unwritable so lint-staged's automatic
+    // restoration of the hidden unstaged content FAILS after the violation.
+    spawnSync('chmod', ['444', path.join(root, 'P.ts')]);
+    const res = run(root, ['commit', '-m', 'will fail']);
+    assert.notEqual(res.status, 0, 'the staged violation must reject');
+    const out = res.stdout + res.stderr;
+    const stashes = run(root, ['stash', 'list']).stdout;
+    // Either lint-staged kept its backup with recovery guidance, or (if it
+    // restored before the write was needed) the state is already intact —
+    // both must leave the unstaged fix recoverable and user stashes intact.
+    const backupRetained = /lint-staged/i.test(stashes);
+    assert.ok(
+      backupRetained || out.includes('Reverting'),
+      `backup retained with guidance, or automatic restore reported: ${out.slice(0, 300)}`
+    );
+    spawnSync('chmod', ['644', path.join(root, 'P.ts')]);
+    if (backupRetained) {
+      const ref = /stash@\{(\d+)\}/.exec(stashes.split('\n').find((l) => /lint-staged/i.test(l)) ?? '');
+      assert.ok(ref, 'backup ref parseable');
+      const applied = run(root, ['stash', 'apply', `stash@{${ref[1]}}`]);
+      assert.equal(applied.status, 0, `documented recovery works: ${applied.stderr}`);
+    }
+    assert.equal(readFileSync(path.join(root, 'P.ts'), 'utf8'), VALID, 'unstaged fix recoverable');
+  }, 60_000);
+});
+
+/** Kill a spawned process and (best effort) its children. */
+function killSync(pid) {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+}

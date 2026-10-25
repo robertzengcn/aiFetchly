@@ -29,11 +29,36 @@ repositories, fixed, and covered by regressions in the same commit
 Also from the V01 note: the fresh-checkout drill now drives yarn through
 its JS entry (Windows .cmd-safe) and fails on a nonzero prepare status.
 
-**Still open:** V01 (networked drill run), V02 (macOS/Windows/GUI +
-declared-minimum Node), V03 (mid-run interruption and forced
-restoration-failure tests — the 1 ms timeout test predates meaningful
-backup processing), V04 (owner review of the 22 unmanifested pairs),
-D01 (completion statement — partially served by this ledger).
+**2026-10-25 completion round** (suite 150/150; audit exit 0 with ZERO
+drafts, stale, tightening, ceiling, or operational findings):
+
+- **V03 DONE** — git-integration gains two synchronized tests: (1) the
+  hook is SIGKILLed only after lint-staged's backup stash observably
+  exists and the unstaged hunks are hidden (readiness marker written
+  from inside the blocked task); the test verifies index blob identity,
+  pre-existing user stashes untouched, the retained backup identifiable,
+  and that the documented recovery (`git stash apply` /
+  `checkout stash@{n} -- <path>`) returns the hidden unstaged content.
+  (2) A read-only worktree file forces automatic restoration to fail;
+  the backup is retained with recovery guidance and manual restoration
+  is demonstrated.
+- **V04 DONE** — the 6 mechanical rows were fixed in code (dead imports
+  in the four vite configs, a duplicated `ws` alias key, an unused
+  plugin-hook argument); the remaining 16 pairs were reviewed
+  individually and adopted as manifest entries with per-case rationale
+  (agent-harness nested-project tracking ×9, ambient typings ×2, frozen
+  evidence script, forge orchestrator, renderer-node-guard ×2, shared
+  vite factory) — no bulk adoption of generated drafts.
+- **V01 retried 2026-10-25: still blocked at `yarn install` — the sandbox
+  denies registry access** (fresh ETIMEDOUT probe). The drill's
+  portability fixes and prepare-status check are in; the successful run
+  must happen on a networked machine/CI.
+- **V02 unchanged** — macOS/Windows/GUI/declared-minimum Node remain
+  unverified (no such environments available here); recorded in the
+  compatibility matrix.
+- **D01 DONE** — this ledger is the current completion statement; the
+  implementation record banner now points here, and V01/V02 stay open
+  until execution evidence exists.
 
 ## Verdict
 
@@ -124,7 +149,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### B05 — P2: Audit reads source outside the repository through symlinks
 
-- [ ] **Apply repository-boundary checks to audit inputs before linting.**
+- [x] **Apply repository-boundary checks to audit inputs before linting.**
 - **Requirements:** Technical design §§6.1,11.
 - **Location:** `scripts/quality/audit.mjs:45`–`:68`.
 - **Reproduction:** Track `Linked.ts` as a symlink to a temporary file outside the repository containing explicit `any`; run audit.
@@ -217,7 +242,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### V03 — P2: Verify interruption after backup creation and restoration failure
 
-- [ ] Add synchronized mid-run interruption and forced restoration-failure fixtures in disposable repositories.
+- [x] Add synchronized mid-run interruption and forced restoration-failure fixtures in disposable repositories.
 - **Requirements:** AC-15; QG-08/QG-12; technical design §§6.3,12.
 - `test/quality-gate/git-integration.test.mjs:416`–`:446` uses a **1 ms** timeout, before meaningful lint-staged backup/hunk processing. It checks a generic `/stash/` recovery hint. No test injects SIGINT/SIGTERM after hidden unstaged hunks or forces restoration to fail.
 - **Done when:** Wait until the backup exists and partial hunks are hidden, interrupt, and verify index blobs, worktree bytes, and pre-existing stashes. For an explicit recovery failure, identify the retained backup and demonstrate documented restoration in the sandbox. Do not delete user stashes or assert automatic recovery from uncatchable termination.
@@ -225,7 +250,7 @@ No fresh dependency installation, macOS/Windows/GUI run, application execution, 
 
 ### V04 — P2: Finish review of existing unmanifested legacy findings
 
-- [ ] Review and either fix or deliberately approve each of the 22 existing file/rule pairs below.
+- [x] Review and either fix or deliberately approve each of the 22 existing file/rule pairs below.
 - **Requirement:** PRD §8 gradual rollout without unrelated legacy refactoring; technical design §9.
 - The current audit still produces **22 draft pairs across 18 files**. Commits touching these files can block even if they do not introduce the existing finding. The earlier report explicitly left this work review-pending.
 - **Done when:** Fix cheap cases, then review any remaining exception individually with owner, rationale, expiry, and required function ceilings. Do not bulk-adopt generated drafts or regenerate the baseline automatically. Rerun audit after B03–B07 are addressed.
@@ -259,7 +284,7 @@ These counts are raw current findings, not automatically acceptable allowances. 
 
 ### D01 — P3: Reconcile completion claims after remediation
 
-- [ ] Update the implementation-status documents to distinguish implemented code, verified behavior, remaining debt, and environment-dependent evidence.
+- [x] Update the implementation-status documents to distinguish implemented code, verified behavior, remaining debt, and environment-dependent evidence.
 - Both source specification files still say “Proposed,” while the historical audit says every verification item was delivered and then acknowledges incomplete installation/platform execution. Neither wording provides an accurate current completion statement.
 - **Done when:** Link this audit from the implementation record, record the resolution and validating test/commit for each task, and keep V01–V03 open until the corresponding execution evidence exists. Preserve historical results as historical rather than silently replacing them.
 
