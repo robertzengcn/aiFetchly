@@ -601,7 +601,8 @@ The semantic projection must support at least:
 2. The run strip and sidebar show bounded attention.
 3. The selected transcript shows tool, permission category, preview, and workspace context.
 4. The user grants once, grants persistently when offered, or denies.
-5. The exact continuation resumes once, or the denial result returns to the model.
+5. A grant resumes the exact paused continuation once. In scheduled-loop journeys the denial result returns to the model (FR-PER-006); in interactive (workspace-coordinator-owned) turns denial is the validated stop of the paused run (deny-equals-stop). Acceptance tests distinguish the two cases.
+6. If the grant or deny action fails, the decision card stays actionable, the error is announced, and the failed decision never cancels an unrelated conversation's run (FR-PER-007).
 
 ### 17.5 Review and send outbound email
 
