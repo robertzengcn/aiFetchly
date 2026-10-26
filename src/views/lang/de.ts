@@ -2781,8 +2781,6 @@ export default {
       retry: "Erneut versuchen",
     },
     title: "KI-Assistent",
-    show_reasoning: "Denkvorgang anzeigen",
-    hide_reasoning: "Denkvorgang ausblenden",
     reasoning_title: "Denkvorgang",
     reasoning_streaming: "Denkvorgang…",
     reasoning_unavailable: "Für dieses Modell ist kein Denkvorgang verfügbar.",

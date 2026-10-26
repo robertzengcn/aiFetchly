@@ -2770,8 +2770,6 @@ export default {
       retry: "Réessayer",
     },
     title: "Assistant IA",
-    show_reasoning: "Afficher le raisonnement",
-    hide_reasoning: "Masquer le raisonnement",
     reasoning_title: "Raisonnement",
     reasoning_streaming: "Raisonnement…",
     reasoning_unavailable:

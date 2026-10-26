@@ -207,22 +207,6 @@
           icon
           size="small"
           variant="text"
-          data-testid="toggle-reasoning"
-          @click="toggleReasoningVisible"
-          :title="
-            showReasoning
-              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
-              : t('aiChatV2.show_reasoning') || 'Show reasoning'
-          "
-        >
-          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
-            mdi-brain
-          </v-icon>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
           @click="onClearMessages"
           :disabled="messages.length === 0"
           :title="t('aiChatV2.clear_chat') || 'Clear chat'"
@@ -955,7 +939,6 @@ import { isPlanStateActive } from "./planStateUtil";
 import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
-  writeAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
 import {
@@ -3160,12 +3143,6 @@ const handleReasoningVisibilityChanged = (event: Event): void => {
       ? customEvent.detail.visible
       : readAiChatReasoningVisible();
 };
-const toggleReasoningVisible = (): void => {
-  const next = !showReasoning.value;
-  showReasoning.value = next;
-  writeAiChatReasoningVisible(next);
-};
-
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
 

@@ -2539,9 +2539,12 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
   /**
    * FR-INT-004/005: the shared reasoning-visibility preference drives the
    * transcript (persisted + cross-surface change event), and the shared
-   * agent-task dialog mounts from the default surface.
+   * agent-task dialog mounts from the default surface. The in-chat
+   * "Hide reasoning" button was removed — visibility is controlled from
+   * AI provider settings, so the surface only follows the shared
+   * preference and its cross-surface change event.
    */
-  it("toggles reasoning visibility through the shared persisted preference (FR-INT-005)", async () => {
+  it("follows the shared persisted reasoning preference without an in-chat toggle (FR-INT-005)", async () => {
     localStorage.setItem("aiChatV2.showReasoning", "true");
     const wrapper = mountSurface();
     useChatWorkspaceStore().setSelected("conv-reasoning");
@@ -2550,20 +2553,20 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       name: "AiChatWorkspaceTranscript",
     });
     expect(transcript.props("showReasoning")).toBe(true);
+    // The in-chat "Hide reasoning" toggle button is gone.
+    expect(wrapper.find('[data-testid="toggle-reasoning"]').exists()).toBe(
+      false
+    );
 
-    await wrapper.get('[data-testid="toggle-reasoning"]').trigger("click");
-    await flushPromises();
-    expect(transcript.props("showReasoning")).toBe(false);
-    expect(localStorage.getItem("aiChatV2.showReasoning")).toBe("false");
-
-    // The cross-surface change event updates the workspace too.
+    // The cross-surface change event (e.g. from AI provider settings)
+    // updates the workspace too.
     window.dispatchEvent(
       new CustomEvent("aifetchly:ai-chat-reasoning-visibility-changed", {
-        detail: { visible: true },
+        detail: { visible: false },
       })
     );
     await flushPromises();
-    expect(transcript.props("showReasoning")).toBe(true);
+    expect(transcript.props("showReasoning")).toBe(false);
     localStorage.removeItem("aiChatV2.showReasoning");
   });
 

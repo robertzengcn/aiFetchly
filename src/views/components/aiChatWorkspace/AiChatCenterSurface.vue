@@ -159,27 +159,6 @@
              compaction progress/retry/cancel, reachable while the inspector
              is closed. -->
         <button
-          type="button"
-          class="chat-center__history-toggle"
-          data-testid="toggle-reasoning"
-          :title="
-            showReasoning
-              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
-              : t('aiChatV2.show_reasoning') || 'Show reasoning'
-          "
-          :aria-label="
-            showReasoning
-              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
-              : t('aiChatV2.show_reasoning') || 'Show reasoning'
-          "
-          :aria-pressed="showReasoning"
-          @click="toggleReasoningVisible"
-        >
-          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
-            mdi-brain
-          </v-icon>
-        </button>
-        <button
           v-if="historyUiEnabled"
           type="button"
           class="chat-center__history-toggle"
@@ -742,7 +721,6 @@ import {
 import type { AIChatPlanContinuationRecoveryView } from "@/entityTypes/aiChatPlanTypes";
 import {
   readAiChatReasoningVisible,
-  writeAiChatReasoningVisible,
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
@@ -2659,10 +2637,10 @@ scopedOverlays.registerSelectionBoundOverlay("scheduled-loop-staging", () => {
 
 // --- Reasoning visibility preference + agent tasks (FR-INT-004/005) ---------
 /**
- * FR-INT-005: user-controlled reasoning display (shared preference with
- * Chat V2 — persisted + cross-surface change event). The selected-
- * conversation preference changes presentation only; main-process
- * authorization and execution are untouched.
+ * FR-INT-005: reasoning display (shared preference with Chat V2 — persisted
+ * + cross-surface change event; controlled from AI provider settings). The
+ * preference changes presentation only; main-process authorization and
+ * execution are untouched.
  */
 const showReasoning = ref<boolean>(readAiChatReasoningVisible());
 
@@ -2675,10 +2653,6 @@ function onReasoningVisibilityChanged(
   if (typeof detail?.visible === "boolean") {
     showReasoning.value = detail.visible;
   }
-}
-
-function toggleReasoningVisible(): void {
-  writeAiChatReasoningVisible(!showReasoning.value);
 }
 
 /**

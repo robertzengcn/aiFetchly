@@ -2636,8 +2636,6 @@ export default {
       retry: "重试",
     },
     title: "AI 助手",
-    show_reasoning: "显示推理",
-    hide_reasoning: "隐藏推理",
     reasoning_title: "推理",
     reasoning_streaming: "推理中…",
     reasoning_unavailable: "此模型不支持推理。",

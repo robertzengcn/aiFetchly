@@ -2792,8 +2792,6 @@ export default {
       retry: "Reintentar",
     },
     title: "Asistente de IA",
-    show_reasoning: "Mostrar razonamiento",
-    hide_reasoning: "Ocultar razonamiento",
     reasoning_title: "Razonamiento",
     reasoning_streaming: "Razonando…",
     reasoning_unavailable:

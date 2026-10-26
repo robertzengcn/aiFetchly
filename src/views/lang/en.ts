@@ -2796,8 +2796,6 @@ export default {
       retry: "Retry",
     },
     title: "AI Assistant",
-    show_reasoning: "Show reasoning",
-    hide_reasoning: "Hide reasoning",
     reasoning_title: "Reasoning",
     reasoning_streaming: "Reasoning…",
     reasoning_unavailable: "Reasoning is not available for this model.",

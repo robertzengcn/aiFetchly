@@ -2724,8 +2724,6 @@ export default {
       retry: "再試行",
     },
     title: "AI アシスタント",
-    show_reasoning: "推論を表示",
-    hide_reasoning: "推論を非表示",
     reasoning_title: "推論",
     reasoning_streaming: "推論中…",
     reasoning_unavailable: "このモデルでは推論を利用できません。",
