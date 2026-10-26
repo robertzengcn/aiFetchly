@@ -4,10 +4,17 @@
     to an ALLOWLISTED component through a static record — never a component
     path from route data, IPC, or user input. The inspector is optional and
     scoped to the active page/selection (IPR-007/008).
+
+    Docked-column change (2026-10-26): no body teleport — the host is a
+    direct flex child of `.app-workspace-shell`, so the active inspector
+    mounts INLINE as the shell row's third column (wide: real layout
+    column; narrow/medium: the surface's own overlay variant).
   -->
-  <Teleport to="body">
-    <component :is="inspectorComponent" v-if="inspectorComponent && inspector.target" :key="inspectorKey" />
-  </Teleport>
+  <component
+    :is="inspectorComponent"
+    v-if="inspectorComponent && inspector.target"
+    :key="inspectorKey"
+  />
 </template>
 
 <script setup lang="ts">
