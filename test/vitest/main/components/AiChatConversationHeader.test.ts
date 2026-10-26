@@ -8,13 +8,27 @@ vi.mock("@/views/components/aiChatWorkspace/WorkspaceStatusIndicator.vue", () =>
   default: { template: "<span />" },
 }));
 
-function mountHeader(runtimeStatus: ConversationRuntimeStatus) {
+function mountHeader(
+  runtimeStatus: ConversationRuntimeStatus,
+  extra: Partial<{
+    goalObjective: string | null;
+    loopStatus: string | null;
+    hasConversation: boolean;
+  }> = {}
+) {
   const i18n = createI18n({
     legacy: false,
     locale: "en",
     messages: {
       en: {
-        workspaceChat: { header: { backgroundAgents: "Background Agents" } },
+        workspaceChat: {
+          header: { backgroundAgents: "Background Agents" },
+          runStrip: {
+            goal: "Goal: {objective}",
+            loopRunning: "Scheduled loop running",
+            loopPaused: "Scheduled loop paused",
+          },
+        },
       },
     },
   });
@@ -26,6 +40,7 @@ function mountHeader(runtimeStatus: ConversationRuntimeStatus) {
       activeToolCount: 0,
       inspectorOpen: false,
       hasConversation: true,
+      ...extra,
     },
     global: {
       plugins: [i18n],
@@ -134,5 +149,70 @@ describe("AiChatConversationHeader background-agents entry", () => {
 
     await item.trigger("click");
     expect(wrapper.emitted("open-agent-tasks")).toHaveLength(1);
+  });
+});
+
+/**
+ * Run-strip removal (2026-10-26 design): the goal objective + scheduled-loop
+ * state move out of the deleted run strip into the header as display-only
+ * chips beside the title, and the inspector (sidebar) toggle moves to the
+ * RIGHT of the overflow "..." menu where it is always rendered.
+ */
+describe("AiChatConversationHeader goal/loop chips + sidebar toggle placement", () => {
+  it("renders the goal chip with the objective and keeps it non-interactive", () => {
+    const wrapper = mountHeader("running", {
+      goalObjective: "Ship the parity suite",
+    });
+    const chip = wrapper.get('[data-testid="workspace-header-goal"]');
+    expect(chip.text()).toBe("Goal: Ship the parity suite");
+    // Display-only: a text span, not a button affordance.
+    expect(chip.element.tagName).toBe("SPAN");
+  });
+
+  it.each([
+    ["running", "Scheduled loop running"],
+    ["paused", "Scheduled loop paused"],
+    ["draining", "draining"],
+  ] as const)("renders the loop chip for %s", (loopStatus, expected) => {
+    const wrapper = mountHeader("running", { loopStatus });
+    expect(wrapper.get('[data-testid="workspace-header-loop"]').text()).toBe(
+      expected
+    );
+  });
+
+  it("renders no chips when goal/loop are not provided", () => {
+    const wrapper = mountHeader("running");
+    expect(
+      wrapper.find('[data-testid="workspace-header-goal"]').exists()
+    ).toBe(false);
+    expect(
+      wrapper.find('[data-testid="workspace-header-loop"]').exists()
+    ).toBe(false);
+  });
+
+  it("renders the sidebar toggle AFTER (right of) the overflow menu", () => {
+    const wrapper = mountHeader("idle");
+    const overflow = wrapper.get('[data-testid="workspace-header-overflow"]');
+    const toggle = wrapper.get('[data-testid="workspace-inspector-toggle"]');
+    // v-menu/v-tooltip stubs wrap their activators in wrapper divs, so the
+    // overflow button's wrapper's next sibling must wrap the toggle — and
+    // the toggle must be the final element of .header-actions.
+    expect(
+      overflow.element.parentElement?.nextElementSibling?.contains(
+        toggle.element
+      )
+    ).toBe(true);
+    const actions = Array.from(
+      wrapper.get(".header-actions").element.children
+    ) as Element[];
+    const last = actions[actions.length - 1];
+    expect(last.contains(toggle.element)).toBe(true);
+  });
+
+  it("renders the sidebar toggle even with no conversation selected", () => {
+    const wrapper = mountHeader("idle", { hasConversation: false });
+    expect(
+      wrapper.find('[data-testid="workspace-inspector-toggle"]').exists()
+    ).toBe(true);
   });
 });
