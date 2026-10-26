@@ -6,7 +6,7 @@
     this one component.
   -->
   <v-dialog
-    :model-value="open"
+    :model-value="modelValue"
     max-width="520"
     persistent
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
@@ -88,11 +88,12 @@ import { useI18n } from "vue-i18n";
 
 withDefaults(
   defineProps<{
-    open?: boolean;
+    /** Dialog visibility (v-model). */
+    modelValue?: boolean;
     installing?: boolean;
     error?: string | null;
   }>(),
-  { open: false, installing: false, error: null }
+  { modelValue: false, installing: false, error: null }
 );
 
 const emit = defineEmits<{

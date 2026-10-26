@@ -239,6 +239,12 @@ function mountChat() {
         WorkspaceRequiredCard: true,
         WorkspaceBadge: true,
         WorkspaceMemoryPanel: true,
+        AiChatVoiceTtsModelInstallDialog: {
+          props: ["modelValue", "installing", "error"],
+          emits: ["update:modelValue", "confirm", "open-settings"],
+          template:
+            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
+        },
         VAlert: true,
         VBtn: {
           emits: ["click"],
@@ -398,7 +404,7 @@ describe("AiChatV2 spoken responses", () => {
     );
   });
 
-  it("does not enable spoken responses when the TTS model is missing; offers to install the speech model", async () => {
+  it("does not enable spoken responses when the TTS model is missing; opens the speech-model install popup", async () => {
     vi.mocked(getVoiceSettings).mockResolvedValue({
       ...defaultVoiceSettings,
       ttsMode: "disabled",
@@ -418,15 +424,89 @@ describe("AiChatV2 spoken responses", () => {
     // Must NOT persist an enablement that would silently fail every reply.
     expect(setVoiceSettings).not.toHaveBeenCalled();
 
-    // Guidance is surfaced with an install affordance in the chat surface.
-    const installBtn = wrapper.find('[data-testid="install-tts-model"]');
-    expect(installBtn.exists()).toBe(true);
-    await installBtn.trigger("click");
+    // Guidance is a popup dialog over the chat, not an inline notice bar.
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+    expect(wrapper.find('[data-testid="install-tts-model"]').exists()).toBe(
+      false
+    );
+  });
+
+  it("installing the speech model from the popup auto-enables spoken responses", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    // Call order: mount loadSettings, toggle gate check, post-install
+    // loadSettings. First two missing_model, third ready. A call counter
+    // avoids mockResolvedValueOnce ordering bugs.
+    let statusCalls = 0;
+    vi.mocked(getVoiceStatus).mockImplementation(async () => {
+      statusCalls += 1;
+      return statusCalls < 3
+        ? { sttState: "ready", ttsState: "missing_model" }
+        : { sttState: "ready", ttsState: "ready" };
+    });
+    vi.mocked(downloadVoiceModel).mockResolvedValue(undefined);
+    vi.mocked(setVoiceSettings).mockImplementation(async (s) => s);
+    const wrapper = mountChat();
     await flushPromises();
 
-    await vi.waitFor(() =>
-      expect(downloadVoiceModel).toHaveBeenCalledWith("sherpa-onnx:tts:auto")
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="tts-install-confirm"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(downloadVoiceModel).toHaveBeenCalledWith("sherpa-onnx:tts:auto");
+    expect(setVoiceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ ttsMode: "all_assistant_messages" })
     );
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("false");
+  });
+
+  it("closing the install popup lets the user reopen it from the toggle", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+
+    await wrapper
+      .find('[data-testid="tts-install-cancel"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("false");
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
   });
 
   it("does not enable spoken responses when the TTS runtime is unavailable; opens the runtime installer", async () => {

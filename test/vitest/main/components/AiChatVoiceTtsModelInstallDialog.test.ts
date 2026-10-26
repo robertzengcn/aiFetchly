@@ -27,7 +27,7 @@ const i18n = createI18n({
  * Mount dialog with the same stub style used across the chat component
  * tests (VDialog stub renders its slot so the v-card is reachable).
  */
-function mountDialog(props: Record<string, unknown> = { open: true }) {
+function mountDialog(props: Record<string, unknown> = { modelValue: true }) {
   return mount(AiChatVoiceTtsModelInstallDialog, {
     props: props as never,
     global: {
@@ -54,7 +54,7 @@ function mountDialog(props: Record<string, unknown> = { open: true }) {
 
 describe("AiChatVoiceTtsModelInstallDialog", () => {
   it("renders the speech-model notice and install affordance when open", () => {
-    const wrapper = mountDialog({ open: true });
+    const wrapper = mountDialog({ modelValue: true });
 
     expect(wrapper.text()).toContain(
       "Spoken responses need a speech model. Install it to enable."
@@ -69,7 +69,7 @@ describe("AiChatVoiceTtsModelInstallDialog", () => {
   });
 
   it("emits confirm when the install button is clicked", async () => {
-    const wrapper = mountDialog({ open: true });
+    const wrapper = mountDialog({ modelValue: true });
 
     await wrapper.find('[data-testid="tts-install-confirm"]').trigger("click");
 
@@ -77,7 +77,7 @@ describe("AiChatVoiceTtsModelInstallDialog", () => {
   });
 
   it("emits update:modelValue false when cancelled", async () => {
-    const wrapper = mountDialog({ open: true });
+    const wrapper = mountDialog({ modelValue: true });
 
     await wrapper.find('[data-testid="tts-install-cancel"]').trigger("click");
 
@@ -85,7 +85,7 @@ describe("AiChatVoiceTtsModelInstallDialog", () => {
   });
 
   it("emits open-settings from the settings link", async () => {
-    const wrapper = mountDialog({ open: true });
+    const wrapper = mountDialog({ modelValue: true });
 
     await wrapper.find('[data-testid="tts-install-settings"]').trigger("click");
 

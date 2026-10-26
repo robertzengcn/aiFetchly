@@ -422,50 +422,6 @@
            list (see handleScheduledStream) so they look identical to
            interactive responses. No separate running-area bubble. -->
 
-      <!-- TTS prerequisite notice: shown when the user tries to enable spoken
-           responses (the header speaker toggle) before a TTS model is installed.
-           Mirrors the STT model-missing notice in AiChatV2Composer so the user
-           is guided to install instead of seeing silent failures on every reply. -->
-      <div
-        v-if="voiceTtsInstallPrompt"
-        class="v2-shell__tts-notice"
-        role="status"
-        aria-live="polite"
-      >
-        <v-icon size="x-small" color="warning" class="mr-1">mdi-volume-off</v-icon>
-        <span class="v2-shell__tts-notice-text">
-          {{
-            t("aiChatV2.voice.tts_model_missing") ||
-            "Spoken responses need a speech model. Install it to enable."
-          }}
-        </span>
-        <v-btn
-          size="x-small"
-          color="primary"
-          variant="tonal"
-          class="ml-2"
-          data-testid="install-tts-model"
-          :loading="voiceModelInstalling"
-          :disabled="voiceModelInstalling"
-          @click="handleInstallTtsModel"
-        >
-          {{
-            voiceModelInstalling
-              ? t("aiChatV2.voice.installing_model") || "Installing..."
-              : t("aiChatV2.voice.install_tts_model") || "Install speech model"
-          }}
-        </v-btn>
-        <v-btn
-          size="x-small"
-          variant="text"
-          class="ml-1"
-          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
-          @click="openAIProviderSettings"
-        >
-          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
-        </v-btn>
-      </div>
-
       <AiChatSelectedContext
         v-if="historyUiEnabled"
         :selections="selectedContextItems"
@@ -615,6 +571,17 @@
       :progress-text="voiceRuntimeInstallProgressText"
       :percent="voiceRuntimeInstallPercent"
       @confirm="confirmInstallVoiceRuntime"
+    />
+
+    <!-- Spoken-response speech-model install popup: opens when the user
+         enables spoken responses before a TTS model is installed, and lets
+         them install it in place (spec 2026-10-26). -->
+    <AiChatVoiceTtsModelInstallDialog
+      v-model="voiceTtsInstallPrompt"
+      :installing="voiceModelInstalling"
+      :error="voiceModelInstallError"
+      @confirm="handleInstallTtsModel"
+      @open-settings="openAIProviderSettings"
     />
 
     <!-- Conversation history dialog -->
@@ -858,6 +825,7 @@ import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
 import AiChatVoiceOutputToggle from "./AiChatVoiceOutputToggle.vue";
 import AiChatVoiceRuntimeInstallDialog from "./AiChatVoiceRuntimeInstallDialog.vue";
+import AiChatVoiceTtsModelInstallDialog from "./AiChatVoiceTtsModelInstallDialog.vue";
 import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
 import { useConversationScopedOverlays } from "@/views/composables/aiChatWorkspace/useConversationScopedOverlays";
 import {
@@ -6668,22 +6636,6 @@ defineExpose({ handleSkillPermissionDeny, onSelectConversation });
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-}
-.v2-shell__tts-notice {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 4px;
-  margin: 0 12px;
-  padding: 4px 8px;
-  border-radius: 4px;
-  background: rgba(255, 152, 0, 0.1);
-  color: rgba(0, 0, 0, 0.7);
-  font-size: 12px;
-}
-.v2-shell__tts-notice-text {
-  min-width: 0;
-  flex: 1 1 auto;
 }
 .v2-shell__plan-panel {
   flex: 0 0 auto;
