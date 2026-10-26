@@ -16,20 +16,13 @@
       @open-agent-tasks="onOpenAgentTasks"
       @clear="onClear"
       @delete="onDelete"
-    />
-
-    <AiChatRunStrip
-      :runtime-status="selectedStore.runtimeStatus"
-      :recovering="recovering"
       :goal-objective="
         sharedOrchestrationEnabled ? activeGoalObjective : null
       "
       :loop-status="sharedOrchestrationEnabled ? activeLoopStatus : null"
-      @stop="onStopFromStrip"
-      @open-details="workspaceStore.openInspector('activity')"
     />
 
-    <!-- Retry/recovery detail (FR-REC-001..003): the run strip keeps the
+    <!-- Retry/recovery detail (FR-REC-001..003): the header status keeps the
          high-level state; this line exposes attempt/max, bounded delay, and
          the current recovery layer + reason when they are live. -->
     <div
@@ -275,7 +268,7 @@
       :generated-image-reference-limit="GENERATED_IMAGE_REFERENCE_LIMIT"
       :generated-image-focus-signal="composerFocusSignal"
       @send="onComposerSend"
-      @stop="stopActiveRunWithSpeech"
+      @stop="onPrimaryStop"
       @request-workspace="onRequestWorkspaceSetup"
       @remove-generated-image="onRemoveGeneratedImage"
       @clear-generated-images="onClearGeneratedImages"
@@ -646,7 +639,7 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
 import AiChatConversationHeader from "@/views/components/aiChatWorkspace/AiChatConversationHeader.vue";
-import AiChatRunStrip from "@/views/components/aiChatWorkspace/AiChatRunStrip.vue";
+
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "@/views/components/aiChatV2/AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
@@ -1031,8 +1024,8 @@ const localizedBannerError = computed<string | null>(() => {
  * Shared text-run stop with speech cancellation (R07 / audit 2026-10-20 B06):
  * EVERY user Stop affordance that kills a text response cancels its spoken
  * output too — queued/playing utterances must not outlive the stopped run.
- * The run strip's handler keeps the goal/loop precedence below; the composer
- * Stop and the batch Stop use this directly (PRD §13: single-primary-stop).
+ * The IMAGE BATCH stop uses this directly; the conversation's single
+ * primary stop (goal → loop → run) is onPrimaryStop below (PRD §13).
  */
 async function stopActiveRunWithSpeech(): Promise<void> {
   resetSpeechFeed();
@@ -1040,12 +1033,17 @@ async function stopActiveRunWithSpeech(): Promise<void> {
   await selectedStore.stopActiveRun();
 }
 
-/** One primary stop action (PRD §13.3): goal → loop → active run. */
-async function onStopFromStrip(): Promise<void> {
+/**
+ * One primary stop action (PRD §13.3): goal → loop → active run.
+ * Run-strip removal (2026-10-26 design): the composer Stop is now the
+ * conversation's single primary stop affordance — the send button swaps to
+ * a stop button while the agent runs, so no separate Stop button remains.
+ * R07 (FR-VOI-008): stopping the turn must also stop its spoken output —
+ * queued/playing utterances must not outlive the text run the user just
+ * cancelled. Applies to every branch below (goal / loop / run).
+ */
+async function onPrimaryStop(): Promise<void> {
   if (!conversationId.value) return;
-  // R07 (FR-VOI-008): stopping the turn must also stop its spoken output —
-  // queued/playing utterances must not outlive the text run the user just
-  // cancelled. Applies to every branch below (goal / loop / run).
   resetSpeechFeed();
   void voice.stopSpeaking();
   if (activeGoalObjective.value) {

@@ -325,7 +325,16 @@ const ComposerStub = defineComponent({
 
 const HeaderStub = defineComponent({
   name: "AiChatConversationHeader",
-  props: ["title", "hasConversation", "inspectorOpen"],
+  props: [
+    "title",
+    "hasConversation",
+    "inspectorOpen",
+    "goalObjective",
+    "loopStatus",
+    "runtimeStatus",
+    "recovering",
+    "activeToolCount",
+  ],
   emits: ["compact", "open-agent-tasks"],
   template:
     '<header data-testid="conversation-header-stub">' +
@@ -365,7 +374,6 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           ],
           template: '<div data-testid="transcript-stub" />',
         }),
-        AiChatRunStrip: true,
         WorkspaceBadge: defineComponent({
           name: "WorkspaceBadge",
           props: ["workspace", "memoryCount", "loading", "busy"],
@@ -5627,21 +5635,6 @@ describe("AiChatCenterSurface speech cancellation (R07)", () => {
 
     wrapper.unmount();
   });
-
-  it("cancels the voice job when the run strip Stop fires", async () => {
-    const wrapper = mountSurface();
-    await flushPromises();
-    const chatWorkspace = useChatWorkspaceStore();
-    chatWorkspace.setSelected("conv-a");
-    await flushPromises();
-    const beforeStop = vi.mocked(cancelVoiceJob).mock.calls.length;
-
-    wrapper.findComponent({ name: "AiChatRunStrip" }).vm.$emit("stop");
-    await flushPromises();
-    expect(vi.mocked(cancelVoiceJob).mock.calls.length).toBe(beforeStop + 1);
-
-    wrapper.unmount();
-  });
 });
 
 /**
@@ -5995,7 +5988,7 @@ describe("AiChatCenterSurface late-error ownership (B08)", () => {
 /**
  * Audit R2 G02: the shared-orchestration rollout adapter gets a documented,
  * SAFE rollback effect. Disabled it hides the shared command orchestration
- * state (goal objective + scheduled-loop status) from the run strip — a
+ * state (goal objective + scheduled-loop status) from the header — a
  * presentation rollback only: command interception, the stop precedence
  * (goal → loop → run, unchanged durable behavior), and every durable
  * identity stay intact. Raw slash-command fallback is NOT restored.
@@ -6012,7 +6005,7 @@ describe("AiChatCenterSurface shared-orchestration rollback (audit R2 G02)", () 
   };
 
   it.each([[undefined], [{ enabled: true, adapters: undefined }]])(
-    "renders goal/loop orchestration state in the strip by default (%#)",
+    "renders goal/loop orchestration state in the header by default (%#)",
     async (flags) => {
       vi.mocked(fetchWorkspaceRolloutFlags).mockResolvedValue(
         flags as never
@@ -6029,8 +6022,11 @@ describe("AiChatCenterSurface shared-orchestration rollback (audit R2 G02)", () 
         iterationCount: 2,
       });
       await flushPromises();
-      const strip = wrapper.findComponent({ name: "AiChatRunStrip" });
-      expect(strip.props("goalObjective")).toBe("Ship the parity suite");
+      // Run-strip removal: the header now owns the goal/loop chips.
+      const header = wrapper.findComponent({
+        name: "AiChatConversationHeader",
+      });
+      expect(header.props("goalObjective")).toBe("Ship the parity suite");
 
       wrapper.unmount();
     }
@@ -6053,20 +6049,18 @@ describe("AiChatCenterSurface shared-orchestration rollback (audit R2 G02)", () 
     });
     await flushPromises();
 
-    const strip = wrapper.findComponent({ name: "AiChatRunStrip" });
-    // Presentation rollback: the shared orchestration surfaces dim out.
-    expect(strip.props("goalObjective")).toBeNull();
-    expect(strip.props("loopStatus")).toBeNull();
-    // The strip keeps its runtime status + stop affordance.
-    expect(strip.props("runtimeStatus")).toBe("idle");
-    expect(strip.find("button").exists() || strip.emitted()).toBeTruthy();
+    // Presentation rollback: the shared orchestration surfaces dim out —
+    // the header receives null goal/loop state.
+    const header = wrapper.findComponent({
+      name: "AiChatConversationHeader",
+    });
+    expect(header.props("goalObjective")).toBeNull();
+    expect(header.props("loopStatus")).toBeNull();
     // Removing the goal (live events still reconcile the store) keeps a
     // rollback-free view in sync for adapter-on surfaces.
     useSelectedConversationStore().seedGoal(null);
     await flushPromises();
-    expect(
-      wrapper.findComponent({ name: "AiChatRunStrip" }).props("goalObjective")
-    ).toBeNull();
+    expect(header.props("goalObjective")).toBeNull();
 
     wrapper.unmount();
   });
@@ -6115,10 +6109,11 @@ describe("AiChatCenterSurface shared-orchestration rollback (audit R2 G02)", () 
     await flushPromises();
 
     // 1) Stop precedence unchanged (run BEFORE /clear: clearing resets the
-    //    selection): the strip stop still targets the (hidden) goal first —
-    //    durable orchestration behavior spared.
+    //    selection): the composer stop is now the ONE primary stop affordance
+    //    and still targets the (hidden) goal first — durable orchestration
+    //    behavior spared even with the strip gone.
     wrapper
-      .findComponent({ name: "AiChatRunStrip" })
+      .findComponent({ name: "AiChatV2Composer" })
       .vm.$emit("stop");
     await flushPromises();
     const goalStopCall = invoke.mock.calls.find(
