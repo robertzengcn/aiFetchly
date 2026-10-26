@@ -14,6 +14,7 @@ function mountHeader(
     goalObjective: string | null;
     loopStatus: string | null;
     hasConversation: boolean;
+    inspectorOpen: boolean;
   }> = {}
 ) {
   const i18n = createI18n({
@@ -224,6 +225,28 @@ describe("AiChatConversationHeader goal/loop chips + sidebar toggle placement", 
    * long campaign objective can never push the "..." / inspector buttons
    * out of reach.
    */
+  /**
+   * Rendering-state note: the toggle's glyph must EXIST in the installed
+   * @mdi/font (pinned repo-wide by `mdIconGlyphs.test.ts` — the original
+   * `mdi-panel-right[-close]` names are absent from @mdi/font 7.4.47 and
+   * rendered invisible). The open/closed DISTINCTION is expressed through
+   * the pressed-tint class, not the glyph, for constant recognizability.
+   */
+  it("tints the sidebar toggle while the inspector is open (visible pressed state)", () => {
+    const closed = mountHeader("idle", { inspectorOpen: false });
+    expect(
+      closed
+        .get('[data-testid="workspace-inspector-toggle"]')
+        .classes()
+        .includes("icon-button--active")
+    ).toBe(false);
+
+    const open = mountHeader("idle", { inspectorOpen: true });
+    const toggle = open.get('[data-testid="workspace-inspector-toggle"]');
+    expect(toggle.classes().includes("icon-button--active")).toBe(true);
+    expect(toggle.attributes("aria-pressed")).toBe("true");
+  });
+
   it("clamps the goal/loop chips so long objectives cannot push header actions out of reach", async () => {
     mountHeader("running", {
       goalObjective: "Ship the parity suite",

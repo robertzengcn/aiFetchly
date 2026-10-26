@@ -317,7 +317,7 @@ const getTaskTypeIcon = (taskType: TaskType): string => {
   switch (taskType) {
     case TaskType.SEARCH: return 'mdi-magnify'
     case TaskType.EMAIL_EXTRACT: return 'mdi-email-multiple'
-    case TaskType.BUCK_EMAIL: return 'mdi-email-send'
+    case TaskType.BUCK_EMAIL: return 'mdi-send'
     case TaskType.GOOGLE_MAPS: return 'mdi-google'
     case TaskType.YANDEX_MAPS: return 'mdi-map-search-outline'
     default: return 'mdi-cog'

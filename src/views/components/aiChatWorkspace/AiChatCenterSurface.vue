@@ -395,7 +395,7 @@
       data-testid="workspace-genimg-notice"
     >
       <v-icon size="x-small" color="warning" class="mr-1">
-        mdi-image-alert-outline
+        mdi-image-off-outline
       </v-icon>
       <span class="chat-center__genimg-notice-text">
         {{ shownImageNotice }}

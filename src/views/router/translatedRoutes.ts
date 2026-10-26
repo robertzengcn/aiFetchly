@@ -417,7 +417,7 @@ export const createTranslatedRoutes = (): RouteRecordRaw[] => {
           meta: {
             visible: false,
             title: computed(() => t("router.sending_bulk_emails")),
-            icon: "mdi-email-send",
+            icon: "mdi-send",
           },
         },
         {

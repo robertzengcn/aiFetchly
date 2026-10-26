@@ -111,23 +111,24 @@
 
       <!-- Sidebar (inspector) toggle — moved RIGHT of the "..." menu
            (run-strip removal, 2026-10-26 design): one always-rendered
-           affordance that opens/hides the right-hand side panel. -->
+           affordance that opens/hides the right-hand side panel. Glyph note:
+           `mdi-dock-right` because `mdi-panel-right[-close]` have no
+           `::before` rule in the installed @mdi/font 7.4.47 and rendered
+           blank (pinned by mdIconGlyphs.test.ts); open state shows via the
+           pressed tint. -->
       <v-tooltip :text="inspectorTooltip" location="bottom">
         <template #activator="{ props: tooltipProps }">
           <button
             v-bind="tooltipProps"
             type="button"
             class="icon-button"
+            :class="{ 'icon-button--active': inspectorOpen }"
             :aria-label="inspectorTooltip"
             :aria-pressed="inspectorOpen"
             data-testid="workspace-inspector-toggle"
             @click="emit('toggle-inspector')"
           >
-            <v-icon
-              :icon="inspectorOpen ? 'mdi-panel-right' : 'mdi-panel-right-close'"
-              size="20"
-              aria-hidden="true"
-            />
+            <v-icon icon="mdi-dock-right" size="20" aria-hidden="true" />
           </button>
         </template>
       </v-tooltip>
@@ -333,6 +334,15 @@ const loopLabel = computed(() => {
 
 .icon-button:hover {
   background: rgba(var(--v-theme-on-surface), 0.07);
+}
+
+/* Pressed state for toggles whose glyph cannot switch shape (the dock
+   icon exists in one form): a primary tint makes the OPEN sidebar state
+   visible without color-only signaling (the tint rides with the pressed
+   attribute + tooltip). */
+.icon-button--active {
+  color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.1);
 }
 
 .destructive {

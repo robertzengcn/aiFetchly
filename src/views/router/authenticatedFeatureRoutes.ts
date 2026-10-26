@@ -647,7 +647,7 @@ export const authenticatedFeatureRoutes: RouteRecordRaw[] = [
       meta: {
         visible: false,
         title: "route.sending_bulk_emails",
-        icon: "mdi-email-send",
+        icon: "mdi-send",
       },
     },
     {
