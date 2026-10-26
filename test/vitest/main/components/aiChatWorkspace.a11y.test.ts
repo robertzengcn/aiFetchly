@@ -3,27 +3,25 @@ import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
-import AiChatRunStrip from "@/views/components/aiChatWorkspace/AiChatRunStrip.vue";
 import WorkspaceStatusIndicator from "@/views/components/aiChatWorkspace/WorkspaceStatusIndicator.vue";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
-import type {
-  ConversationRuntimeStatus,
-  ChatRunStatus,
-} from "@/entityTypes/aiChatWorkspaceTypes";
 
 /**
  * A11Y-001–010 certification, automated subset (PRD §16 / audit bullet 281).
  *
  * Covers the axes that are deterministically assertable at component level:
- *   - A11Y-001/002: accessible names and non-color state on the run strip
- *     (role=status, labeled status indicator, text labels beside icons).
- *   - A11Y-007: run-strip actions carry the repository minimum sizing
- *     (min-height 36px layout rule).
- *   - A11Y-003: the strip actions are real <button> elements reachable by
- *     keyboard (native buttons, not div/click handlers).
+ *   - A11Y-001/002 (header-carried): the WorkspaceStatusIndicator stays
+ *     accessible — named/role=img status with presentational icons; the
+ *     header's goal/loop chips are text-only spans (non-color meaning), and
+ *     the header actions tests live in AiChatConversationHeader.test.ts.
  *   - A11Y-010: reasoning is excluded from consideration output when the
  *     reasoning display is disabled (element not rendered).
+ *
+ * The run strip (A11Y-003 strip actions / A11Y-007 strip sizing) was removed
+ * from the product on 2026-10-26; its stop affordance moved to the composer
+ * send button (real <button>, same sizing rule from layout.scss), so those
+ * certifications retired with the component.
  *
  * Vuetify VDialog (aria-modal, focus trap, initial focus, Escape, focus
  * return) covers A11Y-004/006 for every decision dialog it hosts; the
@@ -163,71 +161,5 @@ describe("A11Y-001/002 accessible name + non-color status", () => {
     expect(host.attributes("aria-label")).toBe("Working…");
     expect(host.attributes("title")).toBe("Working…");
     expect(wrapper.find('[aria-hidden="true"]').exists()).toBe(true);
-  });
-
-  const states: ConversationRuntimeStatus[] = [
-    "queued",
-    "running",
-    "awaiting_permission",
-    "awaiting_user",
-    "failed",
-    "interrupted",
-  ];
-
-  for (const runtimeStatus of states) {
-    it(`run strip for ${runtimeStatus} has role=status with text label and named actions`, () => {
-      const wrapper = mount(AiChatRunStrip, {
-        props: {
-          runtimeStatus,
-          recovering: false,
-        },
-        global: { plugins: [i18n], stubs: { VIcon } },
-      });
-      const strip = wrapper.find('[data-testid="workspace-run-strip"]');
-      expect(strip.exists(), `${runtimeStatus} strip visible`).toBe(true);
-      expect(strip.attributes("role")).toBe("status");
-      // Non-color: a text label travels with the status icon.
-      const labelText = wrapper.find(".run-strip-label").text().trim();
-      expect(labelText.length, `label for ${runtimeStatus}`).toBeGreaterThan(
-        0
-      );
-      // A11Y-003: actions are native buttons (keyboard reachable).
-      const buttons = wrapper.findAll("button");
-      expect(buttons.length).toBeGreaterThanOrEqual(1);
-      for (const button of buttons) {
-        expect(button.text().trim().length).toBeGreaterThan(0);
-      }
-      if (runtimeStatus === ("running" as ChatRunStatus)) {
-        expect(
-          wrapper
-            .find('[data-testid="workspace-run-strip-stop"]')
-            .text()
-            .trim()
-        ).toBe("Stop");
-      }
-    });
-  }
-});
-
-describe("A11Y-007 repository minimum sizing on run-strip actions", () => {
-  it("declares the 36px minimum height rule in the component CSS", async () => {
-    const wrapper = mount(AiChatRunStrip, {
-      props: { runtimeStatus: "running", recovering: false },
-      global: { plugins: [i18n], stubs: { VIcon } },
-    });
-    const source = await import(
-      "@/views/components/aiChatWorkspace/AiChatRunStrip.vue?raw"
-    );
-    expect(source.default).toContain(".strip-action {");
-    expect(
-      /\.strip-action \{[^}]*min-height:\s*36px;/.test(source.default)
-    ).toBe(true);
-    // Sanity: the mounted button carries the class that owns the rule.
-    expect(
-      wrapper
-        .find('[data-testid="workspace-run-strip-stop"]')
-        .classes()
-        .some((c) => c === "strip-action")
-    ).toBe(true);
   });
 });
