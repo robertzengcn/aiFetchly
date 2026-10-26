@@ -3551,20 +3551,22 @@ describe("AiChatCenterSurface generated-image reference drafts (legacy parity)",
   }
 
   /**
-   * FR-BRW-001..005: the workspace composes the shared managed-browser
-   * panels (start + live session) as a compact region of the center — NOT
-   * inside the inspector, so takeover/approval controls stay reachable with
-   * the inspector closed.
+   * FR-BRW-001..005: the workspace composes the live managed-browser
+   * session card as a compact region of the center — NOT inside the
+   * inspector, so takeover/approval controls stay reachable with the
+   * inspector closed. The start banner was removed from the chat head;
+   * sessions start from the Tool Account page / AI browser tools.
    */
-  it("renders the managed-browser region with a conversation selected, outside the inspector (FR-BRW)", async () => {
+  it("renders the managed-browser region without the start banner, outside the inspector (FR-BRW)", async () => {
     const wrapper = mountSurface();
     await selectConversation("conv-1");
     await flushPromises();
 
     const region = wrapper.get('[data-testid="workspace-browser-region"]');
+    // The "Start managed browser" banner is intentionally not part of the chat.
     expect(
       wrapper.findComponent({ name: "ManagedBrowserStartPanel" }).exists()
-    ).toBe(true);
+    ).toBe(false);
     expect(
       wrapper.findComponent({ name: "ManagedBrowserSessionCard" }).exists()
     ).toBe(true);

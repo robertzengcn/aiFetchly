@@ -273,7 +273,6 @@
            session (account, state, handoff controls) whenever one is
            active. Renders nothing when no session is running. -->
       <ManagedBrowserSessionCard />
-      <ManagedBrowserStartPanel />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
@@ -851,7 +850,6 @@ import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import ManagedBrowserSessionCard from "./ManagedBrowserSessionCard.vue";
-import ManagedBrowserStartPanel from "./ManagedBrowserStartPanel.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import TaskExecutionStatusBadge from "./TaskExecutionStatusBadge.vue";
