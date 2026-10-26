@@ -412,47 +412,6 @@
       </v-btn>
     </div>
 
-    <!-- TTS prerequisite notice (shared voice states, design §11.4). -->
-    <div
-      v-if="voice.ttsInstallPrompt.value"
-      class="chat-center__tts-notice"
-      role="status"
-      aria-live="polite"
-    >
-      <v-icon size="x-small" color="warning" class="mr-1">mdi-volume-off</v-icon>
-      <span class="chat-center__tts-notice-text">
-        {{
-          t("aiChatV2.voice.tts_model_missing") ||
-          "Spoken responses need a speech model. Install it to enable."
-        }}
-      </span>
-      <v-btn
-        size="x-small"
-        color="primary"
-        variant="tonal"
-        class="ml-2"
-        data-testid="install-tts-model"
-        :loading="voice.modelInstalling.value"
-        :disabled="voice.modelInstalling.value"
-        @click="voice.installTtsModel"
-      >
-        {{
-          voice.modelInstalling.value
-            ? t("aiChatV2.voice.installing_model") || "Installing..."
-            : t("aiChatV2.voice.install_tts_model") || "Install speech model"
-        }}
-      </v-btn>
-      <v-btn
-        size="x-small"
-        variant="text"
-        class="ml-1"
-        :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
-        @click="openVoiceSettings"
-      >
-        {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
-      </v-btn>
-    </div>
-
     <!-- Spoken-response preference save failure (FR-VOICE-004): recoverable,
          localized, with a retry — the raw IPC error never renders. -->
     <div
@@ -500,6 +459,17 @@
       :progress-text="voice.runtimeInstallProgressText.value"
       :percent="voice.runtimeInstallPercent.value"
       @confirm="voice.confirmRuntimeInstall"
+    />
+
+    <!-- Spoken-response speech-model install popup: opens when the user
+         enables spoken responses before a TTS model is installed, and lets
+         them install it in place (spec 2026-10-26). -->
+    <AiChatVoiceTtsModelInstallDialog
+      v-model="voiceTtsInstallPrompt"
+      :installing="voice.modelInstalling.value"
+      :error="voice.modelInstallError.value"
+      @confirm="voice.installTtsModel"
+      @open-settings="openVoiceSettings"
     />
 
     <!-- Multi-select conversation report dialog (non-AI-gated). -->
@@ -647,6 +617,7 @@ import AiChatV2ToolApprovalModeSelector from "@/views/components/aiChatV2/AiChat
 import AiChatV2ContextBadge from "@/views/components/aiChatV2/AiChatV2ContextBadge.vue";
 import AiChatVoiceOutputToggle from "@/views/components/aiChatV2/AiChatVoiceOutputToggle.vue";
 import AiChatVoiceRuntimeInstallDialog from "@/views/components/aiChatV2/AiChatVoiceRuntimeInstallDialog.vue";
+import AiChatVoiceTtsModelInstallDialog from "@/views/components/aiChatV2/AiChatVoiceTtsModelInstallDialog.vue";
 import WorkspaceBadge from "@/views/components/aiChatV2/WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "@/views/components/aiChatV2/WorkspaceRequiredCard.vue";
 import WorkspaceTrustCard from "@/views/components/aiChatV2/WorkspaceTrustCard.vue";
@@ -838,6 +809,12 @@ const voiceRuntimeInstallDialog = computed({
   get: () => voice.runtimeInstallDialog.value,
   set: (value: boolean) => {
     voice.runtimeInstallDialog.value = value;
+  },
+});
+const voiceTtsInstallPrompt = computed({
+  get: () => voice.ttsInstallPrompt.value,
+  set: (value: boolean) => {
+    voice.ttsInstallPrompt.value = value;
   },
 });
 // R8 P2 (FR-WSP-007): the dialog's open state moved to the workspace store

@@ -194,7 +194,7 @@ import {
   steerChatV2PendingMessage,
   subscribeChatV2PendingEvents,
 } from "@/views/api/aiChatV2";
-import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
+import { cancelVoiceJob, downloadVoiceModel } from "@/views/api/aiChatV2Voice";
 import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
 import type { PlanContinuationDecision } from "@/views/utils/planContinuationIdentity";
 import {
@@ -419,6 +419,12 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           template: '<div data-testid="voice-toggle-stub" />',
         }),
         AiChatVoiceRuntimeInstallDialog: true,
+        AiChatVoiceTtsModelInstallDialog: {
+          props: ["modelValue", "installing", "error"],
+          emits: ["update:modelValue", "confirm", "open-settings"],
+          template:
+            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
+        },
         AiChatHistoryDrawer: defineComponent({
           name: "AiChatHistoryDrawer",
           props: ["modelValue", "conversationId"],
@@ -4220,6 +4226,86 @@ describe("AiChatCenterSurface spoken-response save failure (FR-VOICE-004)", () =
     expect(wrapper.find('[data-testid="voice-save-error"]').exists()).toBe(
       false
     );
+  });
+});
+
+describe("AiChatCenterSurface speech-model install popup", () => {
+  it("opens the popup instead of the inline notice when the TTS model is missing", async () => {
+    getVoiceSettingsMock.mockResolvedValue({
+      inputMode: "disabled",
+      ttsMode: "disabled",
+      autoSendTranscript: false,
+      sttLanguage: "auto",
+      ttsLanguage: "auto",
+      sttModelId: "stt",
+      ttsModelId: "tts",
+      ttsSpeed: 1,
+      maxRecordingMs: 60000,
+    });
+    getVoiceStatusMock.mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatVoiceOutputToggle" })
+      .vm.$emit("toggle");
+    await flushPromises();
+
+    // No enablement may be persisted while the model is missing.
+    expect(setVoiceSettingsMock).not.toHaveBeenCalled();
+    // Guidance is the popup dialog, not an inline notice bar.
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+    expect(wrapper.find('[data-testid="install-tts-model"]').exists()).toBe(
+      false
+    );
+  });
+
+  it("confirming the popup installs the speech model and auto-enables spoken responses", async () => {
+    getVoiceSettingsMock.mockResolvedValue({
+      inputMode: "disabled",
+      ttsMode: "disabled",
+      autoSendTranscript: false,
+      sttLanguage: "auto",
+      ttsLanguage: "auto",
+      sttModelId: "stt",
+      ttsModelId: "tts",
+      ttsSpeed: 1,
+      maxRecordingMs: 60000,
+    });
+    // Call order: mount loadSettings, toggle gate check, post-install
+    // loadSettings — twice missing_model, then ready.
+    let statusCalls = 0;
+    getVoiceStatusMock.mockImplementation(async () => {
+      statusCalls += 1;
+      return statusCalls < 3
+        ? { sttState: "ready", ttsState: "missing_model" }
+        : { sttState: "ready", ttsState: "ready" };
+    });
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatVoiceOutputToggle" })
+      .vm.$emit("toggle");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="tts-install-confirm"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(downloadVoiceModel).toHaveBeenCalledWith("tts");
+    expect(setVoiceSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ttsMode: "all_assistant_messages" })
+    );
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("false");
   });
 });
 
