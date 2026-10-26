@@ -94,7 +94,7 @@ describe("AiChatVoiceTtsModelInstallDialog", () => {
 
   it("disables actions while installing and renders the localized error", () => {
     const wrapper = mountDialog({
-      open: true,
+      modelValue: true,
       installing: true,
       error: "Speech model installation failed.",
     });

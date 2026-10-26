@@ -266,6 +266,8 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
     setVoiceSettingsMock.mockImplementation(async (s) => s);
     const voice = mountVoice();
     await voice.loadSettings();
+    // The popup was open when the user confirmed the install.
+    voice.ttsInstallPrompt.value = true;
 
     await voice.installTtsModel();
 
@@ -278,6 +280,8 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
       expect.objectContaining({ ttsMode: "all_assistant_messages" })
     );
     expect(voice.spokenResponseEnabled.value).toBe(true);
+    // The popup's job (install + enable) is done: it closes itself.
+    expect(voice.ttsInstallPrompt.value).toBe(false);
   });
 
   it("installTtsModel leaves spoken responses disabled when the model is still missing after download", async () => {
@@ -288,26 +292,32 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
     downloadVoiceModelMock.mockResolvedValue(undefined);
     const voice = mountVoice();
     await voice.loadSettings();
+    voice.ttsInstallPrompt.value = true;
 
     await voice.installTtsModel();
 
     expect(downloadVoiceModelMock).toHaveBeenCalledWith("sherpa-onnx:tts:auto");
     expect(setVoiceSettingsMock).not.toHaveBeenCalled();
     expect(voice.spokenResponseEnabled.value).toBe(false);
+    // The popup stays open: the user can retry the install or cancel.
+    expect(voice.ttsInstallPrompt.value).toBe(true);
   });
 
-  it("installTtsModel failure keeps spoken responses off and surfaces a localized error", async () => {
+  it("installTtsModel failure keeps spoken responses off, the popup open, and surfaces a localized error", async () => {
     getVoiceSettingsMock.mockResolvedValue(baseSettings);
     getVoiceStatusMock.mockResolvedValue(readyStatus());
     downloadVoiceModelMock.mockRejectedValue(new Error("network"));
     const voice = mountVoice();
     await voice.loadSettings();
+    voice.ttsInstallPrompt.value = true;
 
     await voice.installTtsModel();
 
     expect(voice.modelInstallError.value).toBeTruthy();
     expect(setVoiceSettingsMock).not.toHaveBeenCalled();
     expect(voice.spokenResponseEnabled.value).toBe(false);
+    // The popup stays open so the install error and retry are visible.
+    expect(voice.ttsInstallPrompt.value).toBe(true);
   });
 
   it("installRequiredModel surfaces a localized failure", async () => {

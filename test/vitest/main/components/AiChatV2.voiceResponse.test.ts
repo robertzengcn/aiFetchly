@@ -243,7 +243,7 @@ function mountChat() {
           props: ["modelValue", "installing", "error"],
           emits: ["update:modelValue", "confirm", "open-settings"],
           template:
-            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
+            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)" :data-error="String(error)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
         },
         VAlert: true,
         VBtn: {
@@ -470,6 +470,41 @@ describe("AiChatV2 spoken responses", () => {
     expect(
       wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
     ).toBe("false");
+  });
+
+  it("keeps the popup open with the localized error when the speech-model download fails", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    vi.mocked(downloadVoiceModel).mockRejectedValue(new Error("network"));
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="tts-install-confirm"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(setVoiceSettings).not.toHaveBeenCalled();
+    // The popup stays open and renders the localized failure message.
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+    expect(
+      wrapper
+        .find('[data-testid="tts-install-dialog"]')
+        .attributes("data-error")
+    ).toContain("failed");
   });
 
   it("closing the install popup lets the user reopen it from the toggle", async () => {

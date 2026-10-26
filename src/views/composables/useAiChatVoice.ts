@@ -416,7 +416,6 @@ export function useAiChatVoice(options: {
     if (modelInstalling.value) return;
     modelInstalling.value = true;
     modelInstallError.value = null;
-    ttsInstallPrompt.value = false;
     try {
       const ttsModelId = settings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
       await downloadVoiceModel(ttsModelId);
@@ -437,6 +436,10 @@ export function useAiChatVoice(options: {
         } catch {
           settingsSaveFailed.value = true;
         }
+        // The popup's job (install + enable) completed: it closes itself.
+        // On failure or a still-missing model it stays open so the user
+        // sees the error or can retry/cancel (spec goal: install in place).
+        ttsInstallPrompt.value = false;
       }
     } catch {
       await loadSettings();

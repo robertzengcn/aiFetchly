@@ -423,7 +423,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
           props: ["modelValue", "installing", "error"],
           emits: ["update:modelValue", "confirm", "open-settings"],
           template:
-            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
+            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)" :data-error="String(error)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
         },
         AiChatHistoryDrawer: defineComponent({
           name: "AiChatHistoryDrawer",
@@ -4306,6 +4306,48 @@ describe("AiChatCenterSurface speech-model install popup", () => {
     expect(
       wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
     ).toBe("false");
+  });
+
+  it("keeps the popup open with the localized error when the speech-model download fails", async () => {
+    getVoiceSettingsMock.mockResolvedValue({
+      inputMode: "disabled",
+      ttsMode: "disabled",
+      autoSendTranscript: false,
+      sttLanguage: "auto",
+      ttsLanguage: "auto",
+      sttModelId: "stt",
+      ttsModelId: "tts",
+      ttsSpeed: 1,
+      maxRecordingMs: 60000,
+    });
+    getVoiceStatusMock.mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    vi.mocked(downloadVoiceModel).mockRejectedValue(new Error("network"));
+    const wrapper = mountSurface();
+    await flushPromises();
+
+    wrapper
+      .findComponent({ name: "AiChatVoiceOutputToggle" })
+      .vm.$emit("toggle");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="tts-install-confirm"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(setVoiceSettingsMock).not.toHaveBeenCalled();
+    // The popup stays open and renders the localized failure message.
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+    expect(
+      wrapper
+        .find('[data-testid="tts-install-dialog"]')
+        .attributes("data-error")
+    ).toContain("failed");
   });
 });
 
