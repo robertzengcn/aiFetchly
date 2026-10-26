@@ -215,4 +215,29 @@ describe("AiChatConversationHeader goal/loop chips + sidebar toggle placement", 
       wrapper.find('[data-testid="workspace-inspector-toggle"]').exists()
     ).toBe(true);
   });
+
+  /**
+   * Reviewer finding (run-strip removal): jsdom does not lay out flexbox,
+   * so the clamp is pinned on the CSS source the way the retired A11Y-007
+   * test pinned the strip: `.header-chip` must be shrinkable with a
+   * working ellipsis (min-width: 0, no flex-shrink: 0) and capped, so a
+   * long campaign objective can never push the "..." / inspector buttons
+   * out of reach.
+   */
+  it("clamps the goal/loop chips so long objectives cannot push header actions out of reach", async () => {
+    mountHeader("running", {
+      goalObjective: "Ship the parity suite",
+      loopStatus: "running",
+    });
+    const source = (
+      await import(
+        "@/views/components/aiChatWorkspace/AiChatConversationHeader.vue?raw"
+      )
+    ).default;
+    const chipRule = /\.header-chip \{[^}]*\}/.exec(source)?.[0] ?? "";
+    expect(chipRule).toContain(".header-chip");
+    expect(/\bmin-width:\s*0;/.test(chipRule)).toBe(true);
+    expect(/\bflex-shrink:\s*0;/.test(chipRule)).toBe(false);
+    expect(/\bmax-width:/.test(chipRule)).toBe(true);
+  });
 });

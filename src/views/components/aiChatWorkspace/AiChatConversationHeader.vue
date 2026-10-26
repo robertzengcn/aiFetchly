@@ -284,7 +284,10 @@ const loopLabel = computed(() => {
 
 /* Display-only chip (goal / scheduled-loop state moved out of the run
    strip): the status-pill visual language minus any interaction affordance
-   — no hover, no pointer cursor, text carries the meaning (non-color). */
+   — no hover, no pointer cursor, text carries the meaning (non-color).
+   Shrinkable with a working ellipsis (min-width: 0 beats the flex auto
+   minimum; no flex-shrink: 0) and width-capped, so a long objective can
+   never push the header actions out of reach. */
 .header-chip {
   display: inline-flex;
   align-items: center;
@@ -298,7 +301,8 @@ const loopLabel = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 24rem;
 }
 
 .header-status:focus-visible,
