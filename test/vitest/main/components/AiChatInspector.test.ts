@@ -110,3 +110,28 @@ describe("AiChatInspector close control", () => {
     expect(wrapper.emitted("open-memory")).toBeTruthy();
   });
 });
+
+/**
+ * Docked-column change (2026-10-26 design §approach): jsdom does not lay
+ * out flexbox, so the push-column truth is pinned on the CSS source — the
+ * docked variant must NOT float (no fixed positioning / edge pinning /
+ * shadow) and must fill the shell row's height as the third flex column.
+ * The overlay drawer variant (narrow/medium) is untouched.
+ */
+describe("AiChatInspector docked layout (push column, not fixed)", () => {
+  it("declares in-flow docked mode: no fixed positioning, fills shell height", async () => {
+    const source = (
+      await import("@/views/components/aiChatWorkspace/AiChatInspector.vue?raw")
+    ).default as string;
+    const docked =
+      /\.workspace-inspector\.docked \{[^}]*\}/.exec(source)?.[0] ?? "";
+    expect(docked).toContain(".workspace-inspector.docked");
+    expect(/\bposition:\s*fixed/.test(docked)).toBe(false);
+    expect(/top:\s*0/.test(docked)).toBe(false);
+    expect(/bottom:\s*0/.test(docked)).toBe(false);
+    // In-flow participation: height follows the shell row.
+    expect(/\bheight:\s*100%/.test(docked)).toBe(true);
+    // No floating shadow on docked (it is a real column).
+    expect(/box-shadow/.test(docked)).toBe(false);
+  });
+});

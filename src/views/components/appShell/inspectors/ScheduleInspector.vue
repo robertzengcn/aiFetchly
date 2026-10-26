@@ -155,18 +155,22 @@ watch(scheduleId, () => {
 
 <style scoped>
 .app-inspector {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--app-surface);
   border-left: 1px solid var(--app-border);
-  z-index: 30;
 }
 
+/* Narrow/medium drawer: floats over the center content (unchanged from
+   the pre-dock presentation); wide mode is an in-flow shell column. */
 .app-inspector.overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
   width: min(92vw, 520px);
   box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
 }

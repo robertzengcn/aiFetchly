@@ -234,18 +234,14 @@ function onResizerKeydown(event: KeyboardEvent): void {
 }
 
 /*
- * Docked (wide-mode) variant: the inspector host TELEPORTS this element to
- * <body>, outside the shell's flex layout — without fixed positioning it
- * renders in normal flow below the full-height app. Dock it to the viewport's
- * right edge (the inline width style still applies, and the resizer works).
+ * Docked (wide-mode) variant: the inspector host renders INLINE inside the
+ * shell's flex row (dock-column change 2026-10-26) — the panel is the row's
+ * third column: real layout space, not a floating panel. The inline width
+ * style still applies and the resizer works; height follows the shell row.
  */
 .workspace-inspector.docked {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 25;
-  box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
+  position: relative;
+  height: 100%;
 }
 
 .inspector-body {
