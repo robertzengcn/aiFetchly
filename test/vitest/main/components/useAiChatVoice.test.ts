@@ -263,6 +263,7 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
     getVoiceSettingsMock.mockResolvedValue(baseSettings);
     getVoiceStatusMock.mockResolvedValue(readyStatus());
     downloadVoiceModelMock.mockResolvedValue(undefined);
+    setVoiceSettingsMock.mockImplementation(async (s) => s);
     const voice = mountVoice();
     await voice.loadSettings();
 
@@ -271,6 +272,42 @@ describe("useAiChatVoice (chat-first shell design §11.1)", () => {
     expect(downloadVoiceModelMock).toHaveBeenCalledWith("sherpa-onnx:tts:auto");
     expect(notifyVoiceModelsChangedMock).toHaveBeenCalled();
     expect(voice.modelInstalling.value).toBe(false);
+    // Popup confirm completes the original enable intent: when the model
+    // is usable after install, persist the enablement the user requested.
+    expect(setVoiceSettingsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ttsMode: "all_assistant_messages" })
+    );
+    expect(voice.spokenResponseEnabled.value).toBe(true);
+  });
+
+  it("installTtsModel leaves spoken responses disabled when the model is still missing after download", async () => {
+    getVoiceSettingsMock.mockResolvedValue(baseSettings);
+    getVoiceStatusMock.mockResolvedValue(
+      readyStatus({ ttsState: "missing_model" })
+    );
+    downloadVoiceModelMock.mockResolvedValue(undefined);
+    const voice = mountVoice();
+    await voice.loadSettings();
+
+    await voice.installTtsModel();
+
+    expect(downloadVoiceModelMock).toHaveBeenCalledWith("sherpa-onnx:tts:auto");
+    expect(setVoiceSettingsMock).not.toHaveBeenCalled();
+    expect(voice.spokenResponseEnabled.value).toBe(false);
+  });
+
+  it("installTtsModel failure keeps spoken responses off and surfaces a localized error", async () => {
+    getVoiceSettingsMock.mockResolvedValue(baseSettings);
+    getVoiceStatusMock.mockResolvedValue(readyStatus());
+    downloadVoiceModelMock.mockRejectedValue(new Error("network"));
+    const voice = mountVoice();
+    await voice.loadSettings();
+
+    await voice.installTtsModel();
+
+    expect(voice.modelInstallError.value).toBeTruthy();
+    expect(setVoiceSettingsMock).not.toHaveBeenCalled();
+    expect(voice.spokenResponseEnabled.value).toBe(false);
   });
 
   it("installRequiredModel surfaces a localized failure", async () => {

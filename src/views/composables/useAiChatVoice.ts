@@ -83,8 +83,11 @@ export interface AiChatVoiceState {
   readonly settingsSaveFailed: Readonly<Ref<boolean>>;
   readonly modelInstalling: Readonly<Ref<boolean>>;
   readonly modelInstallError: Readonly<Ref<string | null>>;
-  /** True when TTS enablement is blocked on installing the speech model. */
-  readonly ttsInstallPrompt: Readonly<Ref<boolean>>;
+  /**
+   * Consumer-writable: the TTS install popup closes itself on cancel
+   * (design §11.4), not only via flows.
+   */
+  readonly ttsInstallPrompt: Ref<boolean>;
   readonly playbackError: Readonly<Ref<string | null>>;
   readonly missingInputModel: Readonly<ComputedRef<boolean>>;
   readonly runtimeUnavailable: Readonly<ComputedRef<boolean>>;
@@ -419,11 +422,31 @@ export function useAiChatVoice(options: {
       await downloadVoiceModel(ttsModelId);
       notifyVoiceModelsChanged();
       await loadSettings();
+      // Popup confirm completes the user's original enable intent
+      // (toggle → popup). When the model is now usable, persist the
+      // enablement (mirrors confirmRuntimeInstall auto-enabling
+      // push-to-talk). A save failure surfaces via settingsSaveFailed.
+      if (status.value?.ttsState === "ready") {
+        try {
+          const current = settings.value ?? (await getVoiceSettings());
+          const saved = await setVoiceSettings({
+            ...current,
+            ttsMode: "all_assistant_messages",
+          });
+          applySettings(saved);
+        } catch {
+          settingsSaveFailed.value = true;
+        }
+      }
     } catch {
+      await loadSettings();
+      // Surface the error AFTER the refresh: loadSettings clears
+      // modelInstallError when the runtime reports state ready, which
+      // would otherwise erase the install-failure message before the
+      // user ever sees it.
       modelInstallError.value =
         t("aiChatV2.voice.tts_model_install_failed") ||
         "Speech model installation failed.";
-      await loadSettings();
     } finally {
       modelInstalling.value = false;
     }
