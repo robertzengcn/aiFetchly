@@ -3593,6 +3593,7 @@ export default {
     },
     header: {
       overflow: "会话菜单",
+      backgroundAgents: "后台代理",
       rename: "重命名聊天",
       renamePrompt: "重命名聊天",
       compact: "压缩会话",

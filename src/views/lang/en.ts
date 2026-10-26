@@ -3801,6 +3801,7 @@ export default {
     },
     header: {
       overflow: "Conversation menu",
+      backgroundAgents: "Background Agents",
       rename: "Rename chat",
       renamePrompt: "Rename chat",
       compact: "Compact conversation",

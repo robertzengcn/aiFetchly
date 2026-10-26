@@ -3810,6 +3810,7 @@ export default {
     },
     header: {
       overflow: "Unterhaltungsmenü",
+      backgroundAgents: "Hintergrund-Agenten",
       rename: "Chat umbenennen",
       renamePrompt: "Chat umbenennen",
       compact: "Unterhaltung komprimieren",

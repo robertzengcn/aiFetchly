@@ -3793,6 +3793,7 @@ export default {
     },
     header: {
       overflow: "Menu de conversation",
+      backgroundAgents: "Agents en arrière-plan",
       rename: "Renommer la discussion",
       renamePrompt: "Renommer la discussion",
       compact: "Compresser la conversation",

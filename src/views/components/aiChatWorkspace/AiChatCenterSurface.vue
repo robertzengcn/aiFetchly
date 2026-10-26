@@ -13,6 +13,7 @@
       @compact="onCompact"
       @export="onExport"
       @duplicate="onDuplicate"
+      @open-agent-tasks="onOpenAgentTasks"
       @clear="onClear"
       @delete="onDelete"
     />
@@ -555,8 +556,16 @@
       </v-card>
     </v-dialog>
 
-    <!-- Agent-task status/cancellation (FR-INT-004, shared dialog). -->
-    <AgentTaskListDialog @cancel-task="handleAgentTaskCancel" />
+    <!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
+         old bottom-left icon-button activator is gone: the task list now
+         opens from the conversation-header overflow menu and anchors to
+         the header "..." button. -->
+    <AgentTaskListDialog
+      ref="agentTaskListRef"
+      :show-activator="false"
+      target="[data-testid=&quot;workspace-header-overflow&quot;]"
+      @cancel-task="handleAgentTaskCancel"
+    />
 
     <!-- Recoverable-history drawer (FR-HIS-001, rollout flag): archive
          search/browse + passage selection; no drawer when the stage is off. -->
@@ -2653,6 +2662,15 @@ function onReasoningVisibilityChanged(
   if (typeof detail?.visible === "boolean") {
     showReasoning.value = detail.visible;
   }
+}
+
+const agentTaskListRef = ref<InstanceType<typeof AgentTaskListDialog> | null>(
+  null
+);
+
+/** Open the background-agents task list (header overflow menu entry). */
+function onOpenAgentTasks(): void {
+  agentTaskListRef.value?.open();
 }
 
 /**

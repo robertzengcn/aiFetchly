@@ -3813,6 +3813,7 @@ export default {
     },
     header: {
       overflow: "Menú de conversación",
+      backgroundAgents: "Agentes en segundo plano",
       rename: "Renombrar chat",
       renamePrompt: "Renombrar chat",
       compact: "Compactar conversación",

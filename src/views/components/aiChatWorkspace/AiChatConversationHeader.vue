@@ -82,6 +82,15 @@
             data-testid="workspace-overflow-compact"
             @click="emit('compact')"
           />
+          <v-list-item
+            role="menuitem"
+            :title="
+              t('workspaceChat.header.backgroundAgents') || 'Background Agents'
+            "
+            prepend-icon="mdi-account-group"
+            data-testid="workspace-overflow-agent-tasks"
+            @click="emit('open-agent-tasks')"
+          />
           <v-divider role="separator" />
           <v-list-item
             role="menuitem"
@@ -134,6 +143,7 @@ const emit = defineEmits<{
   (e: "compact"): void;
   (e: "export"): void;
   (e: "duplicate"): void;
+  (e: "open-agent-tasks"): void;
   (e: "clear"): void;
   (e: "delete"): void;
 }>();

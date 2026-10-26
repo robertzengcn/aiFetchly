@@ -9,7 +9,15 @@ vi.mock("@/views/components/aiChatWorkspace/WorkspaceStatusIndicator.vue", () =>
 }));
 
 function mountHeader(runtimeStatus: ConversationRuntimeStatus) {
-  const i18n = createI18n({ legacy: false, locale: "en", messages: { en: {} } });
+  const i18n = createI18n({
+    legacy: false,
+    locale: "en",
+    messages: {
+      en: {
+        workspaceChat: { header: { backgroundAgents: "Background Agents" } },
+      },
+    },
+  });
   return mount(AiChatConversationHeader, {
     props: {
       title: "Test",
@@ -107,4 +115,24 @@ describe("AiChatConversationHeader clear protection (P1-1)", () => {
       expect(clearItem.attributes("disabled")).toBe("false");
     }
   );
+});
+
+/**
+ * The background-agents task list is reachable from the header overflow
+ * "..." menu as a TEXT entry (the old bottom-left icon activator in the
+ * center surface was removed).
+ */
+describe("AiChatConversationHeader background-agents entry", () => {
+  it("renders a text menu item and emits open-agent-tasks on click", async () => {
+    const wrapper = mountHeader("idle");
+    const item = wrapper.find(
+      '[data-testid="workspace-overflow-agent-tasks"]'
+    );
+    expect(item.exists()).toBe(true);
+    // Text trigger (the v-list-item title), not an icon-only control.
+    expect(item.attributes("title")).toBe("Background Agents");
+
+    await item.trigger("click");
+    expect(wrapper.emitted("open-agent-tasks")).toHaveLength(1);
+  });
 });

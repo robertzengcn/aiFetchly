@@ -3723,6 +3723,7 @@ export default {
     },
     header: {
       overflow: "会話メニュー",
+      backgroundAgents: "バックグラウンドエージェント",
       rename: "チャット名を変更",
       renamePrompt: "チャット名を変更",
       compact: "会話を圧縮",

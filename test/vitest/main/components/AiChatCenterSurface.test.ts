@@ -22,6 +22,9 @@ const createWorkspaceConversationIdMock = vi.fn();
 const startChatRunMock = vi.fn();
 const exportGeneratedImageMock = vi.fn();
 const recoverPlanContinuationMock = vi.fn();
+// The agent-task dialog stub exposes this spy as open() so tests can assert
+// the header overflow entry opens the shared task list.
+const agentTaskListOpenSpy = vi.fn();
 
 vi.mock("@/views/components/aiChatV2/aiChatV2Attachment", () => ({
   buildUploadedAttachments: (...args: unknown[]) =>
@@ -323,10 +326,11 @@ const ComposerStub = defineComponent({
 const HeaderStub = defineComponent({
   name: "AiChatConversationHeader",
   props: ["title", "hasConversation", "inspectorOpen"],
-  emits: ["compact"],
+  emits: ["compact", "open-agent-tasks"],
   template:
     '<header data-testid="conversation-header-stub">' +
     '<button data-testid="header-compact-stub" @click="$emit(\'compact\')" />' +
+    '<button data-testid="header-agent-tasks-stub" @click="$emit(\'open-agent-tasks\')" />' +
     "<slot /></header>",
 });
 
@@ -421,8 +425,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         AgentTaskListDialog: defineComponent({
           name: "AgentTaskListDialog",
+          props: ["showActivator", "target"],
           emits: ["cancel-task"],
-          template: '<div data-testid="agent-task-dialog-stub" />',
+          setup(_, { expose }) {
+            expose({ open: agentTaskListOpenSpy });
+          },
+          template:
+            '<div data-testid="agent-task-dialog-stub" :data-show-activator="String(showActivator)" />',
         }),
         AiChatCompactionStatus: defineComponent({
           name: "AiChatCompactionStatus",
@@ -2570,12 +2579,24 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     localStorage.removeItem("aiChatV2.showReasoning");
   });
 
-  it("mounts the shared agent-task dialog (FR-INT-004)", async () => {
+  it("mounts the shared agent-task dialog without the bottom activator (FR-INT-004)", async () => {
     const wrapper = mountSurface();
     await flushPromises();
-    expect(
-      wrapper.findComponent({ name: "AgentTaskListDialog" }).exists()
-    ).toBe(true);
+    const dialog = wrapper.findComponent({ name: "AgentTaskListDialog" });
+    expect(dialog.exists()).toBe(true);
+    // The old bottom-left icon activator is gone on this surface: the task
+    // list opens from the header overflow entry, anchored to the "..." menu.
+    expect(dialog.attributes("data-show-activator")).toBe("false");
+  });
+
+  it("opens the agent-task list from the header overflow entry (FR-INT-004)", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="header-agent-tasks-stub"]')
+      .trigger("click");
+    await flushPromises();
+    expect(agentTaskListOpenSpy).toHaveBeenCalledTimes(1);
   });
 
   it("cancels EXACTLY the emitted agent task through the agent-runtime channel (T5/D7)", async () => {
