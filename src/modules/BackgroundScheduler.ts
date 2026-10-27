@@ -445,6 +445,14 @@ export class BackgroundScheduler extends BaseDb {
    * background poller has its own isRunning flag, so automatic paths must
    * consult the global state or jobs keep auto-firing while the UI shows
    * "Stopped". Manual Run Now paths intentionally bypass this check.
+   *
+   * Scope: legacy cron/dependency/queue paths only (processScheduledTasks,
+   * processDependencyQueue, processExecutionQueue). Chat-bound interval loops
+   * (processIntervalTasks) must NOT gate on this: the chip defaults to
+   * stopped in the DB and is re-persisted stopped on every clean shutdown, so
+   * the gate silently starved chat-created /loop schedules (they are governed
+   * by their own per-conversation controls and the row's is_active/status
+   * gates in claimIntervalOccurrence instead).
    */
   private isGlobalSchedulerRunning(): boolean {
     try {
@@ -462,15 +470,22 @@ export class BackgroundScheduler extends BaseDb {
    * occurrence, and execute it through the chat-bound runner (technical-design
    * §16). The transactional claim closes the double-poll race; overlapping or
    * pending runs are coalesced rather than duplicated.
+   *
+   * Gated ONLY on this poller's isRunning (started automatically at boot).
+   * Chat-bound loops are governed by their own per-conversation controls
+   * (/loop pause|resume|stop) and the row-level gates in claimIntervalOccurrence,
+   * not by the Schedule page's global Stop/Start chip — gating on that chip
+   * silently starved chat loops (default stopped, re-persisted stopped at
+   * every clean shutdown).
    */
   private async processIntervalTasks(): Promise<void> {
-    if (!this.isRunning || !this.isGlobalSchedulerRunning()) return;
+    if (!this.isRunning) return;
     try {
       const now = new Date();
       const due =
         await this.getIntervalScheduleModel().findDueIntervalSchedules(now, 50);
       for (const schedule of due) {
-        if (!this.isRunning || !this.isGlobalSchedulerRunning()) break;
+        if (!this.isRunning) break;
         await this.processIntervalSchedule(schedule);
       }
     } catch (error) {
