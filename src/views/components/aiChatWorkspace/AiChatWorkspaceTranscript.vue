@@ -174,6 +174,7 @@ import {
 import {
   selectPlanPresentation,
   isReceiptSurface,
+  isPinnedSurface,
 } from "@/views/components/aiChatWorkspace/planPresentationProjection";
 import type {
   PlanPresentationView,
@@ -279,8 +280,6 @@ type ProjectedItem =
 const projectedItems = computed<ProjectedItem[]>(() => {
   const messages = props.messages;
   const result: ProjectedItem[] = [];
-  // FR-052: only one plan lifecycle surface per transcript (latest plan).
-  let planSurfaceRendered = false;
 
   // Build execution groups from all tool messages.
   const groups = buildToolExecutionGroups(messages);
@@ -299,6 +298,11 @@ const projectedItems = computed<ProjectedItem[]>(() => {
 
   // Walk messages in order; replace tool sequences with groups.
   let i = 0;
+  // Whether any plan-bearing message exists (guards the surface selection).
+  let sawPlanMessage = false;
+  // Projected position of the LATEST plan-state row — the chronological
+  // anchor where a resolved receipt returns to message history (PRD §12.4).
+  let receiptAnchor = -1;
   while (i < messages.length) {
     const msg = messages[i];
 
@@ -475,40 +479,13 @@ const projectedItems = computed<ProjectedItem[]>(() => {
       continue;
     }
 
-    // Plan metadata: render only ONE lifecycle-specific surface for the latest
-    // plan (FR-052). The loop calls selectPlanPresentation once per
-    // plan-bearing message, so deduplicate by skipping all plan messages
-    // after the first one that produced a surface.
+    // Plan metadata rows never render themselves; the single lifecycle
+    // surface for the latest plan is placed after the walk below (FR-052).
     if (msg.metadata?.planEventType || msg.metadata?.planStateView) {
-      if (planSurfaceRendered) {
-        // Skip duplicate plan metadata — only the latest plan gets a surface.
-        i += 1;
-        continue;
-      }
-      const plan = selectPlanPresentation(messages);
-      if (plan) {
-        planSurfaceRendered = true; // mark so no subsequent plan message duplicates
-        if (plan.surface === "approval") {
-          result.push({
-            kind: "plan-decision",
-            key: `plan-decision-${plan.planId}-${plan.version}`,
-            plan,
-          });
-        } else if (isReceiptSurface(plan.surface)) {
-          result.push({
-            kind: "plan-receipt",
-            key: `plan-receipt-${plan.planId}-${plan.version}`,
-            plan,
-          });
-        } else if (plan.surface === "question" && plan.pendingQuestion) {
-          result.push({
-            kind: "plan-question",
-            key: `plan-question-${plan.pendingQuestion.questionId}`,
-            question: plan.pendingQuestion,
-          });
-        }
-        // Drafting/executing/completed-without-receipt: skip — the run strip
-        // and Activity own those states (FR-062: no duplicate surfaces).
+      sawPlanMessage = true;
+      if (msg.metadata?.planStateView?.planId) {
+        // The latest plan-state row anchors a resolved receipt in history.
+        receiptAnchor = result.length;
       }
       i += 1;
       continue;
@@ -521,6 +498,41 @@ const projectedItems = computed<ProjectedItem[]>(() => {
       result.push({ kind: "assistant-message", key: msg.id, message: msg });
     }
     i += 1;
+  }
+
+  // ONE lifecycle surface for the latest plan (FR-052), placed AFTER the
+  // walk: plan events routinely occur mid-turn (EnterPlanMode publishes a
+  // plan_state row before the research executions, and per R07/FR-025 the
+  // run continues after plan_submitted), so the first plan row's position
+  // is a stale anchor that buries the card between executed groups.
+  // - Unresolved decisions (approval/question) pin at the very bottom of
+  //   the transcript, immediately above the composer (PRD §12.4, FR-058).
+  // - Resolved transitions return to history at the transition position.
+  const plan = sawPlanMessage ? selectPlanPresentation(messages) : null;
+  if (plan) {
+    if (isPinnedSurface(plan.surface)) {
+      if (plan.surface === "approval") {
+        result.push({
+          kind: "plan-decision",
+          key: `plan-decision-${plan.planId}-${plan.version}`,
+          plan,
+        });
+      } else if (plan.pendingQuestion) {
+        result.push({
+          kind: "plan-question",
+          key: `plan-question-${plan.pendingQuestion.questionId}`,
+          question: plan.pendingQuestion,
+        });
+      }
+    } else if (isReceiptSurface(plan.surface)) {
+      result.splice(receiptAnchor === -1 ? result.length : receiptAnchor, 0, {
+        kind: "plan-receipt",
+        key: `plan-receipt-${plan.planId}-${plan.version}`,
+        plan,
+      });
+    }
+    // Drafting/executing/completed-without-receipt: skip — the run strip
+    // and Activity own those states (FR-062: no duplicate surfaces).
   }
 
   return result;

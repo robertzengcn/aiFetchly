@@ -77,6 +77,171 @@ function msg(
   };
 }
 
+function planState(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    planId: "plan-1",
+    conversationId: "v2-test",
+    status: "awaiting_approval",
+    title: "Ship it",
+    objective: "Deliver",
+    currentVersion: 1,
+    ...overrides,
+  };
+}
+
+/** The transcript's root DOM element (template root is a fragment). */
+function transcriptRootEl(wrapper: ReturnType<typeof mount>): HTMLElement {
+  const el = wrapper.element as HTMLElement;
+  if (el.matches('[data-testid="workspace-transcript"]')) return el;
+  const found = el.querySelector('[data-testid="workspace-transcript"]');
+  if (!found) throw new Error("transcript root not found");
+  return found as HTMLElement;
+}
+
+/** Ordered identifiers for the transcript's top-level DOM children. */
+function transcriptChildOrder(wrapper: ReturnType<typeof mount>): string[] {
+  return Array.from(transcriptRootEl(wrapper).children).map((el) => {
+    const testid = el.getAttribute("data-testid");
+    if (testid) return testid;
+    return el.className.split(" ")[0] || el.tagName.toLowerCase();
+  });
+}
+
+describe("AiChatWorkspaceTranscript plan surface position (FR-052, PRD §12.4)", () => {
+  it("pins the awaiting-approval decision card at the BOTTOM of the transcript even when plan events precede later executions", async () => {
+    // Real single-run flow (R07/FR-025: plan_submitted does NOT pause the run):
+    // EnterPlanMode publishes a plan_state row BEFORE the research executions,
+    // and the turn keeps producing messages after plan_submitted. The decision
+    // card reflects the LATEST state — it must render at the very bottom,
+    // not at the first plan row's stale mid-transcript position.
+    const messages = [
+      msg(MessageType.MESSAGE, { planStateView: planState({ status: "draft" }) }),
+      msg(MessageType.MESSAGE, {}, "assistant", "Researching the task."),
+      msg(MessageType.TOOL_CALL, { toolCallId: "tc-r1", toolName: "web_search" }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-r1",
+        toolName: "web_search",
+        toolResultSummary: "3 results",
+      }),
+      msg(MessageType.MESSAGE, { planStateView: planState() }),
+      msg(MessageType.MESSAGE, {}, "assistant", "Plan submitted for approval."),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const order = transcriptChildOrder(wrapper);
+    expect(order).toContain("workspace-plan-decision-card");
+    // The decision card is the LAST surface in the chat history.
+    expect(order[order.length - 1]).toBe("workspace-plan-decision-card");
+  });
+
+  it("renders the LATEST plan's decision card at the bottom in a multi-plan conversation", async () => {
+    // An older plan cycle (mid-history) must not hijack the position: the
+    // only rendered surface is the newest plan, pinned at the bottom.
+    const messages = [
+      msg(
+        MessageType.MESSAGE,
+        { planStateView: planState({ planId: "plan-old", status: "completed" }) }
+      ),
+      msg(MessageType.TOOL_CALL, { toolCallId: "tc-old", toolName: "web_search" }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-old",
+        toolName: "web_search",
+        toolResultSummary: "old plan work",
+      }),
+      msg(MessageType.MESSAGE, {}, "assistant", "Starting the second task."),
+      msg(
+        MessageType.MESSAGE,
+        {
+          planStateView: planState({
+            planId: "plan-new",
+            title: "Second plan",
+            status: "awaiting_approval",
+          }),
+        },
+        "assistant"
+      ),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const order = transcriptChildOrder(wrapper);
+    expect(order[order.length - 1]).toBe("workspace-plan-decision-card");
+    // The card shows the LATEST plan, not the first plan row's plan.
+    const decisions = wrapper.findAllComponents({
+      name: "AiChatPlanDecisionCard",
+    });
+    expect(decisions).toHaveLength(1);
+    expect((decisions[0].props("plan") as { title: string }).title).toBe(
+      "Second plan"
+    );
+  });
+
+  it("anchors the resolved receipt at the latest plan transition, not the first plan row", async () => {
+    // PRD §12.4: completed decision cards return to normal message history —
+    // at the position of the transition that produced them (after the
+    // research executions, before the approved-plan continuation work).
+    const messages = [
+      msg(MessageType.MESSAGE, { planStateView: planState({ status: "draft" }) }),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-research",
+        toolName: "web_search",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-research",
+        toolName: "web_search",
+        toolResultSummary: "research done",
+      }),
+      msg(
+        MessageType.MESSAGE,
+        {
+          planStateView: planState({ status: "approved" }),
+          planEventType: "plan_approved",
+        }
+      ),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-exec",
+        toolName: "run_command",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-exec",
+        toolName: "run_command",
+        toolResultSummary: "plan executed",
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // Receipt is present exactly once, anchored in history between the
+    // research executions (before the decision) and the approved-plan
+    // continuation executions (after the decision).
+    const order = transcriptChildOrder(wrapper);
+    const receiptIdx = order.findIndex((id) =>
+      id.startsWith("workspace-plan-receipt-")
+    );
+    expect(receiptIdx).toBeGreaterThan(-1);
+    const groupIdxs = order.reduce<number[]>(
+      (acc, id, idx) =>
+        id.startsWith("workspace-execution-group-") ? [...acc, idx] : acc,
+      []
+    );
+    expect(groupIdxs).toHaveLength(2);
+    expect(receiptIdx).toBeGreaterThan(groupIdxs[0]);
+    expect(receiptIdx).toBeLessThan(groupIdxs[1]);
+  });
+});
+
 describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
   it("FR-042/043: renders one execution row per toolCallId, not separate generic cards", async () => {
     const messages = [
