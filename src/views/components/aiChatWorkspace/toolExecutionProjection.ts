@@ -1,6 +1,8 @@
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2GeneratedImage, ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type { ChatRunDetailEvent } from "@/entityTypes/aiChatWorkspaceTypes";
+import { isEnterPlanModeToolName } from "@/service/EnterPlanModeTool";
+import { isPlanToolName } from "@/service/PlanModeToolPolicy";
 
 /**
  * Pure tool-execution projection for the redesigned workspace
@@ -151,6 +153,19 @@ function assistantOwnerFor(
 
 const FAILURE_REASON_MAX_CHARS = 500;
 
+/**
+ * Plan-mode UI tools (`EnterPlanMode`, `AskUserQuestion`,
+ * `SubmitPlanForApproval`) never emit a matching `tool_result` event on
+ * success — they drive the plan lifecycle surfaces through `plan_state` /
+ * `ask_user_question` / `plan_submitted` events (FR-052). Projecting their
+ * call rows as executable work would leave them "running" forever; the same
+ * exclusion already guards the v2 pending-check in
+ * `aiChatV2/toolExecutionStateUtil.ts`.
+ */
+export const isPlanModeUiToolName = (toolName: unknown): boolean =>
+  typeof toolName === "string" &&
+  (isEnterPlanModeToolName(toolName) || isPlanToolName(toolName));
+
 function boundedFailureText(value: string): string | undefined {
   const trimmed = value.replace(/\s+/g, " ").trim();
   if (!trimmed) return undefined;
@@ -294,11 +309,28 @@ export function buildToolExecutionGroups(
   const legacy: Pending[] = [];
   let order = 0;
 
+  // Plan-mode UI tool calls project only when a paired result row exists
+  // (failure receipts). Unpaired ones never emit a result — the plan
+  // lifecycle surfaces own their state, and an unpaired call row would be
+  // stuck "running" forever (FR-052).
+  const pairedResultCallIds = new Set<string>();
+  for (const message of messages) {
+    if (message.messageType !== MessageType.TOOL_RESULT) continue;
+    const resultCallId = message.metadata?.toolCallId?.trim();
+    if (resultCallId) pairedResultCallIds.add(resultCallId);
+  }
+
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
     const metadata = message.metadata;
     if (message.messageType === MessageType.TOOL_CALL) {
       const toolCallId = metadata?.toolCallId?.trim() || null;
+      if (
+        isPlanModeUiToolName(metadata?.toolName) &&
+        (!toolCallId || !pairedResultCallIds.has(toolCallId))
+      ) {
+        continue;
+      }
       const owner = assistantOwnerFor(messages, i);
       const persistFailure = metadata?.toolPersistFailure;
       const view: ToolExecutionView = {

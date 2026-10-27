@@ -166,6 +166,7 @@ import AiChatPlanQuestionFlow from "@/views/components/aiChatWorkspace/AiChatPla
 import {
   buildToolExecutionGroups,
   isBatchToolCard,
+  isPlanModeUiToolName,
   isSkillInstallResult,
   type ToolExecutionGroupView,
   type ToolExecutionView,
@@ -437,6 +438,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           message: msg,
         });
         i += 1;
+      } else if (
+        msg.messageType === ("tool_call" as MessageType) &&
+        isPlanModeUiToolName(msg.metadata?.toolName)
+      ) {
+        // Plan-mode UI tool calls (EnterPlanMode, AskUserQuestion,
+        // SubmitPlanForApproval) have no execution receipt — their state
+        // renders through the plan decision/receipt/question surfaces
+        // (FR-052). A legacy receipt here would show a bogus completed row.
+        i += 1;
+        continue;
       } else {
         // Legacy unpaired receipt.
         result.push({

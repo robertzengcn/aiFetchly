@@ -42,6 +42,7 @@ const i18n = createI18n({
           groupTitle: "Execution",
           progress: "{completed} of {total} complete",
           legacyReceipt: "Previous tool activity",
+          runningTool: "Running {tool}",
           artifactCreated: "HTML report created",
           imagesGenerated: "Images generated",
           filesChanged: "Files changed",
@@ -188,6 +189,44 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
       name: "AiChatPlanDecisionCard",
     });
     expect(decisions.length).toBe(1);
+  });
+
+  it("plan-mode UI tool calls render no stuck Running row (plan card is the surface)", async () => {
+    // EnterPlanMode never emits a tool_result on success — the plan_state
+    // message drives the decision card. Projecting the call row as an
+    // execution left "Running EnterPlanMode" spinning forever.
+    const planState = {
+      planId: "plan-1",
+      conversationId: "v2-test",
+      status: "awaiting_approval",
+      title: "Ship it",
+      objective: "Deliver",
+      currentVersion: 1,
+    };
+    const messages = [
+      msg(MessageType.MESSAGE, {}, "assistant", "This warrants planning."),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-enter-plan",
+        toolName: "EnterPlanMode",
+        toolArguments: { rationale: "multi-step task" },
+      }),
+      msg(MessageType.MESSAGE, { planStateView: planState }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // No stuck "Running EnterPlanMode" execution row / spinner.
+    expect(wrapper.text()).not.toContain("Running EnterPlanMode");
+    expect(
+      wrapper.findAllComponents({ name: "AiChatExecutionRow" }).length
+    ).toBe(0);
+    // The plan decision card IS the transition surface.
+    expect(
+      wrapper.findAllComponents({ name: "AiChatPlanDecisionCard" }).length
+    ).toBe(1);
   });
 
   it("FR-042: tool progress from live events evolves the row in place", async () => {
