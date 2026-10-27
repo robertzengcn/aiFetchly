@@ -1096,3 +1096,132 @@ describe("AiChatWorkspaceTranscript generated-image reference forwarding", () =>
     });
   });
 });
+
+describe("AiChatWorkspaceTranscript scroll-to-bottom button", () => {
+  /**
+   * happy-dom lays out elements with zero dimensions, so scroll state must be
+   * stubbed on the scroller element (same approach as the AiChatV2Messages
+   * scroll tests): getters/setters over scrollHeight/clientHeight/scrollTop.
+   */
+  function stubScrollGeometry(el: HTMLElement, height: number): void {
+    let top = 0;
+    Object.defineProperty(el, "scrollHeight", {
+      get: () => height,
+      configurable: true,
+    });
+    Object.defineProperty(el, "clientHeight", {
+      get: () => 100,
+      configurable: true,
+    });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (v: number) => {
+        top = v;
+      },
+      configurable: true,
+    });
+  }
+
+  function mountTranscript(messages: ChatV2MessageView[]) {
+    return mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: {
+        plugins: [i18n],
+        // Render v-btn as a real <button> so the @click listener lands on a
+        // clickable element (same pattern as the AiChatV2 mount tests).
+        stubs: {
+          VBtn: { template: "<button><slot /></button>" },
+          VIcon: true,
+        },
+      },
+    });
+  }
+
+  it("is hidden while the transcript viewport sits at the bottom", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "hello"),
+    ]);
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
+
+  it("appears when the user scrolls away from the bottom", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "hello"),
+    ]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+
+    const button = wrapper.find('[data-testid="scroll-to-bottom"]');
+    expect(button.exists()).toBe(true);
+  });
+
+  it("click jumps to the bottom and hides the button again", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "hello"),
+    ]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+
+    await wrapper.find('[data-testid="scroll-to-bottom"]').trigger("click");
+    await flushPromises();
+
+    // scrollTop was written to scrollHeight (the bottom) and the affordance
+    // re-pinned: the button is gone.
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
+
+  it("appears when streamed content grows below the viewport without a scroll event", async () => {
+    const first = msg(MessageType.MESSAGE, {}, "assistant", "short");
+    const wrapper = mountTranscript([first]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 100);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+
+    // Content growth (scrollHeight 100 → 1000) fires no scroll event; the
+    // messages watcher must re-evaluate the affordance after the DOM settles.
+    Object.defineProperty(scroller, "scrollHeight", {
+      get: () => 1000,
+      configurable: true,
+    });
+    await wrapper.setProps({
+      messages: [
+        first,
+        msg(
+          MessageType.MESSAGE,
+          {},
+          "assistant",
+          "streamed token ".repeat(80)
+        ),
+      ],
+    });
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+  });
+});

@@ -8,147 +8,171 @@
     Tool Result cards; no nested plan-document scroller; no duplicate
     plan-status surfaces.
   -->
-  <div class="workspace-transcript" data-testid="workspace-transcript">
-    <!-- Queued (pending) rows: user bubbles in creation order, visually
-         distinct; they deliver later through the queue drain. -->
-    <AiChatV2PendingMessage
-      v-for="pending in pendingMessages"
-      :key="`pending-${pending.pendingMessageId}`"
-      :view="pending"
-      :runtime-status="pendingRuntimeStatus"
-      @steer="(id: string) => emit('steer-pending', id)"
-      @cancel="(id: string) => emit('cancel-pending', id)"
-      @resume="(id: string) => emit('resume-pending', id)"
-    />
-
-    <template v-for="item in projectedItems" :key="item.key">
-      <!-- User messages render normally. data-message-id anchors history
-           navigation (FR-HIS-001 scroll-to-source). -->
-      <AiChatV2Message
-        v-if="item.kind === 'user-message'"
-        :message="item.message"
-        :show-reasoning="false"
-        :data-message-id="item.message.id"
-        @use-generated-image="(ref) => emit('use-generated-image', ref)"
-        @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
-        @save-generated-image="(ref) => emit('save-generated-image', ref)"
-        @stop-batch="emit('stop-batch')"
-        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+  <!-- Wrapper is the positioning ancestor for the floating scroll-to-bottom
+       button (sibling of the scroller, NOT a child — an absolute element
+       inside an overflow:auto container scrolls away with the content). -->
+  <div class="workspace-transcript__wrapper">
+    <div
+      ref="scroller"
+      class="workspace-transcript"
+      data-testid="workspace-transcript"
+      @scroll="onScroll"
+    >
+      <!-- Queued (pending) rows: user bubbles in creation order, visually
+           distinct; they deliver later through the queue drain. -->
+      <AiChatV2PendingMessage
+        v-for="pending in pendingMessages"
+        :key="`pending-${pending.pendingMessageId}`"
+        :view="pending"
+        :runtime-status="pendingRuntimeStatus"
+        @steer="(id: string) => emit('steer-pending', id)"
+        @cancel="(id: string) => emit('cancel-pending', id)"
+        @resume="(id: string) => emit('resume-pending', id)"
       />
 
-      <!-- Assistant messages render normally (content + reasoning). -->
-      <AiChatV2Message
-        v-else-if="item.kind === 'assistant-message'"
-        :message="item.message"
-        :status="streamStatusForMessage(item.message)"
-        :show-reasoning="showReasoning"
-        :data-message-id="item.message.id"
-        :reported="reportedMessageIds?.has(item.message.id) === true"
-        @use-generated-image="(ref) => emit('use-generated-image', ref)"
-        @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
-        @save-generated-image="(ref) => emit('save-generated-image', ref)"
-        @stop-batch="emit('stop-batch')"
-        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
-        @report="(d) => emit('report', d)"
-      />
+      <template v-for="item in projectedItems" :key="item.key">
+        <!-- User messages render normally. data-message-id anchors history
+             navigation (FR-HIS-001 scroll-to-source). -->
+        <AiChatV2Message
+          v-if="item.kind === 'user-message'"
+          :message="item.message"
+          :show-reasoning="false"
+          :data-message-id="item.message.id"
+          @use-generated-image="(ref) => emit('use-generated-image', ref)"
+          @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
+          @save-generated-image="(ref) => emit('save-generated-image', ref)"
+          @stop-batch="emit('stop-batch')"
+          @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+        />
 
-      <!-- Execution groups: one compact section per assistant response. -->
-      <AiChatExecutionGroup
-        v-else-if="item.kind === 'execution-group'"
-        :group="item.group"
-        @reopen-artifact="emit('reopen-artifact', $event)"
-        @use-generated-image="(ref) => emit('use-generated-image', ref)"
-      />
+        <!-- Assistant messages render normally (content + reasoning). -->
+        <AiChatV2Message
+          v-else-if="item.kind === 'assistant-message'"
+          :message="item.message"
+          :status="streamStatusForMessage(item.message)"
+          :show-reasoning="showReasoning"
+          :data-message-id="item.message.id"
+          :reported="reportedMessageIds?.has(item.message.id) === true"
+          @use-generated-image="(ref) => emit('use-generated-image', ref)"
+          @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
+          @save-generated-image="(ref) => emit('save-generated-image', ref)"
+          @stop-batch="emit('stop-batch')"
+          @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+          @report="(d) => emit('report', d)"
+        />
 
-      <!-- Legacy unpaired tool rows: compact receipts. -->
-      <AiChatExecutionRow
-        v-else-if="item.kind === 'legacy-receipt'"
-        :execution="item.execution"
-      />
+        <!-- Execution groups: one compact section per assistant response. -->
+        <AiChatExecutionGroup
+          v-else-if="item.kind === 'execution-group'"
+          :group="item.group"
+          @reopen-artifact="emit('reopen-artifact', $event)"
+          @use-generated-image="(ref) => emit('use-generated-image', ref)"
+        />
 
-      <!-- Permission prompt (FR-047, design §15.5): interactive approval
-           card for a gated tool parked mid-execution. -->
-      <AiChatV2Message
-        v-else-if="item.kind === 'permission-prompt'"
-        :message="item.message"
-        :show-reasoning="false"
-        @grant-permission="
-          (msg, payload) => emit('grant-permission', msg, payload)
-        "
-        @deny-permission="(msg) => emit('deny-permission', msg)"
-        @stop-batch="emit('stop-batch')"
-        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
-      />
+        <!-- Legacy unpaired tool rows: compact receipts. -->
+        <AiChatExecutionRow
+          v-else-if="item.kind === 'legacy-receipt'"
+          :execution="item.execution"
+        />
 
-      <!-- Outbound-email batch (§18): the review/approve/send card IS the
-           authorization surface (AD-003) — interactive, never a collapsed
-           execution receipt. -->
-      <AiChatOutboundBatchReviewCard
-        v-else-if="item.kind === 'outbound-batch'"
-        :message="item.message"
-      />
+        <!-- Permission prompt (FR-047, design §15.5): interactive approval
+             card for a gated tool parked mid-execution. -->
+        <AiChatV2Message
+          v-else-if="item.kind === 'permission-prompt'"
+          :message="item.message"
+          :show-reasoning="false"
+          @grant-permission="
+            (msg, payload) => emit('grant-permission', msg, payload)
+          "
+          @deny-permission="(msg) => emit('deny-permission', msg)"
+          @stop-batch="emit('stop-batch')"
+          @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+        />
 
-      <!-- Skill installation (FR-SKL-001): the shared install card with plan
-           approval, dependencies, credentials, retry and cancel — mounted
-           through AiChatV2Message so the exact SkillInstallCard branch
-           (session identity + conversation binding) renders. -->
-      <AiChatV2Message
-        v-else-if="item.kind === 'skill-install'"
-        :message="item.message"
-        :show-reasoning="false"
-        @stop-batch="emit('stop-batch')"
-        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
-      />
+        <!-- Outbound-email batch (§18): the review/approve/send card IS the
+             authorization surface (AD-003) — interactive, never a collapsed
+             execution receipt. -->
+        <AiChatOutboundBatchReviewCard
+          v-else-if="item.kind === 'outbound-batch'"
+          :message="item.message"
+        />
 
-      <!-- Generated-image batch (T3/D2, FR-IMG-010..012): live progress,
-           Stop (keeps completed outputs), and Retry-failed — mounted through
-           AiChatV2Message so the exact batch-card branch renders with its
-           events, never a collapsed execution receipt. -->
-      <AiChatV2Message
-        v-else-if="item.kind === 'batch-card'"
-        :message="item.message"
-        :show-reasoning="false"
-        :status="streamStatusForMessage(item.message)"
-        @stop-batch="emit('stop-batch')"
-        @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
-      />
+        <!-- Skill installation (FR-SKL-001): the shared install card with plan
+             approval, dependencies, credentials, retry and cancel — mounted
+             through AiChatV2Message so the exact SkillInstallCard branch
+             (session identity + conversation binding) renders. -->
+        <AiChatV2Message
+          v-else-if="item.kind === 'skill-install'"
+          :message="item.message"
+          :show-reasoning="false"
+          @stop-batch="emit('stop-batch')"
+          @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+        />
 
-      <!-- Plan lifecycle surfaces: decision/receipt only, never the full doc. -->
-      <AiChatPlanDecisionCard
-        v-else-if="item.kind === 'plan-decision'"
-        :plan="item.plan"
-        :disabled="planDecisionInFlight"
-        :error="planDecisionError"
-        @approve="onPlanApprove"
-        @request-changes="onPlanRequestChanges()"
-        @review-full-plan="openActivity"
-        @discard="emit('discard')"
-      />
-      <AiChatPlanReceipt
-        v-else-if="item.kind === 'plan-receipt'"
-        :plan="item.plan"
-        @open-activity="openActivity"
-      />
+        <!-- Generated-image batch (T3/D2, FR-IMG-010..012): live progress,
+             Stop (keeps completed outputs), and Retry-failed — mounted through
+             AiChatV2Message so the exact batch-card branch renders with its
+             events, never a collapsed execution receipt. -->
+        <AiChatV2Message
+          v-else-if="item.kind === 'batch-card'"
+          :message="item.message"
+          :show-reasoning="false"
+          :status="streamStatusForMessage(item.message)"
+          @stop-batch="emit('stop-batch')"
+          @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
+        />
 
-      <!-- Pinned plan question flow (FR-058: stays when inspector closed). -->
-      <AiChatPlanQuestionFlow
-        v-else-if="item.kind === 'plan-question'"
-        :question="item.question"
-        :submit-error="props.planSubmitError"
-        @submit="onPlanAnswer"
+        <!-- Plan lifecycle surfaces: decision/receipt only, never the full doc. -->
+        <AiChatPlanDecisionCard
+          v-else-if="item.kind === 'plan-decision'"
+          :plan="item.plan"
+          :disabled="planDecisionInFlight"
+          :error="planDecisionError"
+          @approve="onPlanApprove"
+          @request-changes="onPlanRequestChanges()"
+          @review-full-plan="openActivity"
+          @discard="emit('discard')"
+        />
+        <AiChatPlanReceipt
+          v-else-if="item.kind === 'plan-receipt'"
+          :plan="item.plan"
+          @open-activity="openActivity"
+        />
+
+        <!-- Pinned plan question flow (FR-058: stays when inspector closed). -->
+        <AiChatPlanQuestionFlow
+          v-else-if="item.kind === 'plan-question'"
+          :question="item.question"
+          :submit-error="props.planSubmitError"
+          @submit="onPlanAnswer"
+        />
+      </template>
+      <AiChatV2StreamStatus
+        v-if="streamStatus === 'error' && errorMessage"
+        status="error"
+        :error-message="errorMessage"
+        data-testid="workspace-transcript-error"
       />
-    </template>
-    <AiChatV2StreamStatus
-      v-if="streamStatus === 'error' && errorMessage"
-      status="error"
-      :error-message="errorMessage"
-      data-testid="workspace-transcript-error"
-    />
+    </div>
+    <v-btn
+      v-if="showScrollButton"
+      class="workspace-transcript__scroll-down"
+      icon
+      size="small"
+      color="primary"
+      data-testid="scroll-to-bottom"
+      :title="t('aiChatV2.scroll_to_bottom') || 'Scroll to bottom'"
+      :aria-label="t('aiChatV2.scroll_to_bottom') || 'Scroll to bottom'"
+      @click="onScrollButtonClick"
+    >
+      <v-icon>mdi-chevron-down</v-icon>
+    </v-btn>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import type {
   AIChatPendingMessageView,
   ChatV2GeneratedImageReference,
@@ -582,9 +606,58 @@ function onPlanAnswer(answers: unknown[]): void {
 function openActivity(): void {
   emit("open-activity");
 }
+
+// Scroll-to-bottom affordance (parity with AiChatV2Messages): the floating
+// button appears when the transcript viewport is more than a few px away
+// from the bottom — either because the user scrolled up or because new
+// rows/streamed content grew the transcript below the viewport.
+const { t } = useI18n();
+
+const scroller = ref<HTMLDivElement | null>(null);
+const showScrollButton = ref(false);
+
+/** True when the scroller viewport sits within a few px of the bottom. */
+function isNearBottom(): boolean {
+  const el = scroller.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+}
+
+function onScroll(): void {
+  showScrollButton.value = !isNearBottom();
+}
+
+/** Button click: jump to the latest row and re-hide the affordance. */
+async function onScrollButtonClick(): Promise<void> {
+  await nextTick();
+  const el = scroller.value;
+  if (!el) return;
+  el.scrollTop = el.scrollHeight;
+  showScrollButton.value = false;
+}
+
+// Content growth (new rows, streamed tokens) changes scrollHeight without
+// firing a scroll event — re-evaluate the button after the DOM settles.
+watch(
+  () => {
+    const last = props.messages[props.messages.length - 1];
+    return `${props.messages.length}:${last ? last.content.length : 0}`;
+  },
+  () => {
+    void nextTick().then(onScroll);
+  }
+);
+onMounted(onScroll);
 </script>
 
 <style scoped>
+.workspace-transcript__wrapper {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
 .workspace-transcript {
   flex: 1;
   min-height: 0;
@@ -593,5 +666,11 @@ function openActivity(): void {
   flex-direction: column;
   gap: 8px;
   padding: 8px 12px;
+}
+.workspace-transcript__scroll-down {
+  position: absolute;
+  bottom: 12px;
+  right: 16px;
+  z-index: 10;
 }
 </style>
