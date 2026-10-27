@@ -1,5 +1,6 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AiMessageTaskModel } from "@/model/AiMessageTask.model";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
@@ -206,6 +207,21 @@ export class AIChatScheduledLoopModule extends BaseModule {
         slashCommandName: "loop",
       },
     });
+    // Ensure the conversation projection row exists (design §8.6). The
+    // renderer may pass a locally-fabricated v2 id (fresh composer, no active
+    // conversation) that has no ai_chat_conversations row. Without it the
+    // loop's conversation is a phantom: scheduled turns persist messages but
+    // the sidebar never lists the conversation and the transcript becomes
+    // unreachable after navigating away. Mirrors the interactive path, where
+    // AIChatCoordinator bumps the projection on every message persist.
+    const conversationModule = new AIChatConversationModule();
+    await conversationModule.recordMessagePersisted({
+      conversationId,
+      isResult: false,
+      previewText: request.rawCommand,
+      generatedTitle: request.rawCommand,
+      timestamp: now,
+    });
 
     // Create task then schedule; compensate on partial failure so we never
     // leave an active schedule pointing at a missing task (or vice versa).
@@ -261,6 +277,13 @@ export class AIChatScheduledLoopModule extends BaseModule {
           slashCommandResult: true,
           slashCommandName: "scheduled-loop-create",
         },
+      });
+      // Confirmation row → advance the projection preview/counters too.
+      await conversationModule.recordMessagePersisted({
+        conversationId,
+        isResult: true,
+        previewText: summary,
+        timestamp: now,
       });
 
       const schedule = await this.scheduleModel.getScheduleById(scheduleId);

@@ -34,6 +34,7 @@ import {
 } from "@/service/AIChatConversationTurnCoordinator";
 import { ScheduledLoopRunRegistry } from "@/service/ScheduledLoopRunRegistry";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import {
   SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
   SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES,
@@ -123,6 +124,36 @@ export class ScheduledAiMessageRunner {
   private readonly runRegistry = ScheduledLoopRunRegistry.getInstance();
   private readonly broadcaster =
     AIChatConversationUpdateBroadcaster.getInstance();
+
+  /**
+   * Bump the conversation projection after a scheduled turn's durable message
+   * write. Interactive turns do this through AIChatCoordinator; scheduled
+   * turns bypass it, so without an explicit bump the sidebar preview,
+   * lastMessageAt, and messageCount never advance — and a loop conversation
+   * created from a fresh composer (no projection row at all) stays an
+   * unreachable phantom conversation that never appears in the UI.
+   */
+  private async recordProjection(input: {
+    conversationId: string;
+    isResult: boolean;
+    previewText: string;
+  }): Promise<void> {
+    try {
+      await new AIChatConversationModule().recordMessagePersisted({
+        conversationId: input.conversationId,
+        isResult: input.isResult,
+        previewText: input.previewText,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      // The projection is a display hint — never fail the scheduled run for
+      // it. The once-per-process backfill repairs missing rows on restart.
+      console.warn(
+        "[scheduled-runner] conversation projection bump failed:",
+        err
+      );
+    }
+  }
 
   constructor() {
     this.taskModule = new AiMessageTaskModule();
@@ -750,6 +781,15 @@ export class ScheduledAiMessageRunner {
       if (lease) lease.release();
     }
 
+    // The scheduled user turn is durably persisted by now (all paths past the
+    // busy-defer early return persist it). Advance the sidebar projection to
+    // match the interactive path's submit-time bump.
+    await this.recordProjection({
+      conversationId,
+      isResult: false,
+      previewText: task.message,
+    });
+
     // B07 (FR-12/14, NFR-10): terminal delivery happens ONLY after the
     // scheduled transaction commits. On success the committed result
     // decides the stream kind (completed → done, anything else → error);
@@ -792,6 +832,16 @@ export class ScheduledAiMessageRunner {
     }
     try {
       if (finalized.status === "completed") {
+        // Advance the sidebar projection with the durable assistant result
+        // (interactive turns project their terminal through the coordinator;
+        // scheduled turns must do the same here).
+        if (finalized.assistantFinalMessage.trim() !== "") {
+          await this.recordProjection({
+            conversationId,
+            isResult: true,
+            previewText: finalized.assistantFinalMessage,
+          });
+        }
         this.broadcaster.emitScheduledStream({
           conversationId,
           runId,
