@@ -136,6 +136,28 @@ interface SystemSettingPageVm {
   settinglist: SystemSettingDisplay[];
 }
 
+describe("SystemSettingPage layout width", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSystemSettinglist).mockResolvedValue(
+      makeGroupsWithCollidingIds()
+    );
+  });
+
+  it("renders at full page width so the left tree-nav column is not squeezed", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const shell = wrapper.find('[data-testid="app-page-shell"]');
+    expect(shell.exists()).toBe(true);
+    // Two-column master-detail layout must use the full-width contract.
+    // The 700px `width-form` contract squeezes the 3/12 nav column below
+    // its minimum, clipping the tree labels and nav buttons.
+    expect(shell.classes()).toContain("width-full");
+    expect(shell.classes()).not.toContain("width-form");
+  });
+});
+
 describe("SystemSettingPage tree selection", () => {
   beforeEach(() => {
     vi.clearAllMocks();

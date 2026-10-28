@@ -1,5 +1,5 @@
 <template>
-  <AppPageShell page-id="settings-general" title-key="route.system_setting" content-width="form">
+  <AppPageShell page-id="settings-general" title-key="route.system_setting" content-width="full">
     <!-- Category navigation stays in-page (IPR-032): tree + detail columns. -->
     <v-row>
       <!-- Left Column: Tree Navigation -->
