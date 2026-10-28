@@ -3328,19 +3328,19 @@ export class AIChatQueryLoop {
         }
 
         // Detect explicit server-side errors: OpenAI-compatible servers can
-        // signal a failure by returning finish_reason="error" (often with
-        // empty content). This is typically a transient issue (overload,
-        // rate limit, upstream timeout), but can also be a permanent error
-        // like context_window_exceeded. Surface the server's error code and
+        // signal a failure by returning finish_reason="error". This is
+        // typically a transient issue (overload, rate limit, upstream
+        // timeout), but can also be a permanent error like
+        // context_window_exceeded. Surface the server's error code and
         // message so the user-facing mapper can distinguish the two and give
         // an actionable message instead of "service is busy, try again".
-        // We do not auto-retry inside the stream consumer because content
-        // may have already been delivered to onChunk before the error
-        // finish_reason arrives; the user can re-send the turn manually.
-        if (
-          accumulator.state.finishReason === "error" &&
-          accumulator.state.fullContent.trim().length === 0
-        ) {
+        // This check runs even when partial content was already streamed:
+        // silently completing the turn with truncated output left the user
+        // with no error at all (the /goal silent-stop bug). The failed
+        // result carries the partial content so it is still persisted, and
+        // the retry wrapper skips retries once content has been delivered
+        // (tracker.delivered), so this never duplicates visible output.
+        if (accumulator.state.finishReason === "error") {
           const streamError = accumulator.state.streamError;
           const errorCode = streamError?.code ?? "";
           const errorMsg = streamError?.message ?? "";
