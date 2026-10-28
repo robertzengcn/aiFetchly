@@ -2923,6 +2923,34 @@ export class AIChatQueryEngine {
       // ignore lookup failures
     }
     const isPlanMode = request.mode === "plan" || isActivePlanState(planState);
+    // Direct-path parity (runTurn resolves plan state the same way): a queued
+    // turn may arrive in Plan Mode (e.g. the /goal plan prompt is sent with
+    // mode "plan") before any plan row exists. Without creating the draft
+    // here, runPersistedTurn advertises AskUserQuestion/SubmitPlanForApproval
+    // while planContext stays undefined, so the loop never intercepts those
+    // tools and the model's calls fall through to ToolExecutor, which fails
+    // with "Unknown tool: SubmitPlanForApproval".
+    if (isPlanMode && !planState) {
+      try {
+        planState = await planModule.ensurePlanForConversation({
+          conversationId,
+          title: (request.message || modelContent).slice(0, 80) || "New plan",
+          objective: (request.message || modelContent).slice(0, 500),
+        });
+      } catch (err) {
+        // Direct-path parity: a draft-creation failure fails the turn with a
+        // surfaced error instead of running a plan-mode turn that cannot
+        // handle its own plan tools.
+        log.error("[ai-chat-v2] queued plan ensure failed:", err);
+        void redirectToLoginOnAuthExpired(err);
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          errorMessage: userSafeError(err),
+        });
+        return { type: "failed", conversationId, assistantMessageId: "" };
+      }
+    }
     const module = new AIChatV2Module();
 
     // Queue-dispatched turns bypass submitMessage's persistence path, so bind
