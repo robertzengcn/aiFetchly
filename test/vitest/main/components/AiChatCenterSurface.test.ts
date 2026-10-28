@@ -193,6 +193,7 @@ import {
   clearChatV2Conversation,
   steerChatV2PendingMessage,
   subscribeChatV2PendingEvents,
+  setChatV2ToolApprovalMode,
 } from "@/views/api/aiChatV2";
 import { cancelVoiceJob, downloadVoiceModel } from "@/views/api/aiChatV2Voice";
 import { planContinuationRequestId } from "@/views/utils/planContinuationIdentity";
@@ -390,7 +391,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         WorkspaceMemoryPanel: true,
         AiChatV2ModeSelector: defineComponent({
           name: "AiChatV2ModeSelector",
-          props: ["modelValue"],
+          props: ["modelValue", "disabled"],
           emits: ["update:modelValue"],
           template: '<div data-testid="mode-selector-stub">{{ modelValue }}</div>',
         }),
@@ -1592,6 +1593,89 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
       await switchConversation("conv-1");
       expect(shownMode(mounted)).toBe("ask_for_approval");
+    });
+  });
+
+  /**
+   * Switch model & tool-approval mode during an active chat (workspace
+   * parity with AiChatV2.switchModelAndPermissionDuringChat). The workspace
+   * shares the v2 engine (ai-chat-v2-ipc.ts getQueryEngine), whose
+   * executeTool re-reads the persisted approval mode on EVERY tool call, and
+   * the engine reads the model from each turn's request — so a mid-run
+   * change is safe: the model affects the next send, the approval mode the
+   * next tool execution. The selectors must therefore NOT be locked by
+   * selectedStore.isBusy.
+   */
+  describe("switch model & permission during an active chat", () => {
+    /** Resolve the send with a running turn so selectedStore.isBusy is true. */
+    function armRunningSend(): void {
+      startChatRunMock.mockResolvedValue({
+        conversationId: "conv-1",
+        runId: "run-1",
+        status: "running",
+        acceptedAt: "",
+      });
+    }
+
+    async function mountAndStartRun(): Promise<
+      ReturnType<typeof mountSurface>
+    > {
+      armRunningSend();
+      const mounted = mountSurface();
+      await flushPromises();
+      useChatWorkspaceStore().setSelected("conv-1");
+      await flushPromises();
+
+      const composer = mounted.findComponent({ name: "AiChatV2Composer" });
+      composer.vm.$emit("send", "hello mid-run", []);
+      await flushPromises();
+      expect(startChatRunMock).toHaveBeenCalledTimes(1);
+      return mounted;
+    }
+
+    it("keeps the model selector and tool-approval selector enabled while a run is active", async () => {
+      const mounted = await mountAndStartRun();
+
+      // The model selector stays enabled mid-run: the engine reads the model
+      // from each turn's request, so a switch only affects the next send.
+      const modelSelector = mounted.findComponent({
+        name: "AiChatV2ModelSelector",
+      });
+      expect(modelSelector.props("disabled")).toBeFalsy();
+
+      // The tool-approval selector stays enabled mid-run: the user must be
+      // able to escalate to Approve-for-me / Full access when a permission
+      // prompt blocks the in-flight turn, or lock back down to Ask. The
+      // backend re-reads the persisted mode on EVERY tool execution, so a
+      // mid-run change takes effect on the next tool call in the same turn.
+      const approvalSelector = mounted.findComponent({
+        name: "AiChatV2ToolApprovalModeSelector",
+      });
+      expect(approvalSelector.props("disabled")).toBeFalsy();
+
+      // The mode selector intentionally KEEPS its busy lock (v2 parity):
+      // the composer mode is a per-turn override resolved at send time, so
+      // a mid-run change could never affect the in-flight turn.
+      const modeSelector = mounted.findComponent({ name: "AiChatV2ModeSelector" });
+      expect(modeSelector.props("disabled")).toBe(true);
+    });
+
+    it("persists a tool-approval-mode change mid-run so it applies to the in-flight turn", async () => {
+      const mounted = await mountAndStartRun();
+
+      // Drive the real update path: the selector emits, the surface
+      // persists immediately via IPC so the next tool execution in the
+      // running turn observes the new mode.
+      const approvalSelector = mounted.findComponent({
+        name: "AiChatV2ToolApprovalModeSelector",
+      });
+      approvalSelector.vm.$emit("update:modelValue", "approve_for_me");
+      await flushPromises();
+
+      expect(vi.mocked(setChatV2ToolApprovalMode)).toHaveBeenCalledWith(
+        "conv-1",
+        "approve_for_me"
+      );
     });
   });
 

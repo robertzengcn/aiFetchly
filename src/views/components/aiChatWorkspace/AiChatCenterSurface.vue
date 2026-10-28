@@ -285,14 +285,12 @@
           v-model="selectedModel"
           :items="availableModels"
           :default-model="defaultModelId"
-          :disabled="selectedStore.isBusy"
           :loading="!modelsLoaded"
           :no-models="modelsLoaded && availableModels.length === 0"
           @open-settings="openProviderSettings"
         />
         <AiChatV2ToolApprovalModeSelector
           v-model="toolApprovalMode"
-          :disabled="selectedStore.isBusy"
           @update:model-value="onToolApprovalModeChange"
         />
         <button
