@@ -458,6 +458,20 @@ function parseReceivePort(value: string): number | null {
   return Number.isInteger(port) ? port : null;
 }
 
+/**
+ * Trim a text field before it leaves the form (save, test receive, test
+ * email): leading/trailing blanks are never valid in names, addresses,
+ * hosts, ports, or folders, and persisting " imap.example.com " breaks the
+ * IMAP connection while " INBOX " misses the mailbox folder. Numeric input
+ * (v-number-input emits numbers at runtime) is stringified first.
+ * Passwords are deliberately NOT passed through here — credentials are
+ * opaque and may legitimately contain spaces; trimming would silently
+ * change the user's credential.
+ */
+function trimTextField(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
 function syncImplicitTlsPortToggle(protocol: "imap" | "pop3", portValue: string): void {
   const port = parseReceivePort(portValue);
   if (protocol === "imap" && port === 993) {
@@ -563,14 +577,24 @@ const initialize = async () => {
 async function testReceiveConnection() {
   const missing: string[] = [];
   const usernameForTest =
-    receiveUsername.value || smtpUsername.value || from.value;
+    trimTextField(receiveUsername.value) ||
+    trimTextField(smtpUsername.value) ||
+    trimTextField(from.value);
   const passwordForTest = receivePassword.value || password.value;
   const canUseStoredPassword = isEdit.value && Id.value > 0;
+  // Trim host/port/folder values before checking and testing: a whitespace-
+  // only host must count as missing, and the connectivity probe must use the
+  // cleaned address (same normalization as the save path).
+  const imapHostValue = trimTextField(imapHost.value);
+  const imapPortValue = trimTextField(imapPort.value);
+  const pop3HostValue = trimTextField(pop3Host.value);
+  const pop3PortValue = trimTextField(pop3Port.value);
+  const folderValue = trimTextField(receiveFolder.value);
   if (!receiveProtocol.value) missing.push(t('emailReceive.receive_protocol'));
-  if (!imapHost.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_host'));
-  if (!imapPort.value && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_port'));
-  if (!pop3Host.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_host'));
-  if (!pop3Port.value && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_port'));
+  if (!imapHostValue && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_host'));
+  if (!imapPortValue && receiveProtocol.value === 'imap') missing.push(t('emailReceive.imap_port'));
+  if (!pop3HostValue && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_host'));
+  if (!pop3PortValue && receiveProtocol.value === 'pop3') missing.push(t('emailReceive.pop3_port'));
   if (!usernameForTest) missing.push(t('emailReceive.receive_username'));
   if (!passwordForTest && !canUseStoredPassword) missing.push(t('emailReceive.receive_password'));
   if (missing.length > 0) {
@@ -583,11 +607,11 @@ async function testReceiveConnection() {
   const isImap = receiveProtocol.value === 'imap';
   const settings = {
     protocol: receiveProtocol.value,
-    host: isImap ? imapHost.value : pop3Host.value,
-    port: parseInt(isImap ? imapPort.value : pop3Port.value, 10),
+    host: isImap ? imapHostValue : pop3HostValue,
+    port: parseInt(isImap ? imapPortValue : pop3PortValue, 10),
     ssl: isImap ? imapSsl.value === 1 : pop3Ssl.value === 1,
     username: usernameForTest,
-    folder: receiveFolder.value || 'INBOX',
+    folder: folderValue || 'INBOX',
   };
   if (passwordForTest) {
     Object.assign(settings, { password: passwordForTest });
@@ -625,9 +649,26 @@ async function onSubmit() {
     loading.value = false;
     return
   } else {
+    // Normalize text fields before persistence (see trimTextField): trim the
+    // refs themselves so the payload below and the visible form stay in sync.
+    // Whitespace-only values collapse to "" → the existing `|| null` / ternary
+    // logic turns them into null instead of storing blanks.
+    name.value = trimTextField(name.value);
+    from.value = trimTextField(from.value);
+    smtpUsername.value = trimTextField(smtpUsername.value);
+    replyTo.value = trimTextField(replyTo.value);
+    host.value = trimTextField(host.value);
+    imapHost.value = trimTextField(imapHost.value);
+    imapPort.value = trimTextField(imapPort.value);
+    pop3Host.value = trimTextField(pop3Host.value);
+    pop3Port.value = trimTextField(pop3Port.value);
+    receiveUsername.value = trimTextField(receiveUsername.value);
+    receiveFolder.value = trimTextField(receiveFolder.value);
     // v-number-input emits a number at runtime (port is ref<string> for the
     // EmailServiceEntitydata contract), so coerce before measuring/sending.
-    if (String(port.value ?? "").length > 5) {
+    // Trim first: a padded " 465 " would otherwise trip the length guard.
+    port.value = trimTextField(port.value);
+    if (port.value.length > 5) {
 
       alert.value = true;
       alertcolor.value = "error";
@@ -710,17 +751,23 @@ async function onSubmit() {
 }
 
 const openTestDialog = () => {
-  const missing: string[] = [];
-  // Editing a saved service: the password field starts empty because
-  // credentials never round-trip to the form (getEmailServiceDetail returns
-  // the "" sentinel). An empty password here means "use the stored one" —
-  // the send resolves it by id server-side — so it is not a missing field.
-  const canUseStoredPassword = isEdit.value && Id.value > 0;
-  if (!name.value) missing.push(t('emailservice.name'));
-  if (!from.value) missing.push(t('emailservice.from'));
-  if (!password.value && !canUseStoredPassword) missing.push(t('emailservice.password'));
-  if (!host.value) missing.push(t('emailservice.host'));
-  if (!port.value) missing.push(t('emailservice.port'));
+  // Missing-field checks read the trimmed values: a whitespace-only field
+  // must count as missing, matching how it would be saved (trimTextField).
+  const openMissing = (): string[] => {
+    const missing: string[] = [];
+    // Editing a saved service: the password field starts empty because
+    // credentials never round-trip to the form (getEmailServiceDetail returns
+    // the "" sentinel). An empty password here means "use the stored one" —
+    // the send resolves it by id server-side — so it is not a missing field.
+    const canUseStoredPassword = isEdit.value && Id.value > 0;
+    if (!trimTextField(name.value)) missing.push(t('emailservice.name'));
+    if (!trimTextField(from.value)) missing.push(t('emailservice.from'));
+    if (!password.value && !canUseStoredPassword) missing.push(t('emailservice.password'));
+    if (!trimTextField(host.value)) missing.push(t('emailservice.host'));
+    if (!trimTextField(port.value)) missing.push(t('emailservice.port'));
+    return missing;
+  };
+  const missing = openMissing();
   if (missing.length > 0) {
     alert.value = true;
     alertcolor.value = "error";
@@ -741,13 +788,16 @@ const submitTestemail = async () => {
 
   }
   const emailSetting: EmailServiceEntitydata = {
-    name: name.value,
-    from: from.value,
-    smtpUsername: smtpUsername.value || null,
+    // Trim outbound settings so a padded host/address never reaches the SMTP
+    // handshake (same normalization as the save path). Password stays
+    // untouched — credentials are opaque (see trimTextField).
+    name: trimTextField(name.value),
+    from: trimTextField(from.value),
+    smtpUsername: trimTextField(smtpUsername.value) || null,
     replyTo: replyTo.value.trim().length > 0 ? replyTo.value.trim() : null,
     password: password.value,
-    host: host.value,
-    port: String(port.value ?? ""),
+    host: trimTextField(host.value),
+    port: trimTextField(port.value),
     ssl: ssl.value
   }
   // Carry the id so a test send in edit mode can reuse the stored password

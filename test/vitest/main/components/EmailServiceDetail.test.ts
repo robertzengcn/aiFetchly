@@ -530,4 +530,193 @@ describe("EmailServiceDetail Test button (edit mode password sentinel)", () => {
     expect(typeof payload.pop3Port).toBe("string");
     expect(payload.pop3Port).toBe("995");
   });
+
+  it("coerces a whitespace-padded port string to its canonical form in the submit payload", async () => {
+    // " 465 " must not persist with blanks: the port length guard measured the
+    // padded string, and SMTP parsing of " 465 " would break. Trim then coerce.
+    const paddedPortService = {
+      ...STORED_SERVICE,
+      port: " 465 " as unknown as string,
+      imapPort: " 993 " as unknown as string,
+      pop3Port: " 995 " as unknown as string,
+      receiveEnabled: 1,
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(paddedPortService);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as {
+      port: string;
+      imapPort: string | null;
+      pop3Port: string | null;
+    };
+    expect(payload.port).toBe("465");
+    expect(payload.imapPort).toBe("993");
+    expect(payload.pop3Port).toBe("995");
+  });
+});
+
+describe("EmailServiceDetail text-field trimming (no leading/trailing blanks persisted)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    routerMocks.routeId = "";
+    apiMocks.getEmailServiceDetail.mockResolvedValue(STORED_SERVICE);
+    apiMocks.receiveEmailsendevent.mockImplementation(() => {});
+    apiMocks.createupdateEmailService.mockResolvedValue({ id: 9 });
+  });
+
+  it("trims every text field in the submit payload before it reaches the API", async () => {
+    // Simulates a stored/loaded service whose fields carry accidental
+    // leading/trailing blanks (the reported IMAP host bug and its siblings).
+    const spaced = {
+      ...STORED_SERVICE,
+      name: "  Primary SMTP  ",
+      from: " sender@example.com ",
+      replyTo: "  replies@example.com  ",
+      host: "  smtp.example.com  ",
+      port: " 465 ",
+      receiveEnabled: 1,
+      imapHost: " imap.example.com ",
+      imapPort: " 993 ",
+      pop3Host: " pop3.example.com ",
+      pop3Port: " 995 ",
+      receiveUsername: " user@example.com ",
+      receivePassword: "  secret spaces  ",
+      receiveFolder: " INBOX ",
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(spaced);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect(payload.name).toBe("Primary SMTP");
+    expect(payload.from).toBe("sender@example.com");
+    expect(payload.replyTo).toBe("replies@example.com");
+    expect(payload.host).toBe("smtp.example.com");
+    expect(payload.port).toBe("465");
+    expect(payload.imapHost).toBe("imap.example.com");
+    expect(payload.imapPort).toBe("993");
+    expect(payload.pop3Host).toBe("pop3.example.com");
+    expect(payload.pop3Port).toBe("995");
+    expect(payload.receiveUsername).toBe("user@example.com");
+    expect(payload.receiveFolder).toBe("INBOX");
+    // Passwords are opaque credentials: they may legitimately contain spaces
+    // and must NOT be trimmed (trimming would silently change the credential).
+    expect(payload.receivePassword).toBe("  secret spaces  ");
+  });
+
+  it("submits whitespace-only hosts as null instead of persisting blanks", async () => {
+    const blankish = {
+      ...STORED_SERVICE,
+      imapHost: "   ",
+      pop3Host: "\t",
+      receiveEnabled: 1,
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(blankish);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const form = wrapper.find("form");
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.createupdateEmailService).toHaveBeenCalledTimes(1);
+    const payload = apiMocks.createupdateEmailService.mock.calls[0][0] as {
+      imapHost: string | null;
+      pop3Host: string | null;
+    };
+    expect(payload.imapHost).toBe(null);
+    expect(payload.pop3Host).toBe(null);
+  });
+
+  it("sends trimmed host/username/folder to the receive-connection test", async () => {
+    const spaced = {
+      ...STORED_SERVICE,
+      receiveEnabled: 1,
+      imapHost: " imap.example.com ",
+      imapPort: " 993 ",
+      receiveUsername: " user@example.com ",
+      receiveFolder: " INBOX ",
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(spaced);
+    receiveApiMocks.testEmailReceiveConnection.mockResolvedValue({ success: true });
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const testBtn = findButtonByText(wrapper, "test connection");
+    expect(testBtn).toBeTruthy();
+    await testBtn!.trigger("click");
+    await flushPromises();
+
+    expect(receiveApiMocks.testEmailReceiveConnection).toHaveBeenCalledTimes(1);
+    const settings = receiveApiMocks.testEmailReceiveConnection.mock
+      .calls[0][1] as { host?: string; username?: string; folder?: string };
+    expect(settings.host).toBe("imap.example.com");
+    expect(settings.username).toBe("user@example.com");
+    expect(settings.folder).toBe("INBOX");
+  });
+
+  it("report a whitespace-only receive host as missing instead of testing it", async () => {
+    const blankish = {
+      ...STORED_SERVICE,
+      receiveEnabled: 1,
+      imapHost: "   ",
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(blankish);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    const testBtn = findButtonByText(wrapper, "test connection");
+    await testBtn!.trigger("click");
+    await flushPromises();
+
+    const alert = wrapper.find('[data-testid="alert"]');
+    expect(alert.exists()).toBe(true);
+    expect(alert.text()).toContain("Please fill in all required fields");
+    expect(alert.text()).toContain("imap host");
+    expect(receiveApiMocks.testEmailReceiveConnection).not.toHaveBeenCalled();
+  });
+
+  it("sends trimmed settings in the test-email payload", async () => {
+    const spaced = {
+      ...STORED_SERVICE,
+      name: "  Primary SMTP  ",
+      from: " sender@example.com ",
+      host: "  smtp.example.com  ",
+      port: " 465 ",
+    };
+    apiMocks.getEmailServiceDetail.mockResolvedValue(spaced);
+    const wrapper = mountDetail(9);
+    await flushPromises();
+
+    // Open the test dialog and submit it.
+    await findButtonByText(wrapper, "test")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.find('[data-testid="test-dialog"]').exists()).toBe(true);
+    const dialogForm = wrapper.find('[data-testid="test-dialog"] form');
+    await dialogForm.trigger("submit");
+    await flushPromises();
+
+    expect(apiMocks.sendTestemail).toHaveBeenCalledTimes(1);
+    const param = apiMocks.sendTestemail.mock.calls[0][0] as {
+      Setting: { name?: string; from?: string; host?: string; port?: string };
+    };
+    expect(param.Setting.name).toBe("Primary SMTP");
+    expect(param.Setting.from).toBe("sender@example.com");
+    expect(param.Setting.host).toBe("smtp.example.com");
+    expect(param.Setting.port).toBe("465");
+  });
 });
