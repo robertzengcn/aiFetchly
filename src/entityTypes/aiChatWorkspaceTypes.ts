@@ -60,6 +60,8 @@ export interface WorkspaceConversationSummary {
   readonly conversationId: string;
   readonly workspaceKey: string | null;
   readonly title: string;
+  /** Monotonic title version; guards renderer reconciliation (titles §10.3). */
+  readonly titleRevision: number;
   readonly preview: string;
   readonly lastActivityAt: string;
   readonly unread: boolean;

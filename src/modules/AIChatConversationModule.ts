@@ -7,6 +7,18 @@ import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
+import { MessageType } from "@/entityTypes/commonType";
+import { isSubstantiveRequest } from "@/service/aiChatTitle/AIChatTitleEligibility";
+import {
+  GENERATED_TITLE_MAX_CODEPOINTS,
+  normalizeText,
+  sanitizeExcerpt,
+  sanitizeText,
+} from "@/service/aiChatTitle/AIChatTitleText";
+import type {
+  ManualRenameResult,
+  PreparedTitleCandidate,
+} from "@/service/aiChatTitle/AIChatTitleTypes";
 import type {
   ConversationAttention,
   ConversationRuntimeStatus,
@@ -191,6 +203,7 @@ export class AIChatConversationModule extends BaseModule {
         conversationId: id,
         workspaceKey,
         title: projection.title ?? "",
+        titleRevision: projection.titleRevision,
         preview: projection.preview,
         lastActivityAt: (
           projection.lastMessageAt ??
@@ -268,6 +281,129 @@ export class AIChatConversationModule extends BaseModule {
     await this.ensureConnection();
     const updated = await this.convModel().rename(conversationId, title);
     return updated !== null;
+  }
+
+  /**
+   * Atomic manual rename returning authoritative post-commit state (titles
+   * design §5.3). `missing` is reported to the renderer as an unavailable
+   * conversation — never as a successful rename.
+   */
+  async applyManualRename(
+    conversationId: string,
+    title: string
+  ): Promise<ManualRenameResult> {
+    await this.ensureConnection();
+    const updated = await this
+      .convModel()
+      .renameWithOwnership(conversationId, title);
+    if (!updated) return { outcome: "missing" };
+    return {
+      outcome: "renamed",
+      title: updated.title ?? "",
+      titleRevision: updated.titleRevision,
+    };
+  }
+
+  /**
+   * Evaluate the first-three-completed-exchanges window (titles design §7.1)
+   * from durable rows only — renderer-submitted text is never trusted.
+   * Pairs persisted user/assistant MESSAGE rows in ascending order. When an
+   * earlier exchange could not dispatch, the earliest qualifying exchange is
+   * returned again (eligibility retry; no model attempt consumed).
+   */
+  async prepareTitleCandidate(
+    conversationId: string
+  ): Promise<PreparedTitleCandidate> {
+    await this.ensureConnection();
+    const convModel = this.convModel();
+    const row = await convModel.getByConversationId(conversationId);
+    if (!row || row.archivedAt) return { kind: "not_ready" };
+    if (row.titleIsUserSet || row.titleSource === "user") {
+      return { kind: "not_ready" };
+    }
+    if (row.titleGenerationStatus !== "pending") {
+      return { kind: "suppressed" };
+    }
+
+    const messages = await this
+      .messageModel()
+      .getMessagesByConversation(conversationId, 40);
+    const exchanges: Array<{ userText: string; assistantText: string }> = [];
+    let pendingUser: string | null = null;
+    for (const message of messages) {
+      if (message.messageType !== MessageType.MESSAGE) continue;
+      const content = message.content?.trim() ?? "";
+      if (!content) continue;
+      if (message.role === "user") {
+        if (pendingUser === null) pendingUser = content;
+      } else if (message.role === "assistant" && pendingUser !== null) {
+        exchanges.push({ userText: pendingUser, assistantText: content });
+        pendingUser = null;
+      }
+    }
+
+    const substantive = exchanges.find((exchange) =>
+      isSubstantiveRequest(exchange.userText)
+    );
+    if (substantive) {
+      const userText = sanitizeText(normalizeText(substantive.userText));
+      const assistantExcerpt = sanitizeText(
+        normalizeText(substantive.assistantText)
+      );
+      // Improve the visible excerpt to the substantive request (greeting
+      // replacement, FR-01) while still pending — bumping the revision only
+      // when the visible title actually changes.
+      const nextExcerpt = sanitizeExcerpt(
+        substantive.userText,
+        GENERATED_TITLE_MAX_CODEPOINTS
+      );
+      let current = row;
+      if ((row.title ?? "") !== nextExcerpt) {
+        await convModel.updateExcerptIfPending({
+          conversationId,
+          epoch: row.titleEpoch,
+          excerpt: nextExcerpt,
+        });
+        current = (await convModel.getByConversationId(conversationId)) ?? row;
+      }
+      return {
+        kind: "eligible",
+        userText,
+        assistantExcerpt,
+        epoch: current.titleEpoch,
+        revision: current.titleRevision,
+      };
+    }
+
+    if (exchanges.length >= 3) {
+      // Three completed exchanges with no substantive request: stop
+      // automatic evaluation for this lifecycle (FR-02).
+      await convModel.suppressTitleGeneration(conversationId);
+      return { kind: "suppressed" };
+    }
+    return { kind: "pending_window" };
+  }
+
+  /** History-clear title lifecycle (FR-09): fresh epoch, conditional reset. */
+  async clearTitleLifecycle(conversationId: string): Promise<void> {
+    await this.ensureConnection();
+    await this.convModel().clearTitleLifecycleForHistoryClear(conversationId);
+  }
+
+  /**
+   * Startup reconciliation (titles design §6): interrupted dispatched
+   * attempts fall back permanently for their lifecycle, and legacy user-set
+   * rows are repaired to explicit user provenance. Never enqueues work.
+   */
+  async reconcileTitleStateOnStartup(): Promise<{
+    interrupted: number;
+    repaired: number;
+  }> {
+    await this.ensureConnection();
+    const convModel = this.convModel();
+    const interrupted = await convModel.reconcileInterruptedTitleClaims();
+    const repaired = await convModel.repairLegacyUserTitles();
+    return { interrupted, repaired };
   }
 
   /** Update the projection after any message persistence. */
@@ -378,10 +514,20 @@ export class AIChatConversationModule extends BaseModule {
     await this.convModel().createProjection({
       conversationId: newConversationId,
       workspaceKey: source?.workspaceKey ?? null,
+      // Copied nonmanual titles become legacy/suppressed on the duplicate;
+      // neither copy starts a naming job for copied history (titles §11).
       title: source?.title ?? null,
+      titleSource: "legacy",
+      titleGenerationStatus: "suppressed",
       preview: source?.preview ?? "",
       createdAt: new Date(),
     });
+    if (source?.titleIsUserSet && source.title) {
+      // Manual ownership survives duplication.
+      await this
+        .convModel()
+        .renameWithOwnership(newConversationId, source.title);
+    }
     return newConversationId;
   }
 
@@ -452,18 +598,23 @@ export class AIChatConversationModule extends BaseModule {
           preview: excerpt(conv.lastMessage, PREVIEW_EXCERPT_MAX),
           createdAt: conv.createdAt,
         });
-        // Repair counters/timestamps in one pass after creation.
+        // Repair counters/timestamps in one pass after creation. The update
+        // is column-scoped so a concurrent title write can never be rolled
+        // back by stale title columns (titles design §5.3 writer audit).
         const projection = await convModel.getByConversationId(
           conv.conversationId
         );
         if (projection) {
-          const entity = { ...projection };
-          entity.messageCount = conv.messageCount;
-          entity.lastMessageAt = conv.lastMessageTimestamp;
-          entity.lastResultAt = lastAssistantResult?.timestamp ?? null;
-          entity.lastReadAt = conv.lastMessageTimestamp; // backfilled rows start read
-          entity.updatedAt = new Date();
-          await convModel.repository.save(entity);
+          await convModel.repository.update(
+            { id: projection.id },
+            {
+              messageCount: conv.messageCount,
+              lastMessageAt: conv.lastMessageTimestamp,
+              lastResultAt: lastAssistantResult?.timestamp ?? null,
+              lastReadAt: conv.lastMessageTimestamp, // backfilled rows start read
+              updatedAt: new Date(),
+            }
+          );
         }
         changed += 1;
       } catch (err) {

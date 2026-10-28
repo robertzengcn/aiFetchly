@@ -4,6 +4,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { SqliteDb } from "@/config/SqliteDb";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
@@ -464,5 +465,164 @@ describe("AIChatTitle persistence (message pairing input)", () => {
     await seedAssistantMessage(messageModel, "v2-pair", "Sure — here is a plan.", 2);
     const page = await messageModel.getMessagesByConversation("v2-pair", 10);
     expect(page.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+});
+
+describe("AIChatTitle module policy", () => {
+  it("prepareTitleCandidate returns pending_window for greeting-only exchanges under three", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedConversation(model, "v2-win1");
+    await seedUserMessage(messageModel, "v2-win1", "hi", 1);
+    await seedAssistantMessage(messageModel, "v2-win1", "Hello! How can I help?", 2);
+    const candidate = await module.prepareTitleCandidate("v2-win1");
+    expect(candidate).toEqual({ kind: "pending_window" });
+  });
+
+  it("prepareTitleCandidate suppresses after three non-substantive exchanges with zero model calls", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedConversation(model, "v2-win2");
+    for (let i = 0; i < 3; i += 1) {
+      await seedUserMessage(messageModel, "v2-win2", i === 0 ? "Hi!" : "thanks", i * 2 + 1);
+      await seedAssistantMessage(messageModel, "v2-win2", "Sure thing.", i * 2 + 2);
+    }
+    const candidate = await module.prepareTitleCandidate("v2-win2");
+    expect(candidate).toEqual({ kind: "suppressed" });
+    const row = await model.getByConversationId("v2-win2");
+    expect(row?.titleGenerationStatus).toBe("suppressed");
+  });
+
+  it("prepareTitleCandidate picks the earliest substantive exchange and refreshes the greeting excerpt", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-win3",
+      title: "hi",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedUserMessage(messageModel, "v2-win3", "你好", 1);
+    await seedAssistantMessage(messageModel, "v2-win3", "你好！有什么可以帮你？", 2);
+    await seedUserMessage(messageModel, "v2-win3", "帮我找悉尼的牙医", 3);
+    await seedAssistantMessage(messageModel, "v2-win3", "好的，我来帮你查找。", 4);
+    const candidate = await module.prepareTitleCandidate("v2-win3");
+    expect(candidate.kind).toBe("eligible");
+    if (candidate.kind !== "eligible") return;
+    expect(candidate.userText).toContain("悉尼的牙医");
+    expect(candidate.epoch).toBe(0);
+    const row = await model.getByConversationId("v2-win3");
+    expect(row?.title).toBe("帮我找悉尼的牙医"); // excerpt refreshed
+  });
+
+  it("prepareTitleCandidate reports not_ready for manual ownership and missing rows", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedConversation(model, "v2-win4");
+    await model.renameWithOwnership("v2-win4", "Manual");
+    expect(await module.prepareTitleCandidate("v2-win4")).toEqual({
+      kind: "not_ready",
+    });
+    expect(await module.prepareTitleCandidate("v2-none")).toEqual({
+      kind: "not_ready",
+    });
+  });
+
+  it("applyManualRename returns authoritative state or missing", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedConversation(model, "v2-mr");
+    const renamed = await module.applyManualRename("v2-mr", "  Kept  ");
+    expect(renamed.outcome).toBe("renamed");
+    if (renamed.outcome !== "renamed") return;
+    expect(renamed.titleRevision).toBe(1);
+    const missing = await module.applyManualRename("v2-none", "X");
+    expect(missing).toEqual({ outcome: "missing" });
+  });
+
+  it("duplicateConversation copies manual ownership and suppresses nonmanual duplicates", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedUserMessage(messageModel, "v2-dup1", "hello world", 1);
+    await module.recordMessagePersisted({
+      conversationId: "v2-dup1",
+      isResult: false,
+      previewText: "hello world",
+      generatedTitle: "hello world",
+      timestamp: new Date(),
+    });
+    await model.renameWithOwnership("v2-dup1", "Manual Original");
+
+    const duplicateId = await module.duplicateConversation("v2-dup1");
+    expect(duplicateId).not.toBeNull();
+    const copy = await model.getByConversationId(duplicateId!);
+    expect(copy?.title).toBe("Manual Original");
+    expect(copy?.titleIsUserSet).toBe(true);
+    expect(copy?.titleSource).toBe("user");
+    expect(copy?.titleGenerationStatus).toBe("suppressed");
+
+    // Nonmanual duplicate becomes legacy/suppressed.
+    await seedUserMessage(messageModel, "v2-dup2", "second", 1);
+    await module.recordMessagePersisted({
+      conversationId: "v2-dup2",
+      isResult: false,
+      previewText: "second",
+      generatedTitle: "second",
+      timestamp: new Date(),
+    });
+    const duplicate2 = await module.duplicateConversation("v2-dup2");
+    const copy2 = await model.getByConversationId(duplicate2!);
+    expect(copy2?.title).toBe("second");
+    expect(copy2?.titleIsUserSet).toBe(false);
+    expect(copy2?.titleSource).toBe("legacy");
+    expect(copy2?.titleGenerationStatus).toBe("suppressed");
+  });
+
+  it("clearTitleLifecycle restarts pending for nonmanual and retains manual names", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedConversation(model, "v2-cl1");
+    await module.clearTitleLifecycle("v2-cl1");
+    let row = await model.getByConversationId("v2-cl1");
+    expect(row?.titleGenerationStatus).toBe("pending");
+    expect(row?.titleEpoch).toBe(1);
+
+    await seedConversation(model, "v2-cl2");
+    await model.renameWithOwnership("v2-cl2", "Kept");
+    await module.clearTitleLifecycle("v2-cl2");
+    row = await model.getByConversationId("v2-cl2");
+    expect(row?.title).toBe("Kept");
+    expect(row?.titleGenerationStatus).toBe("suppressed");
+  });
+
+  it("reconcileTitleStateOnStartup interrupts running claims and repairs legacy user rows", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await seedConversation(model, "v2-st1");
+    await model.claimTitleAttempt({
+      conversationId: "v2-st1",
+      epoch: 0,
+      revision: 0,
+      requestId: "r",
+    });
+    await model.repository.query(
+      `INSERT INTO ai_chat_conversations
+         (conversationId, title, titleIsUserSet, preview, messageCount, titleSource, titleRevision, titleEpoch, titleGenerationStatus, titleAttemptCount, updatedAt)
+       VALUES ('v2-st2', 'Old', 1, '', 0, 'legacy', 0, 0, 'suppressed', 0, CURRENT_TIMESTAMP)`
+    );
+    const result = await module.reconcileTitleStateOnStartup();
+    expect(result).toEqual({ interrupted: 1, repaired: 1 });
   });
 });

@@ -168,6 +168,9 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       conversationId: event.conversationId,
       workspaceKey: event.workspaceKey ?? existing?.workspaceKey ?? null,
       title: event.title ?? existing?.title ?? "",
+      // Titles PRD §10.3: revision-guarded once known; 0 until a versioned
+      // source (bootstrap/title event) reports one.
+      titleRevision: existing?.titleRevision ?? 0,
       preview: existing?.preview ?? "",
       lastActivityAt: event.lastActivityAt,
       unread: event.unread,
@@ -209,7 +212,9 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
 
   /** Register a locally created conversation before the first summary. */
   function upsertLocalConversation(
-    conversation: WorkspaceConversationSummary
+    conversation: Omit<WorkspaceConversationSummary, "titleRevision"> & {
+      titleRevision?: number;
+    }
   ): void {
     const existing = conversationsById.value.get(conversation.conversationId);
     if (existing) {
@@ -225,7 +230,10 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       });
       return;
     }
-    unassigned.value = [conversation, ...unassigned.value];
+    unassigned.value = [
+      { ...conversation, titleRevision: conversation.titleRevision ?? 0 },
+      ...unassigned.value,
+    ];
     rebuildConversationIndex();
   }
 

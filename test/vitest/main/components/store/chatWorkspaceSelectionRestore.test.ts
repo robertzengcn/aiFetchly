@@ -32,12 +32,13 @@ const bootstrapWorkspaceMock = vi.mocked(bootstrapWorkspace);
 
 function summary(
   conversationId: string,
-  overrides: Partial<WorkspaceConversationSummary> = {}
+  { titleRevision = 0, ...overrides }: Partial<WorkspaceConversationSummary> = {}
 ): WorkspaceConversationSummary {
   return {
     conversationId,
     workspaceKey: null,
     title: `Title ${conversationId}`,
+    titleRevision,
     preview: "",
     lastActivityAt: "2026-10-22T00:00:00.000Z",
     unread: false,
