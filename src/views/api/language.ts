@@ -1,5 +1,6 @@
 import { windowInvoke } from '@/views/utils/apirequest'
 import { LANGUAGE_PREFERENCE_GET, LANGUAGE_PREFERENCE_UPDATE } from '@/config/channellist'
+import { SUPPORTED_LANGUAGES } from '@/config/languages'
 
 /**
  * Get the current language preference from system settings
@@ -50,40 +51,16 @@ export interface LanguagePreference {
 }
 
 /**
- * Available language options
+ * Available language options (derived from the shared config so the
+ * main-process seed and this list can never drift apart).
  */
-export const LANGUAGE_OPTIONS: LanguagePreference[] = [
-    {
-        code: 'en',
-        label: 'English',
-        description: 'English language'
-    },
-    {
-        code: 'zh',
-        label: '中文',
-        description: 'Chinese language'
-    },
-    {
-        code: 'es',
-        label: 'Español',
-        description: 'Spanish language'
-    },
-    {
-        code: 'fr',
-        label: 'Français',
-        description: 'French language'
-    },
-    {
-        code: 'de',
-        label: 'Deutsch',
-        description: 'German language'
-    },
-    {
-        code: 'ja',
-        label: '日本語',
-        description: 'Japanese language'
-    }
-];
+export const LANGUAGE_OPTIONS: LanguagePreference[] = SUPPORTED_LANGUAGES.map(
+    (language) => ({
+        code: language.code as LanguageCode,
+        label: language.label,
+        description: language.description,
+    })
+);
 
 /**
  * Get language preference object by code

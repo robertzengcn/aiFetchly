@@ -92,6 +92,7 @@ export class SystemSettingGroupModel extends BaseDb {
                 }
                 for(const settingelement of sgelement.items){
                     await this.systemSettingModel.getSettingItem(settingelement.key).then(async (setting)=>{
+                        const isLanguageKey = settingelement.key === language_preference;
                         if(!setting){
                             const systemSettingEntity = new SystemSettingEntity();
                             systemSettingEntity.group = settargroup!; // Safe to use ! here since we checked above
@@ -102,11 +103,17 @@ export class SystemSettingGroupModel extends BaseDb {
                            const savedSetting = await this.systemSettingModel.insert(systemSettingEntity)
                            
                            // Initialize language options if this is the language preference setting
-                           if (settingelement.key === language_preference) {
+                           if (isLanguageKey) {
                                await this.systemSettingOptionModel.initLanguageOptions(savedSetting);
                            }
-                        }else{
+                       }else{
                             await this.systemSettingModel.updateGroup(setting, settargroup!)
+                            // Self-heal: databases created before option seeding
+                            // existed have a language row with NO option rows —
+                            // re-run the idempotent seed on every boot too.
+                            if (isLanguageKey) {
+                                await this.systemSettingOptionModel.initLanguageOptions(setting);
+                            }
                         }
                     })
                 }

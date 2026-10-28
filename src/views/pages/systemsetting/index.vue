@@ -124,6 +124,8 @@ density="compact" :value="setting.value" variant="outlined" single-line class="s
                     :value="setting.value" 
                     variant="outlined" 
                     density="compact"
+                    item-title="optionLabel"
+                    item-value="optionValue"
                     :loading="loadingSettings[setting.id]"
                       @update:model-value="updateSetting(setting.id, $event)"
                       >
