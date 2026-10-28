@@ -1721,6 +1721,30 @@ export default {
     user_ai_desktop_notify: "Desktop-Abschlussbenachrichtigung",
     "ai-desktop-notify-description":
       "Zeigt unten rechts eine Desktop-Benachrichtigung, wenn der Haupt-KI-Agent eine Antwort fertiggestellt hat oder ein Plan zur Freigabe bereit ist (nur wenn die App im Hintergrund ist).",
+    "managed-browser-group": "Verwalteter Browser",
+    "managed-browser-group-description":
+      "Einstellungen für den integrierten verwalteten Social-Browser und seinen gemeinsamen Browser-Cache.",
+    "managed-browser-enabled": "Verwalteten Browser aktivieren",
+    "managed-browser-enabled-description":
+      "Aktiviert oder deaktiviert den verwalteten Browser für neue Sitzungen.",
+    "managed-browser-cache-enabled": "Browser-Cache aktivieren",
+    "managed-browser-cache-enabled-description":
+      "Behält den gemeinsamen Browser-Cache zwischen Sitzungen, um Anmeldungen zu beschleunigen und CAPTCHAs zu reduzieren.",
+    "managed-browser-cache-max-size-mb": "Maximale Cache-Größe (MB)",
+    "managed-browser-cache-max-size-description":
+      "Maximale Größe des gemeinsamen Browser-Caches in Megabytes (zulässiger Bereich 100 bis 2048).",
+    "managed-browser-cache-clear-on-exit": "Cache beim Beenden löschen",
+    "managed-browser-cache-clear-on-exit-description":
+      "Löscht den gemeinsamen Browser-Cache beim Beenden der Anwendung.",
+    "managed-browser-2captcha-disclosure": "2Captcha-Hinweis",
+    "managed-browser-2captcha-disclosure-description":
+      "Bestätigt den Hinweis, dass 2Captcha zur Lösung unterstützter Herausforderungen verwendet wird.",
+    "managed-browser-2captcha-domains": "2Captcha autorisierte Domains",
+    "managed-browser-2captcha-domains-description":
+      "Kommagetrennte Liste von Domains, auf denen 2Captcha verwendet werden darf. Leer bedeutet keine.",
+    "managed-browser-2captcha-non-login": "2Captcha außerhalb von Anmeldungen erlauben",
+    "managed-browser-2captcha-non-login-description":
+      "Erlaubt 2Captcha, Herausforderungen zu lösen, die nicht Teil einer Anmeldung sind. Anmelde-, Sicherheits- und Zahlungsherausforderungen erfordern weiterhin eine manuelle Übergabe.",
   },
   aiMemory: {
     title: "KI-Erinnerungen",

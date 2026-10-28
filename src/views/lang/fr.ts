@@ -1714,6 +1714,30 @@ export default {
     user_ai_desktop_notify: "Notification de fin sur le bureau",
     "ai-desktop-notify-description":
       "Affiche une notification en bas à droite lorsque l'agent IA principal a terminé une réponse ou qu'un plan est prêt à être approuvé (uniquement si l'application est en arrière-plan).",
+    "managed-browser-group": "Navigateur géré",
+    "managed-browser-group-description":
+      "Paramètres du navigateur social géré intégré et de son cache de navigateur partagé.",
+    "managed-browser-enabled": "Activer le navigateur géré",
+    "managed-browser-enabled-description":
+      "Active ou désactive le navigateur géré pour les nouvelles sessions.",
+    "managed-browser-cache-enabled": "Activer le cache du navigateur",
+    "managed-browser-cache-enabled-description":
+      "Conserve le cache de navigateur partagé entre les sessions pour accélérer les connexions et réduire les CAPTCHA.",
+    "managed-browser-cache-max-size-mb": "Taille max du cache (Mo)",
+    "managed-browser-cache-max-size-description":
+      "Taille maximale du cache de navigateur partagé en mégaoctets (plage autorisée 100 à 2048).",
+    "managed-browser-cache-clear-on-exit": "Vider le cache à la fermeture",
+    "managed-browser-cache-clear-on-exit-description":
+      "Supprime le cache de navigateur partagé à la fermeture de l'application.",
+    "managed-browser-2captcha-disclosure": "Divulgation d'utilisation de 2Captcha",
+    "managed-browser-2captcha-disclosure-description":
+      "Accepter l'avis selon lequel 2Captcha est utilisé pour résoudre les défis pris en charge.",
+    "managed-browser-2captcha-domains": "Domaines autorisés pour 2Captcha",
+    "managed-browser-2captcha-domains-description":
+      "Liste de domaines (séparés par des virgules) où 2Captcha peut être utilisé. Vide signifie aucun.",
+    "managed-browser-2captcha-non-login": "Autoriser 2Captcha hors connexion",
+    "managed-browser-2captcha-non-login-description":
+      "Autorise 2Captcha à résoudre des défis qui ne font pas partie d'une connexion. Les défis de connexion, de sécurité et de paiement exigent toujours une transmission manuelle.",
   },
   aiMemory: {
     title: "Mémoires de l'IA",

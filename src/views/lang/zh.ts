@@ -1640,6 +1640,30 @@ export default {
     user_ai_desktop_notify: "桌面完成通知",
     "ai-desktop-notify-description":
       "当主 AI 代理完成回复或计划待审批时，在桌面右下角显示通知（仅在应用处于后台时）。",
+    "managed-browser-group": "托管浏览器",
+    "managed-browser-group-description":
+      "内置托管社交浏览器及其共享浏览器缓存的设置。",
+    "managed-browser-enabled": "启用托管浏览器",
+    "managed-browser-enabled-description":
+      "开启或关闭新会话所使用的托管浏览器。",
+    "managed-browser-cache-enabled": "启用浏览器缓存",
+    "managed-browser-cache-enabled-description":
+      "在会话之间保留共享浏览器缓存，以加快登录并减少验证码。",
+    "managed-browser-cache-max-size-mb": "浏览器缓存上限（MB）",
+    "managed-browser-cache-max-size-description":
+      "共享浏览器缓存的最大容量，单位 MB（允许范围 100 到 2048）。",
+    "managed-browser-cache-clear-on-exit": "退出时清除浏览器缓存",
+    "managed-browser-cache-clear-on-exit-description":
+      "应用退出时删除共享浏览器缓存。",
+    "managed-browser-2captcha-disclosure": "2Captcha 使用告知",
+    "managed-browser-2captcha-disclosure-description":
+      "确认并同意使用 2Captcha 来解决受支持的验证码挑战。",
+    "managed-browser-2captcha-domains": "2Captcha 授权域名",
+    "managed-browser-2captcha-domains-description":
+      "允许使用 2Captcha 的域名列表（逗号分隔，留空表示不允许）。",
+    "managed-browser-2captcha-non-login": "允许 2Captcha 处理非登录挑战",
+    "managed-browser-2captcha-non-login-description":
+      "允许 2Captcha 处理与登录无关的挑战。登录、安全和支付类挑战始终需要手动处理。",
   },
   aiMemory: {
     title: "AI 记忆",

@@ -1728,6 +1728,30 @@ export default {
     user_ai_desktop_notify: "Aviso de finalización en escritorio",
     "ai-desktop-notify-description":
       "Muestra un aviso en la esquina inferior derecha cuando el agente de IA principal termina una respuesta o un plan está listo para aprobar (solo si la app está en segundo plano).",
+    "managed-browser-group": "Navegador administrado",
+    "managed-browser-group-description":
+      "Ajustes del navegador social administrado integrado y de su caché de navegador compartida.",
+    "managed-browser-enabled": "Habilitar navegador administrado",
+    "managed-browser-enabled-description":
+      "Activa o desactiva el navegador administrado para las nuevas sesiones.",
+    "managed-browser-cache-enabled": "Habilitar caché del navegador",
+    "managed-browser-cache-enabled-description":
+      "Conserva la caché de navegador compartida entre sesiones para acelerar los inicios de sesión y reducir los CAPTCHA.",
+    "managed-browser-cache-max-size-mb": "Tamaño máximo de la caché (MB)",
+    "managed-browser-cache-max-size-description":
+      "Tamaño máximo de la caché de navegador compartida en megabytes (rango permitido 100 a 2048).",
+    "managed-browser-cache-clear-on-exit": "Vaciar caché al salir",
+    "managed-browser-cache-clear-on-exit-description":
+      "Elimina la caché de navegador compartida al cerrar la aplicación.",
+    "managed-browser-2captcha-disclosure": "Divulgación de uso de 2Captcha",
+    "managed-browser-2captcha-disclosure-description":
+      "Acepta el aviso de que se usa 2Captcha para resolver los desafíos compatibles.",
+    "managed-browser-2captcha-domains": "Dominios autorizados de 2Captcha",
+    "managed-browser-2captcha-domains-description":
+      "Lista de dominios separados por comas donde se permite usar 2Captcha. Vacío significa ninguno.",
+    "managed-browser-2captcha-non-login": "Permitir 2Captcha en desafíos sin inicio de sesión",
+    "managed-browser-2captcha-non-login-description":
+      "Permite que 2Captcha resuelva desafíos que no forman parte de un inicio de sesión. Los desafíos de inicio de sesión, seguridad y pago siempre requieren transferencia manual.",
   },
   aiMemory: {
     title: "Recuerdos de IA",

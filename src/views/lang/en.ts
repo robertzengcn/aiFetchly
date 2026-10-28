@@ -1740,6 +1740,30 @@ export default {
     user_ai_desktop_notify: "Desktop Completion Notice",
     "ai-desktop-notify-description":
       "Show a bottom-right desktop notice when the main AI agent finishes a reply or a plan is ready for approval (only when the app is in the background).",
+    "managed-browser-group": "Managed Browser",
+    "managed-browser-group-description":
+      "Settings for the built-in managed social browser and its shared browser cache.",
+    "managed-browser-enabled": "Enable Managed Browser",
+    "managed-browser-enabled-description":
+      "Turn the managed browser on or off for new sessions.",
+    "managed-browser-cache-enabled": "Enable Browser Cache",
+    "managed-browser-cache-enabled-description":
+      "Keep the shared browser cache between sessions to speed up logins and reduce CAPTCHA prompts.",
+    "managed-browser-cache-max-size-mb": "Browser Cache Max Size (MB)",
+    "managed-browser-cache-max-size-description":
+      "Maximum shared browser cache size in megabytes (allowed range 100 to 2048).",
+    "managed-browser-cache-clear-on-exit": "Clear Browser Cache on Exit",
+    "managed-browser-cache-clear-on-exit-description":
+      "Delete the shared browser cache when the application exits.",
+    "managed-browser-2captcha-disclosure": "2Captcha Usage Disclosure",
+    "managed-browser-2captcha-disclosure-description":
+      "Accept the disclosure that 2Captcha is used to solve supported challenges.",
+    "managed-browser-2captcha-domains": "2Captcha Authorized Domains",
+    "managed-browser-2captcha-domains-description":
+      "Comma-separated list of domains where 2Captcha may be used. Empty means none.",
+    "managed-browser-2captcha-non-login": "Allow 2Captcha for Non-Login Challenges",
+    "managed-browser-2captcha-non-login-description":
+      "Permit 2Captcha to solve challenges that are not part of a login flow. Login, security, and payment challenges always require manual handoff.",
   },
   aiMemory: {
     title: "AI Memories",

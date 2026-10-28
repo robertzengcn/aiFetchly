@@ -1696,6 +1696,30 @@ export default {
     user_ai_desktop_notify: "デスクトップ完了通知",
     "ai-desktop-notify-description":
       "メイン AI エージェントの返信完了、または計画の承認待ち時に右下へデスクトップ通知を表示します（アプリがバックグラウンドのときのみ）。",
+    "managed-browser-group": "管理ブラウザー",
+    "managed-browser-group-description":
+      "内蔵の管理ソーシャルブラウザーと共有ブラウザーキャッシュの設定。",
+    "managed-browser-enabled": "管理ブラウザーを有効化",
+    "managed-browser-enabled-description":
+      "新規セッションでの管理ブラウザーの有効/無効を切り替えます。",
+    "managed-browser-cache-enabled": "ブラウザーキャッシュを有効化",
+    "managed-browser-cache-enabled-description":
+      "セッション間で共有ブラウザーキャッシュを保持し、ログインを高速化して CAPTCHA を削減します。",
+    "managed-browser-cache-max-size-mb": "キャッシュの最大サイズ（MB）",
+    "managed-browser-cache-max-size-description":
+      "共有ブラウザーキャッシュの最大サイズ（メガバイト単位、許容範囲 100〜2048）。",
+    "managed-browser-cache-clear-on-exit": "終了時にキャッシュを削除",
+    "managed-browser-cache-clear-on-exit-description":
+      "アプリの終了時に共有ブラウザーキャッシュを削除します。",
+    "managed-browser-2captcha-disclosure": "2Captcha 利用の同意",
+    "managed-browser-2captcha-disclosure-description":
+      "対応するチャレンジの解決に 2Captcha を使用することへの同意を確認します。",
+    "managed-browser-2captcha-domains": "2Captcha 許可ドメイン",
+    "managed-browser-2captcha-domains-description":
+      "2Captcha の使用を許可するドメインのカンマ区切りリスト。空欄は許可なし。",
+    "managed-browser-2captcha-non-login": "非ログインチャレンジへの 2Captcha 許可",
+    "managed-browser-2captcha-non-login-description":
+      "ログイン以外のチャレンジに対して 2Captcha の使用を許可します。ログイン・セキュリティ・決済のチャレンジは常に手動の引き継ぎが必要です。",
   },
   aiMemory: {
     title: "AIメモリ",
