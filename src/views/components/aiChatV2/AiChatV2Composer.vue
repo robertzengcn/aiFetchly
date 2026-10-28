@@ -1964,6 +1964,11 @@ watch(
   display: flex;
   align-items: center;
   margin-left: auto;
+  /* Small breathing room between the trailing controls: while the assistant
+     streams, the Stop button renders directly beside Send and would otherwise
+     sit flush against it (user feedback 2026-10-28). Also keeps toolbar-actions
+     and stop-speaking evenly spaced from the Send control. */
+  gap: 6px;
 }
 .v2-composer__toolbar-actions {
   display: flex;

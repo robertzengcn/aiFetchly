@@ -3,6 +3,12 @@ import { mount } from "@vue/test-utils";
 import { defineComponent } from "vue";
 import { createI18n } from "vue-i18n";
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
+// Raw SFC source so the test can pin CSS layout contracts (happy-dom cannot
+// compute flex `gap` / getComputedStyle reliably) — mirrors the pattern used
+// by SkillApprovalCard.permissionPreview.test.ts.
+import composerSource from "@/views/components/aiChatV2/AiChatV2Composer.vue?raw";
+
+type ComposerProps = InstanceType<typeof AiChatV2Composer>["$props"];
 
 vi.mock("@/views/api/slashCommands", () => ({
   listSlashCommands: vi.fn(),
@@ -49,7 +55,10 @@ const TextareaStub = defineComponent({
     '<div data-testid="ai-chat-composer"><textarea :rows="$attrs.rows" :data-auto-grow="$attrs[\'auto-grow\'] !== undefined ? \'\' : undefined" :data-max-rows="$attrs[\'max-rows\']" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" @keydown="$emit(\'keydown\', $event)" /><slot name="append-inner" /></div>',
 });
 
-function mountComposer(slots: Record<string, string> = {}) {
+function mountComposer(
+  slots: Record<string, string> = {},
+  props: Partial<ComposerProps> = {}
+) {
   return mount(AiChatV2Composer, {
     global: {
       plugins: [i18n],
@@ -68,6 +77,10 @@ function mountComposer(slots: Record<string, string> = {}) {
       },
     },
     slots,
+    // Call sites pass a Partial (test props are optional); @vue/test-utils'
+    // strict mount signature wants the full prop set, which the component
+    // tolerates as undefined at runtime in tests (see the no-props mounts).
+    props: props as ComposerProps,
   });
 }
 
@@ -161,5 +174,29 @@ describe("AiChatV2Composer lower-toolbar order (PRD §13.3)", () => {
     expect(position("order-controls", "ai-chat-attach")).toBe(true);
     expect(position("ai-chat-attach", "order-spoken")).toBe(true);
     expect(position("order-spoken", "ai-chat-send")).toBe(true);
+  });
+});
+
+describe("AiChatV2Composer stop/send spacing (streaming toolbar)", () => {
+  it("renders the streaming Stop button inside the actions strip, before Send", () => {
+    const wrapper = mountComposer({}, { isStreaming: true });
+    const stop = wrapper.get('[data-testid="ai-chat-stop"]');
+    const send = wrapper.get('[data-testid="ai-chat-send"]');
+    const actions = wrapper.get(".v2-composer__actions");
+    // Stop must be the immediate left-hand neighbor of Send, inside the
+    // trailing actions strip — that adjacency is the pair the gap styles.
+    expect(actions.element.contains(stop.element)).toBe(true);
+    const relation = stop.element.compareDocumentPosition(send.element);
+    expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("pins a flex gap on the actions strip so Stop is not flush against Send", () => {
+    // happy-dom cannot resolve scoped flex `gap`, so pin the CSS contract on
+    // the raw source: the actions strip rule must declare a positive gap.
+    const rule = composerSource.match(/\.v2-composer__actions\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    const gap = rule?.[0].match(/gap:\s*(\d+)px/);
+    expect(gap).not.toBeNull();
+    expect(Number(gap?.[1])).toBeGreaterThan(0);
   });
 });
