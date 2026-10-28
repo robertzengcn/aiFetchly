@@ -303,6 +303,8 @@ AI email forwarding, Trash, and organization proposal: [product requirements](do
 
 Workspace chat generator streaming proposal: [product requirements](docs/prd/ai-chat-workspace-generator-streaming-prd.md) and [technical design](docs/prd/ai-chat-workspace-generator-streaming-technical-design.md).
 
+AI chat automatic titles and manual renaming proposal: [product requirements](docs/prd/ai-chat-automatic-titles-prd.md) and [technical design](docs/prd/ai-chat-automatic-titles-technical-design.md).
+
 The official application website is [aifetchly.com](https://www.aifetchly.com).
 
 ## Support aiFetchly
