@@ -138,7 +138,10 @@ import type {
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
-import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  AIChatPlanStateView,
+  AskUserQuestionAnswer,
+} from "@/entityTypes/aiChatPlanTypes";
 import type {
   ToolCatalog,
   ToolCatalogModeDecision,
@@ -4530,15 +4533,24 @@ export class AIChatQueryEngine {
       });
     }
 
-    // The CALLER persisted the answer before claiming; the ack message was
-    // built from it. Re-serialize the standard answered ack here from the
-    // persisted question state.
-    const answerContent = serializeToolResultContent({
-      success: true,
-      status: "answered",
-      questionId: pending.questionId,
-    });
-    void answerContent;
+    // The CALLER persisted the answer before claiming; the ack sent back to
+    // the model must carry the user's ACTUAL answers — an opaque
+    // "answered" ack forced the model to guess what was chosen (observed in
+    // the /goal flow where it fabricated "assumptions" from prior context).
+    // Read the authoritative answered question from the module layer.
+    const planModule = new AIChatPlanModule();
+    let answeredAnswers: AskUserQuestionAnswer[] | undefined;
+    try {
+      const answeredQuestion = await planModule.getQuestionById(
+        pending.questionId
+      );
+      answeredAnswers = answeredQuestion?.answers;
+    } catch (err) {
+      log.warn(
+        "[ai-chat-v2] failed to load answered question for ack:",
+        err
+      );
+    }
 
     const toolMsgIndex = pending.conversationMessages.findIndex(
       (m) => m.role === "tool" && m.tool_call_id === pending.toolCallId
@@ -4547,6 +4559,7 @@ export class AIChatQueryEngine {
       success: true,
       status: "answered",
       questionId: pending.questionId,
+      ...(answeredAnswers ? { answers: answeredAnswers } : {}),
     });
     if (toolMsgIndex >= 0) {
       pending.conversationMessages[toolMsgIndex] = {
@@ -4562,7 +4575,6 @@ export class AIChatQueryEngine {
       });
     }
 
-    const planModule = new AIChatPlanModule();
     const planState = await planModule.getPlanStateByPlanId(pending.planId);
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const allOpenAITools = [

@@ -52,11 +52,14 @@ vi.mock("@/modules/AIChatAttachmentModule", () => ({
 }));
 
 const mockGetPlanState = vi.fn().mockResolvedValue(null);
+const mockGetPlanStateByPlanId = vi.fn().mockResolvedValue(null);
+const mockGetQuestionById = vi.fn().mockResolvedValue(null);
 vi.mock("@/modules/AIChatPlanModule", () => ({
   AIChatPlanModule: vi.fn().mockImplementation(function () {
     return {
     getPlanState: mockGetPlanState,
-    getPlanStateByPlanId: vi.fn().mockResolvedValue(null),
+    getPlanStateByPlanId: mockGetPlanStateByPlanId,
+    getQuestionById: mockGetQuestionById,
     saveQuestion: vi.fn().mockResolvedValue(undefined),
     submitPlanForApproval: vi.fn().mockResolvedValue(undefined),
     answerQuestion: vi.fn().mockResolvedValue({
@@ -424,6 +427,117 @@ describe("AIChatQueryEngine lifecycle notifications + side-effect gating (Stage 
       conversationId: "v2-B",
       questionId: "question-9",
     });
+  });
+
+  it("plan-question resume injects the user's actual answers into the tool result", async () => {
+    // Regression: on resume, the engine replaced the parked "awaiting_answer"
+    // tool message with an opaque {status:"answered"} ack. The user's actual
+    // answers were persisted to the plan-question row but never reached the
+    // model, which then had to guess what was answered (observed in the /goal
+    // flow: "Assumptions I'm baking in..." with wrong assumptions). The
+    // resumed tool result must carry the persisted answers.
+    const loopInputs: AIChatQueryLoopInput[] = [];
+    const engine = createEngineWithFakeLoop((input) => {
+      loopInputs.push(input);
+      if (loopInputs.length === 1) {
+        return Promise.resolve({
+          type: "paused_for_plan_question",
+          pending: {
+            conversationId: input.conversationId,
+            assistantMessageId: input.assistantMessageId,
+            conversationMessages: [
+              {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "tool-q-1",
+                    type: "function",
+                    function: {
+                      name: "AskUserQuestion",
+                      arguments: "{}",
+                    },
+                  },
+                ],
+              },
+              {
+                role: "tool",
+                tool_call_id: "tool-q-1",
+                content: '{"success":true,"status":"awaiting_answer"}',
+              },
+            ],
+            abortController: new AbortController(),
+            request: input.request,
+            openAITools: [],
+            nextRound: 1,
+            toolCallId: "tool-q-1",
+            questionId: "question-9",
+            planId: "plan-1",
+            eventSink: { emit: () => undefined },
+          },
+        });
+      }
+      return Promise.resolve({
+        type: "completed",
+        conversationId: input.conversationId,
+        assistantMessageId: input.assistantMessageId,
+        fullContent: "plan ready",
+        finishReason: "stop",
+      });
+    });
+
+    const parked = await engine.runTurn({
+      request: { message: "plan it", conversationId: "v2-ans", mode: "plan" },
+      eventSink: makeEventCollector().sink,
+    });
+    expect(parked.type).toBe("paused_for_plan_question");
+
+    // The caller persisted the answers; the plan module exposes them via
+    // getQuestionById.
+    mockGetQuestionById.mockResolvedValue({
+      questionId: "question-9",
+      planId: "plan-1",
+      conversationId: "v2-ans",
+      status: "answered",
+      questions: [],
+      answers: [
+        { questionIndex: 0, selectedOption: "National distributors" },
+        { questionIndex: 1, selectedOption: "CSV only" },
+      ],
+    });
+    mockGetPlanStateByPlanId.mockResolvedValue({
+      planId: "plan-1",
+      conversationId: "v2-ans",
+      status: "draft",
+      title: "t",
+      objective: "o",
+      currentVersion: 0,
+    });
+
+    const claim = engine.claimPendingQuestion("v2-ans", "question-9");
+    expect(claim.status).toBe("claimed");
+    if (claim.status !== "claimed") return;
+    const outcome = await engine.resumeClaimed(claim, {
+      eventSink: makeEventCollector().sink,
+    });
+    expect(outcome.type).toBe("completed");
+
+    // Second loop invocation = the resumed turn.
+    expect(loopInputs).toHaveLength(2);
+    const resumedMessages = loopInputs[1].messages;
+    const toolMsg = resumedMessages.find(
+      (m) => m.role === "tool" && m.tool_call_id === "tool-q-1"
+    );
+    expect(toolMsg).toBeTruthy();
+    const parsed = JSON.parse(toolMsg!.content as string) as {
+      status?: string;
+      answers?: Array<{ selectedOption?: string }>;
+    };
+    expect(parsed.status).toBe("answered");
+    expect(parsed.answers).toEqual([
+      { questionIndex: 0, selectedOption: "National distributors" },
+      { questionIndex: 1, selectedOption: "CSV only" },
+    ]);
   });
 
   it("onResumed fires once when a permission resume starts executing (FR-021)", async () => {

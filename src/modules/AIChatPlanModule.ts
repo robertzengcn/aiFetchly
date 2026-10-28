@@ -305,6 +305,12 @@ export class AIChatPlanModule extends BaseModule {
     return this.toQuestionView(entity);
   }
 
+  /** Fetch a question by id (includes the persisted answers, if any). */
+  async getQuestionById(questionId: string): Promise<AIChatPlanQuestionView | null> {
+    const entity = await this.questionModel.getByQuestionId(questionId);
+    return entity ? this.toQuestionView(entity) : null;
+  }
+
   async answerQuestion(input: {
     conversationId: string;
     questionId: string;
