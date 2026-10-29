@@ -330,8 +330,14 @@ async function main() {
     console.log("[packaged-smoke] OK: window + renderer + preload + local IPC (app:info)");
 
     // GF-1 (opt-in; CI sets PKG_SMOKE_GITHUB=1): git-free public GitHub
-    // plugin install on the packaged app.
+    // plugin install on the packaged app. The production build holds the
+    // single-instance lock, so this process must exit before the second
+    // launch. Otherwise the second process is a second-instance, quits
+    // immediately, and Playwright reports "Target page, context or browser
+    // has been closed".
     if (process.env.PKG_SMOKE_GITHUB === "1") {
+      await app.close({ timeout: 15_000 });
+      app = undefined;
       const gh = await gitFreeGitHubInstall(exe);
       console.log(
         `[packaged-smoke] git-free GitHub install: ok=${gh.ok} ` +
