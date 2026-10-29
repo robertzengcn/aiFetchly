@@ -16,6 +16,7 @@ import {
   sanitizeText,
 } from "@/service/aiChatTitle/AIChatTitleText";
 import type {
+  ChatTitleFailureCode,
   ManualRenameResult,
   PreparedTitleCandidate,
 } from "@/service/aiChatTitle/AIChatTitleTypes";
@@ -388,6 +389,43 @@ export class AIChatConversationModule extends BaseModule {
   async clearTitleLifecycle(conversationId: string): Promise<void> {
     await this.ensureConnection();
     await this.convModel().clearTitleLifecycleForHistoryClear(conversationId);
+  }
+
+  /** Title-service surface: conditional single-attempt claim (design §5.1). */
+  async claimTitleAttempt(input: {
+    conversationId: string;
+    epoch: number;
+    revision: number;
+    requestId: string;
+  }): Promise<boolean> {
+    await this.ensureConnection();
+    return this.convModel().claimTitleAttempt(input);
+  }
+
+  /** Title-service surface: conditional generated-title commit (§5.2). */
+  async applyGeneratedTitle(input: {
+    conversationId: string;
+    epoch: number;
+    revision: number;
+    requestId: string;
+    title: string;
+  }): Promise<
+    | { outcome: "applied"; title: string; revision: number }
+    | { outcome: "stale" }
+    | { outcome: "missing" }
+  > {
+    await this.ensureConnection();
+    return this.convModel().applyGeneratedTitle(input);
+  }
+
+  /** Title-service surface: bounded failure record (no retry). */
+  async markTitleAttemptFailed(input: {
+    conversationId: string;
+    requestId: string;
+    failureCode: ChatTitleFailureCode;
+  }): Promise<void> {
+    await this.ensureConnection();
+    await this.convModel().markTitleAttemptFailed(input);
   }
 
   /**

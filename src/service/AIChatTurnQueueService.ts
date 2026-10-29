@@ -103,6 +103,14 @@ export interface AIChatTurnQueueServiceDeps {
   readonly pendingModule: AIChatPendingMessageModule;
   readonly eventSink: AIChatPendingEventSink;
   /**
+   * Chat-titles design §6: nonblocking notification after a queue-drained
+   * interactive turn durably completes. Fire-and-forget.
+   */
+  readonly onInteractiveTurnCompleted?: (input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+  }) => void;
+  /**
    * Builds the renderer-facing stream sink for queue-dispatched turns.
    * B06: receives the bridge's durable run id + conversation so detail
    * envelopes carry the REAL run identity (not a synthetic pending-queue
@@ -1279,6 +1287,12 @@ export class AIChatTurnQueueService {
           pendingMessageId: row.pendingMessageId,
           status: "completed",
           assistantMessageId: terminal.assistantMessageId,
+        });
+        // Chat-titles FR-02: queued interactive path reaches the common
+        // title trigger exactly once (durable completion first).
+        this.deps.onInteractiveTurnCompleted?.({
+          conversationId,
+          assistantMessageId: terminal.assistantMessageId ?? null,
         });
         await terminalGate.flush();
         // B06: background summary — terminal success (bounded, no bodies).

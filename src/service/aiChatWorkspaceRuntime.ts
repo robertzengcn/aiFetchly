@@ -2,6 +2,16 @@ import { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import type {
   ConversationSummaryEvent,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import {
+  AIChatTitleService,
+  type ResolvedTitleProvider,
+} from "@/service/AIChatTitleService";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import { AiChatApi } from "@/api/aiChatApi";
+import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 
 /**
  * Process-wide workspace event-routing singletons (design §7.5).
@@ -108,4 +118,62 @@ export function getStartupStreamImplementationConfig(): EnvAIChatStreamImplement
     startupStreamConfig = config ?? new EnvAIChatStreamImplementationConfig();
   }
   return startupStreamConfig;
+}
+
+/**
+ * Chat-titles design §6: the shared title-generation service. One instance
+ * per process; the completion owner wiring (workspace IPC + queue service)
+ * funnels completion notifications here without importing IPC modules.
+ */
+let sharedTitleService: AIChatTitleService | null = null;
+
+export function getSharedAIChatTitleService(): AIChatTitleService {
+  if (!sharedTitleService) {
+    sharedTitleService = new AIChatTitleService({
+      createModule: () => new AIChatConversationModule(),
+      resolveTitleProvider: (): ResolvedTitleProvider | null => {
+        // Design §8.4: hosted naming requires entitlement; custom-provider
+        // naming follows resolveForChat and never invokes hosted fallback.
+        const resolution = new AIProviderResolver().resolveForChat();
+        if (!resolution.canUse) return null;
+        if (resolution.kind === "local") {
+          return {
+            kind: "local",
+            config: resolution.config,
+            apiKey: resolution.apiKey,
+          };
+        }
+        return { kind: "hosted" };
+      },
+      completeTitle: (provider, request, signal) => {
+        if (provider.kind === "local") {
+          // Pinned snapshot: this client can never re-read the current
+          // global provider (titles design §8.3).
+          return new OpenAICompatibleProviderClient(
+            provider.config,
+            provider.apiKey
+          ).complete(request, { signal });
+        }
+        return new AiChatApi().openAIChatCompletion(request, { signal });
+      },
+      broadcastTitle: (event) => {
+        sharedWorkspaceEventRouter.broadcastTitleUpdate(event);
+      },
+      providerConfigVersion: () => currentProviderConfigVersion(),
+      isForegroundBusy: () => {
+        // Queued foreground work means naming must yield. (A single
+        // already-dispatched run is not visible here; the 10 s deadline
+        // bounds that overlap.)
+        return getSharedExecutionScheduler().queueDepth() > 0;
+      },
+      requestIdFactory: () => crypto.randomUUID(),
+    });
+  }
+  return sharedTitleService;
+}
+
+/** Test/DB-switch hook: drop the singleton (mirrors other runtime resets). */
+export function resetSharedAIChatTitleService(): void {
+  sharedTitleService?.resetForTesting();
+  sharedTitleService = null;
 }

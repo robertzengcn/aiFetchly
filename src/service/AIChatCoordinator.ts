@@ -105,6 +105,16 @@ export interface AIChatCoordinatorDeps {
     status: ChatRunStatus
   ) => void;
   /**
+   * Chat-titles design §6: nonblocking notification after an interactive
+   * exchange has been durably completed (assistant result persisted + run
+   * terminal state written). Fire-and-forget; title failures never
+   * propagate into the run pipeline.
+   */
+  readonly onInteractiveTurnCompleted?: (input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+  }) => void;
+  /**
    * Busy-conversation send delegation (message-queue PRD §9.2): when the
    * conversation already has a live/running turn, a new send is routed into
    * the durable pending queue instead of being rejected. Returns the
@@ -945,6 +955,14 @@ export class AIChatCoordinator {
           isResult: finalStatus === "completed",
           previewText: terminal.fullContent,
           timestamp: new Date(),
+        });
+      }
+      // Chat-titles FR-02: trigger only from durable completion of an
+      // interactive exchange (never cancelled/failed/paused paths).
+      if (finalStatus === "completed" && terminal) {
+        this.deps.onInteractiveTurnCompleted?.({
+          conversationId,
+          assistantMessageId: terminal.messageId ?? null,
         });
       }
       if (terminal) {

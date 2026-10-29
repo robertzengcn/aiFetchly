@@ -40,6 +40,7 @@ import {
   setQueueTurnDispatcher,
   setRunOwnerResumeRouter,
   sharedWorkspaceEventRouter,
+  getSharedAIChatTitleService,
 } from "@/service/aiChatWorkspaceRuntime";
 import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
@@ -113,6 +114,9 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
       // Cross-path terminal notification (shell / message-queue unification):
       // a coordinator-run terminal re-drains or holds durable rows queued
       // behind it. Failures must never break the coordinator path itself.
+      onInteractiveTurnCompleted: (input) => {
+        getSharedAIChatTitleService().notifyInteractiveTurnCompleted(input);
+      },
       onRunTerminal: (conversationId, status) => {
         if (
           status !== "completed" &&
@@ -320,6 +324,19 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // rows and workspace keys for legacy conversations.
       if (!backfillStarted) {
         backfillStarted = true;
+        // Chat-titles design §6/§11: interrupted title claims fall back
+        // permanently for their lifecycle; legacy user rows are repaired.
+        // Never enqueues naming work and never scans history for jobs.
+        try {
+          const titleReconcile =
+            await conversationModule.reconcileTitleStateOnStartup();
+          void titleReconcile;
+        } catch (err) {
+          console.warn(
+            "[ai-chat-workspace] title startup reconciliation failed:",
+            err
+          );
+        }
         // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
         // bootstrap reports runtime state (design §19.4 / FR-036).
         try {
@@ -719,6 +736,12 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid delete request");
       }
+      // Chat-titles FR-09: deletion cancels outstanding naming work; a
+      // late result can never recreate the conversation (conditional writes
+      // remain the final protection).
+      getSharedAIChatTitleService().cancelConversation(
+        parsed.data.conversationId
+      );
       // B03: never delete under authoritative execution ownership. The old
       // guard checked only the coordinator's liveRuns map, but ordinary
       // sends now dispatch through the durable queue and never populate it —

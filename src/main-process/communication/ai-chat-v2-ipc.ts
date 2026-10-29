@@ -87,6 +87,7 @@ import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import {
   getRunOwnerResumeRouter,
+  getSharedAIChatTitleService,
 } from "@/service/aiChatWorkspaceRuntime";
 import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
@@ -735,6 +736,11 @@ export function getQueueService(): AIChatTurnQueueService {
       // Audit R7-04: queue-drained turns project their durable user/assistant
       // moments into ai_chat_conversations (parity with the coordinator path).
       conversationModule: new AIChatConversationModule(),
+      // Chat-titles FR-02: drained interactive turns reach the common title
+      // trigger once, after durable completion.
+      onInteractiveTurnCompleted: (input) => {
+        getSharedAIChatTitleService().notifyInteractiveTurnCompleted(input);
+      },
     });
   }
   return queueService;
@@ -1727,6 +1733,15 @@ async function handleClearConversation(
     }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
+    // Chat-titles FR-09: clearing messages advances the title epoch (manual
+    // names survive; nonmanual titles restart a pending lifecycle) and
+    // cancels any outstanding naming work for the old epoch.
+    try {
+      await new AIChatConversationModule().clearTitleLifecycle(conversationId);
+      getSharedAIChatTitleService().cancelConversation(conversationId);
+    } catch (err) {
+      console.warn("[ai-chat-v2] title clear lifecycle failed:", err);
+    }
     aiChatQueueCounters.incrementWorkspace("ai_chat_workspace_action_total", {
       capability: "workspace",
       action: "conversation_clear",
