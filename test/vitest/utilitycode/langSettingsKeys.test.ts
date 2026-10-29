@@ -53,6 +53,7 @@ const STATIC_PAGE_KEYS: readonly string[] = [
   "ui_font_scale_larger",
   "ui_font_scale_large",
   "ui_font_scale_largest",
+  "ui_chat_font_size_invalid",
 ];
 
 /** Every group/item label key the settings page resolves through t(). */

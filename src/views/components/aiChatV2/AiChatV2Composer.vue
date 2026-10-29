@@ -1821,8 +1821,10 @@ watch(
 </script>
 
 <style scoped>
+.v2-composer :deep(.v-field) {
+  font-size: var(--app-chat-font-size, 14px);
+}
 .v2-composer {
-  position: relative;
   flex: 0 0 auto;
   position: relative;
   display: flex;

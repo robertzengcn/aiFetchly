@@ -11,6 +11,8 @@ export const user_preferences = "user_preferences";
 export const language_preference = "language_preference";
 /** Root font scale stored in system settings. Mirrored in index.html. */
 export const ui_font_scale = "ui_font_scale";
+/** Chat message and composer size, in whole pixels. */
+export const ui_chat_font_size = "ui_chat_font_size";
 export const ai_website_analysis_business_info =
   "ai_website_analysis_business_info";
 export const embedding_group = "embedding_group";
@@ -52,6 +54,12 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "1",
         description: "ui-font-scale-description",
         type: "stepper",
+      },
+      {
+        key: ui_chat_font_size,
+        value: "14",
+        description: "ui-chat-font-size-description",
+        type: "number",
       },
       {
         key: ai_website_analysis_business_info,

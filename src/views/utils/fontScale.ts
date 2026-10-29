@@ -1,4 +1,4 @@
-import { ui_font_scale } from "@/config/settinggroupInit";
+import { ui_chat_font_size, ui_font_scale } from "@/config/settinggroupInit";
 
 /**
  * Closed set of root font scales. "1" is 16px on `html`.
@@ -120,4 +120,90 @@ export function writeStoredUiFontScale(
 /** Apply the last scale saved in this browser profile. */
 export function applyStoredUiFontScale(): UiFontScaleStep {
   return applyUiFontScale(readStoredUiFontScale());
+}
+
+/** Chat reading and typing size, in whole pixels. index.html mirrors these bounds. */
+export const UI_CHAT_FONT_SIZE_STORAGE_KEY = "aifetchly.ui_chat_font_size";
+export const UI_CHAT_FONT_SIZE_SETTING_KEY = ui_chat_font_size;
+export const UI_CHAT_FONT_SIZE_MIN = 10;
+export const UI_CHAT_FONT_SIZE_MAX = 32;
+export const UI_CHAT_FONT_SIZE_DEFAULT = 14;
+
+let appliedChatFontPx = UI_CHAT_FONT_SIZE_DEFAULT;
+let chatFontWriteEpoch = 0;
+
+export function currentChatFontWriteEpoch(): number {
+  return chatFontWriteEpoch;
+}
+
+export function getAppliedUiChatFontSize(): number {
+  return appliedChatFontPx;
+}
+
+/** Accept a committed pixel size. Out-of-range and non-integers are rejected. */
+export function parseUiChatFontSizeInput(
+  value: string | null | undefined
+): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const px = Number(trimmed);
+  if (px < UI_CHAT_FONT_SIZE_MIN || px > UI_CHAT_FONT_SIZE_MAX) {
+    return null;
+  }
+  return px;
+}
+
+/** Stored values that are not a valid pixel size fall back to the default. */
+export function normalizeUiChatFontSize(
+  value: string | null | undefined
+): number {
+  return parseUiChatFontSizeInput(value) ?? UI_CHAT_FONT_SIZE_DEFAULT;
+}
+
+export function applyUiChatFontSize(
+  value: string | null | undefined
+): number {
+  const px = normalizeUiChatFontSize(value);
+  appliedChatFontPx = px;
+  if (typeof document !== "undefined" && document.documentElement) {
+    document.documentElement.style.setProperty("--app-chat-font-size", `${px}px`);
+  }
+  return px;
+}
+
+export function readStoredUiChatFontSize(): number {
+  try {
+    if (typeof localStorage === "undefined") {
+      return UI_CHAT_FONT_SIZE_DEFAULT;
+    }
+    return normalizeUiChatFontSize(
+      localStorage.getItem(UI_CHAT_FONT_SIZE_STORAGE_KEY)
+    );
+  } catch {
+    return UI_CHAT_FONT_SIZE_DEFAULT;
+  }
+}
+
+export function writeStoredUiChatFontSize(
+  value: string | null | undefined
+): number {
+  const px = normalizeUiChatFontSize(value);
+  chatFontWriteEpoch += 1;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(UI_CHAT_FONT_SIZE_STORAGE_KEY, String(px));
+    }
+  } catch {
+    // Storage can be unavailable; the in-document size still applies.
+  }
+  return applyUiChatFontSize(String(px));
+}
+
+export function applyStoredUiChatFontSize(): number {
+  return applyUiChatFontSize(String(readStoredUiChatFontSize()));
 }

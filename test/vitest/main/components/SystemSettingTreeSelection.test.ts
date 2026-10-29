@@ -43,8 +43,9 @@ const i18n = createI18n({
     en: {
       system_settings: {
         title: "System Settings",
-        ui_font_scale_decrease: "Decrease font size",
-        ui_font_scale_increase: "Increase font size",
+        ui_font_scale_decrease: "Decrease layout font size",
+        ui_font_scale_increase: "Increase layout font size",
+        ui_chat_font_size_invalid: "Enter a whole number from 10 to 32.",
         ui_font_scale_reset: "Reset",
         ui_font_scale_smaller: "Smaller",
         ui_font_scale_default: "Default",
@@ -126,7 +127,15 @@ function mountPage() {
         VDivider: true,
         VBtn: { template: "<button><slot /></button>" },
         VIcon: true,
-        VTextField: true,
+        VTextField: {
+          name: "VTextField",
+          props: {
+            modelValue: { type: [String, Number], default: "" },
+          },
+          emits: ["update:modelValue", "blur"],
+          template:
+            "<input :value='modelValue' @input=\"$emit('update:modelValue', $event.target.value)\" @blur=\"$emit('blur', $event)\" />",
+        },
         VSelect: {
           name: "VSelect",
           props: ["items", "value", "variant", "density", "itemTitle", "itemValue", "loading"],
@@ -345,7 +354,7 @@ describe("SystemSettingPage font scale stepper", () => {
     expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
       "Default"
     );
-    await wrapper.get("[aria-label='Increase font size']").trigger("click");
+    await wrapper.get("[aria-label='Increase layout font size']").trigger("click");
     await flushPromises();
 
     expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(51, "1.125");
@@ -363,7 +372,7 @@ describe("SystemSettingPage font scale stepper", () => {
     vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("0.875"));
     const wrapper = await mountFontScale();
 
-    const decrease = wrapper.get("[aria-label='Decrease font size']");
+    const decrease = wrapper.get("[aria-label='Decrease layout font size']");
     expect(decrease.attributes("disabled")).toBeDefined();
     await decrease.trigger("click");
     await flushPromises();
@@ -390,12 +399,100 @@ describe("SystemSettingPage font scale stepper", () => {
     vi.mocked(updateSystemSetting).mockRejectedValueOnce(new Error("save failed"));
     const wrapper = await mountFontScale();
 
-    await wrapper.get("[aria-label='Increase font size']").trigger("click");
+    await wrapper.get("[aria-label='Increase layout font size']").trigger("click");
     await flushPromises();
 
     expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
       "Default"
     );
     expect(localStorage.getItem("aifetchly.ui_font_scale")).toBeNull();
+  });
+});
+
+describe("SystemSettingPage chat font size", () => {
+  function chatFontGroup(value: string): SystemSettingGroupDisplay[] {
+    return [
+      {
+        id: 5,
+        name: "user_preferences",
+        description: "user-preferences-group-description",
+        items: [
+          {
+            id: 52,
+            key: "ui_chat_font_size",
+            value,
+            description: "ui-chat-font-size-description",
+            type: "number",
+          },
+        ],
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    document.documentElement.style.removeProperty("--app-chat-font-size");
+    vi.mocked(getSystemSettinglist).mockResolvedValue(chatFontGroup("14"));
+    vi.mocked(updateSystemSetting).mockResolvedValue(true);
+  });
+
+  async function mountChatFont(): Promise<ReturnType<typeof mountPage>> {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as SystemSettingPageVm;
+    vm.activeGroups = ["group:5"];
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("saves a typed pixel size and applies it to chat text", async () => {
+    const wrapper = await mountChatFont();
+    const input = wrapper.get("[data-testid='ui-chat-font-size-input']");
+
+    await input.setValue("18");
+    await input.trigger("blur");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(52, "18");
+    expect(
+      document.documentElement.style.getPropertyValue("--app-chat-font-size")
+    ).toBe("18px");
+    expect(localStorage.getItem("aifetchly.ui_chat_font_size")).toBe("18");
+    expect(wrapper.find("[data-testid='ui-chat-font-size-error']").exists()).toBe(
+      false
+    );
+  });
+
+  it("rejects a size outside 10 to 32 and keeps the saved value", async () => {
+    const wrapper = await mountChatFont();
+    const input = wrapper.get("[data-testid='ui-chat-font-size-input']");
+
+    await input.setValue("40");
+    await input.trigger("blur");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).not.toHaveBeenCalled();
+    expect(wrapper.get("[data-testid='ui-chat-font-size-error']").text()).toBe(
+      "Enter a whole number from 10 to 32."
+    );
+    expect((input.element as HTMLInputElement).value).toBe("14");
+    expect(localStorage.getItem("aifetchly.ui_chat_font_size")).toBeNull();
+  });
+
+  it("keeps the previous size when the save fails", async () => {
+    vi.mocked(updateSystemSetting).mockRejectedValueOnce(new Error("save failed"));
+    const wrapper = await mountChatFont();
+    const input = wrapper.get("[data-testid='ui-chat-font-size-input']");
+
+    await input.setValue("18");
+    await input.trigger("blur");
+    await flushPromises();
+
+    expect((input.element as HTMLInputElement).value).toBe("14");
+    expect(localStorage.getItem("aifetchly.ui_chat_font_size")).toBeNull();
+    expect(
+      document.documentElement.style.getPropertyValue("--app-chat-font-size")
+    ).toBe("");
   });
 });

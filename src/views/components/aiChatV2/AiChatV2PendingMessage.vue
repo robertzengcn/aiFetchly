@@ -260,6 +260,7 @@ function onResume(): void {
 .v2-pending__content {
   white-space: pre-wrap;
   word-break: break-word;
+  font-size: var(--app-chat-font-size, 14px);
 }
 .v2-pending__attachments {
   margin-top: 4px;

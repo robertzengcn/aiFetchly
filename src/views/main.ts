@@ -9,9 +9,13 @@ import "./permission";
 // import { createI18n } from 'vue-i18n'
 import i18n from "./lang";
 import { reportRendererError } from "@/views/api/diagnostics";
-import { applyStoredUiFontScale } from "@/views/utils/fontScale";
+import {
+  applyStoredUiChatFontSize,
+  applyStoredUiFontScale,
+} from "@/views/utils/fontScale";
 
 applyStoredUiFontScale();
+applyStoredUiChatFontSize();
 loadFonts();
 // const i18n = createI18n({
 //   // something vue-i18n options here ...

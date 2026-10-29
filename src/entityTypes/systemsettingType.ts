@@ -12,7 +12,8 @@ export interface SystemSettingDisplay {
     | "file"
     | "textarea"
     | "toggle"
-    | "stepper"; // new field for input type
+    | "stepper"
+    | "number"; // new field for input type
   options?: OptionSettingDisplay[]; // optional list of choices for select/radio
   label?: string; // optional label for checkbox
 }
@@ -46,7 +47,8 @@ export type SystemSettingdf = {
     | "toggle"
     | "file"
     | "textarea"
-    | "stepper";
+    | "stepper"
+    | "number";
   options?: OptionSettingdf[];
 };
 export type OptionSettingdf = {

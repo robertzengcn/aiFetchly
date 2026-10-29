@@ -11,6 +11,7 @@
   // User Preferences font stepper. 1 = 16px root. index.html and
   // fontScale.ts write this variable; the html rule below consumes it.
   --app-font-scale: 1;
+  --app-chat-font-size: 14px;
 
   --app-canvas: rgb(var(--v-theme-background));
   --app-shell: rgb(var(--v-theme-surface));

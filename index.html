@@ -27,6 +27,19 @@
             document.documentElement.style.setProperty("--app-font-scale", raw);
             document.documentElement.style.fontSize = (16 * Number(raw)) + "px";
           }
+          var chatRaw = localStorage.getItem("aifetchly.ui_chat_font_size");
+          var chatPx = parseInt(chatRaw, 10);
+          if (
+            chatRaw &&
+            String(chatPx) === String(Number(chatRaw)) &&
+            chatPx >= 10 &&
+            chatPx <= 32
+          ) {
+            document.documentElement.style.setProperty(
+              "--app-chat-font-size",
+              chatPx + "px"
+            );
+          }
         } catch (e) {
           /* storage unavailable before the app boots */
         }

@@ -1959,6 +1959,7 @@ const pastedChips = computed<PastedChip[]>(() => {
 .v2-message__content {
   white-space: pre-wrap;
   line-height: 1.45;
+  font-size: var(--app-chat-font-size, 14px);
 }
 .v2-message__reasoning {
   margin-top: 8px;
@@ -2002,7 +2003,7 @@ const pastedChips = computed<PastedChip[]>(() => {
   white-space: pre-wrap;
   max-height: 220px;
   overflow: auto;
-  font-size: 13px;
+  font-size: var(--app-chat-font-size, 14px);
   line-height: 1.45;
 }
 .v2-message__images {
