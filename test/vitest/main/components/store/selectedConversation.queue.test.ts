@@ -17,6 +17,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   // chatWorkspace store contract
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   // selectedConversation store contract
   cancelChatRun: vi.fn(),
   createClientRequestId: vi.fn().mockReturnValue("req-1"),

@@ -2381,6 +2381,14 @@ export default {
     draft_label: "Entwurf — Überprüfung erforderlich",
   },
   aiProvider: {
+    chatTitles: {
+      section: "Chat-Titel",
+      description: "Die automatische Benennung verwendet einen kurzen Auszug der Unterhaltung und kann etwas Anbieter-Nutzung verursachen.",
+      autoToggle: "Neue Chats automatisch benennen",
+      hostedModelHint: "Der gehostete Modus verwendet das Schlankheitsmodell des Dienstes.",
+      customModelLabel: "Titelmodell (optional)",
+      customModelHint: "Wird verwendet, um neue Chats automatisch zu benennen. Verwendet deinen konfigurierten Anbieter.",
+    },
     title: "KI-Anbieter",
     description:
       "Benutzerdefinierte Anbieter können AI Chat mit Ihrem eigenen Modell betreiben. Gehostete aiFetchly-KI-Funktionen benötigen weiterhin ein Abonnement.",
@@ -3845,6 +3853,21 @@ export default {
       deleteConfirm:
         "Diese Unterhaltung löschen? Alle Nachrichten und generierten Artefakte werden entfernt. Dies kann nicht rückgängig gemacht werden.",
       delete: "Chat löschen",
+    },
+    renameDialog: {
+      title: "Chat umbenennen",
+      label: "Chatname",
+      save: "Speichern",
+      cancel: "Abbrechen",
+      limitHint: "Max. 200 Zeichen",
+      errorEmpty: "Gib einen Namen für diesen Chat ein",
+      errorTooLong: "Der Name darf höchstens 200 Zeichen umfassen",
+      errorInvalid: "Der Name enthält nicht unterstützte Zeichen",
+      errorSaveFailed: "Umbenennen fehlgeschlagen. Bitte erneut versuchen.",
+      errorUnavailable: "Dieser Chat ist nicht mehr verfügbar",
+      saving: "Speichern…",
+      renameAction: "Chat umbenennen",
+      menuButtonLabel: "Unterhaltungsaktionen",
     },
     runStrip: {
       goal: "Ziel: {objective}",

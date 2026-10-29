@@ -54,6 +54,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   subscribeSummaryEvents: (
     callback: SummaryCallback
   ): (() => void) => {

@@ -516,8 +516,17 @@
         />
       </v-card>
     </v-dialog>
-
-    <!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
+    <!-- Chat-titles FR-06: shared rename dialog (header overflow action). -->
+    <AiChatRenameDialog
+      :model-value="headerRename.renameTargetId.value !== null"
+      :initial-title="headerRename.renameInitialTitle.value"
+      :saving="headerRename.renameSaving.value"
+      :error="headerRename.renameError.value"
+      @save="(title) => void headerRename.commitRename(title)"
+      @cancel="headerRename.cancelRename()"
+      @update:model-value="(v) => !v && headerRename.cancelRename()"
+    />
+<!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
          old bottom-left icon-button activator is gone: the task list now
          opens from the conversation-header overflow menu and anchors to
          the header "..." button. -->
@@ -606,6 +615,7 @@ import { buildUploadedAttachments } from "@/views/components/aiChatV2/aiChatV2At
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
+import AiChatRenameDialog from "./AiChatRenameDialog.vue";
 import AiChatConversationHeader from "@/views/components/aiChatWorkspace/AiChatConversationHeader.vue";
 
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
@@ -713,11 +723,13 @@ import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/ge
 import { MessageType } from "@/entityTypes/commonType";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import {
-  renameConversation,
+
   deleteConversation,
   duplicateConversation,
   exportConversation,
+
 } from "@/views/api/aiChatWorkspace";
+import { useConversationRename } from "@/views/composables/conversationRename";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useChatModelsStore } from "@/views/store/chatModels";
 import { useChatReportState } from "@/views/store/chatReportState";
@@ -764,6 +776,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
+const headerRename = useConversationRename();
 const selectedStore = useSelectedConversationStore();
 const inspector = useAppInspectorStore();
 // A02 (design §23.1): independent rollout adapter controls — each answer
@@ -3020,22 +3033,15 @@ function openProviderSettings(): void {
   void router.push({ name: "system_setting_ai_provider" });
 }
 
-async function onRename(): Promise<void> {
+function onRename(): void {
   if (!conversationId.value) return;
-  const next = await appPrompt(
-    t("workspaceChat.header.renamePrompt") || "Rename chat",
-    headerTitle.value ?? ""
+  // Chat-titles FR-06: shared dialog/composable; explicit save errors stay
+  // visible and the draft is preserved on failure (no silent swallow).
+  headerRename.openRename(
+    conversationId.value,
+    headerTitle.value ?? "",
+    document.activeElement instanceof HTMLElement ? document.activeElement : null
   );
-  if (!next || !next.trim()) return;
-  try {
-    await renameConversation({
-      conversationId: conversationId.value,
-      title: next.trim(),
-    });
-    await workspaceStore.bootstrap();
-  } catch {
-    // Non-fatal — the title stays unchanged.
-  }
 }
 
 async function onCompact(): Promise<void> {

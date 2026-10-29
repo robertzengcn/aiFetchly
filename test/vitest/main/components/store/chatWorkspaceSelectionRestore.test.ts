@@ -21,6 +21,7 @@ import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspace
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
 }));
 
 import { bootstrapWorkspace } from "@/views/api/aiChatWorkspace";

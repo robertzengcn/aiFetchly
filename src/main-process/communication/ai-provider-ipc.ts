@@ -87,9 +87,14 @@ export function registerAIProviderIpcHandlers(): void {
 
         if (mode === "local") {
           if (!req.localProvider) {
-            return denied("localProvider is required when mode is 'local'");
+            // Chat-titles FR-08: toggle-only saves are valid — the provider
+            // form itself is untouched, so its stored config must be too.
+            if (typeof req.autoChatTitlesEnabled !== "boolean") {
+              return denied("localProvider is required when mode is 'local'");
+            }
+          } else {
+            svc.saveLocalProvider(req.localProvider);
           }
-          svc.saveLocalProvider(req.localProvider);
         } else {
           // Switching to hosted: leave any saved local config intact but clear
           // local availability so the resolver does not treat local as usable.

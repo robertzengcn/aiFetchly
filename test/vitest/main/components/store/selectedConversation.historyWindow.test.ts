@@ -42,6 +42,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: (callback: SummaryCallback): (() => void) => {
+  vi.fn().mockReturnValue(() => undefined),
     summaryHandler = callback;
     return () => {
       if (summaryHandler === callback) summaryHandler = null;

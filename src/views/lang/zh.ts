@@ -2287,6 +2287,14 @@ export default {
     draft_label: "草稿 — 需要审核",
   },
   aiProvider: {
+    chatTitles: {
+      section: "聊天标题",
+      description: "自动命名会使用对话的简短摘录，并可能产生少量服务商用量。",
+      autoToggle: "自动为新聊天命名",
+      hostedModelHint: "托管模式使用服务的轻量模型。",
+      customModelLabel: "标题模型（可选）",
+      customModelHint: "用于自动为新聊天命名。使用你配置的服务商。",
+    },
     title: "AI 提供商",
     description:
       "自定义提供商可通过你自己的模型驱动 AI 对话。托管版 aiFetchly AI 功能仍需订阅。",
@@ -3627,6 +3635,21 @@ export default {
       export: "导出会话",
       duplicate: "复制会话",
       deleteConfirm: "删除该会话？所有消息和生成的产物都将被移除，且无法恢复。",
+    },
+    renameDialog: {
+      title: "重命名聊天",
+      label: "聊天名称",
+      save: "保存",
+      cancel: "取消",
+      limitHint: "最多 200 个字符",
+      errorEmpty: "请输入聊天名称",
+      errorTooLong: "名称不能超过 200 个字符",
+      errorInvalid: "名称包含不支持的字符",
+      errorSaveFailed: "重命名失败，请重试",
+      errorUnavailable: "该聊天已不存在",
+      saving: "保存中…",
+      renameAction: "重命名聊天",
+      menuButtonLabel: "会话操作",
     },
     runStrip: {
       goal: "目标：{objective}",
