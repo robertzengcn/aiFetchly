@@ -281,12 +281,6 @@ export interface AssistedInconclusiveProbe {
   readonly checkedAt: string;
 }
 
-/** Assisted-inconclusive marker threaded through the send machinery (claim + gate + fence). */
-export interface AssistedInconclusiveProbe {
-  readonly reasonCode: ReplyDetectionUnknownCode;
-  readonly checkedAt: string;
-}
-
 export class EmailReplyDeliveryService {
   private readonly draftModule = new EmailReplyDraftModule();
   private readonly revisionModule = new EmailReplyDraftRevisionModule();
@@ -1412,6 +1406,7 @@ export class EmailReplyDeliveryService {
         incrementReplyMetric("send_claim", {
           outcome: "handoff_assisted_stale",
         });
+        return;
       }
       // Owned claim, no positives, complete cluster, fresh usable negative
       // as of the coherent snapshot — proceed to SMTP immediately.
@@ -1585,10 +1580,6 @@ export class EmailReplyDeliveryService {
       messageId: input.message.id,
     });
     let verdict = this.evaluateFinalAdmission(snapshot, "gate");
-    // ASSISTED mode: `stale` (no fresh complete negative) proceeds without
-    // the excluded-refresh dance — a second probe on a deterministically-
-    // inconclusive mailbox discovers nothing new. The evaluator's
-    // ownership/positive refusals (verdict refuse) are unchanged.
     if (verdict.kind === "admit" ||
         (verdict.kind === "stale" && input.assistedProbe != null)) {
       if (verdict.kind === "stale") {

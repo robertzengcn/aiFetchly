@@ -2389,3 +2389,241 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
     expect(refusals[0]?.reason).toContain("[reply_state_conflict]");
   }, 20_000);
 });
+
+/**
+ * Assisted-inconclusive coverage (final review I-2): negative-path
+ * protections and probe economy must hold IN assisted mode.
+ *  - a positive landing mid-flight refuses at the post-claim gate (zero SMTP);
+ *  - attempt ownership is retained (same-token replay → already_processed);
+ *  - the assisted flow probes exactly ONCE (no useless refresh dance).
+ */
+describe("assisted inconclusive coverage — negatives + probe economy", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+
+  function assistedDetectionFactory(
+    result: ReplyDetectionResult
+  ): () => EmailReplyDetectionService {
+    return () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(async (input) => {
+        if (result.state === "not_replied") {
+          // Mirror production persistNegative (D1b) so a decisive negative
+          // satisfies the claim fence the same way production does.
+          await new EmailReceivedMessageModule().updateReplyEvidence({
+            id: input.messageId,
+            replyNegativeCheckAt: new Date(),
+            replyNegativeContextHash: "test-context-hash",
+            isAnswered: 0,
+            answeredFlagCheckedAt: new Date(),
+          });
+        }
+        return result;
+      });
+      return svc;
+    };
+  }
+
+  it("a sticky positive arriving before the gate refuses the assisted send with ZERO SMTP", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    let smtpCallsCount = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          smtpCallsCount += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: "Hi",
+            info: `<prov-assisted-pos-${smtpCallsCount}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: assistedDetectionFactory(probeFailed),
+    });
+    // The manual reply lands WHILE the probe was inconclusive: the message
+    // row gains sticky positive evidence before the post-claim gate runs.
+    await new EmailReceivedMessageModule().updateReplyEvidence({
+      id: messageId,
+      replyDetectedAt: new Date(),
+      replyDetectionSource: "mailbox_flag",
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date(),
+    });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    expect(smtpCallsCount).toBe(0);
+    // The refusal route is the STANDARD reply_skipped path (assisted never
+    // bypasses positive evidence).
+    const refusals = await auditModule.list({ messageId, page: 0, size: 50 });
+    const refusalRows = refusals.records.filter(
+      (r) => (r as { action: string }).action === "reply_skipped"
+    );
+    expect(refusalRows.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("assisted send retains attempt ownership: same-token replay is already_processed (no double SMTP)", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    let callCount = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          callCount += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: "Hi",
+            info: `<prov-assisted-replay-${callCount}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: assistedDetectionFactory(probeFailed),
+    });
+    const [a, b] = await Promise.all([
+      delivery.sendApprovedReply({ draftId, approvalToken: token }),
+      delivery.sendApprovedReply({ draftId, approvalToken: token }),
+    ]);
+    const sent = [a, b].filter((o) => o.status === "sent").length + [a, b].filter((o) => o.status === "already_processed").length;
+    expect(sent).toBe(2);
+    expect(callCount).toBeLessThanOrEqual(1);
+  });
+
+  it("the assisted flow probes exactly ONCE per send (no excluded refresh dance)", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    let detectCalls = 0;
+    const svc = new EmailReplyDetectionService();
+    vi.spyOn(svc, "detect").mockImplementation(async () => {
+      detectCalls += 1;
+      if (detectCalls > 1) {
+        // The assisted gate/fence must NEVER probe again — fail loudly if it
+        // does (the freshness dance would be running).
+        throw new Error("assisted flow must probe exactly once");
+      }
+      return {
+        state: "unknown",
+        replied: null,
+        source: "unavailable",
+        matchedMessageId: null,
+        reasonCode: "probe_failed",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "partial",
+      };
+    });
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => ({
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: "Hi",
+          info: `<prov-assisted-count-1@x>`,
+        }),
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: () => svc,
+    });
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("sent");
+    expect(detectCalls).toBe(1);
+  });
+
+  it("a positive landing DURING the claimed pause refuses at the gate/fence — assisted mode never swallows refusals", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    let smtpCallsCount = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          smtpCallsCount += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: "Hi",
+            info: `<prov-assisted-mid-${smtpCallsCount}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: assistedDetectionFactory(probeFailed),
+    });
+    // The sticky positive lands BETWEEN the claim (assisted, clean ledger)
+    // and the post-claim gate — exactly the window the gate exists for. Seed
+    // it on the PROTOTYPE spy before constructing the delivery service (the
+    // BaseDb connection-guard copies prototype methods onto instances at
+    // construction, so a post-construction instance spy is bypassed), inside
+    // markSubmitted, which runs immediately before the gate.
+    const originalMarkSubmitted =
+      EmailReplySendAttemptModule.prototype.markSubmitted;
+    const prototypeSpy = vi
+      .spyOn(EmailReplySendAttemptModule.prototype, "markSubmitted")
+      .mockImplementation(async function (
+        this: EmailReplySendAttemptModule,
+        attemptId: number,
+        now: Date
+      ) {
+        await originalMarkSubmitted.call(this, attemptId, now);
+        await new EmailReceivedMessageModule().updateReplyEvidence({
+          id: messageId,
+          replyDetectedAt: new Date(),
+          replyDetectionSource: "mailbox_flag",
+          isAnswered: 1,
+          answeredFlagCheckedAt: new Date(),
+        });
+      });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    prototypeSpy.mockRestore();
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    expect(smtpCallsCount).toBe(0);
+  });
+});
