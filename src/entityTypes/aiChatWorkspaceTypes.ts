@@ -115,6 +115,11 @@ export interface ConversationSummaryEvent {
    */
   readonly runOwner?: ChatRunOwner;
   readonly title?: string;
+  /**
+   * Chat-titles design §10.3: version of `title`. Once a versioned title is
+   * known, unversioned title fields cannot replace it.
+   */
+  readonly titleRevision?: number;
   readonly reason:
     | "run_queued"
     | "run_started"

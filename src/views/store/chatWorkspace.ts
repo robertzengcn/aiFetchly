@@ -5,9 +5,11 @@ import type {
   WorkspaceConversationSummary,
   WorkspaceGroupSummary,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import type { ChatTitleUpdatedEvent } from "@/service/aiChatTitle/AIChatTitleTypes";
 import {
   bootstrapWorkspace,
   subscribeSummaryEvents,
+  subscribeTitleEvents,
 } from "@/views/api/aiChatWorkspace";
 
 /**
@@ -124,6 +126,7 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
   const collapsedWorkspaceKeys = ref<Set<string>>(loadCollapsedKeys());
 
   let summaryUnsubscribe: (() => void) | null = null;
+  let titleUnsubscribe: (() => void) | null = null;
 
   function rebuildConversationIndex(): void {
     const index = new Map<string, WorkspaceConversationSummary>();
@@ -138,24 +141,68 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     conversationsById.value = index;
   }
 
-  /** Load the sidebar projection and start the summary subscription once. */
+  /**
+   * Load the sidebar projection. Event subscriptions start BEFORE the
+   * request so an update arriving mid-bootstrap cannot be lost
+   * (chat-titles design §10.3); the response then merges by revision.
+   */
   async function bootstrap(): Promise<void> {
     bootstrapError.value = null;
+    startEventSubscriptions();
     try {
       const response = await bootstrapWorkspace();
-      workspaces.value = response.workspaces;
-      unassigned.value = response.unassigned;
+      workspaces.value = mergeGroupTitles(response.workspaces);
+      unassigned.value = mergeUnassignedTitles(response.unassigned);
       rebuildConversationIndex();
       bootstrapped.value = true;
-      if (!summaryUnsubscribe) {
-        summaryUnsubscribe = subscribeSummaryEvents((event) => {
-          applySummaryEvent(event);
-        });
-      }
     } catch (err) {
       bootstrapError.value =
         err instanceof Error ? err.message : "Failed to load workspace";
     }
+  }
+
+  function startEventSubscriptions(): void {
+    if (!summaryUnsubscribe) {
+      summaryUnsubscribe = subscribeSummaryEvents((event) => {
+        applySummaryEvent(event);
+      });
+    }
+    if (!titleUnsubscribe) {
+      titleUnsubscribe = subscribeTitleEvents((event) => {
+        applyTitleUpdate(event);
+      });
+    }
+  }
+
+  /**
+   * Titles PRD §10.3: an old bootstrap response must not replace a NEWER
+   * locally known title. Merge keeps the response row but restores a local
+   * title/revision that is strictly newer.
+   */
+  function mergeConversationTitle(
+    row: WorkspaceConversationSummary
+  ): WorkspaceConversationSummary {
+    const local = conversationsById.value.get(row.conversationId);
+    if (!local) return row;
+    if (local.titleRevision > row.titleRevision) {
+      return { ...row, title: local.title, titleRevision: local.titleRevision };
+    }
+    return row;
+  }
+
+  function mergeGroupTitles(
+    groups: readonly WorkspaceGroupSummary[]
+  ): WorkspaceGroupSummary[] {
+    return groups.map((group) => ({
+      ...group,
+      conversations: group.conversations.map(mergeConversationTitle),
+    }));
+  }
+
+  function mergeUnassignedTitles(
+    rows: readonly WorkspaceConversationSummary[]
+  ): WorkspaceConversationSummary[] {
+    return rows.map(mergeConversationTitle);
   }
 
   /**
@@ -164,13 +211,24 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
    */
   function applySummaryEvent(event: ConversationSummaryEvent): void {
     const existing = conversationsById.value.get(event.conversationId);
+    // Titles PRD §10.3: apply a summary-carried title only when versioned
+    // at least as new as the stored revision; an unversioned legacy title
+    // cannot replace a versioned one (first-seen rows still accept it).
+    const storedRevision = existing?.titleRevision ?? 0;
+    const titleIsNewer =
+      event.titleRevision === undefined
+        ? existing === undefined
+        : event.titleRevision >= storedRevision;
+    const mergedTitle = event.title !== undefined && titleIsNewer;
     const updated: WorkspaceConversationSummary = {
       conversationId: event.conversationId,
       workspaceKey: event.workspaceKey ?? existing?.workspaceKey ?? null,
-      title: event.title ?? existing?.title ?? "",
-      // Titles PRD §10.3: revision-guarded once known; 0 until a versioned
-      // source (bootstrap/title event) reports one.
-      titleRevision: existing?.titleRevision ?? 0,
+      title: mergedTitle ? (event.title ?? "") : (existing?.title ?? ""),
+      titleRevision: mergedTitle
+        ? event.titleRevision !== undefined
+          ? event.titleRevision
+          : storedRevision
+        : storedRevision,
       preview: existing?.preview ?? "",
       lastActivityAt: event.lastActivityAt,
       unread: event.unread,
@@ -207,6 +265,31 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
         c.conversationId === updated.conversationId ? updated : c
       );
     }
+    rebuildConversationIndex();
+  }
+
+  /**
+   * Titles design §10.2: revision-guarded title-only update. Ignores older
+   * revisions and unknown conversations (never resurrects deleted rows).
+   */
+  function applyTitleUpdate(event: ChatTitleUpdatedEvent): void {
+    const existing = conversationsById.value.get(event.conversationId);
+    if (!existing) return;
+    if (event.titleRevision < existing.titleRevision) return;
+    const updated: WorkspaceConversationSummary = {
+      ...existing,
+      title: event.title ?? "",
+      titleRevision: event.titleRevision,
+    };
+    workspaces.value = workspaces.value.map((group) => ({
+      ...group,
+      conversations: group.conversations.map((c) =>
+        c.conversationId === updated.conversationId ? updated : c
+      ),
+    }));
+    unassigned.value = unassigned.value.map((c) =>
+      c.conversationId === updated.conversationId ? updated : c
+    );
     rebuildConversationIndex();
   }
 
@@ -377,6 +460,9 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
   function teardown(): void {
     if (summaryUnsubscribe) {
       summaryUnsubscribe();
+    }
+    if (titleUnsubscribe) {
+      titleUnsubscribe();
       summaryUnsubscribe = null;
     }
   }
@@ -432,6 +518,7 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     bootstrapError,
     bootstrap,
     applySummaryEvent,
+    applyTitleUpdate,
     upsertLocalConversation,
     markConversationReadLocally,
     requestedArtifactId,

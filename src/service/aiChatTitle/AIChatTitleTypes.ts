@@ -53,11 +53,9 @@ export interface ChatTitleUpdatedEvent {
 }
 
 /** Authoritative rename result surfaced through IPC after commit. */
-export interface ManualRenameResult {
-  readonly outcome: "renamed" | "missing";
-  readonly title?: string;
-  readonly titleRevision?: number;
-}
+export type ManualRenameResult =
+  | { readonly outcome: "renamed"; readonly title: string; readonly titleRevision: number }
+  | { readonly outcome: "missing" };
 
 /**
  * Result of evaluating the first-three-completed-exchanges window

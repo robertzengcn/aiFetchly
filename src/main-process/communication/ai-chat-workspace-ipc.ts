@@ -715,11 +715,31 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         return denied("Invalid rename request");
       }
       const conversationModule = new AIChatConversationModule();
-      const renamed = await conversationModule.rename(
+      // Chat-titles FR-06/§10.1: authoritative versioned metadata after an
+      // atomic manual write. A missing row is a stable failure — the
+      // renderer reports the chat as unavailable, never as a silent no-op.
+      const result = await conversationModule.applyManualRename(
         parsed.data.conversationId,
         parsed.data.title
       );
-      return ok({ renamed });
+      if (result.outcome === "missing") {
+        return denied("conversation_not_found");
+      }
+      // Persist before publishing (invariant 4): the title event carries the
+      // committed revision so every renderer converges to it.
+      eventRouter.broadcastTitleUpdate({
+        conversationId: parsed.data.conversationId,
+        title: result.title,
+        titleRevision: result.titleRevision,
+        titleSource: "user",
+      });
+      return ok({
+        renamed: true,
+        conversationId: parsed.data.conversationId,
+        title: result.title,
+        titleRevision: result.titleRevision,
+        titleSource: "user",
+      });
     } catch (err) {
       return denied(userSafeError(err));
     }

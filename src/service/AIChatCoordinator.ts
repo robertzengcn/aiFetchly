@@ -1294,6 +1294,7 @@ export class AIChatCoordinator {
     // them too), so this stays within the status-metadata-only contract.
     // The lookup must never block the status broadcast itself.
     let title: string | undefined;
+    let titleRevision: number | undefined;
     try {
       const projection =
         await this.deps.conversationModule.getConversationProjection(
@@ -1301,6 +1302,7 @@ export class AIChatCoordinator {
         );
       if (projection?.title) {
         title = projection.title;
+        titleRevision = projection.titleRevision;
       }
     } catch (err) {
       console.warn("[ai-chat-workspace] summary title lookup failed:", err);
@@ -1317,6 +1319,9 @@ export class AIChatCoordinator {
       // fact so the selected store treats these as bindable.
       runOwner: "interactive",
       ...(title !== undefined ? { title } : {}),
+      ...(title !== undefined && titleRevision !== undefined
+        ? { titleRevision }
+        : {}),
       reason,
     });
   }
