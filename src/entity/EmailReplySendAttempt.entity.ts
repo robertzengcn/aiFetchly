@@ -29,57 +29,57 @@ import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliab
 @Index(["status", "claimedAt"])
 export class EmailReplySendAttemptEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /** Deterministic key over (draftId, revisionId, approvedHash) — §15.3. */
   @Column("varchar", { length: 64 })
-  idempotencyKey: string;
+  idempotencyKey!: string;
 
   @Column("integer")
-  draftId: number;
+  draftId!: number;
 
   @Column("integer")
-  revisionId: number;
+  revisionId!: number;
 
   @Column("integer")
-  approvalId: number;
+  approvalId!: number;
 
   @Column("integer")
-  messageId: number;
+  messageId!: number;
 
   /** Conversation the inbound message belongs to. Nullable until Milestone 2. */
   @Column("integer", { nullable: true })
-  conversationId: number | null;
+  conversationId!: number | null;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column("varchar", { length: 320 })
-  senderAddress: string;
+  senderAddress!: string;
 
   @Column("varchar", { length: 320 })
-  recipientAddress: string;
+  recipientAddress!: string;
 
   @Column("varchar", { length: 30 })
-  status: EmailReplySendAttemptStatus;
+  status!: EmailReplySendAttemptStatus;
 
   @Column("datetime")
-  claimedAt: Date;
+  claimedAt!: Date;
 
   @Column("datetime", { nullable: true })
-  submittedAt: Date | null;
+  submittedAt!: Date | null;
 
   @Column("datetime", { nullable: true })
-  completedAt: Date | null;
+  completedAt!: Date | null;
 
   /** Provider message id, stored on success when the provider returns one. */
   @Column("varchar", { length: 998, nullable: true })
-  providerMessageId: string | null;
+  providerMessageId!: string | null;
 
   @Column("varchar", { length: 50, nullable: true })
-  failureCode: string | null;
+  failureCode!: string | null;
 
   /** Sanitized, length-bounded diagnostic. No credentials or raw SMTP dumps. */
   @Column("text", { nullable: true })
-  sanitizedError: string | null;
+  sanitizedError!: string | null;
 }

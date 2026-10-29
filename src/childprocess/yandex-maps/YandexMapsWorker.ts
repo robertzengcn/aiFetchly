@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 /**
  * Yandex Maps Worker -- Puppeteer-based child process scraper.
  *
@@ -10,7 +11,13 @@
  */
 
 import { type Browser, type Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
+import {
+  yandexMapsWorkerInboundSchema,
+  type YandexMapsWorkerInbound,
+} from "@/schemas/worker/yandexMaps";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { BrowserManager } from "@/modules/browserManager";
 import type {
   YandexMapsSearchResult,
@@ -54,6 +61,13 @@ interface ProgressMessage {
   message: string;
 }
 
+/** Worker -> parent browser-identity report (design §7, T01). */
+interface DescendantReportMessage {
+  type: "descendant-report";
+  pid: number;
+  label: string;
+}
+
 interface ResultMessage {
   type: "result";
   requestId: string;
@@ -73,7 +87,9 @@ let isCancelled = false;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function send(msg: ProgressMessage | ResultMessage): void {
+function send(
+  msg: ProgressMessage | ResultMessage | DescendantReportMessage
+): void {
   if (process.send) {
     process.send(msg);
   }
@@ -129,10 +145,10 @@ async function applyCookies(page: Page, cookies: unknown[]): Promise<void> {
       };
       await page.setCookie(cookieData);
     } catch (err) {
-      console.error("[YandexMapsWorker] Failed to set cookie:", err);
+      log.error("[YandexMapsWorker] Failed to set cookie:", err);
     }
   }
-  console.log(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
+  log.info(`[YandexMapsWorker] Applied ${cookies.length} cookies`);
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +430,15 @@ const DETAIL_PANEL_SELECTORS = [
 // ---------------------------------------------------------------------------
 
 async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
+  if (shutdownResponder.isShuttingDown()) {
+    send({
+      type: "result",
+      requestId: msg.requestId,
+      success: false,
+      error: "Worker is shutting down",
+    });
+    return;
+  }
   const { requestId, query, location, maxResults, showBrowser, language } = msg;
   isCancelled = false;
 
@@ -443,6 +468,17 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
     browser = await browserManager.launchWithStealth({
       headless: !showBrowser,
     });
+
+    // T01 (design §7): report the browser's identity to the parent at
+    // launch so force verification can see it even if this worker dies.
+    const browserPid = browser.process()?.pid;
+    if (browserPid !== undefined) {
+      send({
+        type: "descendant-report",
+        pid: browserPid,
+        label: "browser",
+      } as DescendantReportMessage);
+    }
 
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
@@ -519,7 +555,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           }
         });
       });
-      console.log(
+      log.info(
         `[YandexMapsWorker] Proxy rotation enabled with ${proxies.length} proxy(ies). Initial: ${proxies[0].host}:${proxies[0].port}`
       );
     }
@@ -961,7 +997,7 @@ async function scrapeYandexMaps(msg: StartMessage): Promise<void> {
           consecutiveSkips++;
         }
       } catch (err) {
-        console.error(
+        log.error(
           "[YandexMapsWorker] Error extracting card:",
           err instanceof Error ? err.message : err
         );
@@ -1301,7 +1337,35 @@ function buildSummary(
 // Message handler
 // ---------------------------------------------------------------------------
 
-process.on("message", (msg: WorkerMessage) => {
+process.on("message", (raw: unknown) => {
+  // §7 graceful shutdown (design §7): ack, then exit within the parent's
+  // budget. Parent observes exit + force-verifies (ack is not exit proof).
+  if (shutdownResponder.handle(raw)) return;
+});
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => {
+    process.send?.(message);
+  },
+  // T01 (design §7): close the owned Puppeteer browser before exit.
+  closeOwnedResources: async () => {
+    const owned = browser;
+    browser = null;
+    if (owned) {
+      await owned.close().catch(() => undefined);
+    }
+  },
+});
+
+process.on("message", (raw: unknown) => {
+  const validation = parseWorkerMessage<YandexMapsWorkerInbound>(
+    raw,
+    yandexMapsWorkerInboundSchema()
+  );
+  if (!validation.success) {
+    log.warn("[YandexMapsWorker] dropped malformed message:", validation.error);
+    return;
+  }
+  const msg = validation.data as unknown as WorkerMessage;
   if (msg.type === "start") {
     scrapeYandexMaps(msg).catch((err: unknown) => {
       send({
@@ -1321,7 +1385,7 @@ process.on("message", (msg: WorkerMessage) => {
       browser
         .close()
         .catch((err: unknown) => {
-          console.error(
+          log.error(
             "[YandexMapsWorker] Error closing browser during cancel:",
             err
           );

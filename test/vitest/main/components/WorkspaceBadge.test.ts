@@ -4,6 +4,15 @@ import { createI18n } from "vue-i18n";
 import WorkspaceBadge from "@/views/components/aiChatV2/WorkspaceBadge.vue";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
 
+/**
+ * FR-WS-002/003/007: the workspace chooser badge must render the complete
+ * state model — loading, none selected (explicit Choose action + context),
+ * pending approval, approved (name + icon/text status + shortened path),
+ * revoked, and must block Choose/Change with a visible localized reason while
+ * a run is active. Status is never conveyed by color alone: every state
+ * asserts its text.
+ */
+
 const i18n = createI18n({
   legacy: false,
   locale: "en",
@@ -13,45 +22,200 @@ const i18n = createI18n({
         badgeLabel: "Workspace",
         notSet: "No workspace set",
         changeFolder: "Change folder",
+        removeAction: "Remove workspace",
+        chooseAction: "Choose workspace",
+        chooseHint: "Pick a folder for this conversation's workspace.",
+        loading: "Loading workspace…",
+        statusApproved: "Approved",
+        statusPending: "Pending approval",
+        statusRevoked: "Access revoked",
+        busyReason: "Available after current run",
       },
+      workspaceMemory: { memoryAction: "Memory" },
     },
   },
 });
 
-function mountBadge(workspace: WorkspaceSummary | null) {
+function workspace(
+  overrides: Partial<WorkspaceSummary> = {}
+): WorkspaceSummary {
+  return {
+    id: 7,
+    conversationId: "conv-1",
+    rootPath: "/home/user/projects/very/deeply/nested/checkout-directory",
+    label: null,
+    approvalState: "approved",
+    ...overrides,
+  };
+}
+
+function mountBadge(props: {
+  workspace: WorkspaceSummary | null;
+  memoryCount?: number;
+  loading?: boolean;
+  busy?: boolean;
+}) {
   return mount(WorkspaceBadge, {
-    props: { workspace },
+    props,
     global: {
       plugins: [i18n],
-      stubs: {
-        VIcon: true,
-      },
+      stubs: { VIcon: true },
     },
   });
 }
 
-const approvedWorkspace: WorkspaceSummary = {
-  id: 1,
-  conversationId: "conv-1",
-  rootPath: "/home/user/project",
-  label: null,
-  approvalState: "approved",
-};
+describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
+  it("renders the loading state without chooser actions", () => {
+    const wrapper = mountBadge({ workspace: null, loading: true });
+    expect(
+      wrapper.find('[data-testid="workspace-badge-loading"]').exists()
+    ).toBe(true);
+    expect(wrapper.text()).toContain("Loading workspace…");
+    expect(
+      wrapper.find('[data-testid="workspace-badge-choose"]').exists()
+    ).toBe(false);
+    expect(wrapper.find('[data-testid="workspace-badge-path"]').exists()).toBe(
+      false
+    );
+  });
 
-describe("WorkspaceBadge", () => {
-  it("requests workspace setup when the unset badge is clicked", async () => {
-    const wrapper = mountBadge(null);
+  it("renders an explicit Choose action with explanatory context when no workspace is set", async () => {
+    const wrapper = mountBadge({ workspace: null });
+    expect(wrapper.find('[data-testid="workspace-badge-unset"]').exists()).toBe(
+      true
+    );
+    expect(wrapper.text()).toContain("No workspace set");
+    expect(wrapper.text()).toContain(
+      "Pick a folder for this conversation's workspace."
+    );
+    const choose = wrapper.get('[data-testid="workspace-badge-choose"]');
+    expect(choose.text()).toContain("Choose workspace");
 
-    await wrapper.find(".workspace-badge--unset").trigger("click");
-
+    await choose.trigger("click");
     expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
   });
 
-  it("requests workspace change when the change button is clicked with a workspace set", async () => {
-    const wrapper = mountBadge(approvedWorkspace);
+  it("renders name, icon-plus-text Approved status, and a clickable shortened path without a separate Change/Choose button", () => {
+    const wrapper = mountBadge({
+      workspace: workspace({ label: "project" }),
+    });
+    expect(wrapper.find('[data-testid="workspace-badge"]').exists()).toBe(true);
+    expect(wrapper.get(".workspace-badge__name").text()).toBe("project");
+    // Status is text + icon, never color alone (FR-QUAL-004).
+    const status = wrapper.get(".workspace-badge__status");
+    expect(status.attributes("data-approval-state")).toBe("approved");
+    expect(status.text()).toContain("Approved");
+    // Path is shortened but keeps head and tail segments.
+    const path = wrapper.get(".workspace-badge__path").text();
+    expect(path).toContain("...");
+    expect(path).not.toBe(workspace().rootPath);
+    // When a workspace is set, the path itself is the chooser action:
+    // no separate Choose/Change button is rendered.
+    expect(
+      wrapper.find('[data-testid="workspace-badge-choose"]').exists()
+    ).toBe(false);
+    const pathButton = wrapper.get('[data-testid="workspace-badge-path"]');
+    expect(pathButton.element.tagName).toBe("BUTTON");
+    expect(pathButton.attributes("aria-label")).toBe("Change folder");
+  });
 
-    await wrapper.find(".workspace-badge__change").trigger("click");
+  it("falls back to the path's final segment when the workspace has no label", () => {
+    const wrapper = mountBadge({ workspace: workspace() });
+    expect(wrapper.get(".workspace-badge__name").text()).toBe(
+      "checkout-directory"
+    );
+  });
 
+  it("renders the pending-approval state as text, not color alone", () => {
+    const wrapper = mountBadge({
+      workspace: workspace({ approvalState: "pending", label: "awaiting" }),
+    });
+    const status = wrapper.get(".workspace-badge__status");
+    expect(status.attributes("data-approval-state")).toBe("pending");
+    expect(status.text()).toContain("Pending approval");
+    expect(wrapper.get(".workspace-badge__name").text()).toBe("awaiting");
+  });
+
+  it("renders the revoked state as text", () => {
+    const wrapper = mountBadge({
+      workspace: workspace({ approvalState: "revoked" }),
+    });
+    const status = wrapper.get(".workspace-badge__status");
+    expect(status.attributes("data-approval-state")).toBe("revoked");
+    expect(status.text()).toContain("Access revoked");
+  });
+
+  it("forwards the clickable path action and Memory action for an approved workspace", async () => {
+    const wrapper = mountBadge({
+      workspace: workspace(),
+      memoryCount: 3,
+    });
+    const pathButton = wrapper.get('[data-testid="workspace-badge-path"]');
+    expect(pathButton.text()).toContain("...");
+    await pathButton.trigger("click");
     expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
+
+    expect(wrapper.get(".workspace-badge__memory-count").text()).toBe("3");
+    await wrapper.get(".workspace-badge__memory").trigger("click");
+    expect(wrapper.emitted("request-open-memory")).toHaveLength(1);
+  });
+
+  it("blocks Choose/path while a run is active with a visible reason (FR-WS-007)", async () => {
+    const noWorkspace = mountBadge({ workspace: null, busy: true });
+    const choose = noWorkspace.get('[data-testid="workspace-badge-choose"]');
+    expect(choose.attributes("disabled")).toBeDefined();
+    expect(
+      noWorkspace.find('[data-testid="workspace-badge-busy-reason"]').exists()
+    ).toBe(true);
+    expect(noWorkspace.text()).toContain("Available after current run");
+    await choose.trigger("click");
+    expect(noWorkspace.emitted("request-set-workspace")).toBeUndefined();
+
+    const approved = mountBadge({ workspace: workspace(), busy: true });
+    const pathButton = approved.get('[data-testid="workspace-badge-path"]');
+    expect(pathButton.attributes("disabled")).toBeDefined();
+    expect(approved.text()).toContain("Available after current run");
+    await pathButton.trigger("click");
+    expect(approved.emitted("request-set-workspace")).toBeUndefined();
+  });
+
+  it("allows the safe transition again once no run is active", async () => {
+    const wrapper = mountBadge({ workspace: workspace(), busy: false });
+    await wrapper.get('[data-testid="workspace-badge-path"]').trigger("click");
+    expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
+    expect(
+      wrapper.find('[data-testid="workspace-badge-busy-reason"]').exists()
+    ).toBe(false);
+  });
+
+  // FR-WSP-002 remove leg: an explicit Remove affordance when a workspace is
+  // set, hidden while loading/unset, gated like the other actions (FR-WS-007).
+  it("renders an accessible Remove action when a workspace is set and emits on click", async () => {
+    const wrapper = mountBadge({ workspace: workspace() });
+    const remove = wrapper.get('[data-testid="workspace-badge-remove"]');
+    expect(remove.attributes("aria-label")).toBe("Remove workspace");
+    expect(remove.attributes("title")).toBe("Remove workspace");
+    await remove.trigger("click");
+    expect(wrapper.emitted("request-remove-workspace")).toHaveLength(1);
+  });
+
+  it("does not render the Remove action while loading or when unset", () => {
+    const loading = mountBadge({ workspace: null, loading: true });
+    expect(
+      loading.find('[data-testid="workspace-badge-remove"]').exists()
+    ).toBe(false);
+    const unset = mountBadge({ workspace: null });
+    expect(unset.find('[data-testid="workspace-badge-remove"]').exists()).toBe(
+      false
+    );
+  });
+
+  it("blocks the Remove action while a run is active (FR-WS-007)", async () => {
+    const wrapper = mountBadge({ workspace: workspace(), busy: true });
+    const remove = wrapper.get('[data-testid="workspace-badge-remove"]');
+    expect(remove.attributes("disabled")).toBeDefined();
+    expect(remove.attributes("aria-label")).toBe("Available after current run");
+    await remove.trigger("click");
+    expect(wrapper.emitted("request-remove-workspace")).toBeUndefined();
   });
 });

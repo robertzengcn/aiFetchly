@@ -1,5 +1,11 @@
+import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
+import { log } from "@/modules/Logger";
+import { ScheduleExecutionLogModel } from "@/model/ScheduleExecutionLog.model";
+import { ScheduleDependencyModel } from "@/model/ScheduleDependency.model";
 import { ScheduleManager } from "@/modules/ScheduleManager";
+import { TaskExecutorService } from "@/modules/TaskExecutorService";
 import {ScheduleTaskModule} from "@/modules/ScheduleTaskModule";
+import { ScheduleTaskModuleInterface } from "@/modules/interface/ScheduleTaskModuleInterface";
 
 import { 
     ScheduleCreateRequest, 
@@ -9,27 +15,29 @@ import {
     ExecutionHistoryResponse, 
     DependencyCreateRequest, 
     DependencyGraphResponse, 
+    DependencyValidationResponse,
+    SchedulerStatus,
     SchedulerStatusResponse
 } from "@/entityTypes/schedule-type";
 import { SortBy } from "@/entityTypes/commonType";
-import { ScheduleTaskEntity, TaskType, TriggerType } from "@/entity/ScheduleTask.entity";
-import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity";
-import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
+import { ScheduleTaskEntity, TaskType, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
+import { ExecutionStatus } from "@/entity/ScheduleExecutionLog.entity";
 //import { USERDBPATH } from "@/config/usersetting";
 import { ScheduleDependencyModule } from "@/modules/ScheduleDependencyModule";
-import { DependencyValidationResult } from "@/modules/interface/ScheduleDependencyInterface";
+import { DependencyValidationResult, ScheduleDependencyInterface } from "@/modules/interface/ScheduleDependencyInterface";
 import { ScheduleExecutionLogModule } from "@/modules/ScheduleExecutionLogModule";
-import type { ExecutionStatistics } from "@/modules/interface/ScheduleExecutionLogInterface";
 export class ScheduleController {
     private scheduleTaskModule: ScheduleTaskModule;
     private scheduleExecutionLogModule: ScheduleExecutionLogModule;
     private scheduleDependencyModule: ScheduleDependencyModule;
     private scheduleManager: ScheduleManager;
+    private taskExecutorService: TaskExecutorService;
     constructor() {
         this.scheduleTaskModule = new ScheduleTaskModule();
         this.scheduleExecutionLogModule = new ScheduleExecutionLogModule();
         this.scheduleDependencyModule = new ScheduleDependencyModule();
         this.scheduleManager = ScheduleManager.getInstance();
+        this.taskExecutorService = new TaskExecutorService();
         this.scheduleDependencyModule = new ScheduleDependencyModule();
     }
 
@@ -71,7 +79,7 @@ export class ScheduleController {
 
             return scheduleId;
         } catch (error) {
-            console.error('Failed to create schedule:', error);
+            log.error('Failed to create schedule:', error);
             throw error;
         }
     }
@@ -105,7 +113,7 @@ export class ScheduleController {
                 await this.scheduleManager.updateSchedule(updatedSchedule);
             }
         } catch (error) {
-            console.error(`Failed to update schedule ${id}:`, error);
+            log.error(`Failed to update schedule ${id}:`, error);
             throw error;
         }
     }
@@ -126,7 +134,7 @@ export class ScheduleController {
             await this.scheduleDependencyModule.deleteDependencyByParentChild(0, id); // Remove as child
             await this.scheduleDependencyModule.deleteDependencyByParentChild(id, 0); // Remove as parent
         } catch (error) {
-            console.error(`Failed to delete schedule ${id}:`, error);
+            log.error(`Failed to delete schedule ${id}:`, error);
             throw error;
         }
     }
@@ -144,7 +152,7 @@ export class ScheduleController {
                 await this.scheduleManager.addSchedule(schedule);
             }
         } catch (error) {
-            console.error(`Failed to enable schedule ${id}:`, error);
+            log.error(`Failed to enable schedule ${id}:`, error);
             throw error;
         }
     }
@@ -158,7 +166,7 @@ export class ScheduleController {
             await this.scheduleTaskModule.disableSchedule(id);
             await this.scheduleManager.removeSchedule(id);
         } catch (error) {
-            console.error(`Failed to disable schedule ${id}:`, error);
+            log.error(`Failed to disable schedule ${id}:`, error);
             throw error;
         }
     }
@@ -171,7 +179,7 @@ export class ScheduleController {
         try {
             await this.scheduleManager.pauseSchedule(id);
         } catch (error) {
-            console.error(`Failed to pause schedule ${id}:`, error);
+            log.error(`Failed to pause schedule ${id}:`, error);
             throw error;
         }
     }
@@ -184,7 +192,7 @@ export class ScheduleController {
         try {
             await this.scheduleManager.resumeSchedule(id);
         } catch (error) {
-            console.error(`Failed to resume schedule ${id}:`, error);
+            log.error(`Failed to resume schedule ${id}:`, error);
             throw error;
         }
     }
@@ -195,9 +203,9 @@ export class ScheduleController {
      */
     public async runScheduleNow(id: number): Promise<void> {
         try {
-            await this.scheduleManager.executeSchedule(id, { detach: true });
+            await this.scheduleManager.executeSchedule(id);
         } catch (error) {
-            console.error(`Failed to run schedule ${id}:`, error);
+            log.error(`Failed to run schedule ${id}:`, error);
             throw error;
         }
     }
@@ -221,7 +229,7 @@ export class ScheduleController {
                 size
             };
         } catch (error) {
-            console.error('Failed to get schedule list:', error);
+            log.error('Failed to get schedule list:', error);
             throw error;
         }
     }
@@ -254,7 +262,7 @@ export class ScheduleController {
                 }
             };
         } catch (error) {
-            console.error(`Failed to get schedule ${id}:`, error);
+            log.error(`Failed to get schedule ${id}:`, error);
             throw error;
         }
     }
@@ -278,7 +286,7 @@ export class ScheduleController {
                 size
             };
         } catch (error) {
-            console.error(`Failed to get execution history for schedule ${scheduleId}:`, error);
+            log.error(`Failed to get execution history for schedule ${scheduleId}:`, error);
             throw error;
         }
     }
@@ -320,7 +328,7 @@ export class ScheduleController {
 
             return dependencyId;
         } catch (error) {
-            console.error(`Failed to add dependency ${parentId} -> ${childId}:`, error);
+            log.error(`Failed to add dependency ${parentId} -> ${childId}:`, error);
             throw error;
         }
     }
@@ -334,7 +342,7 @@ export class ScheduleController {
         try {
             await this.scheduleDependencyModule.deleteDependencyByParentChild(parentId, childId);
         } catch (error) {
-            console.error(`Failed to remove dependency ${parentId} -> ${childId}:`, error);
+            log.error(`Failed to remove dependency ${parentId} -> ${childId}:`, error);
             throw error;
         }
     }
@@ -355,18 +363,8 @@ export class ScheduleController {
             const dependencyChain = await this.scheduleDependencyModule.getDependencyChain(scheduleId);
             
             // Build nodes and edges
-            const nodes: Array<{
-                id: number;
-                name: string;
-                type: string;
-                status: ScheduleTaskEntity["status"];
-            }> = [];
-            const edges: Array<{
-                from: number;
-                to: number;
-                condition: string;
-                delay: number;
-            }> = [];
+            const nodes: any[] = [];
+            const edges: any[] = [];
             const visited = new Set<number>();
 
             // Add the target schedule
@@ -417,7 +415,7 @@ export class ScheduleController {
 
             return { nodes, edges };
         } catch (error) {
-            console.error(`Failed to get dependency graph for schedule ${scheduleId}:`, error);
+            log.error(`Failed to get dependency graph for schedule ${scheduleId}:`, error);
             throw error;
         }
     }
@@ -432,7 +430,7 @@ export class ScheduleController {
             const validation = await this.scheduleDependencyModule.validateDependencies(scheduleId);
             return validation;
         } catch (error) {
-            console.error(`Failed to validate dependencies for schedule ${scheduleId}:`, error);
+            log.error(`Failed to validate dependencies for schedule ${scheduleId}:`, error);
             throw error;
         }
     }
@@ -444,7 +442,7 @@ export class ScheduleController {
     public getSchedulerStatus(): SchedulerStatusResponse {
         try {
             const status = this.scheduleManager.getSchedulerStatus();
-            console.log('Scheduler status:', status);
+            log.info('Scheduler status:', status);
             return {
                 isRunning: status.isRunning,
                 activeSchedules: status.activeSchedules,
@@ -453,7 +451,7 @@ export class ScheduleController {
                 nextCheckTime: status.nextCheckTime
             };
         } catch (error) {
-            console.error('Failed to get scheduler status:', error);
+            log.error('Failed to get scheduler status:', error);
             throw error;
         }
     }
@@ -465,7 +463,7 @@ export class ScheduleController {
         try {
             await this.scheduleManager.start();
         } catch (error) {
-            console.error('Failed to start scheduler:', error);
+            log.error('Failed to start scheduler:', error);
             throw error;
         }
     }
@@ -477,7 +475,7 @@ export class ScheduleController {
         try {
             await this.scheduleManager.stop();
         } catch (error) {
-            console.error('Failed to stop scheduler:', error);
+            log.error('Failed to stop scheduler:', error);
             throw error;
         }
     }
@@ -491,7 +489,7 @@ export class ScheduleController {
         try {
             return await this.scheduleTaskModule.getSchedulesByTaskType(taskType);
         } catch (error) {
-            console.error(`Failed to get schedules by task type ${taskType}:`, error);
+            log.error(`Failed to get schedules by task type ${taskType}:`, error);
             throw error;
         }
     }
@@ -501,12 +499,12 @@ export class ScheduleController {
      * @param limit Maximum number of executions to return
      * @returns Array of recent execution log entities
      */
-    public async getRecentExecutions(limit: number): Promise<ReturnType<ScheduleController['mapExecutionToResponse']>[]> {
+    public async getRecentExecutions(limit: number): Promise<any[]> {
         try {
             const executions = await this.scheduleExecutionLogModule.getRecentExecutions(limit);
             return executions.map(exec => this.mapExecutionToResponse(exec));
         } catch (error) {
-            console.error('Failed to get recent executions:', error);
+            log.error('Failed to get recent executions:', error);
             throw error;
         }
     }
@@ -516,11 +514,11 @@ export class ScheduleController {
      * @param scheduleId The schedule ID
      * @returns Execution statistics
      */
-    public async getExecutionStatistics(scheduleId: number): Promise<ExecutionStatistics> {
+    public async getExecutionStatistics(scheduleId: number): Promise<any> {
         try {
             return await this.scheduleExecutionLogModule.getExecutionStatistics(scheduleId);
         } catch (error) {
-            console.error(`Failed to get execution statistics for schedule ${scheduleId}:`, error);
+            log.error(`Failed to get execution statistics for schedule ${scheduleId}:`, error);
             throw error;
         }
     }
@@ -534,7 +532,7 @@ export class ScheduleController {
         try {
             return this.scheduleManager.calculateNextRunTime(cronExpression);
         } catch (error) {
-            console.error('Failed to calculate next run time:', error);
+            log.error('Failed to calculate next run time:', error);
             // Return a default time (1 hour from now) if calculation fails
             const defaultTime = new Date();
             defaultTime.setHours(defaultTime.getHours() + 1);
@@ -547,7 +545,7 @@ export class ScheduleController {
      * @param schedule The schedule entity
      * @returns Mapped schedule object
      */
-    private mapScheduleToResponse(schedule: ScheduleTaskEntity): Record<string, unknown> {
+    private mapScheduleToResponse(schedule: ScheduleTaskEntity): any {
         return {
             id: schedule.id,
             name: schedule.name,
@@ -576,7 +574,7 @@ export class ScheduleController {
      * @param execution The execution log entity
      * @returns Mapped execution object
      */
-    private mapExecutionToResponse(execution: ScheduleExecutionLogEntity): Record<string, unknown> {
+    private mapExecutionToResponse(execution: any): any {
         return {
             id: execution.id,
             schedule_id: execution.schedule_id,
@@ -597,7 +595,7 @@ export class ScheduleController {
      * @param dependency The dependency entity
      * @returns Mapped dependency object
      */
-    private mapDependencyToResponse(dependency: ScheduleDependencyEntity): Record<string, unknown> {
+    private mapDependencyToResponse(dependency: any): any {
         return {
             id: dependency.id,
             parent_schedule_id: dependency.parent_schedule_id,

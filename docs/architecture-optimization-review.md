@@ -7,6 +7,26 @@
 
 ---
 
+## Remediation Status (Architecture Remediation Program — 2026-07-10)
+
+> This table tracks which findings from this review have been addressed by the
+> Architecture Remediation Program (`docs/prd/architecture-remediation-prd.md`).
+> Branch: `worktree-architecture-remediation`.
+
+| Finding | § | Workstream | Status |
+|---|---|---|---|
+| `src/service/` undocumented 4th layer | 4.1 | WS-8 | ✅ Resolved — CLAUDE.md documents the four-layer reality + placement rules |
+| `synchronize: true`, dual data-access, dual driver | 4.2 | WS-3 | ✅ Migration gate + CLI shipped; `synchronize` auto-disables when baseline exists; all 18 legacy `*db.ts` removed; `SqliteVecDatabase` cleaned (typed driver, no `as any`, no dead code); entity indices added (16 hot paths); path-safe singleton |
+| Dead `ChildProcessManager`, restart loops, contract fragmentation | 4.3 | WS-4 | ⚠️ Partial — dead managers deleted + canonical managers documented (R4.1); bounded restart policy with circuit-breaker (R4.2); fatal-error handling (R4.3); in-flight job crash recovery — main re-queues on worker restart, marks failed on circuit-break (R4.4); before-quit cleanup closes the worker + its browsers gracefully (R4.5). **R4.6: all 11 worker entries validate inbound via Zod `safeParse`** (8 canonical schemas in `src/schemas/worker/` + shared `parseWorkerMessage` helper; malformed dropped, never crash). R4.7 WorkerCoordinator singleton shipped (budget cap + 5 tests). Transport unification + interface-file collapse remain. |
+| God modules, no DI, dead abstractions, factory tangle | 4.4 | WS-5 | ⚠️ Partial — `BaseModule` constructor lazy (R5.2 ✅); **R5.1 COMPLETE** — all 4 hubs (TaskExecutorService, RagSearchModule, YellowPagesOrchestrator, YellowPagesProcessManager) have constructor-injection DI + fake-substitution unit tests (the singleton uses a `createForTest` factory for test isolation). Factory consolidation (R5.4), god-file splits (R5.6) remain. |
+| Stalled Pinia migration, god components, mixed API layer | 4.5 | WS-6 | ⚠️ Partial — Pinia-only cutover complete: `vuex`/`vuex-module-decorators`/`vue-class-component`/`vue-template-compiler` dropped, setup-style stores + 18 parity tests (R6.1); API consolidated — `skills.vue`→`windowInvoke`, `ipcRenderer` gone from `src/views` (R6.4); `useApiCall` composable + first adoption (R6.5); `Iresponse` deduped to one `CommonMessage<any>` (R6.6); dead frontend code removed — `HomeView.vue`, `componets/` typo dir, empty `asyncRoutes`/permission machinery (R6.7). v1-chat retirement (R6.2, needs parity decision) + god-component splits (R6.3) remain. |
+| Logging epidemic, `any`, half-strict tsconfig, dead code | 4.6 | WS-7 | ⚠️ Drift gates — `no-console: warn` + `no-explicit-any: warn` eslint rules added; Zod mandate reconciled; `electron-store` un-aliased so prod type-checks the real package (R7.3); backend console→Logger completed — only ~24 active calls remained (the rest were commented debug), all convertible ones done (R7.4). **R7.2 COMPLETE — all three strict flags ON** (`noImplicitThis`, `strictPropertyInitialization` via 729 `!` assertions, `noImplicitAny` via 134 annotations across the codebase incl. preload/background); `tsc --noEmit` exit 0. Explicit-`any` reduction (separate from noImplicitAny) remains. |
+| Plaintext secrets, navigation bypass, unsandboxed window, exec injection, raw IPC, preload logging | 6 | WS-1 | ⚠️ Partial — nav guard (R1.2 ✅), execFile (R1.4 ✅), preload gate (R1.6 ✅), ipcRenderer lint (R1.8 ✅), SecureStore adapter + wiring behind flag (R1.1 ✅). 48/51 IPC handlers migrated to registerValidatedHandler (R1.5). Sandbox flip (R1.3) documented as compensating control. userIpc 4 (auth) deferred. |
+| CI runs 0 tests, no coverage | 7-8 | WS-2 | ✅ Resolved — blocking CI gate (vitest suite 99.7% green), coverage tooling (`@vitest/coverage-v8`), `yarn test:ci`, 5 test-bug fixes, USonar quarantine |
+| Bogus `crypto`, dead `sqlite3`, stray files | 7 | WS-0 | ✅ Resolved — `crypto`/`sqlite3`/`@types/sqlite3` removed; orphan configs deleted; gitignore broadened; timestamp files removed |
+
+---
+
 ## 1. Executive Summary
 
 aiFetchly is a **large, mature, genuinely functional** desktop application with a few **excellent seams** — a clean IPC validation wrapper, a real template-method platform-adapter pattern, fully-parity i18n, and an intact "no DB in workers" boundary. The core problem is not that it doesn't work; it's that **two migrations stalled mid-flight and the codebase now carries the weight of both worlds simultaneously**, with a third undocumented layer quietly holding the brain.

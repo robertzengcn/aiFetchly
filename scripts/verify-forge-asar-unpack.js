@@ -8,7 +8,7 @@
 "use strict";
 
 const path = require("node:path");
-const minimatch = require("minimatch");
+const { minimatch } = require("minimatch");
 
 async function loadProductionAsarUnpackDir() {
   const previousDisableAsar = process.env.FORGE_DISABLE_ASAR;

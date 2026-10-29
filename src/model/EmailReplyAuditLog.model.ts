@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import { SortBy } from "@/entityTypes/commonType";
@@ -16,13 +17,21 @@ export interface ReplyAuditLogListInput {
 }
 
 export class EmailReplyAuditLogModel extends BaseDb {
-  private repository: Repository<EmailReplyAuditLogEntity>;
+  /**
+   * Resolved per access: BaseDb rebinds `this.sqliteDb` to the live
+   * singleton before every guarded async call, so a repository captured
+   * at construction could stay bound to a replaced (never-initialized or
+   * destroyed) DataSource — the describe-scope module construction pattern
+   * in tests hits exactly that. A getter cannot go stale.
+   */
+  private get repository(): Repository<EmailReplyAuditLogEntity> {
+    return this.sqliteDb.connection.getRepository(
+      EmailReplyAuditLogEntity
+    );
+  }
 
   constructor(filepath: string) {
     super(filepath);
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplyAuditLogEntity
-    );
   }
 
   async create(entity: EmailReplyAuditLogEntity): Promise<number> {
@@ -37,7 +46,7 @@ export class EmailReplyAuditLogModel extends BaseDb {
         delayMs: 250,
         onRetry: (nextAttempt, maxAttempts, delayMs, error) => {
           const message = error instanceof Error ? error.message : String(error);
-          console.warn(
+          log.warn(
             `Reply audit log write hit a SQLite lock; retrying attempt ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${message}`
           );
         },

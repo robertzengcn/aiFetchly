@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { log } from "@/modules/Logger";
 import * as fs from 'fs';
 import type { AppInfo } from '@/entityTypes/appInfo-type';
 
@@ -25,7 +26,7 @@ export class AppInfoModule {
         };
       }
     } catch (error) {
-      console.error('Error loading package.json:', error);
+      log.error('Error loading package.json:', error);
     }
 
     // Fallback values

@@ -39,6 +39,14 @@ export function isBrowserProfileImportEnabled(): boolean {
  */
 export const EMAIL_REPLY_KILL_SWITCH_FLAG = "email_reply_kill_switch";
 
+/** Git-free GitHub plugin installation rollback flag (design §17.1):
+ *  archive acquisition is ENABLED unless the main-process Token store holds
+ *  the exact value "false" — read failures also leave it enabled, because
+ *  installation safety comes from the archive controls while a corrupt
+ *  settings store must not silently restore the native-Git dependency.
+ *  Remove after two stable releases. */
+export const GITHUB_ARCHIVE_INSTALL_FLAG = "github_archive_install_enabled";
+
 export function isEmailReplyKillSwitchOn(): boolean {
   try {
     return new Token().getValue(EMAIL_REPLY_KILL_SWITCH_FLAG) === "true";
@@ -46,6 +54,26 @@ export function isEmailReplyKillSwitchOn(): boolean {
     // Unreadable store: treat as NOT killed so a storage hiccup doesn't paralyze
     // the feature. Operators who want the switch on set it explicitly.
     return false;
+  }
+}
+
+/**
+ * Managed-browser APPLICATION RELEASE FLAG (PRD FR-SETTING-002). Separate from
+ * the user preference `managed-browser-enabled` (system_setting): this flag is
+ * the emergency rollout control. Effective enablement requires BOTH; neither
+ * can be overridden by renderer or LLM arguments. Default ON; the Token store
+ * may suspend new sessions with the explicit value "false" without rewriting
+ * the stored user preference.
+ */
+export const MANAGED_BROWSER_ENABLED_FLAG = "managed_browser_release_enabled";
+
+export function isManagedBrowserReleaseFlagEnabled(): boolean {
+  try {
+    return new Token().getValue(MANAGED_BROWSER_ENABLED_FLAG) !== "false";
+  } catch {
+    // Unreadable store: keep the release flag enabled; the user preference
+    // and remaining gates still apply.
+    return true;
   }
 }
 

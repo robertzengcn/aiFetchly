@@ -8,19 +8,19 @@ import { Order } from "./order.decorator";
 @Index(["createdAt"])
 export class AgentTaskMessageEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  agentTaskId: string;
+  agentTaskId!: string;
 
   @Order(2)
   @Column("varchar", { length: 32, nullable: false })
-  role: string;
+  role!: string;
 
   @Order(3)
   @Column("text", { nullable: false })
-  content: string;
+  content!: string;
 
   @Order(4)
   @Column("varchar", { length: 100, nullable: true })

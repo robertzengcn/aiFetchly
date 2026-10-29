@@ -1,7 +1,22 @@
 # Documentation Index
 
+## Architecture and Security
+
+- [MCP and Skill OAuth Integration Guidance](./mcp-oauth-integration-guidance.md)
+- [Secure Desktop Auth Handoff Technical Design](./custom-protocol-auth-handoff-security-fix.md)
+
 ## Product Requirements
 
+- [PRD: AI Chat Workspace and Chat V2 Capability Parity](./prd/ai-chat-workspace-v2-capability-parity-prd.md)
+- [Technical Design: AI Chat Workspace and Chat V2 Capability Parity](./prd/ai-chat-workspace-v2-capability-parity-technical-design.md)
+- [PRD: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-prd.md)
+- [Technical Design: AI Chat-First Application Shell and Composer Refinement](./prd/ai-chat-first-application-shell-technical-design.md)
+- [PRD: AI Chat Generated-Image Editing Without a Workspace](./prd/ai-chat-generated-image-editing-prd.md)
+- [Technical Design: AI Chat Generated-Image Editing Without a Workspace](./prd/ai-chat-generated-image-editing-technical-design.md)
+- [PRD: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-prd.md)
+- [Technical Design: Natural-Language Skill Installation and Portable Skill Runtime](./prd/natural-language-skill-installation-technical-design.md)
+- [PRD: Contact Verification AI Tool](./prd/contact-verification-ai-tool-prd.md)
+- [Technical Design: Contact Verification AI Tool](./prd/contact-verification-ai-tool-technical-design.md)
 - [PRD: Recoverable Large Tool Results](./superpowers/specs/2026-09-29-ai-chat-large-tool-results-prd.md)
 - [Technical Design: Recoverable Large Tool Results](./superpowers/specs/2026-09-29-ai-chat-large-tool-results-technical-design.md)
 - [PRD: Separate SMTP Login, From, and Reply-To](./prd/email-service-from-reply-to-prd.md)

@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { EmailServiceTagRelationModel } from "@/model/EmailServiceTagRelation.model";
 import type { ServiceTagView } from "@/model/EmailServiceTagRelation.model";
@@ -83,7 +84,7 @@ export class EmailServiceModule
       const encryptedService = await this.encryptCredentialsForStorage(service);
       return await this.emailServiceModel.create(encryptedService);
     } catch (error) {
-      console.error("Error creating email service:", error);
+      log.error("Error creating email service:", error);
       throw error;
     }
   }
@@ -93,7 +94,7 @@ export class EmailServiceModule
       const service = await this.emailServiceModel.read(id);
       return await this.decryptServiceCredentials(service);
     } catch (error) {
-      console.error("Error getting email service:", error);
+      log.error("Error getting email service:", error);
       throw error;
     }
   }
@@ -123,7 +124,7 @@ export class EmailServiceModule
       const encryptedService = await this.encryptCredentialsForStorage(service);
       await this.emailServiceModel.update(id, encryptedService);
     } catch (error) {
-      console.error("Error updating email service:", error);
+      log.error("Error updating email service:", error);
       throw error;
     }
   }
@@ -147,7 +148,7 @@ export class EmailServiceModule
       );
       await this.emailServiceModel.delete(id);
     } catch (error) {
-      console.error("Error deleting email service:", error);
+      log.error("Error deleting email service:", error);
       throw error;
     }
   }
@@ -156,7 +157,7 @@ export class EmailServiceModule
     try {
       await this.emailServiceModel.updateServiceStatus(id, status);
     } catch (error) {
-      console.error("Error updating email service status:", error);
+      log.error("Error updating email service status:", error);
       throw error;
     }
   }
@@ -193,7 +194,7 @@ export class EmailServiceModule
         num,
       };
     } catch (error) {
-      console.error("Error listing email services:", error);
+      log.error("Error listing email services:", error);
       throw error;
     }
   }
@@ -210,7 +211,7 @@ export class EmailServiceModule
         search
       );
     } catch (error) {
-      console.error("Error counting email services:", error);
+      log.error("Error counting email services:", error);
       throw error;
     }
   }
@@ -222,7 +223,7 @@ export class EmailServiceModule
       const service = await this.emailServiceModel.findByName(name);
       return await this.decryptServiceCredentials(service);
     } catch (error) {
-      console.error("Error finding email service by name:", error);
+      log.error("Error finding email service by name:", error);
       throw error;
     }
   }
@@ -275,7 +276,7 @@ export class EmailServiceModule
       const services = await this.emailServiceModel.findByHost(host);
       return await this.decryptServiceCredentialsList(services);
     } catch (error) {
-      console.error("Error finding email services by host:", error);
+      log.error("Error finding email services by host:", error);
       throw error;
     }
   }
@@ -291,7 +292,7 @@ export class EmailServiceModule
       );
       return decryptedServices.filter((service) => service.status === 1);
     } catch (error) {
-      console.error("Error getting active email services:", error);
+      log.error("Error getting active email services:", error);
       throw error;
     }
   }
@@ -320,7 +321,7 @@ export class EmailServiceModule
       const services = await this.emailServiceModel.listReceiveEnabled();
       return await this.decryptServiceCredentialsList(services);
     } catch (error) {
-      console.error("Error listing receive-enabled services:", error);
+      log.error("Error listing receive-enabled services:", error);
       throw error;
     }
   }
@@ -339,7 +340,7 @@ export class EmailServiceModule
         lastReceiveSyncError
       );
     } catch (error) {
-      console.error("Error updating receive sync state:", error);
+      log.error("Error updating receive sync state:", error);
       throw error;
     }
   }
@@ -391,7 +392,7 @@ export class EmailServiceModule
         folder: service.receiveFolder || "INBOX",
       };
     } catch (error) {
-      console.error("Error resolving receive connection config:", error);
+      log.error("Error resolving receive connection config:", error);
       throw error;
     }
   }
@@ -697,12 +698,12 @@ export class EmailServiceModule
       return FieldCipher.decrypt(stored, key);
     } catch (error) {
       if (error instanceof SecretKeyUnavailableError) {
-        console.warn(
+        log.warn(
           `[EmailServiceModule] decrypt ${fieldName}: secret key unavailable`,
           error.message
         );
       } else {
-        console.error(
+        log.error(
           `[EmailServiceModule] decrypt ${fieldName}: failed for service`,
           serviceId,
           error

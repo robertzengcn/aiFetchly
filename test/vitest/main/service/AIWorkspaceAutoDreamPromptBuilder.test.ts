@@ -20,7 +20,11 @@ const packets: WorkspaceAwareAutoDreamSourcePacket[] = [
     updatedAt: "2026-01-01T00:00:00Z",
     title: "Chat about tests",
     messages: [
-      { id: "m1", role: "user", content: "Run main process tests with yarn testmain" },
+      {
+        id: "m1",
+        role: "user",
+        content: "Run main process tests with yarn testmain",
+      },
     ],
     workspace: {
       workspaceId: 1,
@@ -101,7 +105,7 @@ describe("AIWorkspaceAutoDreamPromptBuilder", () => {
     expect(parsed.create[0].type).toBe("workflow");
   });
 
-  it("rejects a create whose workspaceKey is not in the valid set", () => {
+  it("rejects a create whose workspaceKey is not in the valid set when multiple workspaces are in play", () => {
     const raw = JSON.stringify({
       create: [
         {
@@ -117,7 +121,7 @@ describe("AIWorkspaceAutoDreamPromptBuilder", () => {
     });
     const parsed = parseWorkspaceAutoDreamModelOutput(
       raw,
-      new Set([WS_KEY]),
+      new Set([WS_KEY, "ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]),
       []
     );
     expect(parsed.ok).toBe(true);
@@ -173,11 +177,14 @@ describe("AIWorkspaceAutoDreamPromptBuilder", () => {
       update: [{ memoryId: "wmem-unknown", content: "x" }],
       archive: [{ memoryId: "wmem-unknown" }],
     });
-    const parsed = parseWorkspaceAutoDreamModelOutput(
-      raw,
-      new Set([WS_KEY]),
-      [view({ memoryId: "wmem-real", type: "decision", title: "t", content: "c" })]
-    );
+    const parsed = parseWorkspaceAutoDreamModelOutput(raw, new Set([WS_KEY]), [
+      view({
+        memoryId: "wmem-real",
+        type: "decision",
+        title: "t",
+        content: "c",
+      }),
+    ]);
     expect(parsed.update.length).toBe(0);
     expect(parsed.archive.length).toBe(0);
   });
@@ -187,11 +194,14 @@ describe("AIWorkspaceAutoDreamPromptBuilder", () => {
       update: [{ memoryId: "wmem-real", content: "updated content" }],
       archive: [],
     });
-    const parsed = parseWorkspaceAutoDreamModelOutput(
-      raw,
-      new Set([WS_KEY]),
-      [view({ memoryId: "wmem-real", type: "decision", title: "t", content: "c" })]
-    );
+    const parsed = parseWorkspaceAutoDreamModelOutput(raw, new Set([WS_KEY]), [
+      view({
+        memoryId: "wmem-real",
+        type: "decision",
+        title: "t",
+        content: "c",
+      }),
+    ]);
     expect(parsed.update.length).toBe(1);
     expect(parsed.update[0].content).toBe("updated content");
   });
@@ -214,5 +224,59 @@ describe("AIWorkspaceAutoDreamPromptBuilder", () => {
     );
     expect(parsed.ok).toBe(false);
     expect(parsed.error).toBe("empty");
+  });
+
+  it("extracts JSON after a reasoning preamble and markdown fence", () => {
+    const inner = JSON.stringify({
+      create: [
+        {
+          workspaceKey: WS_KEY,
+          type: "workflow",
+          title: "Main process tests",
+          content: "Run main process tests with yarn testmain.",
+          confidence: 90,
+          sourceKind: "chat_v2",
+          sourceId: "v2-1",
+          reason: "explicit user instruction",
+        },
+      ],
+      update: [],
+      archive: [],
+    });
+    const parsed = parseWorkspaceAutoDreamModelOutput(
+      `thinking through the packets...\n\`\`\`json\n${inner}\n\`\`\``,
+      new Set([WS_KEY]),
+      []
+    );
+    expect(parsed.ok).toBe(true);
+    expect(parsed.create.length).toBe(1);
+    expect(parsed.create[0].title).toBe("Main process tests");
+  });
+
+  it("defaults workspaceKey when omitted on a single-workspace run", () => {
+    const raw = JSON.stringify({
+      create: [
+        {
+          type: "decision",
+          title: "Use vitest for main tests",
+          content:
+            "The user asked to run yarn testmain for main-process tests.",
+          confidence: 80,
+          sourceKind: "chat_v2",
+          sourceId: "v2-1",
+          reason: "explicit user instruction",
+        },
+      ],
+      update: [],
+      archive: [],
+    });
+    const parsed = parseWorkspaceAutoDreamModelOutput(
+      raw,
+      new Set([WS_KEY]),
+      []
+    );
+    expect(parsed.ok).toBe(true);
+    expect(parsed.create.length).toBe(1);
+    expect(parsed.create[0].workspaceKey).toBe(WS_KEY);
   });
 });

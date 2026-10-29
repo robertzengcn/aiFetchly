@@ -1,11 +1,19 @@
 <template>
+  <AppPageShell
+    page-id="proxy-list"
+    title-key="route.proxy_list"
+    content-width="full"
+  >
+    <!-- Table (with its search/check/batch toolbar) stays domain-owned (design §13.2). -->
     <div class="tables_page">
-<ProxyTable />
+      <ProxyTable />
     </div>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
 // import router from '@/views/router';
 import { ref } from 'vue';
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue';
 import ProxyTable from '@/views/pages/proxy/widgets/ProxyTable.vue'
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
@@ -21,8 +29,8 @@ const dialog = ref(false);
         .tj_label {
             padding: 4px 8px;
             border-radius: 15px;
-            background: rgba(244, 67, 54, 0.2);
-            color: #f44336;
+            background: var(--app-danger-soft);
+            color: var(--app-danger);
         }
         .v-chip {
             margin-inline-end: 0 !important;

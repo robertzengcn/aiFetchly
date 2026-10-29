@@ -73,9 +73,16 @@ vi.mock("@/modules/WorkspaceModule", () => ({
   },
 }));
 
+// The production singleton pulls portable-memory + config-manager graphs
+// (including CJS `validator`) that this IPC unit test does not exercise.
+vi.mock("@/service/workspaceWatch/WorkspaceWatchManagerSingleton", () => ({
+  markWorkspaceApproved: vi.fn(),
+}));
+
 // --- Imports (after mocks) --------------------------------------------------
 
 import { registerWorkspaceWatchHandlers } from "@/main-process/communication/workspace-watch-ipc";
+import { setApprovedWorkspaceAcquireHook } from "@/modules/WorkspaceWatchModule";
 import {
   AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
   AIFETCHLY_WORKSPACE_WATCH_RELEASE,
@@ -120,6 +127,7 @@ describe("workspace-watch IPC handlers (CFG-02 + TRS-07 + WAT-06)", () => {
   });
 
   afterEach(() => {
+    setApprovedWorkspaceAcquireHook(null);
     resetElectronMocks();
   });
 
@@ -144,6 +152,25 @@ describe("workspace-watch IPC handlers (CFG-02 + TRS-07 + WAT-06)", () => {
     // Response carries the resolved workspaceId string so the renderer can
     // pass it back on release/preview/setTrust.
     expect(r.data).toEqual({ workspaceId: "42" });
+  });
+
+  it("acquire invokes the approved-workspace hook with the resolved root", async () => {
+    const hook = vi.fn();
+    setApprovedWorkspaceAcquireHook(hook);
+    try {
+      resolverMocks.resolve.mockResolvedValue({
+        workspaceId: 42,
+        rootPath: "/tmp/workspaces/acme",
+      });
+      await mockIpcMain.callHandler(
+        AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
+        {},
+        { conversationId: "conv-1" }
+      );
+      expect(hook).toHaveBeenCalledWith("/tmp/workspaces/acme");
+    } finally {
+      setApprovedWorkspaceAcquireHook(null);
+    }
   });
 
   it("acquire returns null when no approved workspace (CFG-02 fail-closed)", async () => {

@@ -8,6 +8,7 @@
  */
 
 import { type IpcMainInvokeEvent } from "electron";
+import { log } from "@/modules/Logger";
 import { v4 as uuidv4 } from "uuid";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { AccountSessionService } from "@/modules/AccountSessionService";
@@ -67,7 +68,7 @@ export function registerGoogleMapsHandlers(): void {
             cookies = normalizedToCookiesType(snapshot.cookies);
           }
         } catch (err) {
-          console.warn(
+          log.warn(
             "[GoogleMaps] Failed to load cookies for account",
             input.account_id,
             err
@@ -97,7 +98,7 @@ export function registerGoogleMapsHandlers(): void {
             proxies = resolved;
           }
         } catch (err) {
-          console.warn("[GoogleMaps] Failed to load proxies:", err);
+          log.warn("[GoogleMaps] Failed to load proxies:", err);
         }
       }
 
@@ -131,7 +132,7 @@ export function registerGoogleMapsHandlers(): void {
         })
         .catch((err: unknown) => {
           const errorMessage = err instanceof Error ? err.message : String(err);
-          console.error("[GoogleMaps] Search failed:", errorMessage);
+          log.error("[GoogleMaps] Search failed:", errorMessage);
           if (!senderWebContents.isDestroyed()) {
             senderWebContents.send(GOOGLE_MAPS_SEARCH_RESULT, {
               requestId,

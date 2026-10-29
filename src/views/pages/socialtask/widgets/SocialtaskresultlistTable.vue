@@ -78,7 +78,7 @@ const search = ref('');
 const $route = useRoute();
 const taskId = $route.params.id.toString();
 
-function loadItems({ page, itemsPerPage }) {
+function loadItems({ page, itemsPerPage }: { page: number; itemsPerPage: number }) {
     loading.value = true
     const fetchitem: Fetchparam = {
         id: parseInt(taskId),

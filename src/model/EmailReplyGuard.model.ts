@@ -146,14 +146,17 @@ function isUniqueConstraintInsertError(error: unknown): boolean {
  * across the unbounded LLM call between them.
  */
 export class EmailReplyGuardModel extends BaseDb {
-  private repository: Repository<EmailReplyGuardEntity>;
+  /** Resolved per access — BaseDb rebinds the live singleton before every
+   * guarded async call; a construction-time repository could stay bound to a
+   * replaced DataSource (test describe-scope module construction). */
+  private get repository(): Repository<EmailReplyGuardEntity> {
+    return this.sqliteDb.connection.getRepository(EmailReplyGuardEntity);
+  }
 
   constructor(filepath: string) {
     super(filepath);
     rejectDatabaseAccessFromWorker("EmailReplyGuardModel");
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplyGuardEntity
-    );
+
   }
 
   /**

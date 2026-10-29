@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 /**
  * Simple rate limiter for tool execution
  */
@@ -34,19 +35,19 @@ export class RateLimiter {
       const waitTime = 60000 - (now - oldestExecution);
 
       if (waitTime > 0) {
-        console.log(`Rate limit reached. Waiting ${waitTime}ms...`);
+        log.info(`Rate limit reached. Waiting ${waitTime}ms...`);
         await this.sleep(waitTime);
       }
     }
 
-    // Check concurrent limit (maxConcurrent <= 0 means "no limit").
-    // Without the > 0 guard, maxConcurrent: 0 makes this `0 >= 0` forever
-    // (the increment that would break the condition is after the loop).
+    // Check concurrent limit. A non-positive maxConcurrent means "no concurrent
+    // limit" (0 disables enforcement); without this guard, maxConcurrent === 0
+    // makes `concurrentCount >= 0` always true and acquire() busy-waits forever.
     while (
       this.config.maxConcurrent > 0 &&
       this.concurrentCount >= this.config.maxConcurrent
     ) {
-      console.log(`Concurrent limit reached. Waiting...`);
+      log.info(`Concurrent limit reached. Waiting...`);
       await this.sleep(100);
     }
 

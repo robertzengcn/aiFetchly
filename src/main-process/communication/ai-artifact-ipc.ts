@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import { ipcMain } from "electron";
 import { AIArtifactModule } from "@/modules/AIArtifactModule";
 import { AI_ARTIFACT_GET, AI_ARTIFACT_LIST } from "@/config/channellist";
@@ -81,7 +82,7 @@ async function handleGetArtifact(
     const artifact = await module.getArtifact(req.value.artifactId);
     return ok(artifact);
   } catch (err) {
-    console.error("[ai-artifact] get failed:", err);
+    log.error("[ai-artifact] get failed:", err);
     return denied(
       err instanceof Error ? err.message : "Failed to read the artifact."
     );
@@ -98,7 +99,7 @@ async function handleListArtifacts(
     const artifacts = await module.listArtifacts(req.value.conversationId);
     return ok(artifacts);
   } catch (err) {
-    console.error("[ai-artifact] list failed:", err);
+    log.error("[ai-artifact] list failed:", err);
     return denied(
       err instanceof Error ? err.message : "Failed to list artifacts."
     );

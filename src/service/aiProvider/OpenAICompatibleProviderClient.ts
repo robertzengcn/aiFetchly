@@ -7,6 +7,8 @@ import type {
 import type { LocalAIProviderConfig } from "@/entityTypes/aiProviderTypes";
 import type {
   ChatProviderClient,
+  ChatProviderIterationOptions,
+  ChatProviderStreamEvent,
   OpenAIChatCompletionOptions,
   OpenAIChatCompletionStreamOptions,
 } from "./ChatProviderClient";
@@ -131,7 +133,18 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       controller.abort();
     }, timeoutMs);
     try {
-      return await this.fetchImpl(url, { ...init, signal: controller.signal });
+      const response = await this.fetchImpl(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      // TODO-03 (FR-008/015): the header-timeout lifetime ENDS when headers
+      // arrive, but the caller-abort link must survive for the whole body
+      // read — otherwise Stop during a streaming read leaves the request
+      // alive with no way to cancel it. Attach a body-close cleanup that
+      // aborts the transport when the caller aborts mid-body or the response
+      // is finalized, and keeps the listener installed until then.
+      this.linkCallerAbortToBody(response, controller, callerSignal);
+      return response;
     } catch (err) {
       // Distinguish a timeout (timer fired) from a user-initiated abort.
       const timedOut =
@@ -145,9 +158,56 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
       throw err;
     } finally {
       clearTimeout(timer);
-      if (callerSignal) {
-        callerSignal.removeEventListener("abort", onCallerAbort);
-      }
+    }
+  }
+
+  /**
+   * TODO-03: keep the caller's abort connected through body consumption.
+   * `fetch()` resolves when headers arrive; removing the listener then (the
+   * old behavior) disconnected Stop from the streaming read. Instead:
+   * - a caller abort mid-body aborts the transport controller (which cancels
+   *   the in-flight read with an AbortError);
+   * - the listener is removed only when the body is closed/cancelled or the
+   *   response errors — never before.
+   */
+  private linkCallerAbortToBody(
+    response: Response,
+    controller: AbortController,
+    callerSignal: AbortSignal | undefined
+  ): void {
+    if (!callerSignal) return;
+    const abortTransport = (): void => {
+      if (!controller.signal.aborted) controller.abort();
+    };
+    if (callerSignal.aborted) {
+      abortTransport();
+      return;
+    }
+    callerSignal.addEventListener("abort", abortTransport, { once: true });
+    const detach = (): void => {
+      callerSignal.removeEventListener("abort", abortTransport);
+    };
+    // Review F7: an N-round tool loop accumulates one listener per request
+    // on the TURN signal (Node warns past 10) and retains each round's
+    // controller/body closure until turn end. Detach as soon as the body
+    // reaches a terminal state: cancel, error, or full drain.
+    const body = response.body;
+    if (body) {
+      const originalCancel = body.cancel.bind(body);
+      body.cancel = (reason?: unknown): Promise<void> => {
+        detach();
+        abortTransport();
+        return originalCancel(reason);
+      };
+      // NOTE: no drain-watcher here — a second reader would steal the body
+      // lock from the parser (a ReadableStream allows one reader). The
+      // parser's finally cancels the body on EVERY terminal path (post-DONE
+      // included, TODO-04), which fires the cancel wrapper above and detaches.
+      // A consumer that neither drains nor cancels leaves the listener —
+      // bounded by the turn signal's lifetime as before.
+      void detach;
+    } else {
+      detach();
     }
   }
 
@@ -342,11 +402,17 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     }
   }
 
-  async stream(
+  /**
+   * Stage B §5.1 (FR-001): native provider iteration for OpenAI-compatible
+   * endpoints. Chunks stream through the shared parser generator; the local
+   * path performs no transport retry, so every event is a chunk. Cancelling
+   * iteration aborts/cancels the underlying request via the parser's
+   * finally-cleanup.
+   */
+  async *streamEvents(
     request: OpenAIChatCompletionRequest,
-    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
-    options?: OpenAIChatCompletionStreamOptions
-  ): Promise<void> {
+    options?: ChatProviderIterationOptions
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     const payload = buildStreamingPayload({
       ...request,
       model: this.resolveModel(request.model),
@@ -404,6 +470,26 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
         }
       }
     }
-    await this.streamParser.consume(res, onChunk, options?.signal);
+    for await (const chunk of this.streamParser.parseBodyStream(
+      res,
+      options?.signal
+    )) {
+      yield { type: "chunk", chunk };
+    }
+  }
+
+  /** @deprecated Callback facade — consumes streamEvents() (one impl). */
+  async stream(
+    request: OpenAIChatCompletionRequest,
+    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
+    options?: OpenAIChatCompletionStreamOptions
+  ): Promise<void> {
+    for await (const event of this.streamEvents(request, {
+      signal: options?.signal,
+    })) {
+      if (event.type === "chunk") {
+        onChunk(event.chunk);
+      }
+    }
   }
 }

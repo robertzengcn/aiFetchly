@@ -18,19 +18,19 @@ import { Order } from "./order.decorator";
 @Index(["outputId"])
 export class AIToolOutputGrantEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Order(1)
     @Column("varchar", { length: 64, nullable: false })
-    outputId: string;
+    outputId!: string;
 
     @Order(2)
     @Column("varchar", { length: 100, nullable: false })
-    granteeConversationId: string;
+    granteeConversationId!: string;
 
     @Order(3)
     @Column("varchar", { length: 64, nullable: false })
-    granteeEpoch: string;
+    granteeEpoch!: string;
 
     @Order(4)
     @Column("varchar", { length: 100, nullable: true })
@@ -38,7 +38,7 @@ export class AIToolOutputGrantEntity extends AuditableEntity {
 
     @Order(5)
     @Column("varchar", { length: 200, nullable: false })
-    grantReason: string;
+    grantReason!: string;
 
     @Order(6)
     @Column("datetime", { nullable: true })

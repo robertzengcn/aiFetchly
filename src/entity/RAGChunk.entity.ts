@@ -11,26 +11,26 @@ import { RAGDocumentEntity } from './RAGDocument.entity';
 @Index(['contentHash'])
 export class RAGChunkEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     @Order(1)
     @Column('int', { nullable: false })
-    documentId: number;
+    documentId!: number;
 
     @Order(2)
     @Column('int', { nullable: false })
-    chunkIndex: number;
+    chunkIndex!: number;
 
     @Order(3)
     @Column('text', { nullable: false })
-    content: string;
+    content!: string;
 
     @Order(4)
     @Column('varchar', { length: 64, nullable: false })
-    contentHash: string; // SHA-256 hash for deduplication
+    contentHash!: string; // SHA-256 hash for deduplication
 
     @Order(5)
     @Column('int', { nullable: false, default: 0 })
-    tokenCount: number;
+    tokenCount!: number;
 
     // Vector fields
     @Order(6)
@@ -59,5 +59,5 @@ export class RAGChunkEntity extends AuditableEntity {
         onDelete: 'CASCADE',
     })
     @JoinColumn({ name: 'documentId' })
-    document: RAGDocumentEntity;
+    document!: RAGDocumentEntity;
 }

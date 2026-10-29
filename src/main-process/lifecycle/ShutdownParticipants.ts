@@ -1,0 +1,405 @@
+import { log } from "@/modules/Logger";
+import type { ShutdownParticipant } from "@/main-process/lifecycle/ShutdownCoordinator";
+import type { ShutdownReport } from "@/main-process/lifecycle/ShutdownCoordinator";
+
+/**
+ * ShutdownParticipants — composition of the existing cleanup owners into
+ * coordinator participants (technical design §3, §6; inventory §2).
+ *
+ * Principles (design §3 "ShutdownParticipants"):
+ *  - Compose EXISTING owners; do not instantiate unused services at
+ *    shutdown. Owner modules are imported dynamically inside stop()/
+ *    finalize() so early-startup shutdowns (single-instance loser, empty
+ *    participant set — §12) never construct services, and unit tests can
+ *    mock each owner independently.
+ *  - freeze() is synchronous: the global spawn gate (bound to the
+ *    lifecycle service) already blocks new spawns; participants additionally
+ *    stop accepting dispatch here where an owner exposes a sync pause.
+ *
+ * v1 inventory coverage (design §2 families):
+ *  - tool jobs (ToolJobRegistry.shutdown)
+ *  - managed browsers (ManagedBrowserSupervisor.shutdownAll + cache
+ *    clear-on-exit + maintenance scheduler stop)
+ *  - contact extraction worker (registry-tracked, kill + observed exit)
+ *  - schedulers (ScheduleManager.handleAppShutdown + Chat V2 scheduler)
+ *  - marketing WebSocket + token auto-refresh
+ *  - workspace watcher (graceful command, 2s wait, SIGKILL)
+ *  - Yellow Pages process manager (terminateAllProcesses)
+ *  - diagnostics retention, dev browser bridge, pending desktop auth,
+ *    log cleanup, startup marker (finalize, design §11)
+ * Remaining families (MCP stdio servers, shell/hook descendants, skill/
+ * python/embedding/voice workers, installers/downloads) rely on the
+ * owned-process registry + force phase until per-family graceful adapters
+ * are added — documented in docs/prd/application-exit-and-system-tray-*.md.
+ */
+
+/** Callbacks for resources owned by background.ts module scope. */
+export interface BackgroundShutdownDeps {
+  /** Stop the Chat V2 interval scheduler singleton (background.ts owns it). */
+  readonly stopChatScheduler: () => Promise<void>;
+  /** Stop the dev browser bridge if it started (no-op in production). */
+  readonly stopDevBrowserBridge: () => Promise<void>;
+  /** Stop the diagnostics retention timer (sync). */
+  readonly stopDiagnosticsRetention: () => void;
+  /** Clear any in-flight desktop-auth handoff. */
+  readonly clearPendingDesktopAuth: () => void;
+  /** Stop periodic log cleanup. */
+  readonly stopLogCleanup: () => void;
+  /**
+   * Remove the clean-startup marker AFTER the cleanup outcome is known
+   * (design §11 — moved away from the beginning of before-quit). Any
+   * coordinated exit is NOT a crash, so the marker comes off regardless;
+   * the persisted report distinguishes clean from forced for the next
+   * launch (AC-15).
+   */
+  readonly clearStartupMarker: () => void;
+  /** Persist the privacy-safe shutdown report (FR-09). */
+  readonly writeShutdownReport: (report: ShutdownReport) => void;
+  /**
+   * T14: durable variant resolving whether the report was actually
+   * persisted; when present the marker decision uses it. Optional for
+   * backwards compatibility with tests/early-startup paths.
+   */
+  readonly appendShutdownReportDurable?: (report: ShutdownReport) => boolean;
+  /** True once a user database path exists (guards scheduler shutdown). */
+  readonly hasUserData: () => boolean;
+}
+
+/** Budget-aware graceful browser supervision budget (ms cap). */
+const MANAGED_BROWSER_BUDGET_CAP_MS = 5_000;
+/** How long to wait for observed contact-worker exit in the graceful phase. */
+const CONTACT_WORKER_OBSERVE_MS = 2_000;
+
+export function createShutdownParticipants(
+  deps: BackgroundShutdownDeps
+): ShutdownParticipant[] {
+  const toolJobs: ShutdownParticipant = {
+    id: "tool-jobs",
+    freeze: () => {
+      // T06/AC-05: seal the registry SYNCHRONOUSLY at exit entry — jobs
+      // admitted after this tick are refused (start() throws closed).
+      // H5: active jobs are aborted + relabelled cancelled here; their
+      // admission leases ride deferred settlement so stop() below can await
+      // actual cleanup quiescence before other participants tear down.
+      void import("@/service/ToolJobRegistry").then(
+        ({ getDefaultToolJobRegistry }) => {
+          getDefaultToolJobRegistry().shutdown();
+        }
+      );
+    },
+    stop: async (context) => {
+      // H5 (lifecycle): await bounded cleanup for the jobs frozen above
+      // (plugin process teardown incl. browser group kill) before the rest
+      // of the shutdown proceeds. Bounded by the remaining budget; a hung
+      // tool cannot block exit beyond it.
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      await getDefaultToolJobRegistry().shutdownAndAwaitCleanup(
+        Math.max(0, Math.min(5_000, context.remainingMs()))
+      );
+    },
+    finalize: async () => undefined,
+  };
+
+  const managedBrowsers: ShutdownParticipant = {
+    id: "managed-browsers",
+    freeze: () => undefined,
+    stop: async (context) => {
+      const { getDefaultManagedBrowserSupervisor } = await import(
+        "@/service/ManagedBrowserSupervisor"
+      );
+      const { getDefaultManagedBrowserCacheMaintenanceScheduler } =
+        await import("@/service/ManagedBrowserCacheMaintenanceScheduler");
+      getDefaultManagedBrowserCacheMaintenanceScheduler().stop();
+      const supervisor = getDefaultManagedBrowserSupervisor();
+      if (supervisor.listSessions().length > 0) {
+        await supervisor.shutdownAll(
+          Math.min(MANAGED_BROWSER_BUDGET_CAP_MS, context.remainingMs())
+        );
+        log.info("Managed browser supervisor shutdown completed");
+      }
+    },
+    finalize: async () => {
+      // Clear-on-exit preference (FR-CACHE-014) runs AFTER sessions stopped.
+      const { ManagedBrowserSettingsModule } = await import(
+        "@/modules/ManagedBrowserSettingsModule"
+      );
+      const { getDefaultManagedBrowserCacheModule } = await import(
+        "@/modules/ManagedBrowserCacheModule"
+      );
+      const settings =
+        await new ManagedBrowserSettingsModule().getEffectiveSettings();
+      if (settings.clearCacheOnExit) {
+        await getDefaultManagedBrowserCacheModule().queueAllForShutdown();
+      }
+    },
+  };
+
+  const contactExtraction: ShutdownParticipant = {
+    id: "contact-extraction",
+    freeze: () => undefined,
+    stop: async (context) => {
+      const contactIpc = await import(
+        "@/main-process/communication/contactExtraction-ipc"
+      );
+      // Send the §7 shutdown protocol and wait for OBSERVED exit within a
+      // bounded slice; survivors are force-verified in the force phase.
+      const budget = Math.min(
+        CONTACT_WORKER_OBSERVE_MS,
+        Math.max(0, context.remainingMs())
+      );
+      await contactIpc.cleanupContactExtractionWorker(budget);
+    },
+    finalize: async () => {
+      // T07 (design §5/§11): settle task outcomes AFTER the stop stage —
+      // worker shutdown and final-result handlers have drained, so a row
+      // completing during shutdown lands terminal and is never flipped.
+      // Still before the report/marker decision, which happens post-run.
+      const contactIpc = await import(
+        "@/main-process/communication/contactExtraction-ipc"
+      );
+      const interrupted = await contactIpc.reconcileInterruptedExtractions(
+        "Application exited while extraction was in progress"
+      );
+      if (interrupted.length > 0) {
+        log.info(
+          `[contact-extraction] marked ${interrupted.length} in-flight job(s) interrupted`
+        );
+      }
+    },
+  };
+
+  const schedulers: ShutdownParticipant = {
+    id: "schedulers",
+    freeze: () => undefined,
+    stop: async () => {
+      // Token auto-refresh timer stops first so no refresh races shutdown.
+      const { TokenRefreshService } = await import("@/modules/tokenRefresh");
+      TokenRefreshService.stopAutoRefresh();
+      if (!deps.hasUserData()) return;
+      const { ScheduleManager } = await import("@/modules/ScheduleManager");
+      await ScheduleManager.getInstance().handleAppShutdown();
+      await deps.stopChatScheduler();
+      log.info("Schedulers shutdown completed");
+    },
+    finalize: async () => undefined,
+  };
+
+  const searchScraper: ShutdownParticipant = {
+    id: "search-scraper",
+    freeze: () => undefined,
+    stop: async () => {
+      // Graceful stop of the search worker happens via the §7 protocol
+      // broadcast + force phase; rows settle in finalize (T07).
+    },
+    finalize: async () => {
+      // T07 (design §5/§11): settle rows AFTER the stop stage drained final
+      // results — the module's own child-exit handler races app termination
+      // and can miss the DB write, so the at-exit mapping runs here.
+      const { SearchModule } = await import("@/modules/SearchModule");
+      const interrupted = await new SearchModule().reconcileInterruptedTasks(
+        "Application exited while the search task was running"
+      );
+      if (interrupted.length > 0) {
+        log.info(
+          `[search-scraper] marked ${interrupted.length} running task(s) interrupted`
+        );
+      }
+    },
+  };
+
+  const durableTasks: ShutdownParticipant = {
+    id: "durable-tasks",
+    freeze: () => undefined,
+    stop: async () => {
+      // Workers stop in the stop stage; rows settle in finalize (T07).
+    },
+    finalize: async () => {
+      // FR-06/AC-09 at-exit mapping for the remaining durable families,
+      // ordered AFTER the stop stage (T07): bulk-email Processing rows ->
+      // existing Error + [interrupted] note; social live runs ->
+      // module-registry interruption marker (entity has no status column).
+      // Completed rows untouched; nothing auto-retried.
+      const { BuckEmailTaskModule } = await import(
+        "@/modules/buckEmailTaskModule"
+      );
+      const interruptedEmails =
+        await new BuckEmailTaskModule().reconcileInterruptedTasks(
+          "Application exited while the email batch was running"
+        );
+      if (interruptedEmails.length > 0) {
+        log.info(
+          `[bulk-email] marked ${interruptedEmails.length} processing task(s) interrupted`
+        );
+      }
+      const { reconcileInterruptedSocialRuns } = await import(
+        "@/modules/socialtask"
+      );
+      const interruptedRuns = await reconcileInterruptedSocialRuns(
+        "Application exited while the social task run was in progress"
+      );
+      if (interruptedRuns.length > 0) {
+        log.info(
+          `[social] marked ${interruptedRuns.length} live run(s) interrupted`
+        );
+      }
+    },
+  };
+
+  const workerProtocol: ShutdownParticipant = {
+    id: "worker-graceful-protocol",
+    freeze: () => {
+      // T06: typed cancellation of queued browser-slot acquisitions.
+      void import("@/modules/WorkerCoordinator").then((m) => {
+        m.WorkerCoordinator.getInstance().freezeForShutdown();
+      });
+    },
+    stop: async (context) => {
+      // Design §7 rollout: send the validated shutdown message to every live
+      // registered worker over its own transport (postMessage / ipc send),
+      // bounded per record; survivors are force-stopped by the force phase.
+      const { getOwnedProcessRegistry } = await import(
+        "@/main-process/lifecycle/OwnedProcessRegistry"
+      );
+      const { inferShutdownTransport } = await import(
+        "@/main-process/lifecycle/workerShutdownProtocol"
+      );
+      const registry = getOwnedProcessRegistry();
+      const slice = Math.max(250, Math.floor(context.remainingMs() / 2));
+      const live = registry.list().filter((r) => !r.exited);
+      for (const record of live) {
+        const handle = registry.getHandleForShutdown(record.id);
+        if (!handle) continue;
+        const transport = inferShutdownTransport(
+          handle as Parameters<typeof inferShutdownTransport>[0]
+        );
+        if (!transport) continue;
+        try {
+          transport({
+            type: "shutdown",
+            requestId: `${record.ownerId}-${Date.now()}`,
+            reason: "app-shutdown",
+            remainingMs: slice,
+          });
+        } catch (err) {
+          log.warn(
+            `[worker-protocol] send failed for '${record.ownerId}':`,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
+      // Give the collective workers ONE bounded window to exit naturally;
+      // poll cheaply rather than per-record waits (records may share pids).
+      const deadline = Date.now() + slice;
+      while (Date.now() < deadline) {
+        const stillLive = registry.list().filter((r) => !r.exited);
+        if (stillLive.length === 0) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const remaining = registry.list().filter((r) => !r.exited).length;
+      log.info(
+        `[worker-protocol] graceful pass done; ${remaining} worker(s) left to the force phase`
+      );
+    },
+    finalize: async () => undefined,
+  };
+
+  const marketingWebSocket: ShutdownParticipant = {
+    id: "marketing-websocket",
+    freeze: () => undefined,
+    stop: async () => {
+      const { cleanupWebSocketConnection } = await import(
+        "@/main-process/communication/websocket-ipc"
+      );
+      cleanupWebSocketConnection();
+      log.info("WebSocket connection cleanup completed");
+    },
+    finalize: async () => undefined,
+  };
+
+  const workspaceWatch: ShutdownParticipant = {
+    id: "workspace-watch",
+    freeze: () => undefined,
+    stop: async () => {
+      const { getWorkspaceWatchManager } = await import(
+        "@/service/workspaceWatch/WorkspaceWatchManagerSingleton"
+      );
+      const watcherManager = getWorkspaceWatchManager();
+      if (watcherManager) {
+        await watcherManager.shutdown();
+        log.info("WorkspaceWatchManager shutdown completed");
+      }
+    },
+    finalize: async () => undefined,
+  };
+
+  const appResources: ShutdownParticipant = {
+    id: "app-resources",
+    freeze: () => undefined,
+    stop: async () => {
+      // Dev bridge stop is async but must not wait on dead sockets.
+      await deps.stopDevBrowserBridge();
+    },
+    finalize: async () => {
+      // Final housekeeping only AFTER cleanup outcome is known (§11):
+      // pending auth, retention timer, log cleanup, startup marker.
+      deps.clearPendingDesktopAuth();
+      deps.stopDiagnosticsRetention();
+      deps.stopLogCleanup();
+    },
+  };
+
+  return [
+    toolJobs,
+    managedBrowsers,
+    contactExtraction,
+    schedulers,
+    marketingWebSocket,
+    workspaceWatch,
+    searchScraper,
+    durableTasks,
+    workerProtocol,
+    appResources,
+  ];
+}
+
+/**
+ * Report-aware wrapper: attach the clean-shutdown marker decision to the
+ * coordinator's report. background.ts registers this via onReport.
+ */
+export function reportSinkAdapter(
+  deps: BackgroundShutdownDeps
+): (report: ShutdownReport) => void {
+  return (report) => {
+    try {
+      // T14/AC-15: the marker comes off ONLY when the durable report was
+      // WRITTEN and the outcome was clean — a failed write keeps it so the
+      // next launch cannot mistake a report-less exit for clean termination.
+      const durable =
+        typeof deps.appendShutdownReportDurable === "function"
+          ? deps.appendShutdownReportDurable(report)
+          : null;
+      if (durable === null) {
+        // Legacy writer without a durability signal: write, then clear only
+        // on clean (the writer itself never throws — see its catch).
+        deps.writeShutdownReport(report);
+        if (report.clean) deps.clearStartupMarker();
+        return;
+      }
+      if (durable && report.clean) {
+        deps.clearStartupMarker();
+      } else if (durable && !report.clean) {
+        // Forced/incomplete but DURABLY recorded: still a coordinated exit,
+        // not a crash — remove the crash marker; the persisted report
+        // distinguishes forced from clean for the next launch.
+        deps.clearStartupMarker();
+      }
+    } catch (err) {
+      log.error(
+        "[shutdown] report sink failed:",
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  };
+}

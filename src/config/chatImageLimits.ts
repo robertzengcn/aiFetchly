@@ -29,6 +29,12 @@ export const CHAT_IMAGE_LIMITS = Object.freeze({
   maxEncodingAttempts: 6,
   /** Client target for the sum of all data-URL characters in one request. */
   targetTotalDataUrlChars: 6_000_000,
+  /**
+   * Maximum on-disk size accepted for an AI-chat-generated source image.
+   * Matches the storage service cap so every stored generated image remains
+   * admissible as an edit input.
+   */
+  maxGeneratedSourceBytes: 20 * 1024 * 1024,
 });
 
 /** Decoder safety guard: reject any single input dimension above this (px). */

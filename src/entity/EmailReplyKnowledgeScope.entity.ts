@@ -13,28 +13,28 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index(["emailServiceId"], { unique: true })
 export class EmailReplyKnowledgeScopeEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   /** Bumped on every change; generation metadata records the version used. */
   @Column("integer", { default: 1 })
-  version: number;
+  version!: number;
 
   /** Serialized number[] of allowed RAG document ids. */
   @Column("text")
-  documentIdsJson: string;
+  documentIdsJson!: string;
 
   /** Serialized string[] of allowed tags. */
   @Column("text")
-  tagsJson: string;
+  tagsJson!: string;
 
   /** 0 = allowlist only (empty allowlist searches nothing); 1 = all eligible docs. */
   @Column("integer", { default: 0 })
-  allowAllDocuments: number;
+  allowAllDocuments!: number;
 
   /** Exclude documents marked inactive/stale (default on). */
   @Column("integer", { default: 1 })
-  excludeInactiveDocuments: number;
+  excludeInactiveDocuments!: number;
 }

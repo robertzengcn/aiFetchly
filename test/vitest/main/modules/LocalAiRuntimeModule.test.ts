@@ -8,7 +8,6 @@ import { LocalAiRuntimeStateStore } from "@/service/localAiRuntime/LocalAiRuntim
 import { LocalAiRuntimeCompatibilityService } from "@/service/localAiRuntime/LocalAiRuntimeCompatibilityService";
 import { LocalAiRuntimeResolver } from "@/service/localAiRuntime/LocalAiRuntimeResolver";
 import { LocalAiRuntimeOperationCoordinator } from "@/service/localAiRuntime/LocalAiRuntimeOperationCoordinator";
-import { LocalAiRuntimeHealthService } from "@/service/localAiRuntime/LocalAiRuntimeHealthService";
 import type {
   RuntimeDownloadRequest,
   RuntimeDownloadResult,
@@ -145,7 +144,7 @@ function setup(initialVersion = "1.0.0"): FakeSetup {
   };
 
   const fakeHealth = {
-    async check(ctx: {
+    async check(_ctx: {
       runtime: ResolvedLocalAiRuntime;
     }): Promise<{ ok: boolean; errorMessage?: string }> {
       return {
@@ -248,6 +247,30 @@ describe("LocalAiRuntimeModule install/activate", () => {
     expect(await env.state.readActive("voice-sherpa")).toBeNull();
     // Staging/download leftovers cleaned.
     expect(fs.existsSync(env.paths.stagingRoot)).toBe(true); // root dir remains
+  });
+
+  test("failed install keeps the consent grant so the same offer can retry", async () => {
+    const env = setup();
+    env.setHealthOk(false);
+    const offer = await env.module.prepareInstall("voice-sherpa");
+    await expect(
+      env.module.install({
+        operationId: offer.operationId,
+        runtimeId: "voice-sherpa",
+        expectedRuntimeVersion: offer.runtimeVersion,
+        consentToken: offer.consentToken,
+      })
+    ).rejects.toThrow(LocalAiRuntimeError);
+
+    env.setHealthOk(true);
+    await expect(
+      env.module.install({
+        operationId: offer.operationId,
+        runtimeId: "voice-sherpa",
+        expectedRuntimeVersion: offer.runtimeVersion,
+        consentToken: offer.consentToken,
+      })
+    ).resolves.toMatchObject({ activated: true, runtimeVersion: "1.0.0" });
   });
 
   test("health failure preserves the previous active runtime", async () => {

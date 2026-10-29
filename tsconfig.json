@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
     "outDir": "./dist",
-    "strictPropertyInitialization": false,
-    "noImplicitAny": false,
-    "noImplicitThis": false,
+    "strictPropertyInitialization": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
     "target": "es6",
     "module": "esnext",
     "strict": true,
@@ -42,9 +42,6 @@
       ],
       "electron-log/node": [
         "./test/mocks/electron-log.ts"
-      ],
-      "electron-store": [
-        "./test/mocks/electron-store.ts"
       ]
     },
     "lib": [
@@ -68,6 +65,7 @@
     "**/*.ejs"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "test/e2e"
   ]
 }

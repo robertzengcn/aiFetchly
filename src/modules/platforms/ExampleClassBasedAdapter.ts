@@ -1,4 +1,5 @@
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
+import { log } from "@/modules/Logger";
 import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
 import { Page } from 'puppeteer';
 
@@ -86,7 +87,7 @@ export class ExampleClassBasedAdapter implements IBasePlatformAdapter {
             return this.cleanAndValidateData(businessData);
             
         } catch (error) {
-            console.error('Error extracting business data:', error);
+            log.error('Error extracting business data:', error);
             return this.getFallbackData(page);
         }
     }

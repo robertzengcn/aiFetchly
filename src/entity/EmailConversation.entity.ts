@@ -17,28 +17,28 @@ import type { EmailConversationContextConfidence } from "@/entityTypes/emailRepl
 @Index(["emailServiceId", "lastMessageAt"])
 export class EmailConversationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column("varchar", { length: 998 })
-  rootMessageKey: string;
+  rootMessageKey!: string;
 
   @Column("varchar", { length: 998, nullable: true })
-  displaySubject: string | null;
+  displaySubject!: string | null;
 
   @Column("varchar", { length: 20, default: "exact" })
-  contextConfidence: EmailConversationContextConfidence;
+  contextConfidence!: EmailConversationContextConfidence;
 
   /** Recorded when confidence is partial/ambiguous (FR-001). */
   @Column("text", { nullable: true })
-  ambiguityReason: string | null;
+  ambiguityReason!: string | null;
 
   @Column("datetime")
-  lastMessageAt: Date;
+  lastMessageAt!: Date;
 
   /** Bumped when the conversation's turn set changes (cache invalidation). */
   @Column("integer", { default: 1 })
-  contextVersion: number;
+  contextVersion!: number;
 }

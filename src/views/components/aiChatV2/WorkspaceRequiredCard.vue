@@ -1,5 +1,12 @@
 <template>
-  <v-card class="workspace-required-card" elevation="2" rounded border>
+  <v-card
+    class="workspace-required-card"
+    elevation="2"
+    rounded
+    border
+    data-testid="workspace-required"
+    :data-conversation-id="conversationId"
+  >
     <v-card-item>
       <div class="workspace-required-card__header">
         <v-icon size="small" color="primary">mdi-folder-plus-outline</v-icon>
@@ -59,7 +66,7 @@ const errorText = ref<string | null>(null);
 const titleText = t("workspace.required.title") || "Choose a workspace folder";
 const bodyText =
   t("workspace.required.body") ||
-  "Pick a folder where AI file tools can read and write.";
+  "Pick a folder for this conversation's workspace.";
 const cancelText = t("workspace.required.cancel") || "Cancel";
 const pickText = t("workspace.required.pick") || "Pick folder";
 

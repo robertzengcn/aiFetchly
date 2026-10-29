@@ -7,6 +7,7 @@ import {
   hashApprovalToken,
 } from "@/service/emailReply/EmailReplyRevisionHasher";
 import type { OutboundEmailAuthorizationType } from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OUTBOUND_EMAIL_AUTHORIZABLE_BATCH_STATUSES } from "@/entityTypes/outboundEmailDeliveryTypes";
 import { OUTBOUND_RESOLVER_VERSION } from "@/service/outboundEmail/outboundReliabilityVersions";
 
 /**
@@ -110,7 +111,8 @@ export interface ReviewApprovalResult {
   readonly code?:
     | "batch_not_found"
     | "authorization_already_active"
-    | "batch_hash_mismatch";
+    | "batch_hash_mismatch"
+    | "batch_not_authorizable";
   readonly authorizationId?: number;
   /** Returned once; only the SHA-256 hash is persisted. */
   readonly token?: string;
@@ -367,6 +369,15 @@ export class OutboundEmailAuthorizationService {
     const batch = await this.draftModel.readBatch(input.batchId);
     if (!batch) {
       return { success: false, code: "batch_not_found" };
+    }
+    // §8.1 lifecycle / FR-OUT-006: only a pre-authorization batch may gain a
+    // new review approval. A batch whose delivery was attempted (queued,
+    // sending) or settled (sent, partially_sent, failed, discarded) — or is
+    // inconclusive (delivery_unknown) — must fail closed: the fresh
+    // authorizationId would mint a fresh claim idempotency key and the next
+    // send creates a SECOND delivery attempt of the same batch.
+    if (!OUTBOUND_EMAIL_AUTHORIZABLE_BATCH_STATUSES.has(batch.status)) {
+      return { success: false, code: "batch_not_authorizable" };
     }
     if (batch.batchHash !== input.batchHash) {
       return { success: false, code: "batch_hash_mismatch" };

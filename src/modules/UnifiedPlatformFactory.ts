@@ -1,8 +1,10 @@
 import { PlatformConfig, PlatformType, PlatformSummary } from '@/modules/interface/IPlatformConfig';
+import { log } from "@/modules/Logger";
 import { IBasePlatformAdapter, IPlatformAdapterFactory } from '@/modules/interface/IBasePlatformAdapter';
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
 import { BaseModule } from '@/modules/baseModule';
 
+/* eslint-disable @typescript-eslint/ban-types */
 /**
  * Configuration-only platform adapter that uses only JSON configuration
  * for data extraction without custom logic.
@@ -117,14 +119,14 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
         }
 
         try {
-            console.log('Initializing Unified Platform Factory...');
+            log.info('Initializing Unified Platform Factory...');
             
             // Platform registry is ready to use without initialization
             
             this.isInitialized = true;
-            console.log('Unified Platform Factory initialized successfully');
+            log.info('Unified Platform Factory initialized successfully');
         } catch (error) {
-            console.error('Failed to initialize Unified Platform Factory:', error);
+            log.error('Failed to initialize Unified Platform Factory:', error);
             throw error;
         }
     }
@@ -163,11 +165,11 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
             // Cache the adapter
             this.platformAdapters.set(config.id, adapter);
             
-            console.log(`Created ${config.type} adapter for platform '${config.id}'`);
+            log.info(`Created ${config.type} adapter for platform '${config.id}'`);
             return adapter;
             
         } catch (error) {
-            console.error(`Failed to create adapter for platform '${config.id}':`, error);
+            log.error(`Failed to create adapter for platform '${config.id}':`, error);
             throw error;
         }
     }
@@ -204,7 +206,7 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
             return new AdapterClass(config);
             
         } catch (error) {
-            console.error(`Failed to load class-based adapter for ${config.id}:`, error);
+            log.error(`Failed to load class-based adapter for ${config.id}:`, error);
             throw error;
         }
     }
@@ -232,7 +234,7 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
             return new HybridPlatformAdapter(config, BaseClass);
             
         } catch (error) {
-            console.error(`Failed to load hybrid adapter for ${config.id}:`, error);
+            log.error(`Failed to load hybrid adapter for ${config.id}:`, error);
             throw error;
         }
     }
@@ -244,7 +246,7 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
      */
     registerAdapter(platformName: string, adapter: IBasePlatformAdapter): void {
         this.platformAdapters.set(platformName, adapter);
-        console.log(`Registered adapter for platform '${platformName}'`);
+        log.info(`Registered adapter for platform '${platformName}'`);
     }
 
     /**
@@ -253,7 +255,7 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
      */
     unregisterAdapter(platformName: string): void {
         this.platformAdapters.delete(platformName);
-        console.log(`Unregistered adapter for platform '${platformName}'`);
+        log.info(`Unregistered adapter for platform '${platformName}'`);
     }
 
     /**
@@ -325,7 +327,7 @@ export class UnifiedPlatformFactory extends BaseModule implements IPlatformAdapt
      */
     clearCache(): void {
         this.platformAdapters.clear();
-        console.log('Cleared platform adapter cache');
+        log.info('Cleared platform adapter cache');
     }
 }
 
@@ -419,7 +421,7 @@ class HybridPlatformAdapter implements IBasePlatformAdapter {
                 const customExtractor = await this.loadCustomExtractor(functionName as string);
                 customData[extractorName] = await customExtractor(page);
             } catch (error) {
-                console.warn(`Failed to apply custom extractor ${extractorName}:`, error);
+                log.warn(`Failed to apply custom extractor ${extractorName}:`, error);
             }
         }
         
@@ -446,3 +448,4 @@ class HybridPlatformAdapter implements IBasePlatformAdapter {
         return customFunction;
     }
 } 
+/* eslint-enable @typescript-eslint/ban-types */

@@ -114,6 +114,30 @@ describe("projectToWirePayload", () => {
     );
   });
 
+  test("mainLogTail is key-absent when the flag is off, capped when on", () => {
+    const pkg = { ...richPkg(), mainLogTail: "t".repeat(40 * 1024) };
+
+    // Flag off (default): the key must not exist at all, so a backend
+    // without the field sees a byte-identical contract.
+    delete process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL;
+    const offWire = projectToWirePayload(pkg);
+    expect(offWire).not.toHaveProperty("mainLogTail");
+    expect(Object.keys(offWire)).not.toContain("mainLogTail");
+
+    // Flag on: present and capped to MAX_MAIN_LOG_TAIL.
+    process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL = "true";
+    try {
+      const onWire = projectToWirePayload(pkg);
+      expect(onWire.mainLogTail).toBe("t".repeat(32 * 1024));
+
+      // Flag on but no tail in the package: still key-absent.
+      const noTail = projectToWirePayload(richPkg());
+      expect(noTail).not.toHaveProperty("mainLogTail");
+    } finally {
+      delete process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL;
+    }
+  });
+
   test("recentErrors carry no rich-only fields and are capped to 50", () => {
     const wire = projectToWirePayload(richPkg());
     expect(wire.recentErrors.length).toBe(50); // capped to server MaxRecentErrorEntries

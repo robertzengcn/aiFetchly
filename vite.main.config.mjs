@@ -45,6 +45,26 @@ export default ({ mode }) => {
             'process.env.VITE_LOGIN_URL': JSON.stringify(
                 process.env.VITE_LOGIN_URL || process.env.VITE_LOGIN_URL_TEST || ''
             ),
+            // Plugin Hub (community catalog) base URL — first-party constant
+            // consumed by src/config/pluginHubUrl.ts (see that file for why
+            // process.env is used instead of import.meta.env).
+            'process.env.VITE_PLUGIN_HUB_URL': JSON.stringify(
+                process.env.VITE_PLUGIN_HUB_URL || ''
+            ),
+            // Bake the crash-upload mainLogTail rollout flag for PRODUCTION
+            // builds only: packaged apps launched from Finder/Start Menu have
+            // no shell env, so the value must come from the build environment
+            // (CI env, or .env — forge.config.js loads it via dotenv with no
+            // prefix filter before vite runs). Dev and test keep a live
+            // process.env read so the flag stays runtime-controllable
+            // (tests toggle it per-case; dev uses the shell env).
+            ...(mode === 'production'
+                ? {
+                      'process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL': JSON.stringify(
+                          process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL || ''
+                      ),
+                  }
+                : {}),
         },
         build: {
             rollupOptions: {
@@ -70,6 +90,18 @@ export default ({ mode }) => {
             // transpile-only mode silently passes files with type errors
             // (this exact issue bit us during the zod schema rollout).
             globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
+            // WS-2: coverage (only active when run with --coverage).
+            coverage: {
+                provider: 'v8',
+                reporter: ['text', 'html', 'lcov'],
+                reportsDirectory: './coverage/main',
+                include: [
+                    'src/main-process/**', 'src/service/**', 'src/modules/**',
+                    'src/model/**', 'src/controller/**', 'src/utils/**',
+                    'src/config/**', 'src/schemas/**', 'src/entity/**', 'src/entityTypes/**',
+                ],
+                exclude: ['**/*.test.ts', 'test/**', 'src/**/*.d.ts', '**/index.ts'],
+            },
             // Per-worker temp-dir isolation (V01 / re-audit checkbox 1).
             // BaseDb/BaseModule fall back to `os.tmpdir()/aifetchly-test` when
             // constructed without a filepath; under the default forks pool two

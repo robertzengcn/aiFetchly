@@ -32,8 +32,16 @@ import { e2eTest as test, expect } from "../fixtures/base";
 import type { Locator } from "@playwright/test";
 import { assertCleanTeardown } from "../support/assertions";
 import type { LaunchedApp } from "../fixtures/electronApp";
+import type { E2ETestRoot } from "../fixtures/types";
 import type { FakeOpenAiController } from "../fixtures/fakeOpenAiServer";
 import * as net from "node:net";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import * as path from "node:path";
+
+const execFileAsync = promisify(execFile);
+/** The user database lives in <testRoot>/database/scraper.db. */
+const DB_FILE_NAME = "scraper.db";
 
 function composer(app: LaunchedApp): Locator {
   return app.mainWindow
@@ -43,8 +51,39 @@ function composer(app: LaunchedApp): Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // The chat workspace is the default landing route; the legacy dock toggle
+  // only exists when the app landed elsewhere. Handle both.
+  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
+  try {
+    await toggle.waitFor({ state: "visible", timeout: 5_000 });
+    await toggle.click();
+  } catch {
+    /* already on the chat workspace */
+  }
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
+  // Under the chat-first shell, start a conversation so the send path has a
+  // conversation to append to (the legacy dock creates one implicitly).
+  const newChat = app.mainWindow.getByTestId("workspace-new-chat");
+  try {
+    await newChat.waitFor({ state: "visible", timeout: 5_000 });
+    await newChat.click();
+    await expect(composer(app)).toBeVisible({ timeout: 30_000 });
+  } catch {
+    /* legacy dock: no shell strip button */
+  }
+}
+
+/**
+ * The chat content root: the chat-first shell renders the transcript as
+ * `workspace-transcript`; the legacy dock uses `ai-chat-root`. Scope text
+ * containment to whichever is present.
+ */
+function chatRoot(app: LaunchedApp): Locator {
+  return app.mainWindow
+    .locator(
+      '[data-testid="workspace-transcript"], [data-testid="ai-chat-root"]'
+    )
+    .first();
 }
 
 async function sendUnique(app: LaunchedApp, prefix: string): Promise<void> {
@@ -140,10 +179,9 @@ async function draftBatchViaTool(
   await openChat(app);
   await fakeAi.setScenario("stream-text");
   await sendUnique(app, "e2e-outbound-prep");
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-    "Hello world!",
-    { timeout: 30_000 }
-  );
+  await expect(chatRoot(app)).toContainText("Hello world!", {
+    timeout: 30_000,
+  });
 
   // The next non-continuation request returns a draft_outbound_email_batch
   // tool call. Direct recipients keep the batch small and deterministic.
@@ -166,10 +204,9 @@ async function draftBatchViaTool(
 
   // Draft preparation is non-sending, so it executes without a permission
   // card. The fake server answers the continuation with "Done."
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
-    "Done.",
-    { timeout: 30_000 }
-  );
+  await expect(chatRoot(app)).toContainText("Done.", {
+    timeout: 30_000,
+  });
   const reviewAction = app.mainWindow.getByTestId("outbound-batch-review");
   await expect(reviewAction).toBeVisible({ timeout: 15_000 });
   const batchId = await reviewAction.getAttribute("data-batch-id");
@@ -245,7 +282,7 @@ test.describe("Outbound email review → approve → send (Electron integration)
       await expect(approveBtn).toBeHidden({ timeout: 15_000 });
 
       // The send was claimed and the dialog closed.
-      await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toBeVisible();
+      await expect(chatRoot(aiApp)).toBeVisible();
 
       // Poll the authoritative batch status because delivery progress is
       // intentionally hidden with the closed dialog.
@@ -292,4 +329,236 @@ test.describe("Outbound email review → approve → send (Electron integration)
       await smtp.close();
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// Parity-audit follow-up coverage (FR-OUT-006 / FR-OUT-009):
+//   • Duplicate claim — a repeated send with the SAME claim triple collapses
+//     into already_processed with the ORIGINAL attempt id (FR-OUT-006). The
+//     duplicate exercises the same validated channel the dialog's Send
+//     button posts through; the raw token is minted by calling the approve
+//     channel directly (server-side) because the dialog only ever holds it
+//     in renderer memory.
+//   • Persistent receipt — closing the dialog after a claimed send does not
+//     discard the transcript receipt: the batch card stays attached and
+//     reopening Review still renders the terminal delivery progress with the
+//     no-auto-retry note (FR-OUT-009).
+// Claim-time expiry of authorizations is covered at unit level in
+// test/vitest/main/OutboundEmailDeliveryService.test.ts (authorization_expired).
+// ---------------------------------------------------------------------------
+
+interface OutboundEnvelope {
+  status: boolean;
+  msg?: string;
+  data: unknown;
+}
+
+/**
+ * Invoke an outbound IPC channel with a JSON payload through the preload
+ * bridge and return the envelope. Mirrors the direct-invoke helpers used by
+ * sibling specs (the seed helper above).
+ */
+async function invokeOutboundEnvelope(
+  app: LaunchedApp,
+  channel: string,
+  payload: unknown
+): Promise<OutboundEnvelope> {
+  const response = await app.mainWindow.evaluate(
+    async (args: { channel: string; raw: string }) => {
+      const api = (
+        window as unknown as {
+          api: {
+            invoke: (
+              c: string,
+              d?: unknown
+            ) => Promise<
+              { status: boolean; data: unknown; msg?: string } | undefined
+            >;
+          };
+        }
+      ).api;
+      return await api.invoke(args.channel, args.raw);
+    },
+    { channel, raw: JSON.stringify(payload) }
+  );
+  return (response ?? {
+    status: false,
+    data: null,
+    msg: "no envelope",
+  }) as OutboundEnvelope;
+}
+
+interface OutboundBatchStatusData {
+  batchStatus?: string;
+  attempt?: { id?: number; status?: string } | null;
+  outcomes?: Array<{
+    recipientAddress?: string;
+    status?: string;
+    draftId?: number;
+  }>;
+}
+
+/** Read the authoritative batch status (attempt + outcomes). */
+async function readBatchStatus(
+  app: LaunchedApp,
+  batchId: number
+): Promise<OutboundBatchStatusData> {
+  const response = await invokeOutboundEnvelope(
+    app,
+    "outbound:email:batch:status",
+    {
+      batchId,
+    }
+  );
+  return (response.data ?? {}) as OutboundBatchStatusData;
+}
+
+test("duplicate send claim cannot start a second attempt (FR-OUT-006)", async ({
+  aiApp,
+  fakeAi,
+}) => {
+  test.setTimeout(150_000);
+  const smtp = await startDroppingSmtpServer();
+  try {
+    const serviceId = await seedDroppingSmtpService(aiApp, smtp.port);
+    const batchId = await draftBatchViaTool(aiApp, fakeAi, serviceId);
+
+    // Mirrors the dialog: GET (fills missing senders), then approve with the
+    // loaded hash. The handler returns the raw token ONCE; only the id + the
+    // post-fill hash are needed for the claim triple.
+    const getResponse = await invokeOutboundEnvelope(
+      aiApp,
+      "outbound:email:batch:get",
+      { batchId }
+    );
+    expect(getResponse.status).toBe(true);
+    const batchData = getResponse.data as {
+      batch?: { batchHash?: string };
+      drafts?: Array<{ id?: number }>;
+    } | null;
+    const batchHash = batchData?.batch?.batchHash ?? "";
+    const draftId = batchData?.drafts?.[0]?.id ?? 0;
+    expect(batchHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(draftId).toBeGreaterThan(0);
+
+    const approveResponse = await invokeOutboundEnvelope(
+      aiApp,
+      "outbound:email:batch:approve",
+      { batchId, batchHash }
+    );
+    expect(
+      approveResponse.status,
+      `approve failed: ${approveResponse.msg}`
+    ).toBe(true);
+    const approval = approveResponse.data as {
+      authorizationId?: number;
+      batchHash?: string;
+    } | null;
+    const authorizationId = approval?.authorizationId ?? 0;
+    const claimHash = approval?.batchHash ?? "";
+    expect(authorizationId).toBeGreaterThan(0);
+
+    const sendPayload = { batchId, authorizationId, batchHash: claimHash };
+
+    // First claim — wins the attempt and starts the production worker
+    // against the dropping SMTP server.
+    const first = await invokeOutboundEnvelope(
+      aiApp,
+      "outbound:email:batch:send",
+      sendPayload
+    );
+    expect(first.status, `first send failed: ${first.msg}`).toBe(true);
+    const firstData = first.data as { status?: string; attemptId?: number };
+    expect(firstData.status).toBe("claimed");
+    const attemptId = firstData.attemptId ?? 0;
+    expect(attemptId).toBeGreaterThan(0);
+
+    // Repeated click / stale renderer retry: the SAME claim triple must
+    // collapse into already_processed bound to the ORIGINAL attempt, never a
+    // second delivery.
+    const second = await invokeOutboundEnvelope(
+      aiApp,
+      "outbound:email:batch:send",
+      sendPayload
+    );
+    expect(second.status, `duplicate send errored: ${second.msg}`).toBe(true);
+    const secondData = second.data as { status?: string; attemptId?: number };
+    expect(secondData.status).toBe("already_processed");
+    expect(secondData.attemptId).toBe(attemptId);
+
+    // Exactly one attempt and one outcome settle — delivery_unknown like the
+    // canonical journey; the duplicate created nothing extra.
+    await expect
+      .poll(async () => await readBatchStatus(aiApp, batchId), {
+        timeout: 60_000,
+      })
+      .toEqual({
+        batchStatus: "delivery_unknown",
+        attempt: { id: attemptId, status: "completed" },
+        outcomes: [
+          {
+            draftId,
+            recipientAddress: "e2e-recipient@example.com",
+            status: "delivery_unknown",
+            id: expect.any(Number),
+            errorCode: expect.anything(),
+            providerMessageId: null,
+          },
+        ],
+      });
+  } finally {
+    await smtp.close();
+  }
+});
+
+test("receipt stays after dialog close and reopening shows delivery progress (FR-OUT-009)", async ({
+  aiApp,
+  fakeAi,
+}) => {
+  test.setTimeout(150_000);
+  const smtp = await startDroppingSmtpServer();
+  try {
+    const serviceId = await seedDroppingSmtpService(aiApp, smtp.port);
+    const batchId = await draftBatchViaTool(aiApp, fakeAi, serviceId);
+
+    // Full dialog journey: review → approve → send (UI clicks).
+    await aiApp.mainWindow.getByTestId("outbound-batch-review").click();
+    const approveBtn = aiApp.mainWindow.getByTestId("outbound-review-approve");
+    const sendBtn = aiApp.mainWindow.getByTestId("outbound-review-send");
+    await expect(approveBtn).toBeVisible({ timeout: 15_000 });
+    await approveBtn.click();
+    await expect(sendBtn).toBeEnabled({ timeout: 15_000 });
+    await sendBtn.click();
+    // The dialog closes itself after the claim.
+    await expect(chatRoot(aiApp)).toBeVisible({ timeout: 15_000 });
+
+    // The transcript receipt is NOT discarded with the dialog: the batch
+    // card stays attached to the message row.
+    await expect(
+      aiApp.mainWindow.getByTestId("workspace-outbound-batch")
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Wait for the attempt to settle at delivery_unknown, then reopen the
+    // dialog — it must still render the terminal delivery progress.
+    await expect
+      .poll(async () => (await readBatchStatus(aiApp, batchId)).batchStatus, {
+        timeout: 60_000,
+      })
+      .toBe("delivery_unknown");
+
+    await aiApp.mainWindow.getByTestId("outbound-batch-review").click();
+    const progressTitle = aiApp.mainWindow
+      .locator(".outbound-progress__header")
+      .getByText("Delivery Progress");
+    await expect(progressTitle).toBeVisible({ timeout: 15_000 });
+    const outcomeRow = aiApp.mainWindow.locator(
+      '[data-testid^="outbound-progress-row-"]'
+    );
+    await expect(outcomeRow).toHaveCount(1, { timeout: 15_000 });
+    await expect(outcomeRow.first()).toContainText("Delivery Unknown");
+    // §18: delivery_unknown never offers one-click retry — the note is shown.
+    await expect(outcomeRow.first()).toContainText("do not auto-retry");
+  } finally {
+    await smtp.close();
+  }
 });

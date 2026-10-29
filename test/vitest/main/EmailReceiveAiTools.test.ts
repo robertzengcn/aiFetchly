@@ -15,7 +15,12 @@ vi.mock("@/service/MCPToolService", () => ({
 const draftGenStub = { createDraft: vi.fn() };
 const deliveryStub = { sendApprovedReply: vi.fn() };
 const approvalStub = { approveDraft: vi.fn() };
-const draftModuleStub = { ensureConnection: vi.fn(), read: vi.fn() };
+const draftModuleStub = {
+  ensureConnection: vi.fn(),
+  read: vi.fn(),
+  countActiveSendAttempts: vi.fn(),
+  demoteApprovedToDraft: vi.fn(),
+};
 
 // FR-032 check_email_replied stubs: the tool layer constructs these via
 // `new ModuleName()` before calling checkReply/read. Each is a function
@@ -30,6 +35,20 @@ const messageModuleStub = {
   listByEmailService: vi.fn(),
   markRead: vi.fn(),
 };
+// Approved-draft re-confirm path retires prior approvals in bulk before the
+// CAS demotion (D3/D4 review fixes).
+const approvalModuleStub = {
+  ensureConnection: vi.fn(),
+  findActiveByDraft: vi.fn(),
+  invalidate: vi.fn(),
+  invalidateAllForDraft: vi.fn(),
+};
+vi.mock("@/modules/EmailReplyApprovalModule", () => ({
+  EmailReplyApprovalModule: function () {
+    return approvalModuleStub;
+  },
+}));
+
 // AI-enable gate (FR-6.1): default true so happy-path tests proceed; the
 // disabled-AI test flips this to false.
 let aiEnabled = true;
@@ -127,6 +146,8 @@ import {
   fetchUnreadEmails,
   getEmailMessage,
 } from "@/service/EmailReceiveAiTools";
+import { createEmailReplyDraftSchema } from "@/entityTypes/emailReceiveAiTypes";
+import { emailReplyDraftCreateInputSchema } from "@/schemas/ipc/emailReply";
 import {
   SendPolicyRejection,
   SendBindingError,
@@ -195,13 +216,45 @@ describe("Email reply draft/send AI tools", () => {
     expect(skill!.description).toContain("does not probe");
   });
 
-  it("send_email_reply REQUIRES confirmation (it sends email)", () => {
+  it("create_email_reply_draft accepts reviewed=true in its schema and registry", () => {
+    const parsed = createEmailReplyDraftSchema.parse({
+      message_id: 3,
+      reviewed: true,
+    });
+    expect(parsed.reviewed).toBe(true);
+    const skill = SkillRegistry.getSkill("create_email_reply_draft");
+    expect(skill).not.toBeNull();
+    const props = skill!.parameters.properties as Record<
+      string,
+      { type: string; description?: string }
+    >;
+    expect(props.reviewed?.type).toBe("boolean");
+    // Usage restriction is stated where the model can read it.
+    expect(skill!.description).toMatch(/reviewed/i);
+    expect(props.reviewed?.description).toMatch(/ONLY/i);
+    // I-1 mitigation (final review): unattended scheduled execution has no
+    // human reviewing the message, so the flag must never be claimed there.
+    expect(props.reviewed?.description).toMatch(/scheduled|unattended/i);
+    expect(skill!.description).toMatch(/scheduled|unattended/i);
+  });
+
+  it("IPC draft-create schema accepts humanReviewed", () => {
+    // lazySchema exports a THUNK (first call caches + returns the schema).
+    const parsed = emailReplyDraftCreateInputSchema().parse({
+      messageId: 3,
+      humanReviewed: true,
+    });
+    expect(parsed.humanReviewed).toBe(true);
+  });
+
+  it("send_email_reply directs the user to card approval without sending", async () => {
     const skill = SkillRegistry.getSkill("send_email_reply");
     expect(skill).not.toBeNull();
-    expect(skill!.source).toBe("built-in");
-    expect(skill!.permissionCategory).toBe("automation");
-    expect(skill!.requiresConfirmation).toBe(true);
-    expect(skill!.parameters.required).toContain("draft_id");
+    expect(skill!.requiresConfirmation).toBe(false);
+    expect(skill!.description).toContain("Approve and send");
+    const result = await skill!.execute({ draft_id: 3 }, { conversationId: "chat", toolCallId: "reply" });
+    expect(result.success).toBe(false);
+    expect(result.result.code).toBe("email_reply_card_approval_required");
   });
 });
 
@@ -1058,4 +1111,107 @@ describe("checkEmailReplied diagnostic DTO compatibility (G02)", () => {
     // No replyEvidence field leaked into the diagnostic DTO.
     expect(result).not.toHaveProperty("replyEvidence");
   });
+});
+
+describe("sendEmailReply — approved-draft re-confirmation (CAS-fenced)", () => {
+  function stubApprovedDraft(draftId: number): void {
+    draftModuleStub.read.mockResolvedValue({
+      id: draftId,
+      messageId: 1,
+      emailServiceId: 1,
+      subject: "Re: Hi",
+      bodyText: "Hello",
+      bodyHtml: null,
+      status: "approved",
+      currentRevisionId: 7,
+    });
+  }
+
+  beforeEach(() => {
+    // No file-global clearAllMocks: reset every stub this suite touches so
+    // call-history assertions see only the current test's calls.
+    draftModuleStub.read.mockReset();
+    approvalModuleStub.invalidateAllForDraft.mockReset();
+    approvalModuleStub.invalidateAllForDraft.mockResolvedValue(1);
+    draftModuleStub.demoteApprovedToDraft.mockReset();
+    draftModuleStub.countActiveSendAttempts.mockReset();
+    draftModuleStub.countActiveSendAttempts.mockResolvedValue(0);
+    approvalStub.approveDraft.mockReset();
+    approvalStub.approveDraft.mockResolvedValue({ token: "tok2" });
+    deliveryStub.sendApprovedReply.mockReset();
+    deliveryStub.sendApprovedReply.mockResolvedValue({
+      status: "sent",
+      attemptId: 8,
+      sentAt: "2026-10-20T00:00:00.000Z",
+    });
+  });
+
+  it("retires approvals in bulk, CAS-demotes approved->draft, re-approves, delivers", async () => {
+    stubApprovedDraft(20);
+    draftModuleStub.demoteApprovedToDraft.mockResolvedValue(true);
+    const result = await sendEmailReply({ draft_id: 20, email_service_id: 1 });
+    expect(result.success).toBe(true);
+    expect(approvalModuleStub.invalidateAllForDraft).toHaveBeenCalledWith(
+      20,
+      expect.stringContaining("Re-confirmed send"),
+      expect.any(Date)
+    );
+    expect(draftModuleStub.demoteApprovedToDraft).toHaveBeenCalledWith(20);
+    expect(approvalStub.approveDraft).toHaveBeenCalledWith({
+      draftId: 20,
+      approvedByType: "tool_confirmation",
+      approvedById: "ai_tool",
+    });
+  });
+
+  it("refuses when a send is already in flight, leaving the row untouched", async () => {
+    stubApprovedDraft(21);
+    draftModuleStub.countActiveSendAttempts.mockResolvedValue(1);
+    const result = await sendEmailReply({ draft_id: 21, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("already in flight");
+    }
+    expect(approvalModuleStub.invalidateAllForDraft).not.toHaveBeenCalled();
+    expect(draftModuleStub.demoteApprovedToDraft).not.toHaveBeenCalled();
+    expect(approvalStub.approveDraft).not.toHaveBeenCalled();
+    expect(deliveryStub.sendApprovedReply).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the CAS demotion loses the race (row moved concurrently)", async () => {
+    stubApprovedDraft(22);
+    draftModuleStub.demoteApprovedToDraft.mockResolvedValue(false);
+    const result = await sendEmailReply({ draft_id: 22, email_service_id: 1 });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("state changed while re-confirming");
+    }
+    // The losing writer must NOT re-approve or deliver.
+    expect(approvalStub.approveDraft).not.toHaveBeenCalled();
+    expect(deliveryStub.sendApprovedReply).not.toHaveBeenCalled();
+  });
+
+  it.each(["sending", "sent", "discarded"] as const)(
+    "refuses confirm_send for a '%s' draft without touching the row",
+    async (status) => {
+      draftModuleStub.read.mockResolvedValue({
+        id: 30,
+        messageId: 1,
+        emailServiceId: 1,
+        subject: "Re: Hi",
+        bodyText: "Hello",
+        bodyHtml: null,
+        status,
+      });
+      const result = await sendEmailReply({ draft_id: 30, email_service_id: 1 });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain(`Cannot send a draft in state '${status}'`);
+      }
+      expect(draftModuleStub.countActiveSendAttempts).not.toHaveBeenCalled();
+      expect(draftModuleStub.demoteApprovedToDraft).not.toHaveBeenCalled();
+      expect(approvalStub.approveDraft).not.toHaveBeenCalled();
+      expect(deliveryStub.sendApprovedReply).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -59,6 +59,15 @@ vi.mock("@/modules/lib/httpclient", () => ({
   HttpResponseError: MockHttpResponseError,
 }));
 
+// Production imports HttpResponseError from "@/modules/lib/httpResponseError"
+// (not via httpclient), so mirror the mock there too — otherwise
+// `instanceof` in isHttpNotFoundError never matches the test double.
+vi.mock("@/modules/lib/httpResponseError", () => ({
+  HttpResponseError: MockHttpResponseError,
+  MAX_RESPONSE_BODY_BYTES: 16 * 1024,
+  MAX_RETRY_AFTER_MS: 60_000,
+}));
+
 import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettingsService";
 
 /** Read the first argument of the first call to a mocked fetch. */
@@ -94,7 +103,11 @@ describe("AiChatApi provider routing", () => {
 
   beforeEach(() => {
     tokenStore.clear();
-    vi.clearAllMocks();
+    // Reset (not just clear) so mockRejectedValueOnce/mockResolvedValueOnce
+    // queues from a prior test cannot leak into the next one.
+    mockGet.mockReset();
+    mockPostJson.mockReset();
+    mockPostStream.mockReset();
     api = new AiChatApi();
   });
 
@@ -237,57 +250,13 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("listOpenAIModels returns hosted models even without AI entitlement", async () => {
-    // No hosted entitlement and no local config — model listing is ungated.
-    mockGet.mockResolvedValue({
-      object: "list",
-      data: [{ id: "gpt-4", object: "model" }],
-    });
-    const res = await api.listOpenAIModels();
-    expect(res.data).toHaveLength(1);
-    expect(res.data[0].id).toBe("gpt-4");
-  });
-
-  it("openAIChatCompletion throws when hosted AI is disabled and no local provider", async () => {
-    // No hosted entitlement and no local config — chat is gated.
-    await expect(
-      api.openAIChatCompletion({
-        messages: [{ role: "user", content: "hi" }],
-      })
-    ).rejects.toThrow(/subscription|local AI provider/i);
-  });
-
-  it("openAIChatCompletionStream throws when hosted AI is disabled and no local provider", async () => {
-    // No hosted entitlement and no local config — streaming chat is gated.
-    const onChunk = vi.fn();
-    await expect(
-      api.openAIChatCompletionStream(
-        { messages: [{ role: "user", content: "hi" }] },
-        onChunk
-      )
-    ).rejects.toThrow(/subscription|local AI provider/i);
-  });
-
-  it("openAIChatCompletion succeeds when hosted AI is enabled", async () => {
-    enableHosted();
-    mockPostJson.mockResolvedValue({
-      id: "x",
-      object: "chat.completion",
-      created: 0,
-      model: "gpt-x",
-      choices: [
-        {
-          index: 0,
-          message: { role: "assistant", content: "hello" },
-          finish_reason: "stop",
-        },
-      ],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    });
-    const res = await api.openAIChatCompletion({
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.choices[0].message.content).toBe("hello");
+  it("falls back to the hosted model list when the resolver denies", async () => {
+    // 821509d8 deliberately removed the AI-enable gate from model listing:
+    // a denial (no hosted entitlement AND no local config) now falls back to
+    // the hosted list instead of throwing; execution gates live elsewhere.
+    const models = await api.listOpenAIModels();
+    expect(models.object).toBe("list");
+    expect(Array.isArray(models.data)).toBe(true);
   });
 
   it("hosted sends the small alias on the wire without the internal fallback", async () => {

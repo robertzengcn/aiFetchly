@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 /**
  * Progress reporting interface that defines the contract for reporting scraping progress.
  * 
@@ -9,7 +10,7 @@
  * ```typescript
  * const reporter = new ProgressReporter();
  * reporter.onProgressUpdate((progress) => {
- *   console.log(`Progress: ${progress.percentage}%`);
+ *   log.info(`Progress: ${progress.percentage}%`);
  * });
  * reporter.reportProgress({ currentPage: 1, totalPages: 10, percentage: 10 });
  * ```

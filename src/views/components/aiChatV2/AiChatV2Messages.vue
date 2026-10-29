@@ -13,6 +13,18 @@
           {{ t("aiChatV2.empty_description") || "Ask anything." }}
         </div>
       </div>
+      <!-- Pending (queued) messages: user bubbles in creation order, visually
+           distinct; only delivered rows feed context/tool/token features. -->
+      <AiChatV2PendingMessage
+        v-for="pending in pendingMessages"
+        :key="`pending-${pending.pendingMessageId}`"
+        :view="pending"
+        :runtime-status="runtimeStatus"
+        :steering-enabled="steeringEnabled"
+        @steer="(id: string) => emit('steer-pending', id)"
+        @cancel="(id: string) => emit('cancel-pending', id)"
+        @resume="(conversationId: string) => emit('resume-pending', conversationId)"
+      />
       <AiChatV2Message
         v-for="m in messages"
         :key="m.id"
@@ -32,6 +44,20 @@
         @open-artifact="(id: string) => emit('open-artifact', id)"
         @copy-artifact-html="(id: string) => emit('copy-artifact-html', id)"
         @report="onReportRequest"
+        @use-generated-image="
+          (reference: ChatV2GeneratedImageReference) =>
+            emit('use-generated-image', reference)
+        "
+        @edit-generated-image="
+          (reference: ChatV2GeneratedImageReference) =>
+            emit('edit-generated-image', reference)
+        "
+        @save-generated-image="
+          (reference: ChatV2GeneratedImageReference) =>
+            emit('save-generated-image', reference)
+        "
+        @retry-generated-image-batch="onRetryGeneratedImageBatch"
+        @stop-batch="emit('stop-batch')"
       />
       <div
         v-if="showTypingIndicator"
@@ -82,25 +108,39 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
+import {
+  ref,
+  watch,
+  nextTick,
+  onMounted,
+  onBeforeUnmount,
+  withDefaults,
+} from "vue";
 import { useI18n } from "vue-i18n";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatPendingMessageView,
+  ChatV2GeneratedImageReference,
+  ChatV2MessageView,
+  ChatV2RuntimeStatus,
+} from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
+import AiChatV2PendingMessage from "./AiChatV2PendingMessage.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 
-const props = defineProps<{
-  messages: ChatV2MessageView[];
-  activeAssistantMessageId: string | null;
-  streamStatus: Status;
-  errorMessage?: string;
-  showTypingIndicator?: boolean;
-  isStreaming?: boolean;
-  retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
-  /** Active seven-layer recovery status. Null when no recovery is running. */
-  recoveryInfo?: {
+const props = withDefaults(
+    defineProps<{
+    messages: ChatV2MessageView[];
+    activeAssistantMessageId: string | null;
+    streamStatus: Status;
+    errorMessage?: string;
+    showTypingIndicator?: boolean;
+    isStreaming?: boolean;
+    retryInfo?: { attempt: number; maxAttempts: number; delayMs: number } | null;
+    /** Active seven-layer recovery status. Null when no recovery is running. */
+    recoveryInfo?: {
     layer: import("@/service/AIChatRecoveryTypes").AIChatRecoveryLayer;
     reason: import("@/service/AIChatRecoveryTypes").AIChatRecoveryReason;
     attempt?: number;
@@ -111,14 +151,22 @@ const props = defineProps<{
     currentModel?: string;
     fallbackModel?: string;
     message?: string;
-  } | null;
-  workspaceRoot?: string;
-  showReasoning?: boolean;
-  /** Message ids already reported this session (parent-owned after lift). */
-  reportedMessageIds: Set<string>;
-  /** Tool-call message ids still waiting for a result during a live turn. */
-  awaitingToolMessageIds?: ReadonlySet<string>;
-}>();
+    } | null;
+    workspaceRoot?: string;
+    showReasoning?: boolean;
+    /** Non-terminal queued messages for this conversation (PRD §7.2). */
+    pendingMessages?: AIChatPendingMessageView[];
+    /** Main-process runtime status, drives Steer visibility (PRD §7.3). */
+    runtimeStatus?: ChatV2RuntimeStatus;
+    /** Steering kill switch (presentation only; default on). */
+    steeringEnabled?: boolean;
+    /** Message ids already reported this session (parent-owned after lift). */
+    reportedMessageIds?: Set<string>;
+    /** Tool-call message ids still waiting for a result during a live turn. */
+    awaitingToolMessageIds?: ReadonlySet<string>;
+  }>(),
+  { steeringEnabled: true, reportedMessageIds: () => new Set<string>() }
+);
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
   (e: "deny-permission", message: ChatV2MessageView): void;
@@ -127,6 +175,29 @@ const emit = defineEmits<{
   (e: "request-plan-changes", feedback: string): void;
   (e: "open-artifact", artifactId: string): void;
   (e: "copy-artifact-html", artifactId: string): void;
+  (
+    e: "use-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "edit-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "save-generated-image",
+    reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "retry-generated-image-batch",
+    payload: {
+      references: ChatV2GeneratedImageReference[];
+      instruction: string;
+    }
+  ): void;
+  (e: "stop-batch"): void;
+  (e: "steer-pending", pendingMessageId: string): void;
+  (e: "cancel-pending", pendingMessageId: string): void;
+  (e: "resume-pending", conversationId: string): void;
   (e: "report", descriptor: ReportableOutputDescriptor): void;
 }>();
 const { t } = useI18n();
@@ -240,6 +311,13 @@ const onGrantPermission = (
 
 const onDenyPermission = (message: ChatV2MessageView): void => {
   emit("deny-permission", message);
+};
+
+const onRetryGeneratedImageBatch = (payload: {
+  references: ChatV2GeneratedImageReference[];
+  instruction: string;
+}): void => {
+  emit("retry-generated-image-batch", payload);
 };
 
 onMounted(scrollToBottom);

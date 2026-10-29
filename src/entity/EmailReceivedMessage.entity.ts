@@ -20,121 +20,121 @@ import type {
 @Index(["threadKey"])
 export class EmailReceivedMessageEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   /** Provider-stable identifier (IMAP UID or POP3 UIDL/hash). Used for dedupe. */
   @Column("varchar", { length: 255 })
-  providerUid: string;
+  providerUid!: string;
 
   @Column("varchar", { length: 998, nullable: true })
-  messageId: string | null;
+  messageId!: string | null;
 
   /** Normalized thread key derived from References / In-Reply-To / Message-ID. */
   @Column("varchar", { length: 998, nullable: true })
-  threadKey: string | null;
+  threadKey!: string | null;
 
   @Column("varchar", { length: 998, nullable: true })
-  inReplyTo: string | null;
+  inReplyTo!: string | null;
 
   @Column("text", { nullable: true })
-  referencesHeader: string | null;
+  referencesHeader!: string | null;
 
   @Column("varchar", { length: 320 })
-  fromAddress: string;
+  fromAddress!: string;
 
   @Column("varchar", { length: 255, nullable: true })
-  fromName: string | null;
+  fromName!: string | null;
 
   @Column("varchar", { length: 320, nullable: true })
-  replyToAddress: string | null;
+  replyToAddress!: string | null;
 
   @Column("text")
-  toAddressesJson: string;
+  toAddressesJson!: string;
 
   @Column("text", { nullable: true })
-  ccAddressesJson: string | null;
+  ccAddressesJson!: string | null;
 
   @Column("varchar", { length: 998 })
-  subject: string;
+  subject!: string;
 
   @Column("text", { nullable: true })
-  bodyText: string | null;
+  bodyText!: string | null;
 
   @Column("text", { nullable: true })
-  bodyHtmlSanitized: string | null;
+  bodyHtmlSanitized!: string | null;
 
   @Column("text", { nullable: true })
-  snippet: string | null;
+  snippet!: string | null;
 
   @Column("datetime")
-  receivedAt: Date;
+  receivedAt!: Date;
 
   @Column("integer", { default: 1 })
-  isUnread: number;
+  isUnread!: number;
 
   @Column("varchar", { length: 50, nullable: true })
-  classification: EmailMessageClassification | null;
+  classification!: EmailMessageClassification | null;
 
   @Column("real", { nullable: true })
-  classificationConfidence: number | null;
+  classificationConfidence!: number | null;
 
   @Column("varchar", { length: 50, default: "not_started" })
-  replyStatus: EmailReplyStatus;
+  replyStatus!: EmailReplyStatus;
 
   @Column("datetime", { nullable: true })
-  processedAt: Date | null;
+  processedAt!: Date | null;
 
   // ---- Conversation + normalization extension (P1, technical design §6.2) ----
 
   /** Conversation this message belongs to (EmailConversationEntity.id). */
   @Column("integer", { nullable: true })
-  conversationId: number | null;
+  conversationId!: number | null;
 
   /** Normalized RFC Message-ID (unfolded, validated, length-capped). */
   @Column("varchar", { length: 998, nullable: true })
-  normalizedMessageId: string | null;
+  normalizedMessageId!: string | null;
 
   @Column("varchar", { length: 998, nullable: true })
-  normalizedInReplyTo: string | null;
+  normalizedInReplyTo!: string | null;
 
   /** Serialized normalized References chain (JSON string[]). */
   @Column("text", { nullable: true })
-  normalizedReferencesJson: string | null;
+  normalizedReferencesJson!: string | null;
 
   /** Safe plain text used for policy/context (quote/signature reduced). */
   @Column("text", { nullable: true })
-  normalizedBodyText: string | null;
+  normalizedBodyText!: string | null;
 
   /** The newly-written part of a reply, separated from quoted history. */
   @Column("text", { nullable: true })
-  newContentText: string | null;
+  newContentText!: string | null;
 
   // ---- Automated-message header signals (FR-020, P2) ----
   @Column("varchar", { length: 998, nullable: true })
-  autoSubmittedHeader: string | null;
+  autoSubmittedHeader!: string | null;
   @Column("varchar", { length: 998, nullable: true })
-  precedenceHeader: string | null;
+  precedenceHeader!: string | null;
   @Column("varchar", { length: 998, nullable: true })
-  listIdHeader: string | null;
+  listIdHeader!: string | null;
   @Column("varchar", { length: 998, nullable: true })
-  listUnsubscribeHeader: string | null;
+  listUnsubscribeHeader!: string | null;
 
   // ---- Attachment metadata (names/types/sizes only; never opened — FR-021) ----
   @Column("integer", { default: 0 })
-  hasAttachments: number;
+  hasAttachments!: number;
   @Column("text", { nullable: true })
-  attachmentMetadataJson: string | null;
+  attachmentMetadataJson!: string | null;
 
   // ---- Classification provenance (FR-007) ----
   @Column("varchar", { length: 30, nullable: true })
-  classificationSource: string | null;
+  classificationSource!: string | null;
   @Column("varchar", { length: 50, nullable: true })
-  classificationVersion: string | null;
+  classificationVersion!: string | null;
   @Column("datetime", { nullable: true })
-  classifiedAt: Date | null;
+  classifiedAt!: Date | null;
 
   // ---- Mailbox reply evidence (FR-030, technical design §5.1) ----
   // These columns are the evidence/observation layer, separate from the
@@ -145,31 +145,31 @@ export class EmailReceivedMessageEntity extends AuditableEntity {
 
   /** Raw IMAP `\Answered` flag at last flag check (0 = not observed as answered). */
   @Column("integer", { default: 0 })
-  isAnswered: number;
+  isAnswered!: number;
 
   /** When the provider answered-flag was last observed (IMAP flag check time). */
   @Column("datetime", { nullable: true })
-  answeredFlagCheckedAt: Date | null;
+  answeredFlagCheckedAt!: Date | null;
 
   /** Sticky first positive detection time — never cleared by later zero/negative. */
   @Column("datetime", { nullable: true })
-  replyDetectedAt: Date | null;
+  replyDetectedAt!: Date | null;
 
   /** Which source produced the sticky positive: `mailbox_flag` or `sent_search`. */
   @Column("varchar", { length: 20, nullable: true })
-  replyDetectionSource: string | null;
+  replyDetectionSource!: string | null;
 
   /** The Sent-folder message that matched (RFC Message-ID), for diagnostics only. */
   @Column("varchar", { length: 998, nullable: true })
-  replyMatchedMessageId: string | null;
+  replyMatchedMessageId!: string | null;
 
   /** When the last complete negative observation was stored (cache freshness). */
   @Column("datetime", { nullable: true })
-  replyNegativeCheckAt: Date | null;
+  replyNegativeCheckAt!: Date | null;
 
   /** Detector context hash the negative was observed under (invalidation key). */
   @Column("varchar", { length: 64, nullable: true })
-  replyNegativeContextHash: string | null;
+  replyNegativeContextHash!: string | null;
 
   /**
    * R02: end of the probe invocation that owns the negative observation
@@ -180,13 +180,13 @@ export class EmailReceivedMessageEntity extends AuditableEntity {
    * cleared with the observation itself.
    */
   @Column("datetime", { nullable: true })
-  replyNegativeOwnerExpiresAt: Date | null;
+  replyNegativeOwnerExpiresAt!: Date | null;
 
   /** IMAP folder this message was synced from (UID provenance, §4.1). */
   @Column("varchar", { length: 255, nullable: true })
-  providerFolder: string | null;
+  providerFolder!: string | null;
 
   /** IMAP UIDVALIDITY of the source folder (lossless string; UID is only valid with this). */
   @Column("varchar", { length: 64, nullable: true })
-  providerUidValidity: string | null;
+  providerUidValidity!: string | null;
 }

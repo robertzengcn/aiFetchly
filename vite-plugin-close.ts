@@ -3,7 +3,7 @@ export default function ClosePlugin() {
         name: 'ClosePlugin', // required, will show up in warnings and errors
 
         // use this to catch errors when building
-        buildEnd(error) {
+        buildEnd(error?: unknown) {
             if(error) {
                 console.error('Error bundling')
                 console.error(error)
@@ -14,7 +14,7 @@ export default function ClosePlugin() {
         },
 
         // use this to catch the end of a build without errors
-        closeBundle(id) {
+        closeBundle(id?: unknown) {
             console.log('Bundle closed')
             //process.exit(0)
         },

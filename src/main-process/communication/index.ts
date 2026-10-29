@@ -2,7 +2,6 @@
 // export { default as AsyncMsg } from "./async-msg";
 import { registerExtraModulesIpcHandlers } from "@/main-process/communication/extramodule-ipc";
 import { registerScheduleIpcHandlers } from "@/main-process/communication/scheduleIpc";
-import { registerYellowPagesIpcHandlers } from "@/main-process/communication/yellowPagesIpc";
 import SyncMsg from "@/main-process/communication/sync-msg";
 import AsyncMsg from "@/main-process/communication/async-msg";
 import { BrowserWindow } from "electron";
@@ -19,14 +18,26 @@ import { registerPlatformIpcHandlers } from "@/main-process/communication/platfo
 import { registerSessionRecordingIpcHandlers } from "@/main-process/communication/sessionRecording-ipc";
 import { registerLanguagePreferenceIpcHandlers } from "@/main-process/communication/language-ipc";
 import { registerRagIpcHandlers } from "@/main-process/communication/rag-ipc";
-import { registerAiChatIpcHandlers } from "@/main-process/communication/ai-chat-ipc";
 import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-chat-v2-ipc";
+import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";
+import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
+import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
+import { registerAiChatRendererMetricsIpcHandlers } from "@/main-process/communication/aiChatRendererMetricsIpc";
+import { registerAiChatWorkspaceActionCountIpcHandlers } from "@/main-process/communication/aiChatWorkspaceActionCountIpc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerToolResultIpcHandlers } from "@/main-process/communication/tool-result-ipc";
 import { registerAiChatScheduledLoopIpcHandlers } from "@/main-process/communication/ai-chat-scheduled-loop-ipc";
+import {
+  registerSkillInstallationIpcHandlers,
+  registerSkillInstallationLifecycleIpcHandlers,
+  registerPromptSkillInvokeIpcHandler,
+  registerSkillInstallRunCommandIpcHandler,
+  registerSkillInstallRevealSourceIpcHandler,
+} from "@/main-process/communication/skill-installation-ipc";
 import { registerAiTaskRolloutMetricsIpcHandlers } from "@/main-process/communication/aiTaskRolloutMetrics-ipc";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
 import { registerAIEmailTemplateHandlers } from "@/main-process/communication/ai-email-template-ipc";
 import { registerDashboardIpcHandlers } from "@/main-process/communication/dashboard-ipc";
 import { registerMCPToolIpcHandlers } from "@/main-process/communication/mcp-tool-ipc";
@@ -40,15 +51,25 @@ import { registerYandexMapsHandlers } from "@/main-process/communication/yandexM
 import { registerAiMessageTaskIpcHandlers } from "@/main-process/communication/aiMessageTask-ipc";
 import { registerAgentRuntimeIpcHandlers } from "@/main-process/communication/agent-runtime-ipc";
 import { registerAgentDefinitionIpcHandlers } from "@/main-process/communication/agent-definition-ipc";
+import { registerManagedBrowserIpcHandlers } from "@/main-process/communication/managed-browser-ipc";
 import { registerPluginIpcHandlers } from "@/main-process/communication/plugin-ipc";
+import { registerCommunityPluginIpcHandlers } from "@/main-process/communication/community-plugin-ipc";
 import { registerPluginMarketplaceIpcHandlers } from "@/main-process/communication/plugin-marketplace-ipc";
 import { registerAIUserMemoryIpcHandlers } from "@/main-process/communication/ai-user-memory-ipc";
 import { registerAIWorkspaceIpcHandlers } from "@/main-process/communication/ai-workspace-ipc";
 import { registerLocalAiRuntimeIpcHandlers } from "@/main-process/communication/local-ai-runtime-ipc";
+import {
+  registerComputerUseIpcHandlers,
+  setComputerUseSettingsStore,
+} from "@/main-process/communication/computer-use-ipc";
+import { ComputerUseError } from "@/entityTypes/computerUseTypes";
+import { TokenComputerUseSettingsStore } from "@/service/computerUse/ComputerUseSettingsStore";
 import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
+import { registerPluginArtifactIpcHandlers } from "@/main-process/communication/plugin-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
+import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
@@ -81,9 +102,12 @@ export function registerCommunicationIpcHandlers(
     // Register the window so scheduled-loop turn completions can broadcast a
     // narrow conversation-update refresh hint to the renderer (FR-11).
     AIChatConversationUpdateBroadcaster.getInstance().register(win);
+    // Interactive stream chunks + pending-message lifecycle broadcasts
+    // (message-queue design §14.2) — queue-dispatched turns start in the
+    // main process and must reach every live window.
+    AIChatV2EventBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
-    registerYellowPagesIpcHandlers();
     registerSearchIpcHandlers();
     registeProxyIpcHandlers();
     registerEmailextractionIpcHandlers();
@@ -103,12 +127,23 @@ export function registerCommunicationIpcHandlers(
     registerSessionRecordingIpcHandlers();
     registerLanguagePreferenceIpcHandlers();
     registerRagIpcHandlers();
-    registerAiChatIpcHandlers();
     registerAiChatV2IpcHandlers();
+    registerGeneratedImageExportIpcHandlers();
+    registerAiFileOpenIpcHandlers();
+    registerAiChatWorkspaceIpcHandlers();
+    // Audit R2 G01: renderer projection aggregates → main telemetry merge.
+    registerAiChatRendererMetricsIpcHandlers();
+    // R8 §2: renderer-originated workspace action counts.
+    registerAiChatWorkspaceActionCountIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
     registerToolResultIpcHandlers();
     registerAiChatScheduledLoopIpcHandlers();
+    registerSkillInstallationIpcHandlers();
+    registerSkillInstallationLifecycleIpcHandlers();
+    registerPromptSkillInvokeIpcHandler();
+    registerSkillInstallRunCommandIpcHandler();
+    registerSkillInstallRevealSourceIpcHandler();
     registerAiTaskRolloutMetricsIpcHandlers();
     registerAIEmailTemplateHandlers();
     registerDashboardIpcHandlers();
@@ -123,15 +158,51 @@ export function registerCommunicationIpcHandlers(
     registerAiMessageTaskIpcHandlers();
     registerAgentRuntimeIpcHandlers();
     registerAgentDefinitionIpcHandlers();
+    registerManagedBrowserIpcHandlers(win);
     registerPluginIpcHandlers();
+    // Community catalog (NON-AI-gated): the registration call was dropped by
+    // a dev-side merge, leaving plugin:community:* unregistered ("No handler
+    // registered") and the unified plugin page unable to load any catalog.
+    registerCommunityPluginIpcHandlers();
     registerPluginMarketplaceIpcHandlers();
     registerAIUserMemoryIpcHandlers();
     registerAIWorkspaceIpcHandlers(win);
     registerLocalAiRuntimeIpcHandlers(() => win);
+    registerComputerUseIpcHandlers({
+      // Until a qualified plugin backend ships, sessions fail closed with
+      // the typed `backend_unavailable` instead of "No handler registered"
+      // (review D1-A). Settings/status/readiness are live.
+      listSessions: () => [],
+      startSession: async () => {
+        throw new ComputerUseError(
+          "backend_unavailable",
+          "No qualified desktop backend is installed"
+        );
+      },
+      stopSession: async () => {
+        throw new ComputerUseError("session_invalid", "No session is active");
+      },
+      pauseSession: async () => {
+        throw new ComputerUseError("session_invalid", "No session is active");
+      },
+      resumeSession: async () => {
+        throw new ComputerUseError("session_invalid", "No session is active");
+      },
+      listWindows: async () => [],
+      // Grounding is Windows-only in this release; on other platforms the
+      // components cannot be offered at all (PRD §5.2 platform matrix).
+      groundingReadiness: () =>
+        process.platform === "win32" ? "not_installed" : "unsupported_target",
+    });
+    // Audit A21: writes are persisted through the Token-backed store (validated
+    // on write AND on load); readiness is derived, not hardcoded.
+    setComputerUseSettingsStore(new TokenComputerUseSettingsStore());
     registerAIProviderIpcHandlers();
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
+    registerPluginArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
+    registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
     // Best-effort reply-reliability startup: lift legacy drafts onto immutable
     // revisions and sweep stale in-flight send attempts to delivery_unknown.

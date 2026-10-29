@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import * as fs from 'fs';
 import * as path from 'path';
 // Remove electron import since it's not available in child processes
@@ -75,10 +76,10 @@ export class SessionRecordingManager {
     try {
       if (!fs.existsSync(this.sessionsDirectory)) {
         fs.mkdirSync(this.sessionsDirectory, { recursive: true });
-        console.log(`Created sessions directory: ${this.sessionsDirectory}`);
+        log.info(`Created sessions directory: ${this.sessionsDirectory}`);
       }
     } catch (error) {
-      console.error('Failed to create sessions directory:', error);
+      log.error('Failed to create sessions directory:', error);
     }
   }
 
@@ -87,7 +88,7 @@ export class SessionRecordingManager {
    */
   startSession(taskId: number, platform: string, keywords: string[], location: string): void {
     if (this.isRecording) {
-      console.warn('Session recording already in progress, stopping previous session');
+      log.warn('Session recording already in progress, stopping previous session');
       this.endSession(0, []);
     }
 
@@ -106,7 +107,7 @@ export class SessionRecordingManager {
       sessionFilePath: ''
     };
 
-    console.log(`Started session recording for task ${taskId} on ${platform}`);
+    log.info(`Started session recording for task ${taskId} on ${platform}`);
   }
 
   /**
@@ -123,7 +124,7 @@ export class SessionRecordingManager {
     };
 
     this.trainingData.push(trainingPoint);
-    console.log(`Logged action: ${action} (training data points: ${this.trainingData.length})`);
+    log.info(`Logged action: ${action} (training data points: ${this.trainingData.length})`);
   }
 
   /**
@@ -141,7 +142,7 @@ export class SessionRecordingManager {
     }
 
     this.currentSession.detailPageTrainingData.push(data);
-    console.log(`Added detail page training data for: ${data.businessName} (total detail pages: ${this.currentSession.detailPageTrainingData.length})`);
+    log.info(`Added detail page training data for: ${data.businessName} (total detail pages: ${this.currentSession.detailPageTrainingData.length})`);
   }
 
   /**
@@ -181,7 +182,7 @@ export class SessionRecordingManager {
 
       return simplifiedState;
     } catch (error) {
-      console.error('Failed to capture page state:', error);
+      log.error('Failed to capture page state:', error);
       return '<error_capturing_state>';
     }
   }
@@ -205,7 +206,7 @@ export class SessionRecordingManager {
 
     this.isRecording = false;
     
-    console.log(`Ended session recording with ${resultsCount} results and ${this.trainingData.length} training points`);
+    log.info(`Ended session recording with ${resultsCount} results and ${this.trainingData.length} training points`);
     return true;
   }
 
@@ -214,7 +215,7 @@ export class SessionRecordingManager {
    */
   async saveSession(): Promise<void> {
     if (!this.currentSession || this.currentSession.resultsCount <= 1) {
-      console.log(`Session not saved: results count ${this.currentSession?.resultsCount} <= 1`);
+      log.info(`Session not saved: results count ${this.currentSession?.resultsCount} <= 1`);
       return;
     }
 
@@ -254,12 +255,12 @@ export class SessionRecordingManager {
 
       fs.writeFileSync(filePath, JSON.stringify(sessionData, null, 2));
       
-      console.log(`Session saved to: ${filePath}`);
-      console.log(`Training data: ${this.currentSession.trainingData.length} points`);
-      console.log(`Results: ${this.currentSession.resultsCount} items`);
+      log.info(`Session saved to: ${filePath}`);
+      log.info(`Training data: ${this.currentSession.trainingData.length} points`);
+      log.info(`Results: ${this.currentSession.resultsCount} items`);
 
     } catch (error) {
-      console.error('Failed to save session:', error);
+      log.error('Failed to save session:', error);
     } finally {
       // Clear current session
       this.currentSession = null;

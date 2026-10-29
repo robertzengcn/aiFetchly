@@ -65,7 +65,7 @@ export function inferTimeoutClassByName(name: string): ToolTimeoutClass {
   if (name === "search_maps_businesses" || name === "extract_contact_info") {
     return "browser";
   }
-  if (name === "analyze_website" || name === "search_yellow_pages") {
+  if (name === "analyze_website") {
     return "network";
   }
   return "network";

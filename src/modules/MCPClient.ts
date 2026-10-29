@@ -1,6 +1,22 @@
 import { spawn, ChildProcess } from "child_process";
+import { log } from "@/modules/Logger";
 import { MCP_CONNECT_TIMEOUT_MS } from "@/config/mcpConfig";
-import type { EventEmitter } from "events";
+import {
+  SupervisedStdioTransport,
+  type SupervisedStdioTransportOptions,
+} from "@/modules/mcp/SupervisedStdioTransport";
+import { buildSanitizedChildEnv } from "@/modules/mcp/mcpSpawnPolicy";
+import {
+  getPluginMcpRuntimeResolver,
+  type ResolvedPluginLaunch,
+} from "@/service/PluginMcpRuntimeResolver";
+import type { HostAuthorizedRecoveryV1 } from "@/entityTypes/pluginExecutionTypes";
+import { Client as McpSdkClient } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  MCP_PLUGIN_PARTIAL_METHOD,
+  registerPluginPartialHandler,
+  type PluginPartialGateOutcome,
+} from "@/modules/mcp/pluginPartial";
 import type { WebSocket as WSWebSocket } from "ws";
 
 // WebSocket import - use dynamic import for optional dependency
@@ -11,56 +27,6 @@ try {
 } catch {
   // WebSocket not available, will throw error when trying to use it
 }
-
-/**
- * F1 fix — minimal environment allowlist inherited by spawned MCP stdio
- * children. Keeps PATH/HOME/USER/locale essentials so binaries resolve,
- * while keeping tokens, cookies, DB paths, and Electron-internal secrets
- * out of the child environment.
- */
-const MCP_ENV_ALLOWLIST: readonly string[] = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LANG",
-  "TERM",
-  "SHELL",
-  "PWD",
-  "HOSTNAME",
-  "LOGNAME",
-  "TZ",
-  "APPDATA",
-  "LOCALAPPDATA",
-  "PROGRAMFILES",
-  "SystemRoot",
-  "COMSPEC",
-];
-
-/**
- * F1 fix (bypass) — env var names that must NEVER be inherited from
- * caller-declared config.env. These enable arbitrary code execution or
- * process hijacking if layered on top of the spawned stdio child.
- */
-const MCP_ENV_DENY_NAMES: ReadonlySet<string> = new Set([
-  "LD_PRELOAD",
-  "LD_LIBRARY_PATH",
-  "DYLD_INSERT_LIBRARIES",
-  "DYLD_LIBRARY_PATH",
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "ELECTRON_RUN_AS_NODE",
-  "ELECTRON_ENABLE_LOGGING",
-  "UV_THREADPOOL_SIZE",
-  "PYTHONPATH",
-  "PYTHONSTARTUP",
-  "PERL5OPT",
-  "PERLLIB",
-  "RUBYOPT",
-  "RUBYLIB",
-]);
-
-/** F1 fix (bypass) — env var prefixes to block (case-insensitive). */
-const MCP_ENV_DENY_PREFIXES: readonly string[] = ["ELECTRON_", "AIFETCHLY_"];
 
 export interface MCPClientConfig {
   host?: string;
@@ -77,6 +43,37 @@ export interface MCPClientConfig {
   env?: Record<string, string>;
   /** Working directory for the spawned process (plugin-owned servers). */
   cwd?: string;
+  /** Owned-process family id for supervised stdio spawns. */
+  ownerId?: string;
+  /**
+   * Host-managed plugin runtime (plugin PRD §19.5). When present, the client
+   * resolves the trusted launch through PluginMcpRuntimeResolver instead of
+   * spawning a plugin-declared OS command: process.execPath in Node mode with
+   * the validated entry file and a written host-context file. Mutually
+   * exclusive with command/host in practice; command stays ignored.
+   */
+  hostRuntime?: {
+    readonly pluginName: string;
+    readonly entry: string;
+    readonly pluginVersion?: string;
+    /**
+     * Execute-mode host context (deadline, browser, output directory). When
+     * absent the launch is discovery mode — no browser, no output allocation
+     * (design §6.2).
+     */
+    readonly context?: {
+      readonly mode: "execute";
+      readonly executionId: string;
+      readonly outputDirectory?: string;
+      readonly browser?: {
+        readonly executablePath: string;
+        readonly version: string;
+      };
+      readonly deadlineEpochMs?: number;
+      /** Recovery attempt the host ledger authorized for this call (H1). */
+      readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
+    };
+  };
 }
 
 export interface MCPToolInfo {
@@ -85,15 +82,74 @@ export interface MCPToolInfo {
   inputSchema?: Record<string, unknown>;
 }
 
+/** Normalized content block of a tool result (design §4.1: complete blocks). */
+export type MCPContentBlock =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "image";
+      readonly mimeType: string;
+      /** Base64 payload; must be routed to the supervisor, never persisted. */
+      readonly data: string;
+    }
+  | {
+      readonly type: "audio";
+      readonly mimeType: string;
+      readonly data: string;
+    }
+  | {
+      readonly type: "resource";
+      readonly resource: {
+        readonly uri: string;
+        readonly text?: string;
+        readonly blob?: string;
+        readonly mimeType?: string;
+      };
+    }
+  | {
+      /** Preserved for completeness (audit A19): MCP resource_link blocks. */
+      readonly type: "resource_link";
+      readonly uri: string;
+      readonly name?: string;
+      readonly description?: string;
+      readonly mimeType?: string;
+    };
+
+/** Structured tool-call result preserving every content block plus isError. */
+export interface MCPToolCallContent {
+  readonly content: readonly MCPContentBlock[];
+  readonly structuredContent?: Record<string, unknown>;
+  readonly isError: boolean;
+}
+
 /**
- * MCP Client for communicating with MCP servers
- * Supports stdio, SSE, and WebSocket transports
+ * MCP Client for communicating with MCP servers.
+ *
+ * The stdio path is rebuilt on the official `@modelcontextprotocol/sdk`
+ * `Client` with a host-owned `SupervisedStdioTransport` (PRD D-19): full
+ * initialize/version negotiation, `notifications/initialized`, server→client
+ * notifications/progress/cancellation, complete content blocks, graceful
+ * close, and process-tree termination. The legacy WebSocket path is kept for
+ * existing generic servers; SSE remains unsupported.
  */
 export class MCPClient {
   private config: MCPClientConfig;
-  private connection: ChildProcess | WSWebSocket | EventSource | null = null;
+  private connection: ChildProcess | WSWebSocket | null = null;
   private connected = false;
   private requestId = 0;
+  /** SDK client for the stdio path; owns the transport lifecycle. */
+  private sdk: McpSdkClient | null = null;
+  /** Trusted host-runtime launch adopted by connectStdioHostRuntime. */
+  private hostLaunch: ResolvedPluginLaunch | null = null;
+  /** B07: transport adopted for the CURRENT SDK session (shutdown truth). */
+  private supervisedTransport: SupervisedStdioTransport | null = null;
+  /**
+   * H5: plugin-partial snapshot sink — set by MCPToolService for managed
+   * async calls; validates + maps `notifications/aifetchly/plugin-partial`
+   * snapshots onto the registry and the renderer stream.
+   */
+  private pluginPartialSink:
+    | ((raw: unknown) => PluginPartialGateOutcome)
+    | null = null;
   private pendingRequests: Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -107,15 +163,23 @@ export class MCPClient {
   }
 
   /**
+   * H5: install the plugin-partial snapshot sink for a managed-async call.
+   * Must be called BEFORE connect() — the SDK notification route is bound
+   * during the handshake and reads the sink when delivery arrives.
+   */
+  setPluginPartialSink(
+    sink: (raw: unknown) => PluginPartialGateOutcome
+  ): void {
+    this.pluginPartialSink = sink;
+  }
+
+  /**
    * Establish connection based on transport type.
    *
    * Race-protects the underlying `doConnect()` with `MCP_CONNECT_TIMEOUT_MS`
    * so a dead MCP server fails fast instead of eating the entire call budget.
-   *
-   * If the timeout fires, `doConnect()` may still be running in the
-   * background (e.g., a stdio child process that hasn't completed the
-   * handshake). We force-disconnect to clean up any spawned process and
-   * avoid leaving `this.connected = true` on an abandoned client.
+   * On timeout we force-disconnect to clean up any spawned process and avoid
+   * leaving `this.connected = true` on an abandoned client.
    */
   async connect(): Promise<void> {
     if (this.connected) {
@@ -130,14 +194,23 @@ export class MCPClient {
       );
     });
 
+    // Keep a handle on the raced-away connect attempt: when the timeout wins,
+    // its eventual rejection must not surface as an unhandled rejection.
+    const connectPromise = this.doConnect();
+    connectPromise.catch(() => undefined);
     try {
-      await Promise.race([this.doConnect(), timeoutPromise]);
+      await Promise.race([connectPromise, timeoutPromise]);
     } catch (err) {
       if (err instanceof Error && err.message === "MCP connection timeout") {
-        // Force-kill any spawned connection directly — disconnect() would
-        // no-op because this.connected is still false (doConnect hasn't
-        // completed). We must bypass the guard.
+        // Force cleanup — disconnect() would no-op because this.connected is
+        // still false (doConnect hasn't completed). We must bypass the guard.
         try {
+          if (this.sdk) {
+            await this.sdk.close().catch(() => {
+              /* best-effort */
+            });
+            this.sdk = null;
+          }
           if (
             this.config.transport === "stdio" &&
             this.connection &&
@@ -149,7 +222,6 @@ export class MCPClient {
               this.config.transport === "sse") &&
             this.connection
           ) {
-            // Best-effort close for socket-like connections
             const conn = this.connection as { close?: () => void };
             if (typeof conn.close === "function") conn.close();
           }
@@ -187,9 +259,19 @@ export class MCPClient {
   }
 
   /**
-   * Connect via stdio (process-based)
+   * Connect via stdio on the official SDK: spawn through the supervised
+   * transport, run the full initialize/version-negotiation handshake, and
+   * fail closed when the server negotiates an unsupported protocol version.
    */
   private async connectStdio(): Promise<void> {
+    // Host-managed plugin runtime: resolve the trusted launch (validated
+    // entry, process.execPath, host-context file) and spawn through the
+    // transport's trustedNodeLaunch branch. Falls through to the normal
+    // command path for every other server.
+    if (this.config.hostRuntime) {
+      return this.connectStdioHostRuntime();
+    }
+
     // Prefer explicit command/args (plugin-owned stdio servers). Fall back to
     // the legacy "host is a space-separated command" convention for manually
     // added stdio servers.
@@ -209,110 +291,133 @@ export class MCPClient {
       );
     }
 
-    return new Promise((resolve, reject) => {
-      // F1 fix — do NOT inherit the full main-process environment when
-      // spawning MCP stdio servers. Renderer/plugin-controlled server
-      // configs can reach this sink; leaking process.env exposes tokens,
-      // DB paths, cookies, and other secrets the child has no business
-      // seeing. We keep a small PATH/HOME/USER/LANG-style allowlist and
-      // layer only the caller-declared config.env on top.
-      const childEnv: NodeJS.ProcessEnv = {};
-      for (const key of MCP_ENV_ALLOWLIST) {
-        if (process.env[key] !== undefined) {
-          childEnv[key] = process.env[key];
-        }
-      }
-      if (this.config.env) {
-        for (const [k, v] of Object.entries(this.config.env)) {
-          if (typeof v !== "string") continue;
-          // F1 fix (bypass) — block variables that can hijack the spawned
-          // child process. config.env is renderer/plugin-controlled, so
-          // without this deny-list a malicious server config could inject
-          // LD_PRELOAD / DYLD_INSERT_LIBRARIES / NODE_OPTIONS / ELECTRON_*
-          // and get arbitrary code execution despite the env allowlist
-          // applied to process.env above.
-          const upper = k.toUpperCase();
-          if (MCP_ENV_DENY_NAMES.has(upper)) {
-            continue;
-          }
-          if (
-            MCP_ENV_DENY_PREFIXES.some((prefix) => upper.startsWith(prefix))
-          ) {
-            continue;
-          }
-          childEnv[k] = v;
-        }
-      }
+    const transportOptions: SupervisedStdioTransportOptions = {
+      command,
+      args,
+      env: this.config.env,
+      cwd: this.config.cwd,
+      ownerId: this.config.ownerId ?? "mcp-server",
+    };
 
-      const child = spawn(command, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: childEnv,
-        cwd: this.config.cwd,
-      });
-
-      this.connection = child;
-
-      let buffer = "";
-
-      child.stdout?.on("data", (data: Buffer) => {
-        buffer += data.toString();
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.trim()) {
-            try {
-              const message = JSON.parse(line);
-              this.handleMessage(message);
-            } catch (e) {
-              console.warn("Failed to parse MCP message:", e);
-            }
-          }
-        }
-      });
-
-      child.stderr?.on("data", (data: Buffer) => {
-        console.error("MCP stderr:", data.toString());
-      });
-
-      child.on("error", (error) => {
-        reject(error);
-      });
-
-      child.on("exit", (code) => {
-        this.connected = false;
-        if (code !== 0 && code !== null) {
-          console.error(`MCP process exited with code ${code}`);
-        }
-      });
-
-      // Send initialize request
-      this.sendRequest("initialize", {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: {
-          name: "aiFetchly",
-          version: "1.0.0",
-        },
-      })
-        .then(() => {
-          resolve();
-        })
-        .catch(reject);
-    });
+    const transport = new SupervisedStdioTransport(transportOptions);
+    await this.adoptSdkTransport(transport);
   }
 
   /**
-   * Connect via SSE (Server-Sent Events)
+   * Host-managed runtime branch (plugin PRD §19.7): resolve the launch via
+   * PluginMcpRuntimeResolver (entry confinement, atomic host-context file),
+   * spawn process.execPath in Node mode through the supervised transport, and
+   * release the context file on disconnect.
+   */
+  private async connectStdioHostRuntime(): Promise<void> {
+    const { pluginName, entry, pluginVersion, context } =
+      this.config.hostRuntime!;
+
+    const resolver = getPluginMcpRuntimeResolver();
+    const resolved = context
+      ? resolver.resolveForExecute(pluginName, entry, {
+          mode: "execute",
+          executionId: context.executionId,
+          pluginVersion: pluginVersion ?? "unknown",
+          outputDirectory: context.outputDirectory,
+          browser: context.browser,
+          deadlineEpochMs: context.deadlineEpochMs,
+          authorizedRecovery: context.authorizedRecovery,
+        })
+      : resolver.resolveForDiscovery(
+          pluginName,
+          entry,
+          pluginVersion ?? "unknown"
+        );
+    if (!resolved.ok) {
+      throw new Error(
+        `Plugin MCP runtime for "${pluginName}" rejected: ${resolved.error.message}`
+      );
+    }
+    this.hostLaunch = resolved.launch;
+
+    const transport = new SupervisedStdioTransport({
+      command: resolved.launch.executable,
+      args: resolved.launch.extraArgs,
+      env: this.config.env,
+      cwd: resolved.launch.cwd,
+      ownerId: resolved.launch.ownerId,
+      trustedNodeLaunch: {
+        executable: resolved.launch.executable,
+        entryFile: resolved.launch.entryFile,
+      },
+    });
+    try {
+      await this.adoptSdkTransport(transport);
+    } catch (error) {
+      // Failed handshake — release the transient context file immediately.
+      resolver.release(resolved.launch);
+      this.hostLaunch = null;
+      throw error;
+    }
+  }
+
+  /** Shared SDK handshake/adoption used by both stdio branches. */
+  private async adoptSdkTransport(
+    transport: SupervisedStdioTransport
+  ): Promise<void> {
+    // B07: kept for shutdown truth — disconnect() reports whether the
+    // transport observed the child exit, so a kill that could not be
+    // confirmed is never reported as successful cleanup.
+    this.supervisedTransport = transport;
+    const client = new McpSdkClient(
+      { name: "aiFetchly", version: "1.0.0" },
+      { capabilities: {} }
+    );
+    // Assign BEFORE the handshake: a connect() timeout must be able to close
+    // this client (and through it the transport, which owns and kills the
+    // spawned server child). Leaving it null here leaks the child process.
+    this.sdk = client;
+
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      this.sdk = null;
+      await client.close().catch(() => {
+        /* best-effort */
+      });
+      throw error;
+    }
+
+    // Protocol-version pinning (design §4.1) is enforced inside the SDK
+    // Client: connect() rejects a server whose negotiated protocolVersion is
+    // outside SUPPORTED_PROTOCOL_VERSIONS.
+
+    // H5: route plugin-partial snapshots through the host gate. The SDK
+    // discards unknown notification methods silently when no sink is set,
+    // so generic (non-plugin) servers are unaffected. An abusive plugin can
+    // terminate its own call below.
+    registerPluginPartialHandler(client, (notification) => {
+      const sink = this.pluginPartialSink;
+      if (!sink) return;
+      const outcome = sink(
+        (notification as { params?: unknown }).params ?? notification
+      );
+      if (outcome.terminateCall) {
+        log.warn(
+          `[mcp-partial] terminating MCP call after repeated invalid ${MCP_PLUGIN_PARTIAL_METHOD} snapshots`
+        );
+        this.terminateCallForPartialAbuse();
+      }
+    });
+    this.sdk = client;
+    this.connection = null; // the SDK owns the child via the transport
+  }
+
+  /**
+   * Connect via SSE (SSE remains out of scope; Computer Use uses stdio).
    */
   private async connectSSE(): Promise<void> {
-    // Note: Node.js doesn't have native EventSource, would need polyfill or library
-    // For now, throw error indicating SSE needs implementation
     throw new Error("SSE transport not yet implemented");
   }
 
   /**
-   * Connect via WebSocket
+   * Connect via WebSocket (legacy path for existing generic servers).
    */
   private async connectWebSocket(): Promise<void> {
     if (!WebSocket) {
@@ -354,7 +459,7 @@ export class MCPClient {
           const message = JSON.parse(dataStr);
           this.handleMessage(message);
         } catch (e) {
-          console.warn("Failed to parse WebSocket message:", e);
+          log.warn("Failed to parse WebSocket message:", e);
         }
       });
 
@@ -369,7 +474,7 @@ export class MCPClient {
   }
 
   /**
-   * Handle incoming messages
+   * Handle incoming messages (legacy WebSocket path only).
    */
   private handleMessage(message: Record<string, unknown>): void {
     if (message.id !== undefined && typeof message.id === "number") {
@@ -386,7 +491,7 @@ export class MCPClient {
   }
 
   /**
-   * Send a request to the MCP server
+   * Send a request to the MCP server (legacy WebSocket path only).
    */
   private async sendRequest(
     method: string,
@@ -427,12 +532,6 @@ export class MCPClient {
       const message = JSON.stringify(request) + "\n";
 
       if (
-        this.config.transport === "stdio" &&
-        this.connection &&
-        "stdin" in this.connection
-      ) {
-        this.connection.stdin?.write(message);
-      } else if (
         this.config.transport === "websocket" &&
         this.connection &&
         WebSocket &&
@@ -446,9 +545,35 @@ export class MCPClient {
   }
 
   /**
-   * Request list of available tools from server
+   * H5 (abuse): hard-fail the in-flight managed-async call after repeated
+   * invalid plugin-partial snapshots. Closing the SDK client rejects every
+   * pending request ("Connection closed") and closes the supervised
+   * transport, which escalates to the process-group kill.
+   */
+  private terminateCallForPartialAbuse(): void {
+    const sdk = this.sdk;
+    this.sdk = null;
+    this.connected = false;
+    if (sdk) {
+      void sdk.close().catch(() => {
+        /* transport close escalates to the tree kill */
+      });
+    }
+  }
+
+  /**
+   * Request list of available tools from server.
    */
   async listTools(): Promise<MCPToolInfo[]> {
+    if (this.sdk) {
+      const result = await this.sdk.listTools();
+      return result.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as Record<string, unknown>,
+      }));
+    }
+
     const result = (await this.sendRequest("tools/list")) as {
       tools?: Array<{
         name: string;
@@ -469,12 +594,154 @@ export class MCPClient {
   }
 
   /**
-   * Execute tool call
+   * Execute tool call and get the complete, normalized content union
+   * (design §4.1: preserve all content blocks, structured content, and
+   * isError semantics). Image data must be routed to the supervisor and is
+   * never persisted into tool JSON by generic callers.
+   *
+   * Managed-async callers (plugin PRD §21.5) pass `maxTotalTimeoutMs` and
+   * `resetTimeoutOnProgress: false` so progress notifications never extend
+   * the authoritative job deadline, plus `onprogress` to receive correlated
+   * SDK progress notifications.
+   */
+  async callToolContent(
+    toolName: string,
+    params: Record<string, unknown>,
+    options?: {
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      /** Hard total ceiling independent of progress activity (HOST-07). */
+      maxTotalTimeoutMs?: number;
+      /** Default true (legacy behavior); async callers pass false. */
+      resetTimeoutOnProgress?: boolean;
+      /** SDK progress-notification sink (progress/total/message). */
+      onprogress?: (progress: {
+        readonly progress: number;
+        readonly total?: number;
+        readonly message?: string;
+      }) => void;
+    }
+  ): Promise<MCPToolCallContent> {
+    if (!this.sdk) {
+      throw new Error("callToolContent requires an SDK stdio connection");
+    }
+    const result = await this.sdk.callTool(
+      { name: toolName, arguments: params },
+      undefined,
+      {
+        timeout: options?.timeoutMs ?? this.config.timeout,
+        signal: options?.signal,
+        resetTimeoutOnProgress: options?.resetTimeoutOnProgress ?? true,
+        maxTotalTimeout: options?.maxTotalTimeoutMs,
+        onprogress: options?.onprogress,
+      }
+    );
+
+    const rawContent = Array.isArray(result.content) ? result.content : [];
+    const content: MCPContentBlock[] = [];
+    for (const block of rawContent) {
+      const typed = block as Record<string, unknown>;
+      if (typed.type === "text" && typeof typed.text === "string") {
+        content.push({ type: "text", text: typed.text });
+      } else if (
+        typed.type === "image" &&
+        typeof typed.data === "string" &&
+        typeof typed.mimeType === "string"
+      ) {
+        content.push({
+          type: "image",
+          mimeType: typed.mimeType,
+          data: typed.data,
+        });
+      } else if (
+        typed.type === "audio" &&
+        typeof typed.data === "string" &&
+        typeof typed.mimeType === "string"
+      ) {
+        content.push({
+          type: "audio",
+          mimeType: typed.mimeType,
+          data: typed.data,
+        });
+      } else if (typed.type === "resource_link" && typeof typed.uri === "string") {
+        content.push({
+          type: "resource_link",
+          uri: typed.uri,
+          name: typeof typed.name === "string" ? typed.name : undefined,
+          description:
+            typeof typed.description === "string" ? typed.description : undefined,
+          mimeType:
+            typeof typed.mimeType === "string" ? typed.mimeType : undefined,
+        });
+      } else if (typed.type === "resource" && typed.resource) {
+        const resource = typed.resource as Record<string, unknown>;
+        content.push({
+          type: "resource",
+          resource: {
+            uri: String(resource.uri ?? ""),
+            text: typeof resource.text === "string" ? resource.text : undefined,
+            blob: typeof resource.blob === "string" ? resource.blob : undefined,
+            mimeType:
+              typeof resource.mimeType === "string"
+                ? resource.mimeType
+                : undefined,
+          },
+        });
+      }
+    }
+
+    return {
+      content,
+      structuredContent:
+        result.structuredContent &&
+        typeof result.structuredContent === "object"
+          ? (result.structuredContent as Record<string, unknown>)
+          : undefined,
+      isError: result.isError === true,
+    };
+  }
+
+  /**
+   * Execute tool call (compatibility shape preserved for MCPToolService).
    */
   async callTool(
     toolName: string,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<Record<string, unknown>> {
+    if (this.sdk) {
+      const result = await this.callToolContent(toolName, params, options);
+
+      if (result.isError) {
+        throw new Error(`Tool execution failed: ${JSON.stringify(result)}`);
+      }
+
+      // Prefer structured content when the server provides it.
+      if (result.structuredContent) {
+        return result.structuredContent;
+      }
+
+      const textContent = result.content.find(
+        (block): block is Extract<MCPContentBlock, { type: "text" }> =>
+          block.type === "text"
+      );
+      if (textContent?.text) {
+        try {
+          return JSON.parse(textContent.text) as Record<string, unknown>;
+        } catch {
+          return { result: textContent.text };
+        }
+      }
+      const dataContent = result.content.find(
+        (block) => block.type === "image" || block.type === "audio"
+      );
+      if (dataContent) {
+        return { data: dataContent.data, mimeType: dataContent.mimeType };
+      }
+
+      return { content: result.content };
+    }
+
     const result = (await this.sendRequest("tools/call", {
       name: toolName,
       arguments: params,
@@ -507,11 +774,40 @@ export class MCPClient {
   }
 
   /**
-   * Close connection
+   * Close connection: SDK graceful close (drain stdin, then escalate to
+   * SIGTERM/SIGKILL) for stdio; direct close for the legacy WebSocket path.
    */
-  async disconnect(): Promise<void> {
-    if (!this.connected) {
-      return;
+  async disconnect(): Promise<boolean> {
+    if (!this.connected && !this.sdk) {
+      return true;
+    }
+
+    // Host-runtime launches own a transient host-context file; release it on
+    // every disconnect path (design §6.2: delete after process exit).
+    if (this.hostLaunch) {
+      getPluginMcpRuntimeResolver().release(this.hostLaunch);
+      this.hostLaunch = null;
+    }
+
+    if (this.sdk) {
+      const sdk = this.sdk;
+      const supervised = this.supervisedTransport;
+      this.supervisedTransport = null;
+      this.sdk = null;
+      this.connected = false;
+      // B07: a close() failure is RECORDABLE, not swallowed — combined with
+      // the transport's exit confirmation this decides whether callers may
+      // claim the shutdown happened.
+      let closeOk = true;
+      try {
+        await sdk.close();
+      } catch {
+        closeOk = false;
+      }
+      const exitConfirmed = supervised
+        ? (supervised.exitConfirmation() ?? false)
+        : true;
+      return closeOk && exitConfirmed;
     }
 
     if (
@@ -531,6 +827,17 @@ export class MCPClient {
 
     this.connection = null;
     this.connected = false;
+    for (const pending of this.pendingRequests.values()) {
+      pending.reject(new Error("MCP client disconnected"));
+    }
     this.pendingRequests.clear();
+    return true;
   }
 }
+
+/**
+ * Exposed for the session pool and tests: build the sanitized child env from
+ * the shared spawn policy. Re-exported so callers do not reach into private
+ * MCPClient internals.
+ */
+export { buildSanitizedChildEnv };

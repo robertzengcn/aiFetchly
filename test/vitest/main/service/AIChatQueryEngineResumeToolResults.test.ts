@@ -151,6 +151,10 @@ function stubLoop() {
     run: vi.fn().mockResolvedValue({
       type: "completed",
       content: "ok",
+      // Stage A outcome handling reads fullContent (absent on the legacy
+      // dev-only result shape) — supply it so the terminal path persists
+      // cleanly instead of crashing in handleLoopResult.
+      fullContent: "ok",
       conversationId: "conv-resume",
       assistantMessageId: "asst-resume",
       messages: [],
@@ -158,7 +162,7 @@ function stubLoop() {
   };
 }
 
-function makeEngine(events: AIChatQueryEvent[]): AIChatQueryEngine {
+function makeEngine(_events: AIChatQueryEvent[]): AIChatQueryEngine {
   const engine = new AIChatQueryEngine(stubLoop() as never, {
     streamChatCompletion: makeStream(),
     executeTool: vi.fn().mockResolvedValue(oversizedToolResult()),
@@ -227,19 +231,41 @@ async function pauseThenResume(events: AIChatQueryEvent[]) {
     toolArguments: { to: "x@example.com" },
     turnId: "turn-1",
   });
+  // Stage A claim architecture: the resume's destination sink lives in the
+  // pendingSinks side map (takePendingSink), not on the pending entry — seed
+  // it with the observing sink so the test sees what reaches the renderer.
+  (
+    engine as unknown as {
+      pendingSinks: Map<string, unknown>;
+    }
+  ).pendingSinks.set("conv-resume", {
+    emit: (e: AIChatQueryEvent) => events.push(e),
+  });
 
   const result = await engine.resumeToolAfterPermission({
     toolId: "call_1",
     conversationId: "conv-resume",
     approved: true,
   } as never);
+  // The continuation runs fire-and-forget through the claim path; settle it
+  // deterministically on the segment's terminal event.
+  await vi.waitFor(() => {
+    expect(
+      events.some(
+        (e) =>
+          e.type === "complete" ||
+          e.type === "error" ||
+          e.type === "cancelled"
+      )
+    ).toBe(true);
+  });
   return { engine, result, messages };
 }
 
 describe("AIChatQueryEngine.resumeToolAfterPermission — preserved results", () => {
   it("routes the resumed result through the pipeline", async () => {
     const events: AIChatQueryEvent[] = [];
-    const { engine, messages } = await pauseThenResume(events);
+    const { engine } = await pauseThenResume(events);
     expect(engine).toBeDefined();
 
     // The pipeline actually ran for the resumed attempt.

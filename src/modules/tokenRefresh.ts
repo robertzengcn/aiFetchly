@@ -155,7 +155,7 @@ export class TokenRefreshService {
     try {
       new URL(loginUrl);
     } catch (error) {
-      console.warn(
+      log.warn(
         `Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`
       );
       loginUrl = "http://localhost:3000";

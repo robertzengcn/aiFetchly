@@ -11,6 +11,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { defineComponent } from "vue";
 import { createI18n } from "vue-i18n";
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
+import AiChatV2SlashSuggestions from "@/views/components/aiChatV2/AiChatV2SlashSuggestions.vue";
 import { listSlashCommands } from "@/views/api/slashCommands";
 import type { SlashCommandView } from "@/entityTypes/slashCommandTypes";
 import type { SlashCommandListResponse } from "@/entityTypes/slashCommandTypes";
@@ -27,6 +28,12 @@ vi.mock("@/views/api/slashCommands", () => ({
     configChangedCallback.current = cb;
     return () => undefined;
   }),
+}));
+
+const listAtMentionSuggestionsMock = vi.fn();
+vi.mock("@/views/api/aiChatAtMentions", () => ({
+  listAtMentionSuggestions: (...args: unknown[]) =>
+    listAtMentionSuggestionsMock(...args),
 }));
 
 const i18n = createI18n({
@@ -83,12 +90,16 @@ function command(name: string): SlashCommandView {
   };
 }
 
-function mountComposer(conversationId?: string | null) {
+function mountComposer(
+  conversationId?: string | null,
+  workspaceId?: number | null
+) {
   return mount(AiChatV2Composer, {
     props: {
       isStreaming: false,
       isProcessing: false,
       conversationId,
+      ...(workspaceId !== undefined ? { workspaceId } : {}),
     },
     global: {
       plugins: [i18n],
@@ -174,6 +185,84 @@ describe("AiChatV2Composer conversation-scoped slash suggestions", () => {
     await flushPromises();
 
     expect(listSlashCommands).not.toHaveBeenCalled();
+  });
+
+  /** R8 P2 (FR-WSP-006): a same-conversation workspace rebinding must
+   * refresh the scoped slash catalog — otherwise the previous workspace's
+   * commands stay listable from the open dropdown. */
+  it("refreshes the slash scope when the workspace rebinds on the SAME conversation", async () => {
+    vi.mocked(listSlashCommands).mockResolvedValue({
+      commands: [command("workspace-cmd")],
+    } as unknown as SlashCommandListResponse);
+    const wrapper = mountComposer("conv-A", 1);
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("/w");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(listSlashCommands).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conversationId: "conv-A" })
+    );
+    expect(
+      wrapper.findComponent(AiChatV2SlashSuggestions).exists()
+    ).toBe(true);
+
+    vi.mocked(listSlashCommands).mockClear();
+    // Same conversation, different bound workspace.
+    await wrapper.setProps({ workspaceId: 2 });
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+
+    expect(listSlashCommands).toHaveBeenCalledWith({
+      conversationId: "conv-A",
+      query: "w",
+    });
+  });
+
+  it("does NOT refresh slash on a rebind when the draft is not a slash command", async () => {
+    const wrapper = mountComposer("conv-A", 1);
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("hello");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    vi.mocked(listSlashCommands).mockClear();
+
+    await wrapper.setProps({ workspaceId: 2 });
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+
+    expect(listSlashCommands).not.toHaveBeenCalled();
+  });
+
+  /** R8 P2 (FR-WSP-007): the @-mention catalog is workspace-file scoped —
+   * a rebinding must refresh it while the mention dropdown is open. */
+  it("refreshes the @-mention scope when the workspace rebinds with the dropdown open", async () => {
+    listAtMentionSuggestionsMock.mockResolvedValue({
+      suggestions: [
+        {
+          id: "w1-file-ts",
+          displayText: "file.ts",
+          insertText: "@file.ts",
+          relativePath: "file.ts",
+          kind: "file",
+        },
+      ],
+      workspaceRequired: false,
+    });
+    const wrapper = mountComposer("conv-A", 1);
+    await wrapper.find('[data-testid="ai-chat-composer"]').setValue("@f");
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+    expect(listAtMentionSuggestionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ conversationId: "conv-A" })
+    );
+
+    listAtMentionSuggestionsMock.mockClear();
+    await wrapper.setProps({ workspaceId: 2 });
+    await vi.advanceTimersByTimeAsync(130);
+    await flushPromises();
+
+    expect(listAtMentionSuggestionsMock).toHaveBeenCalledWith({
+      conversationId: "conv-A",
+      query: "f",
+    });
   });
 
   it("does not flash a previous conversation's commands when switching mid-suggestion (AC-1 stale guard)", async () => {

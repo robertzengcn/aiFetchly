@@ -12,11 +12,11 @@ import { Order } from "@/entity/order.decorator";
 @Index(["health"])
 export class PluginMarketplaceEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("text")
-  name: string;
+  name!: string;
 
   @Order(2)
   @Column("text", { nullable: true })
@@ -24,7 +24,7 @@ export class PluginMarketplaceEntity extends AuditableEntity {
 
   @Order(3)
   @Column("text")
-  ownerName: string;
+  ownerName!: string;
 
   @Order(4)
   @Column("text", { nullable: true })
@@ -44,11 +44,11 @@ export class PluginMarketplaceEntity extends AuditableEntity {
 
   @Order(8)
   @Column("text")
-  sourceKind: string; // PluginMarketplaceSourceKind
+  sourceKind!: string; // PluginMarketplaceSourceKind
 
   @Order(9)
   @Column("text")
-  sourceUri: string; // redacted for display
+  sourceUri!: string; // redacted for display
 
   @Order(10)
   @Column("text", { nullable: true })
@@ -60,27 +60,27 @@ export class PluginMarketplaceEntity extends AuditableEntity {
 
   @Order(12)
   @Column("text")
-  manifestJson: string; // validated marketplace manifest
+  manifestJson!: string; // validated marketplace manifest
 
   @Order(13)
   @Column("integer", { default: 0 })
-  pluginCount: number;
+  pluginCount!: number;
 
   @Order(14)
   @Column("integer", { default: 1 })
-  enabled: number;
+  enabled!: number;
 
   @Order(15)
   @Column("integer", { default: 0 })
-  autoUpdate: number; // MVP: stored, not acted on
+  autoUpdate!: number; // MVP: stored, not acted on
 
   @Order(16)
   @Column("text", { default: "healthy" })
-  health: string; // PluginMarketplaceHealth
+  health!: string; // PluginMarketplaceHealth
 
   @Order(17)
   @Column("text", { default: "[]" })
-  lastErrorJson: string;
+  lastErrorJson!: string;
 
   @Order(18)
   @Column("datetime", { nullable: true })
@@ -88,5 +88,5 @@ export class PluginMarketplaceEntity extends AuditableEntity {
 
   @Order(19)
   @Column("text", { default: "{}" })
-  sourceMetaJson: string; // non-secret source metadata
+  sourceMetaJson!: string; // non-secret source metadata
 }

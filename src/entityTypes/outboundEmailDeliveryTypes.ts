@@ -132,6 +132,22 @@ export type OutboundEmailBatchStatus = z.infer<
   typeof outboundEmailBatchStatusSchema
 >;
 
+/**
+ * Batch statuses from which a NEW exact-draft review approval may be created
+ * (§8.1 lifecycle + §13.2). Everything else — delivery attempted (queued,
+ * sending) or settled (sent, partially_sent, failed, discarded) or
+ * inconclusive (delivery_unknown) — must fail closed: a fresh approval mints
+ * a fresh idempotency key and would create a SECOND delivery attempt
+ * (FR-OUT-006). Mirrors OutboundEmailDraftService's SENDER_FILLABLE_STATUSES.
+ */
+export const OUTBOUND_EMAIL_AUTHORIZABLE_BATCH_STATUSES: ReadonlySet<OutboundEmailBatchStatus> =
+  new Set([
+    "drafting",
+    "draft_ready",
+    "preflight_failed",
+    "awaiting_review",
+  ]);
+
 export const outboundEmailDraftStatusSchema = z.enum([
   "draft",
   "invalid",

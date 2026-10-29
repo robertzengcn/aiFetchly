@@ -21,7 +21,7 @@ import { ref } from 'vue'
 // import { SearchResult } from '@/views/api/types'
 import { useRoute } from "vue-router";
 import router from '@/views/router';
-// import { TaskRunEntity } from '@/entityTypes/taskrun-types'
+import { TaskRunEntity } from '@/entityTypes/taskrun-type'
 type Fetchparam = {
     id: number
     page: number,
@@ -71,7 +71,7 @@ const search = ref('');
 const $route = useRoute();
 const taskId = $route.params.id.toString();
 
-function loadItems({ page, itemsPerPage }) {
+function loadItems({ page, itemsPerPage }: { page: number; itemsPerPage: number }) {
     loading.value = true
     const fetchitem: Fetchparam = {
         id: parseInt(taskId),
@@ -91,7 +91,7 @@ function loadItems({ page, itemsPerPage }) {
         })
 }
 //open task result list page
-const checkList=(item)=>{
+const checkList=(item: TaskRunEntity)=>{
     // const routeData = router.resolve({name: 'Task-result-list', params: {id: item.id}});
     // window.open(routeData.href, '_blank')
     router.push({

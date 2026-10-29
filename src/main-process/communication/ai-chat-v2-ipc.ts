@@ -1,5 +1,44 @@
 import { ipcMain } from "electron";
+import {
+  AIChatTurnQueueService,
+  AIChatTurnQueueError,
+  createSteeringPromoter,
+} from "@/service/AIChatTurnQueueService";
+import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatV2EventBroadcaster } from "@/service/AIChatV2EventBroadcaster";
+import {
+  AI_CHAT_MESSAGE_QUEUE_ENABLED,
+  AI_CHAT_MESSAGE_STEERING_ENABLED,
+} from "@/config/usersetting";
+import {
+  aiChatPendingCreateInputSchema,
+  aiChatPendingListInputSchema,
+  aiChatPendingSteerInputSchema,
+  aiChatPendingCancelInputSchema,
+  aiChatPendingResumeInputSchema,
+} from "@/schemas/ipc/aiChatPendingMessage";
+import {
+  AI_CHAT_V2_PENDING_CREATE,
+  AI_CHAT_V2_PENDING_LIST,
+  AI_CHAT_V2_PENDING_STEER,
+  AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_PENDING_RESUME,
+} from "@/config/channellist";
+import type { ZodType } from "zod/v4";
+// G01 (design §18): bounded observability counters for capability actions.
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
+import { recordPlanDecisionTiming } from "@/main-process/communication/aiChatPlanDecisionTiming";
+import type {
+  AIChatPendingCreateResult,
+  AIChatPendingMessageView,
+} from "@/entityTypes/aiChatV2Types";
 import { Token } from "@/modules/token";
+import { log } from "@/modules/Logger";
+// P1-1 (audit 2026-10-22): the clear channel shares the delete handler's
+// authoritative busy predicate (B03). Call-time use only — the module graph
+// between the two IPC files is circular by design with deferred access.
+import { getConversationBusyReason } from "@/main-process/communication/ai-chat-workspace-ipc";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import type { OpenAIChatCompletionRequest } from "@/api/aiChatApi";
@@ -15,6 +54,10 @@ import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import type { ModelLimitResolver } from "@/service/AIChatRequestBudgetService";
 import { AIChatCompactAgentService } from "@/service/AIChatCompactAgentService";
+import {
+  getSharedLightweightCompletionService,
+  resetLightweightRuntime,
+} from "@/service/AIChatLightweightCompletionFactory";
 import { AIChatCompactionCoordinator } from "@/service/AIChatCompactionCoordinator";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
@@ -41,11 +84,14 @@ import {
 import { evaluateToolApproval } from "@/service/AIChatToolApprovalPolicyService";
 import { redirectToLoginOnAuthExpired } from "@/service/AIChatAuthExpiredHandler";
 import { userSafeError } from "@/service/AIChatErrorMapper";
+import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
+import {
+  getRunOwnerResumeRouter,
+} from "@/service/aiChatWorkspaceRuntime";
+import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
+import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
-import type {
-  AIChatQueryEvent,
-  AIChatQueryEventSink,
-} from "@/service/AIChatQueryEvents";
 import {
   AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
   AI_CHAT_V2_DENY_TOOL_PERMISSION,
@@ -64,6 +110,7 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_READ_PASTE_CACHE,
@@ -82,10 +129,18 @@ import {
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
+  AIChatPlanContinuationRecoveryView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import { AnswerPlanQuestionAnswersSchema } from "@/main-process/communication/aiChatV2PlanAnswerSchema";
+import {
+  PlanApproveInputSchema,
+  PlanRejectInputSchema,
+  PlanRequestChangesInputSchema,
+  PlanVersionsInputSchema,
+  parsePlanDecisionInput,
+} from "@/main-process/communication/aiChatV2PlanDecisionSchema";
 import type {
   ChatV2StreamRequest,
   ChatV2StreamChunk,
@@ -103,6 +158,20 @@ import {
   aiChatHistorySubmissionIdSchema,
 } from "@/schemas/aiChatHistorySelections";
 import { PasteStoreService } from "@/service/pastedText/PasteStoreService";
+import { CHAT_IMAGE_LIMITS } from "@/config/chatImageLimits";
+import {
+  normalizeGeneratedImageReferences,
+  GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+  GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+} from "@/service/generatedImageReferenceNormalize";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
+import { AIChatWorkspaceRunDispatchBridge } from "@/service/AIChatWorkspaceRunDispatchBridge";
+import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
+import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
+
+/** Cap for the user-confirmed batch reference set. Matches the batch tool's
+ * MAX_BATCH_ITEMS so a confirmed set is never rejected downstream. */
+const CONFIRMED_BATCH_MAX_REFERENCES = 50;
 import type {
   SearchResult,
   ReadResult,
@@ -164,6 +233,15 @@ export function createQueryLoop(): AIChatQueryLoop {
     // budget-checked immediately before streamChatCompletion (FR-04/FR-08,
     // AC-11/AC-16). Never omit this service on a production path.
     requestBudgetService: new AIChatRequestBudgetService(),
+    // Stage B §5.1: native provider iteration is the loop's preferred seam;
+    // the callback form remains as the compatibility facade.
+    streamEvents: (request, options) => {
+      const api = new AiChatApi();
+      return api.openAIChatCompletionStreamEvents(
+        applyLocalToolPolicy(request),
+        options
+      );
+    },
     streamChatCompletion: (request, onChunk, options) => {
       const api = new AiChatApi();
       return api.openAIChatCompletionStream(
@@ -238,6 +316,13 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   if (queryEngine) {
     queryEngine.stopActiveTurn();
   }
+  if (queueService) {
+    // Rows stay durable in each database; only in-memory drain chains and
+    // event associations are dropped (message-queue design §16.2). The next
+    // database runs its own recovery on first use.
+    queueService = null;
+  }
+  queueServiceRecovered = false;
   queryEngine = null;
   compactAgent = null;
   queryEngineDbPath = null;
@@ -252,6 +337,12 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
+  // Clear the shared lightweight route cooldowns so one account/provider
+  // cannot suppress another (tech-design §12).
+  resetLightweightRuntime();
+  // Staged confirmed reference sets belong to the previous account's
+  // conversations; drop them so they can never feed a new account's batch.
+  getConfirmedBatchReferenceRegistry().clearAll();
 }
 
 function getCompactAgent(): AIChatCompactAgentService {
@@ -270,12 +361,19 @@ function getCompactAgent(): AIChatCompactAgentService {
     const tokenService = new Token();
     const catalog = getCompactModelCatalog();
     compactAgent = new AIChatCompactAgentService(tokenService, {
-      completeChat: (request) => new AiChatApi().openAIChatCompletion(request),
+      // Route session-memory and full-compact workloads through the shared
+      // lightweight completion service so the hosted provider (when the kill
+      // switch is enabled) sends model: "small" (tech-design §5.2).
+      completeLightweight: (input) =>
+        getSharedLightweightCompletionService().complete(input),
       // Compact follows the chat availability resolver so local-provider users
-      // can compact conversations without a hosted subscription. Sync predicate
-      // (compact agent isEnabled cannot await); the lazy reconcile runs at the
-      // streaming entry points via the async canUseChat().
-      isEnabled: () => canUseChatSync().ok,
+      // can compact conversations without a hosted subscription.
+      isEnabled: () => canUseChat().ok,
+      // Capability gate for full compact: absent metadata means the small
+      // route is not eligible and compact goes to the normal model
+      // (tech-design §16.1).
+      getSmallModelCapability: () =>
+        compactModelCatalog!.getSmallModelCapability(),
       // Real per-model context window so the auto-compact threshold matches
       // the renderer badge denominator (hard-coded 128k would never trip for
       // models with smaller windows).
@@ -405,7 +503,9 @@ function newRetrievalService(): AIChatHistoryRetrievalService {
   return new AIChatHistoryRetrievalService(new AIChatArchiveModule());
 }
 
-function getQueryEngine(): AIChatQueryEngine {
+
+/** Shared engine singleton — also used by the workspace coordinator. */
+export function getQueryEngine(): AIChatQueryEngine {
   const dbPath = getCurrentUserDbPath();
   if (
     queryEngine &&
@@ -420,6 +520,34 @@ function getQueryEngine(): AIChatQueryEngine {
       compactAgent: getCompactAgent(),
       autoDreamService: getSharedAutoDreamService(),
       workspaceAutoDreamService: getSharedWorkspaceAutoDreamService(),
+      // Turn mailboxes persist steering via the pending Module (design §10).
+      // The applied flip broadcasts as a pending lifecycle event so every
+      // surface's steering bubble clears (the shell store removes on it).
+      steeringPromoter: createSteeringPromoter(
+        new AIChatPendingMessageModule(),
+        ({ conversationId, pendingMessageId, view }) => {
+          AIChatV2EventBroadcaster.getInstance().emitPendingEvent({
+            conversationId,
+            pendingMessageId,
+            status: "applied",
+            occurredAt: new Date().toISOString(),
+            ...(view ? { pendingMessage: view } : {}),
+          });
+        }
+      ),
+      // True-terminal notification for the durable queue: resumed-turn
+      // continuations (permission / plan-question grants) are fire-and-forget,
+      // so this is the only drain/hold trigger for rows queued behind them.
+      // Coordinator-run terminals notify through the same queue call — the
+      // double notification is idempotent (drain chains serialize; holds
+      // re-pause already-paused rows).
+      onTurnTerminal: (conversationId, outcome) => {
+        void getQueueService()
+          .notifyExternalTurnTerminal(conversationId, outcome)
+          .catch((err: unknown) => {
+            log.warn("[ai-chat-v2] queue terminal notification failed:", err);
+          });
+      },
       // §11.1: share one coordinator across the interactive engine and the
       // compact agent when the new-compaction stage is on, so the post-turn
       // auto-compaction hook takes the durable incremental path. Flag-off
@@ -444,6 +572,190 @@ function getQueryEngine(): AIChatQueryEngine {
 }
 
 // -------------------------------------------------------------------------
+// Pending-message queue service (message-queue design §9)
+// -------------------------------------------------------------------------
+
+let queueService: AIChatTurnQueueService | null = null;
+let queueServiceRecovered = false;
+
+function isQueueFeatureEnabled(): boolean {
+  return new Token().getValue(AI_CHAT_MESSAGE_QUEUE_ENABLED) !== "false";
+}
+
+function isSteeringFeatureEnabled(): boolean {
+  return (
+    isQueueFeatureEnabled() &&
+    new Token().getValue(AI_CHAT_MESSAGE_STEERING_ENABLED) !== "false"
+  );
+}
+
+/**
+ * Broadcaster-backed stream sink for queue-dispatched turns: reuses the
+ * shared createChatV2StreamSink mapping and fans it out to every live
+ * window, since queue turns start in the main process (design §14.2).
+ *
+ * The same chunks are ALSO wrapped with run identity and routed through the
+ * workspace detail channel (chat-first shell unification): the shell's
+ * transcript consumes ChatRunDetailEvent, not the legacy stream channel, so
+ * without this bridge a queue-drained turn would render only after a
+ * history reload. The sink instance is per dispatch, so the adapter's
+ * sequence stays monotonic within one turn; the synthetic runId is stable
+ * for the turn (the presenter binds runs by opening "start" events).
+ */
+let pendingTurnSinkCounter = 0;
+/**
+ * B06: per-dispatch broadcast sink. When the queue supplies the bridge's
+ * durable run identity, detail envelopes carry the REAL run id (Activity
+ * identity and live event identity agree; reselection reconstructs it).
+ * Without identity (legacy callers) a synthetic per-turn id preserves the
+ * previous behavior.
+ */
+function createBroadcastEventSink(identity?: {
+  runId: string;
+  conversationId: string;
+  /** Audit R03: the accepted append identity this stream serves from. */
+  sourceRunId?: string | null;
+}): AIChatQueryEventSink {
+  const broadcaster = AIChatV2EventBroadcaster.getInstance();
+  pendingTurnSinkCounter += 1;
+  const adapter = new AIChatRunEventAdapter(
+    identity?.runId ?? `pending-queue-${pendingTurnSinkCounter}`,
+    identity?.conversationId ?? "" // per-chunk: overridden below when empty
+  );
+  const routeDetail = (chunk: ChatV2StreamChunk): void => {
+    if (!chunk.conversationId && !identity?.conversationId) return;
+    // The adapter's envelope copies its CONSTRUCTOR conversationId, so bind
+    // the chunk's real conversation here — the router only delivers events
+    // whose conversation matches the window's selection.
+    sharedWorkspaceEventRouter.sendDetailEvent({
+      ...adapter.wrap(chunk),
+      conversationId: chunk.conversationId || identity?.conversationId || "",
+      // B06: the envelope run id is the durable bridge run when known.
+      ...(identity?.runId ? { runId: identity.runId } : {}),
+      // Audit R03: the accepted append identity rides the envelope so the
+      // renderer's start facts bind the accepted send exactly.
+      ...(identity?.sourceRunId ? { sourceRunId: identity.sourceRunId } : {}),
+    });
+  };
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => {
+      broadcaster.emitStreamChunk(chunk);
+      routeDetail(chunk);
+    },
+    sendComplete: (chunk) => {
+      broadcaster.emitStreamComplete(chunk);
+      routeDetail(chunk);
+    },
+  });
+}
+
+/**
+ * B06: bounded queue-owned summary broadcast (allowlisted reasons only —
+ * never transcript/tool bodies). Inactive rows get authoritative
+ * pending/waiting/terminal attention without private detail; the selected
+ * conversation keeps full detail via the detail channel above.
+ */
+function broadcastQueueSummary(input: {
+  conversationId: string;
+  runId: string | null;
+  /** Audit R03: accepted append identity the fact's turn was scheduled from. */
+  sourceRunId?: string | null;
+  reason:
+    | "run_queued"
+    | "run_started"
+    | "permission_required"
+    | "user_input_required"
+    | "run_completed"
+    | "run_failed"
+    | "run_cancelled";
+}): void {
+  const runtimeStatus =
+    input.reason === "permission_required"
+      ? ("awaiting_permission" as const)
+      : input.reason === "user_input_required"
+        ? ("awaiting_user" as const)
+        : input.reason === "run_started"
+          ? ("running" as const)
+          : input.reason === "run_queued"
+            ? ("queued" as const)
+            : ("idle" as const);
+  sharedWorkspaceEventRouter.broadcastSummary({
+    conversationId: input.conversationId,
+    workspaceKey: null,
+    runtimeStatus,
+    attention:
+      input.reason === "permission_required"
+        ? "permission"
+        : input.reason === "user_input_required"
+          ? "user_input"
+          : input.reason === "run_failed"
+            ? "failure"
+            : "none",
+    unread: input.reason !== "run_completed",
+    lastActivityAt: new Date().toISOString(),
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.sourceRunId ? { sourceRunId: input.sourceRunId } : {}),
+    reason: input.reason,
+  });
+}
+
+export function getQueueService(): AIChatTurnQueueService {
+  if (!queueService) {
+    const pendingModule = new AIChatPendingMessageModule();
+    // B02: queue-backed dispatches admit through the SHARED global
+    // scheduler (same instance as the workspace coordinator) — sourceId =
+    // pendingMessageId, terminal mapping persisted before side effects.
+    const sharedScheduler = getSharedExecutionScheduler();
+    queueService = new AIChatTurnQueueService({
+      engine: getQueryEngine(),
+      pendingModule,
+      // T1 (AD-002/003): queue-backed dispatches mint their run envelopes
+      // through the bridge — sourceId = pendingMessageId, terminal mapping
+      // persisted before the drain's side effects settle.
+      dispatchBridge: new AIChatWorkspaceRunDispatchBridge(
+        undefined,
+        sharedScheduler
+      ),
+      scheduler: sharedScheduler,
+      eventSink: {
+        emit: (event) =>
+          AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
+      },
+      streamSinkFactory: (identity) => createBroadcastEventSink(identity),
+      summarySink: (input) => broadcastQueueSummary(input),
+      tryAcquireLease: ({ conversationId }) =>
+        AIChatConversationTurnCoordinator.getInstance().tryAcquire({
+          conversationId,
+          owner: "interactive",
+          ownerId: "pending-queue",
+        }),
+      isAiEnabled: () => canUseChat().ok,
+      isQueueEnabled: isQueueFeatureEnabled,
+      isSteeringEnabled: isSteeringFeatureEnabled,
+      // Audit R7-04: queue-drained turns project their durable user/assistant
+      // moments into ai_chat_conversations (parity with the coordinator path).
+      conversationModule: new AIChatConversationModule(),
+    });
+  }
+  return queueService;
+}
+
+/**
+ * Run startup/database-switch recovery exactly once per queue-service
+ * instance (design §16.1). Reconciliation only pauses/deduplicates durable
+ * rows — it never starts provider work.
+ */
+async function ensureQueueRecovered(): Promise<void> {
+  if (queueServiceRecovered) return;
+  queueServiceRecovered = true;
+  try {
+    await getQueueService().recoverOnStartup();
+  } catch (err) {
+    log.error("[ai-chat-v2] pending queue recovery failed:", err);
+  }
+}
+
+// -------------------------------------------------------------------------
 // IPC helpers
 // -------------------------------------------------------------------------
 
@@ -464,12 +776,11 @@ function getChatResolver(): AIProviderResolver {
 }
 
 /**
- * Synchronous chat-availability check. Used for the compact-agent `isEnabled`
- * predicate, which cannot await. Local-provider mode returns early (local
- * compaction must work without a hosted subscription — PRD §11.4); only the
- * hosted branch reads USER_AI_ENABLED.
+ * Provider-aware Chat V2 availability gate. Exported so sibling AI-chat
+ * handler files (e.g. generated-image export, workspace coordinator) enforce
+ * the SAME gate FIRST, before parsing payloads or touching the filesystem.
  */
-function canUseChatSync(): { ok: true } | { ok: false; message: string } {
+export function canUseChat(): { ok: true } | { ok: false; message: string } {
   const provider = getChatResolver().resolveForChat();
   if (provider.canUse) {
     return { ok: true };
@@ -486,7 +797,7 @@ function canUseChatSync(): { ok: true } | { ok: false; message: string } {
  *
  * GET failures keep the cache, so a Community user is never falsely unlocked.
  */
-async function canUseChat(): Promise<
+async function canUseChatWithReconcile(): Promise<
   { ok: true } | { ok: false; message: string }
 > {
   const first = getChatResolver().resolveForChat();
@@ -592,241 +903,33 @@ function sendComplete(event: IpcEventLike, chunk: ChatV2StreamChunk): void {
  * (start, complete, cancelled, error) since the engine emits these.
  */
 function createEventSink(event: IpcEventLike): AIChatQueryEventSink {
-  let tokenLogCount = 0;
-  return {
-    emit: (e: AIChatQueryEvent) => {
-      switch (e.type) {
-        case "start":
-          sendChunk(event, {
-            eventType: "start",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            // §13.3: the renderer clears only the accepted selection chips.
-            historySelectionAcceptedIds: e.historySelectionAcceptedIds,
-            // §4.2: surviving chips whose source moved are marked changed.
-            historySelectionChangedIds: e.historySelectionChangedIds,
-            // P2-10: surviving chips that were hard-rejected are marked rejected.
-            historySelectionRejectedIds: e.historySelectionRejectedIds,
-          });
-          break;
-        case "token":
-          if (tokenLogCount < 5 || tokenLogCount % 25 === 0) {
-            console.log(
-              `[ai-chat-v2] IPC token conv=${e.conversationId} message=${e.messageId} deltaLen=${e.contentDelta.length} tokenIndex=${tokenLogCount}`
-            );
-          }
-          tokenLogCount += 1;
-          sendChunk(event, {
-            eventType: "token",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            contentDelta: e.contentDelta,
-            model: e.model,
-          });
-          break;
-        case "reasoning_delta":
-          // Log length only — never the reasoning text itself (SSR-3 / §14).
-          console.debug(
-            `[ai-chat-v2] reasoning_delta conv=${e.conversationId} message=${e.messageId} deltaLen=${e.reasoningDelta.length}`
-          );
-          sendChunk(event, {
-            eventType: "reasoning_delta",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            reasoningDelta: e.reasoningDelta,
-            model: e.model,
-          });
-          break;
-        case "retry_connect":
-          sendChunk(event, {
-            eventType: "retry_connect",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            retryAttempt: e.retryAttempt,
-            retryMaxAttempts: e.retryMaxAttempts,
-            retryDelayMs: e.retryDelayMs,
-          });
-          break;
-        case "recovery_status":
-          sendChunk(event, {
-            eventType: "recovery_status",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            recoveryLayer: e.layer,
-            recoveryReason: e.reason,
-            recoveryAttempt: e.attempt,
-            recoveryMaxAttempts: e.maxAttempts,
-            recoveryDelayMs: e.delayMs,
-            recoveryElapsedMs: e.elapsedMs,
-            recoveryOriginalModel: e.originalModel,
-            recoveryCurrentModel: e.currentModel,
-            recoveryFallbackModel: e.fallbackModel,
-            recoveryMessage: e.message,
-          });
-          break;
-        case "tool_progress":
-          sendChunk(event, {
-            eventType: "tool_progress",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            phase: e.phase,
-            progressMessage: e.message,
-            progressFraction:
-              typeof e.progress === "number" ? e.progress : undefined,
-            partialCount: e.partialCount ?? undefined,
-            expectedCount: e.expectedCount ?? undefined,
-            progressTimestamp: e.timestamp,
-          });
-          break;
-        case "tool_call":
-          sendChunk(event, {
-            eventType: "tool_call",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            toolArguments: e.toolArguments,
-          });
-          break;
-        case "tool_result":
-          sendChunk(event, {
-            eventType: "tool_result",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            toolResult: e.toolResult,
-            replacesPermissionPromptForToolId:
-              e.replacesPermissionPromptForToolId,
-          });
-          break;
-        case "plan_blocked_tool":
-          sendChunk(event, {
-            eventType: "plan_blocked_tool" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            fullContent: e.fullContent,
-            planBlockedToolName: e.planBlockedToolName,
-            planBlockedReason: e.planBlockedReason,
-          } as ChatV2StreamChunk);
-          break;
-        case "ask_user_question":
-          sendChunk(event, {
-            eventType: "ask_user_question" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            question: e.question,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_submitted":
-          sendChunk(event, {
-            eventType: "plan_submitted" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            toolCallId: e.toolCallId,
-            toolName: e.toolName,
-            planState: e.planState,
-          } as ChatV2StreamChunk);
-          break;
-        case "plan_state":
-          sendChunk(event, {
-            eventType: "plan_state" as never,
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            planState: e.planState,
-            autoEntered: e.autoEntered,
-          } as ChatV2StreamChunk);
-          break;
-        case "usage_update":
-          sendChunk(event, {
-            eventType: "usage_update",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            model: e.model,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-          });
-          break;
-        case "task_execution_state":
-          // T13 (FR-13/14, NFR-10/11): forward authoritative task-execution
-          // lifecycle state to the renderer badge. Non-terminal chunk on the
-          // shared STREAM_CHUNK channel; the terminal variant is emitted AFTER
-          // durable finalization at the engine complete/cancelled/failed gates.
-          // G02: forward the durable delivery identity for consumer dedup.
-          sendChunk(event, {
-            eventType: "task_execution_state",
-            conversationId: e.conversationId,
-            taskExecutionState: {
-              executionId: e.executionId,
-              conversationId: e.conversationId,
-              status: e.status,
-              reasonCode: e.reasonCode,
-              outcome: e.outcome,
-              remainingWork: e.remainingWork,
-              finalEventIdentity: e.finalEventIdentity,
-            },
-          });
-          break;
-        case "complete":
-          sendComplete(event, {
-            eventType: "complete",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-            images: e.images,
-            model: e.model,
-            finishReason: e.finishReason,
-            promptTokens: e.promptTokens,
-            completionTokens: e.completionTokens,
-            totalTokens: e.totalTokens,
-            reasoningContent: e.reasoningContent,
-          });
-          break;
-        case "cancelled":
-          sendComplete(event, {
-            eventType: "cancelled",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            fullContent: e.fullContent,
-          });
-          break;
-        case "error":
-          sendComplete(event, {
-            eventType: "error",
-            conversationId: e.conversationId,
-            messageId: e.messageId,
-            errorMessage: e.errorMessage,
-          });
-          break;
-      }
-    },
-  };
+  return createChatV2StreamSink({
+    sendChunk: (chunk) => sendChunk(event, chunk),
+    sendComplete: (chunk) => sendComplete(event, chunk),
+  });
 }
 
 // -------------------------------------------------------------------------
 // Stream handler (thin — delegates to engine)
 // -------------------------------------------------------------------------
 
-function validateStreamRequest(
+/** Stream request validation shared with the workspace coordinator. */
+export function validateStreamRequest(
   req: Partial<ChatV2StreamRequest>
 ): string | null {
   const hasFiles =
     Array.isArray(req.uploadedFiles) && req.uploadedFiles.length > 0;
+  // Generated-image references count as message content: the engine supplies
+  // a neutral instruction when the text is blank.
+  const hasReferences =
+    Array.isArray(req.generatedImageReferences) &&
+    req.generatedImageReferences.length > 0;
   if (
     !req ||
     typeof req.message !== "string" ||
     req.message.trim().length === 0
   ) {
-    if (!hasFiles) {
+    if (!hasFiles && !hasReferences) {
       return "Message must be a non-empty string";
     }
   }
@@ -966,7 +1069,8 @@ function classifyAttachment(
   return null;
 }
 
-function normalizeChatV2UploadedFiles(
+/** Attachment normalization shared with the workspace coordinator. */
+export function normalizeChatV2UploadedFiles(
   input: unknown
 ): ChatV2UploadedAttachment[] {
   if (!Array.isArray(input)) return [];
@@ -1043,9 +1147,163 @@ function normalizeChatV2UploadedFiles(
 }
 
 //handleStream is the main function that handles the stream request
+/**
+ * Result of validating a chat request's generated-image fields.
+ *  - ok: the normalized fields (references possibly empty; the confirmed
+ *    batch staged into trusted main-process state when present) plus the
+ *    request with those fields replaced/stripped for engine consumption.
+ *  - !ok: a typed error to report on whichever surface the caller owns.
+ */
+export type GeneratedImageValidationResult =
+  | {
+      ok: true;
+      request: ChatV2StreamRequest;
+    }
+  | {
+      ok: false;
+      errorMessage: string;
+      errorCode?: string;
+    };
+
+/**
+ * Shared validation + trusted staging for generated-image request fields —
+ * used by BOTH the direct stream handler and the pending-message queue path
+ * (every renderer send now creates a pending row first, so the queue path
+ * must enforce the exact same contract):
+ *
+ *  1. uploaded image attachments + direct generated-image references share
+ *     one per-request budget (CHAT_IMAGE_LIMITS);
+ *  2. the user-confirmed batch reference set is normalized and STAGED into
+ *     ConfirmedBatchReferenceRegistry under the conversation id, then the
+ *     field is stripped so the stored request / engine / model never see it.
+ *
+ * Never trusts renderer-supplied shapes; rejects before any provider work.
+ */
+export function validateAndStageGeneratedImageFields(
+  uploadedFiles: readonly { kind: string }[],
+  req: ChatV2StreamRequest,
+  opts?: { readonly stage?: boolean }
+): GeneratedImageValidationResult {
+  const uploadedImageCount = uploadedFiles.filter(
+    (file) => file.kind === "image"
+  ).length;
+
+  // Validate opaque generated-image references (never trust the renderer).
+  const normalizedReferences = normalizeGeneratedImageReferences(
+    req.generatedImageReferences,
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  );
+  if (!normalizedReferences.ok) {
+    return {
+      ok: false,
+      errorMessage: normalizedReferences.reason,
+      errorCode: normalizedReferences.errorCode,
+    };
+  }
+
+  // Combined image cap: uploaded image attachments + referenced generated
+  // images share one per-request budget.
+  if (
+    uploadedImageCount + normalizedReferences.references.length >
+    CHAT_IMAGE_LIMITS.maxImagesPerRequest
+  ) {
+    return {
+      ok: false,
+      errorMessage: `Too many images: at most ${CHAT_IMAGE_LIMITS.maxImagesPerRequest} combined uploaded and referenced images are allowed per request.`,
+      errorCode: GENERATED_IMAGE_REFERENCE_LIMIT_CODE,
+    };
+  }
+
+  // User-confirmed batch reference set: normalized here and staged into
+  // trusted main-process state under this conversation's id. Staging runs
+  // AFTER every other validation so no earlier failure leaves a stale set
+  // behind, and the field is stripped from the request so the engine/model
+  // never see it.
+  const confirmedBatch = req.confirmedGeneratedImageBatch as
+    | { references?: unknown }
+    | undefined;
+  if (confirmedBatch !== undefined) {
+    const batchRecord =
+      typeof confirmedBatch === "object" &&
+      confirmedBatch !== null &&
+      !Array.isArray(confirmedBatch)
+        ? confirmedBatch
+        : undefined;
+    if (
+      !batchRecord ||
+      !Array.isArray(batchRecord.references) ||
+      typeof req.conversationId !== "string" ||
+      req.conversationId.length === 0
+    ) {
+      return {
+        ok: false,
+        errorMessage:
+          "confirmedGeneratedImageBatch requires a conversationId and a non-empty references array",
+        errorCode: GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      };
+    }
+    const normalizedConfirmed = normalizeGeneratedImageReferences(
+      batchRecord.references,
+      CONFIRMED_BATCH_MAX_REFERENCES
+    );
+    if (
+      !normalizedConfirmed.ok ||
+      normalizedConfirmed.references.length === 0
+    ) {
+      return {
+        ok: false,
+        errorMessage: normalizedConfirmed.ok
+          ? "confirmedGeneratedImageBatch.references must contain at least one reference"
+          : normalizedConfirmed.reason,
+        errorCode: normalizedConfirmed.ok
+          ? GENERATED_IMAGE_REFERENCE_INVALID_CODE
+          : normalizedConfirmed.errorCode ??
+            GENERATED_IMAGE_REFERENCE_INVALID_CODE,
+      };
+    }
+    if (opts?.stage !== false) {
+      getConfirmedBatchReferenceRegistry().stage(
+        req.conversationId,
+        normalizedConfirmed.references
+      );
+    } else {
+      // Deferred staging (Codex P1): the caller stages at DISPATCH — a
+      // receive-time entry under a busy conversation would be consumed by
+      // the running turn or cleared by its terminal. Keep the NORMALIZED
+      // set on the returned request so the dispatch owner can stage it.
+      return {
+        ok: true,
+        request: {
+          ...req,
+          generatedImageReferences:
+            normalizedReferences.references.length > 0
+              ? normalizedReferences.references
+              : undefined,
+          confirmedGeneratedImageBatch: {
+            references: normalizedConfirmed.references,
+          },
+        },
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    request: {
+      ...req,
+      generatedImageReferences:
+        normalizedReferences.references.length > 0
+          ? normalizedReferences.references
+          : undefined,
+      // Trusted channel only: never stored, forwarded, or model-visible.
+      confirmedGeneratedImageBatch: undefined,
+    },
+  };
+}
+
 async function handleStream(event: IpcEventLike, data: string): Promise<void> {
   // Chat availability gate FIRST, before parsing request data.
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     sendComplete(event, {
       eventType: "error",
@@ -1079,11 +1337,28 @@ async function handleStream(event: IpcEventLike, data: string): Promise<void> {
 
   const engine = getQueryEngine();
   const eventSink = createEventSink(event);
+  if (process.env.AIFETCHLY_DEBUG_LOGS === "true") {
+    log.info(
+      `[e2e-debug] submitMessage conv=${req.conversationId ?? "(new)"} ` +
+        `msg=${req.message.slice(0, 40)}`
+    );
+  }
 
   // Normalize uploaded files
   const uploadedFiles = normalizeChatV2UploadedFiles(req.uploadedFiles);
-  const processedReq = {
-    ...req,
+  const validated = validateAndStageGeneratedImageFields(uploadedFiles, req);
+  if (!validated.ok) {
+    sendComplete(event, {
+      eventType: "error",
+      conversationId:
+        typeof req.conversationId === "string" ? req.conversationId : "",
+      errorMessage: validated.errorMessage,
+      ...(validated.errorCode ? { errorCode: validated.errorCode } : {}),
+    });
+    return;
+  }
+  const processedReq: ChatV2StreamRequest = {
+    ...validated.request,
     uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
   };
 
@@ -1111,6 +1386,26 @@ function handleStop(data?: unknown): void {
     const value = (raw as { conversationId?: unknown }).conversationId;
     conversationId = typeof value === "string" ? value : undefined;
   }
+  // A staged confirmed reference set belongs to the turn being stopped:
+  // dropping it prevents a cancelled turn from feeding a later batch run.
+  const registry = getConfirmedBatchReferenceRegistry();
+  if (conversationId !== undefined) {
+    registry.clear(conversationId);
+  } else {
+    registry.clearAll();
+  }
+  // Review F1 (FR-008/024): route Stop through the run's owner when the
+  // coordinator owns the conversation — a raw engine stop leaves the parked
+  // run's terminal dropped outside any live dispatch (the run row wedges in
+  // awaiting_* and the busy queue never drains). Non-coordinator turns keep
+  // the engine-internal path.
+  if (
+    conversationId !== undefined &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    void getRunOwnerResumeRouter()!.cancelOwnedRun(conversationId);
+    return;
+  }
   getQueryEngine().stopActiveTurn(conversationId);
 }
 
@@ -1121,7 +1416,7 @@ function handleStop(data?: unknown): void {
 export async function handleResumeToolAfterPermission(
   data: unknown
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1153,6 +1448,9 @@ export async function handleResumeToolAfterPermission(
   // the paused turn for this conversation + toolId, route the grant directly
   // to it instead of the interactive singleton engine. The scheduled engine
   // parked the turn and is the only one that can resume it.
+  // Review F1 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's cancel — the engine's deny wrapper re-executes outside the
+  // owner's lease/capacity and its continuation is unobserved.
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1165,6 +1463,21 @@ export async function handleResumeToolAfterPermission(
       registry.clearPendingPermission(conversationId);
       return ok(result);
     }
+  }
+
+  // Stage A §3.5 (FR-024): permission resume re-enters through the run's
+  // owner (claim → queued → scheduler capacity → lease → observed outcome)
+  // when the workspace coordinator owns the conversation. Non-coordinator
+  // turns (legacy V2 send, scheduled) keep the engine-internal path.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    return ok(result);
   }
 
   const engine = getQueryEngine();
@@ -1213,6 +1526,36 @@ export async function handleDenyToolPermission(
       ? parsed.conversationId
       : undefined;
 
+  // R01 (FR-009): interactive deny on a coordinator-owned run is the
+  // owner's validated cancel — resumeRun's claim validation rejects a stale
+  // tool id, so deny first tries a matching pending action and falls back to
+  // cancellation (the documented deny policy) only when the run is owned.
+  if (
+    conversationId &&
+    getRunOwnerResumeRouter()?.ownsConversation(conversationId) === true
+  ) {
+    // R9 B07: bind the denial to the exact run/tool claim BEFORE any
+    // mutation. A stale decision — mismatched/consumed tool id, an
+    // already-claimed action, or a delayed old-card deny after a newer
+    // turn began — must be a NO-OP with recoverable feedback, never a
+    // cancellation of the currently owned run. A valid (fresh-claim)
+    // deny keeps the deny-equals-stop policy.
+    const validated = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId,
+      action: { kind: "permission", toolId: parsed.toolId },
+    });
+    if (validated.ok && validated.claimed) {
+      // The action existed and this deny claimed it — the queued resume is
+      // cancelled before the tool starts (deny-equals-stop).
+      const cancelled = await getRunOwnerResumeRouter()!.cancelOwnedRun(
+        conversationId
+      );
+      return ok({ ok: cancelled, handled: true });
+    }
+    // Stale/duplicate deny: idempotent no-op; the renderer rewrites the
+    // stale card to the denied receipt without stopping the live run.
+    return ok({ ok: true, handled: true });
+  }
   if (conversationId) {
     const registry = ScheduledLoopEngineRegistry.getInstance();
     const entry = registry.getByConversation(conversationId);
@@ -1237,6 +1580,13 @@ export async function handleDenyToolPermission(
 // -------------------------------------------------------------------------
 
 async function handleModels(): Promise<CommonMessage<unknown>> {
+  // R8 P3 (PRD §14 item 1): the model list is a metadata call, not a
+  // generation bypass — gate it like the other chat handlers so a disabled
+  // plan cannot enumerate the provider catalog. Same denied envelope.
+  const chatAccess = await canUseChatWithReconcile();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
   try {
     const api = new AiChatApi();
     const models = await api.listOpenAIModels();
@@ -1249,17 +1599,25 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
 async function handleConversations(
   data?: string
 ): Promise<CommonMessage<ChatV2ConversationSummary[]>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
   try {
-    const req = data ? JSON.parse(data) : {};
+    // Accept both the stringified production payloads and object payloads
+    // (direct window.api.invoke callers in E2E) — same tolerance as the
+    // resume/deny handlers; an object used to throw in JSON.parse and deny.
+    let req: { searchQuery?: unknown } = {};
+    if (typeof data === "string" && data) {
+      req = JSON.parse(data) as { searchQuery?: unknown };
+    } else if (data && typeof data === "object") {
+      req = data as { searchQuery?: unknown };
+    }
     const searchQuery =
       typeof req.searchQuery === "string" ? req.searchQuery : undefined;
+    const engine = getQueryEngine();
     const module = new AIChatV2Module();
     const summaries = await module.getConversations(searchQuery);
-    const engine = getQueryEngine();
     return ok(
       summaries.map((summary) => ({
         ...summary,
@@ -1277,7 +1635,7 @@ async function handleHistory(
   _e: IpcEventLike,
   data: unknown
 ): Promise<CommonMessage<ChatV2HistoryResponse | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1303,12 +1661,20 @@ async function handleHistory(
       tokensUsed: r.tokensUsed,
       metadata: parseMetadata(r.metadata),
     }));
+    let pendingMessages: AIChatPendingMessageView[] | undefined;
+    try {
+      pendingMessages = await getQueueService().list(conversationId);
+    } catch (err) {
+      // Pending listing must never break history rendering.
+      log.error("[ai-chat-v2] pending list failed:", err);
+    }
     return ok({
       conversationId,
       messages: views,
       totalMessages: views.length,
       runtimeStatus:
         getQueryEngine().getConversationRuntimeStatus(conversationId),
+      pendingMessages,
     });
   } catch (err) {
     return denied(userSafeError(err));
@@ -1319,7 +1685,7 @@ async function handleClearConversation(
   _e: IpcEventLike,
   data: string
 ): Promise<CommonMessage<{ deleted: number } | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1332,8 +1698,40 @@ async function handleClearConversation(
     if (!conversationId) {
       return denied("conversationId is required");
     }
+    // P1-1 (audit 2026-10-22): the clear channel obeys the SAME authoritative
+    // busy guard as delete (B03). Under a live run, non-idle engine runtime,
+    // non-terminal pending rows, or a non-terminal durable run envelope, the
+    // wipe would let that owner re-persist content after the transcript is
+    // dropped (queue cascade clears parked envelopes first only when it runs
+    // — and deleting live pending rows would kill recoverable queued work).
+    const busyReason = await getConversationBusyReason(conversationId);
+    if (busyReason) {
+      aiChatQueueCounters.incrementWorkspace(
+        "ai_chat_workspace_action_total",
+        {
+          capability: "workspace",
+          action: "conversation_clear",
+          outcome: "denied_busy",
+        }
+      );
+      return denied(
+        `This conversation is busy (${busyReason}). Stop it before clearing.`
+      );
+    }
+    // Queue cascade FIRST (FR-44): stop the runtime, delete pending rows
+    // and their staged attachment bytes before the transcript goes away.
+    try {
+      await getQueueService().clearConversation(conversationId);
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearConversation failed:", err);
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
+    aiChatQueueCounters.incrementWorkspace("ai_chat_workspace_action_total", {
+      capability: "workspace",
+      action: "conversation_clear",
+      outcome: "cleared",
+    });
     // Cascade: clear any durable plan state for this conversation.
     try {
       const planModule = new AIChatPlanModule();
@@ -1350,11 +1748,16 @@ async function handleClearConversation(
 async function handleClearAll(): Promise<
   CommonMessage<{ deleted: number } | null>
 > {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
   try {
+    try {
+      await getQueueService().clearAll();
+    } catch (err) {
+      log.error("[ai-chat-v2] pending clearAll failed:", err);
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearAllV2History();
     return ok({ deleted });
@@ -1364,13 +1767,113 @@ async function handleClearAll(): Promise<
 }
 
 // -------------------------------------------------------------------------
+// Pending-message queue handlers (message-queue PRD §12)
+// -------------------------------------------------------------------------
+
+/**
+ * registerValidatedHandler-style wrapper that checks CHAT availability
+ * before parsing — the queue serves the same users the chat stream does
+ * (hosted subscription OR valid local provider), so canUseChat is the
+ * correct gate rather than the hosted-only USER_AI_ENABLED check.
+ */
+function registerChatValidatedHandler<TInput, TOutput>(
+  channel: string,
+  schema: () => ZodType<TInput>,
+  handler: (input: TInput) => Promise<TOutput>
+): void {
+  ipcMain.handle(channel, async (_event, raw) => {
+    const chatAccess = canUseChat();
+    if (!chatAccess.ok) {
+      return { status: false, msg: chatAccess.message, data: null };
+    }
+    const input = typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = schema().safeParse(input);
+    if (!parsed.success) {
+      const msg = parsed.error.issues.map((issue) => issue.message).join("; ");
+      log.warn(`[${channel}] validation failed: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+    try {
+      const data = await handler(parsed.data);
+      return { status: true, msg: "ok", data };
+    } catch (err) {
+      const msg =
+        err instanceof AIChatTurnQueueError
+          ? `[${err.code}] ${err.message}`
+          : err instanceof Error
+          ? err.message
+          : "Unknown error";
+      log.warn(`[${channel}] handler error: ${msg}`);
+      return { status: false, msg, data: null };
+    }
+  });
+}
+
+async function handlePendingCreate(input: {
+  clientRequestId: string;
+  request: ChatV2StreamRequest;
+}): Promise<AIChatPendingCreateResult> {
+  void ensureQueueRecovered();
+  // Same generated-image contract as the direct stream handler (every send
+  // now queues first): validate reference shapes + combined image cap, stage
+  // the user-confirmed batch set into trusted main-process state, and strip
+  // the trusted field so neither the stored row nor the engine/model see it.
+  const uploadedFiles = normalizeChatV2UploadedFiles(
+    input.request.uploadedFiles
+  );
+  const validated = validateAndStageGeneratedImageFields(
+    uploadedFiles,
+    input.request
+  );
+  if (!validated.ok) {
+    throw new AIChatTurnQueueError("INVALID_REQUEST", validated.errorMessage);
+  }
+  return await getQueueService().submit({
+    clientRequestId: input.clientRequestId,
+    request: {
+      ...validated.request,
+      uploadedFiles: uploadedFiles.length > 0 ? uploadedFiles : undefined,
+    },
+  });
+}
+
+async function handlePendingList(input: {
+  conversationId: string;
+}): Promise<AIChatPendingMessageView[]> {
+  void ensureQueueRecovered();
+  return await getQueueService().list(input.conversationId);
+}
+
+async function handlePendingSteer(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  void ensureQueueRecovered();
+  return await getQueueService().steer(input);
+}
+
+async function handlePendingCancel(input: {
+  conversationId: string;
+  pendingMessageId: string;
+}): Promise<AIChatPendingMessageView> {
+  return await getQueueService().cancel(input);
+}
+
+async function handlePendingResume(input: {
+  conversationId: string;
+}): Promise<{ resumed: number }> {
+  await getQueueService().resumeConversation(input.conversationId);
+  return { resumed: 1 };
+}
+
+// -------------------------------------------------------------------------
 // Plan Mode IPC handlers
 // -------------------------------------------------------------------------
 
 async function handlePlanState(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1387,10 +1890,36 @@ async function handlePlanState(
   }
 }
 
+/**
+ * R12 — plan-continuation commit-to-response crash recovery. Read-only
+ * reconcile of the persisted decision transitions against deterministic
+ * pending continuation ids; never writes or dispatches.
+ */
+async function handlePlanContinuationRecover(
+  data: string
+): Promise<CommonMessage<AIChatPlanContinuationRecoveryView | null>> {
+  const chatAccess = await canUseChatWithReconcile();
+  if (!chatAccess.ok) {
+    return denied(chatAccess.message);
+  }
+  try {
+    const req = data ? JSON.parse(data) : {};
+    if (typeof req.conversationId !== "string") {
+      return denied("conversationId must be a string");
+    }
+    const planModule = new AIChatPlanModule();
+    const recovery =
+      await planModule.getRecoverablePlanContinuation(req.conversationId);
+    return ok(recovery);
+  } catch (err) {
+    return denied(userSafeError(err));
+  }
+}
+
 async function handleAnswerQuestion(
   data: string
 ): Promise<CommonMessage<{ ok: boolean; error?: string } | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1407,6 +1936,9 @@ async function handleAnswerQuestion(
   if (!parsed.conversationId || typeof parsed.conversationId !== "string") {
     return denied("conversationId is required");
   }
+  if (!Array.isArray(parsed.answers)) {
+    return denied("answers must be an array");
+  }
   // Validate the cross-process payload (Zod-at-IPC rule) before forwarding to
   // the engine. Rejects malformed shapes and bounds free-text length.
   const answersResult = AnswerPlanQuestionAnswersSchema.safeParse(
@@ -1416,11 +1948,23 @@ async function handleAnswerQuestion(
     return denied("answers payload is invalid");
   }
 
+  // Stage A §3.5 (FR-024): plan answers re-enter through the run's owner.
+  if (getRunOwnerResumeRouter()?.ownsConversation(parsed.conversationId) === true) {
+    const result = await getRunOwnerResumeRouter()!.resumeRun({
+      conversationId: parsed.conversationId,
+      action: {
+        kind: "answer",
+        questionId: parsed.questionId,
+        answers: parsed.answers,
+      },
+    });
+    return ok(result);
+  }
   const engine = getQueryEngine();
   const result = await engine.answerPlanQuestion({
     questionId: parsed.questionId,
     conversationId: parsed.conversationId,
-    answers: answersResult.data,
+    answers: parsed.answers,
   });
   return ok(result);
 }
@@ -1428,33 +1972,31 @@ async function handleAnswerQuestion(
 async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as {
-        planId?: string;
-        conversationId?: string;
-        version?: number;
-      })
-    : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
-  }
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (typeof parsed.version !== "number") {
-    return denied("version is required");
+  // Audit R2 N07: bounded pre-validated schedules replace JSON.parse + casts
+  // at the IPC boundary.
+  const parsed = parsePlanDecisionInput(data, PlanApproveInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
     const planState = await planModule.approvePlan({
-      conversationId: parsed.conversationId,
-      planId: parsed.planId,
-      version: parsed.version,
+      conversationId: parsed.value.conversationId,
+      planId: parsed.value.planId,
+      version: parsed.value.version,
     });
+    // Audit R2 G01: anchor the decision moment so the workspace start-run
+    // acceptance of the follow-up continuation measures the real
+    // decision → durable-acceptance interval (bounded identity ledger).
+    recordPlanDecisionTiming(
+      parsed.value.planId,
+      parsed.value.version,
+      "approve-plan"
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -1464,35 +2006,28 @@ async function handleApprovePlan(
 async function handleRejectPlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as {
-        planId?: string;
-        conversationId?: string;
-        version?: number;
-        feedback?: string;
-      })
-    : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
-  }
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (typeof parsed.version !== "number") {
-    return denied("version is required");
+  const parsed = parsePlanDecisionInput(data, PlanRejectInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
     const planState = await planModule.rejectPlan({
-      conversationId: parsed.conversationId,
-      planId: parsed.planId,
-      version: parsed.version,
-      feedback: parsed.feedback,
+      conversationId: parsed.value.conversationId,
+      planId: parsed.value.planId,
+      version: parsed.value.version,
+      feedback: parsed.value.feedback,
     });
+    // Audit R2 G01: reject-path continuations carry the same timing anchor.
+    recordPlanDecisionTiming(
+      parsed.value.planId,
+      parsed.value.version,
+      "reject-plan"
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -1502,38 +2037,28 @@ async function handleRejectPlan(
 async function handleRequestPlanChanges(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as {
-        planId?: string;
-        conversationId?: string;
-        version?: number;
-        feedback?: string;
-      })
-    : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
-  }
-  if (!parsed.conversationId) {
-    return denied("conversationId is required");
-  }
-  if (typeof parsed.version !== "number") {
-    return denied("version is required");
-  }
-  if (!parsed.feedback || parsed.feedback.trim().length === 0) {
-    return denied("feedback is required");
+  const parsed = parsePlanDecisionInput(data, PlanRequestChangesInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
     const planState = await planModule.requestPlanChanges({
-      conversationId: parsed.conversationId,
-      planId: parsed.planId,
-      version: parsed.version,
-      feedback: parsed.feedback,
+      conversationId: parsed.value.conversationId,
+      planId: parsed.value.planId,
+      version: parsed.value.version,
+      feedback: parsed.value.feedback,
     });
+    // Audit R2 G01: request-changes continuations carry the same anchor.
+    recordPlanDecisionTiming(
+      parsed.value.planId,
+      parsed.value.version,
+      "request-plan-changes"
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -1543,17 +2068,17 @@ async function handleRequestPlanChanges(
 async function handlePlanVersions(
   data: string
 ): Promise<CommonMessage<AIChatPlanVersionView[] | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data ? (JSON.parse(data) as { planId?: string }) : {};
-  if (!parsed.planId) {
-    return denied("planId is required");
+  const parsed = parsePlanDecisionInput(data, PlanVersionsInputSchema);
+  if (!parsed.ok) {
+    return denied(parsed.error);
   }
   try {
     const planModule = new AIChatPlanModule();
-    const versions = await planModule.listVersions(parsed.planId);
+    const versions = await planModule.listVersions(parsed.value.planId);
     return ok(versions);
   } catch (err) {
     return denied(userSafeError(err));
@@ -1571,13 +2096,19 @@ async function handlePlanVersions(
 async function handleCompactionStart(
   data: string
 ): Promise<CommonMessage<{ started: boolean }>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
-  const parsed = data
-    ? (JSON.parse(data) as { conversationId?: string; model?: string })
-    : {};
+  // Accept both stringified and object payloads (same tolerance as the
+  // resume/deny/conversations handlers; raw window.api.invoke callers in
+  // E2E pass objects).
+  let parsed: { conversationId?: string; model?: string } = {};
+  if (typeof data === "string" && data) {
+    parsed = JSON.parse(data) as { conversationId?: string; model?: string };
+  } else if (data && typeof data === "object") {
+    parsed = data as { conversationId?: string; model?: string };
+  }
   if (!parsed.conversationId) {
     return denied("conversationId is required");
   }
@@ -1674,7 +2205,7 @@ function parseSetApprovalModePayload(
 async function handleGetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1694,7 +2225,7 @@ async function handleGetToolApprovalMode(
 async function handleSetToolApprovalMode(
   data: string
 ): Promise<CommonMessage<string>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -1731,7 +2262,7 @@ function parseObjectPayload(data: unknown): Record<string, unknown> {
   return {};
 }
 
-function serializeHistoryTimestamp(timestamp: unknown): string {
+export function serializeHistoryTimestamp(timestamp: unknown): string {
   if (timestamp instanceof Date) {
     return timestamp.toISOString();
   }
@@ -1748,7 +2279,9 @@ function serializeHistoryTimestamp(timestamp: unknown): string {
   return new Date(0).toISOString();
 }
 
-function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
+export function parseMetadata(
+  raw?: string | null
+): ChatV2MessageMetadata | undefined {
   if (!raw) {
     return undefined;
   }
@@ -1775,7 +2308,7 @@ function parseMetadata(raw?: string | null): ChatV2MessageMetadata | undefined {
 async function handleReadPasteCache(
   data: unknown
 ): Promise<CommonMessage<string | null>> {
-  const chatAccess = await canUseChat();
+  const chatAccess = await canUseChatWithReconcile();
   if (!chatAccess.ok) {
     return denied(chatAccess.message);
   }
@@ -2347,18 +2880,50 @@ async function handleTaskRetry(
 export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(
     AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
-    async (_e, data: unknown) => handleResumeToolAfterPermission(data ?? "")
+    async (_e, data: unknown) => {
+      // G01 (design §18): permission decision → resumed execution timing
+      // and bounded action counters (labels only, never tool arguments).
+      const resumedAt = performance.now();
+      const result = await handleResumeToolAfterPermission(data ?? "");
+      if (result.status) {
+        aiChatQueueCounters.observeTiming(
+          "permission_decision_to_resume_ms",
+          performance.now() - resumedAt
+        );
+      }
+      aiChatQueueCounters.recordWorkspaceAction(
+        "permission",
+        "resume",
+        result.status ? "ok" : "error"
+      );
+      return result;
+    }
   );
-  ipcMain.handle(AI_CHAT_V2_DENY_TOOL_PERMISSION, async (_e, data: unknown) =>
-    handleDenyToolPermission(data ?? "")
-  );
+  ipcMain.handle(AI_CHAT_V2_DENY_TOOL_PERMISSION, async (_e, data: unknown) => {
+    const result = await handleDenyToolPermission(data ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "permission",
+      "deny",
+      result.status ? "handled" : "error"
+    );
+    return result;
+  });
   ipcMain.handle(AI_CHAT_V2_MODELS, async () => handleModels());
   ipcMain.handle(AI_CHAT_V2_CONVERSATIONS, async (_e, data: unknown) =>
     handleConversations(data as string)
   );
-  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) =>
-    handleHistory(_e as IpcEventLike, data)
-  );
+  ipcMain.handle(AI_CHAT_V2_HISTORY, async (_e, data: unknown) => {
+    // G01 (design §18): selection request → reconstructed transcript.
+    const requestedAt = performance.now();
+    const result = await handleHistory(_e as IpcEventLike, data);
+    if (result.status) {
+      aiChatQueueCounters.observeTiming(
+        "selection_request_to_transcript_ms",
+        performance.now() - requestedAt
+      );
+    }
+    return result;
+  });
   ipcMain.handle(AI_CHAT_V2_CLEAR_CONVERSATION, async (_e, data: unknown) =>
     handleClearConversation(_e as IpcEventLike, data as string)
   );
@@ -2369,17 +2934,60 @@ export function registerAiChatV2IpcHandlers(): void {
   ipcMain.handle(AI_CHAT_V2_ANSWER_QUESTION, async (_e, data: unknown) =>
     handleAnswerQuestion((data as string) ?? "")
   );
-  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) =>
-    handleApprovePlan((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) =>
-    handleRejectPlan((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) =>
-    handleRequestPlanChanges((data as string) ?? "")
-  );
-  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) =>
-    handlePlanVersions((data as string) ?? "")
+  ipcMain.handle(AI_CHAT_V2_APPROVE_PLAN, async (_e, data: unknown) => {
+    // Audit R2 G01: the misleading decision-persistence-only timing was
+    // removed — `plan_decision_to_continuation_ms` is now observed at the
+    // durable continuation acceptance boundary in the workspace start-run
+    // handler (plan continuation → queue submission receipt). The valid
+    // capability action counters stay.
+    const result = await handleApprovePlan((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "approve",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(AI_CHAT_V2_REJECT_PLAN, async (_e, data: unknown) => {
+    const result = await handleRejectPlan((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "reject",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(AI_CHAT_V2_REQUEST_PLAN_CHANGES, async (_e, data: unknown) => {
+    const result = await handleRequestPlanChanges((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "request_changes",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(AI_CHAT_V2_PLAN_VERSIONS, async (_e, data: unknown) => {
+    const result = await handlePlanVersions((data as string) ?? "");
+    aiChatQueueCounters.recordWorkspaceAction(
+      "plan",
+      "versions",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
+  ipcMain.handle(
+    AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
+    async (_e, data: unknown) => {
+      const result = await handlePlanContinuationRecover(
+        (data as string) ?? ""
+      );
+      aiChatQueueCounters.recordWorkspaceAction(
+        "plan",
+        "continuation_recover",
+        result.status ? "ok" : "error"
+      );
+      return result;
+    }
   );
   ipcMain.handle(AI_CHAT_V2_GET_TOOL_APPROVAL_MODE, async (_e, data: unknown) =>
     handleGetToolApprovalMode((data as string) ?? "")
@@ -2449,4 +3057,35 @@ export function registerAiChatV2IpcHandlers(): void {
     }
   });
   ipcMain.on(AI_CHAT_V2_STREAM_STOP, (_e, data?: unknown) => handleStop(data));
+
+  // Pending-message queue (message-queue PRD §12). Handlers call the queue
+  // service only — never a Model or repository.
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CREATE,
+    aiChatPendingCreateInputSchema,
+    handlePendingCreate
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_LIST,
+    aiChatPendingListInputSchema,
+    handlePendingList
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_STEER,
+    aiChatPendingSteerInputSchema,
+    handlePendingSteer
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_CANCEL,
+    aiChatPendingCancelInputSchema,
+    handlePendingCancel
+  );
+  registerChatValidatedHandler(
+    AI_CHAT_V2_PENDING_RESUME,
+    aiChatPendingResumeInputSchema,
+    handlePendingResume
+  );
+  // Startup reconciliation (design §16.1): reconcile durable rows once the
+  // handlers exist; it only pauses/deduplicates — never dispatches.
+  void ensureQueueRecovered();
 }

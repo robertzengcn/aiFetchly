@@ -5,15 +5,15 @@ import { EmailFilterEntity } from "./EmailFilter.entity";
 @Entity('email_filter_detail')
 export class EmailFilterDetailEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: 'text' })
-  content: string;
+  content!: string;
 
   @Column({ type: 'integer' })
-  filter_id: number;
+  filter_id!: number;
 
   @ManyToOne(() => EmailFilterEntity, emailFilter => emailFilter.id)
   @JoinColumn({ name: 'filter_id' })
-  emailFilter: EmailFilterEntity;
+  emailFilter!: EmailFilterEntity;
 } 

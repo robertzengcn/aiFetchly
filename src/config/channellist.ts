@@ -249,28 +249,6 @@ export const PLATFORM_VALIDATE = "platform:validate";
 export const PLATFORM_STATISTICS = "platform:statistics";
 export const PLATFORM_TOGGLE = "platform:toggle";
 
-// Yellow Pages Management Channels
-export const YELLOW_PAGES_CREATE = "yellow_pages:create";
-export const YELLOW_PAGES_UPDATE = "yellow_pages:update";
-export const YELLOW_PAGES_DELETE = "yellow_pages:delete";
-export const YELLOW_PAGES_START = "yellow_pages:start";
-export const YELLOW_PAGES_STOP = "yellow_pages:stop";
-export const YELLOW_PAGES_PAUSE = "yellow_pages:pause";
-export const YELLOW_PAGES_RESUME = "yellow_pages:resume";
-export const YELLOW_PAGES_LIST = "yellow_pages:list";
-export const YELLOW_PAGES_DETAIL = "yellow_pages:detail";
-export const YELLOW_PAGES_PROGRESS = "yellow_pages:progress";
-export const YELLOW_PAGES_RESULTS = "yellow_pages:results";
-export const YELLOW_PAGES_EXPORT = "yellow_pages:export";
-export const YELLOW_PAGES_BULK = "yellow_pages:bulk";
-export const YELLOW_PAGES_HEALTH = "yellow_pages:health";
-export const YELLOW_PAGES_PLATFORMS = "yellow_pages:platforms";
-export const YELLOW_PAGES_STATISTICS = "yellow_pages:statistics";
-export const YELLOW_PAGES_KILL_PROCESS = "yellow_pages:kill_process";
-export const YELLOW_PAGES_CHECK_ORPHANED_PROCESSES =
-  "yellow_pages:check_orphaned_processes";
-export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION =
-  "yellow_pages:handle_previous_session";
 
 // Language Preference Channels
 export const LANGUAGE_PREFERENCE_GET = "language:preference:get";
@@ -357,6 +335,13 @@ export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
 export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
   "ai-chat-v2:request-plan-changes";
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
+/**
+ * Renderer->Main (R12): reconcile persisted plan decision transitions
+ * against deterministic pending continuation ids. Returns the one
+ * recoverable continuation intent (commit-to-response crash gap) or null.
+ */
+export const AI_CHAT_V2_PLAN_CONTINUATION_RECOVER =
+  "ai-chat-v2:plan-continuation-recover";
 export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:get-tool-approval-mode";
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
@@ -364,6 +349,23 @@ export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
 /** Main->renderer: read cached expanded pasted-text bodies for previews. */
 export const AI_CHAT_V2_READ_PASTE_CACHE = "ai-chat-v2:read-paste-cache";
 export const AI_CHAT_V2_AT_MENTION_SUGGEST = "ai-chat-v2:at-mention-suggest";
+/**
+ * Renderer->Main: save one generated image into the approved workspace
+ * (explicit user intent — no model-facing permission flow). Handler enforces
+ * the chat availability gate, authorizes the reference via
+ * GeneratedImageReferenceService, and reuses the export_generated_artifacts
+ * copy policy.
+ */
+export const AI_CHAT_V2_EXPORT_GENERATED_IMAGE =
+  "ai-chat-v2:export-generated-image";
+
+// AI Chat V2 pending-message queue & steering (message-queue PRD §12)
+export const AI_CHAT_V2_PENDING_CREATE = "ai-chat-v2:pending-message-create";
+export const AI_CHAT_V2_PENDING_LIST = "ai-chat-v2:pending-message-list";
+export const AI_CHAT_V2_PENDING_STEER = "ai-chat-v2:pending-message-steer";
+export const AI_CHAT_V2_PENDING_CANCEL = "ai-chat-v2:pending-message-cancel";
+export const AI_CHAT_V2_PENDING_RESUME = "ai-chat-v2:pending-message-resume";
+export const AI_CHAT_V2_PENDING_EVENT = "ai-chat-v2:pending-message-event";
 export const AI_CHAT_V2_GOAL_CREATE = "ai-chat-v2:goal-create";
 export const AI_CHAT_V2_GOAL_GET = "ai-chat-v2:goal-get";
 export const AI_CHAT_V2_GOAL_LOOP_START = "ai-chat-v2:goal-loop-start";
@@ -381,6 +383,42 @@ export const AI_CHAT_V2_SCHEDULED_LOOP_RESUME =
 export const AI_CHAT_V2_SCHEDULED_LOOP_STOP = "ai-chat-v2:scheduled-loop-stop";
 export const AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN =
   "ai-chat-v2:scheduled-loop-stop-run";
+// Skill installation channels (natural-language-skill-installation design §15.1).
+// PREPARE/APPROVE serve the AI-driven install flow and check USER_AI_ENABLED
+// first; STATUS/CANCEL are plain lifecycle queries. SUBMIT_SECRET is a
+// dedicated secure channel — the value never travels through chat or tool JSON.
+export const SKILL_INSTALL_PREPARE = "skill-install:prepare";
+export const SKILL_INSTALL_APPROVE = "skill-install:approve";
+// Typed dependency-install approval (PRD §18): renderer-only, token-gated
+// like APPROVE; installation runs through the catalog-validated system
+// dependency module, never repository shell text.
+export const SKILL_INSTALL_APPROVE_DEPENDENCY =
+  "skill-install:approve-dependency";
+export const SKILL_INSTALL_SUBMIT_SECRET = "skill-install:submit-secret";
+export const SKILL_INSTALL_STATUS = "skill-install:status";
+export const SKILL_INSTALL_CANCEL = "skill-install:cancel";
+// Typed retry (FR-20/§10.1): re-run a failed install from the recorded
+// canonical source, enforcing the three-same-cause stop rule.
+export const SKILL_INSTALL_RETRY = "skill-install:retry";
+// Management listing for the skill-management UI (PRD §22.3).
+export const SKILL_INSTALL_LIST = "skill-install:list";
+export const SKILL_INSTALL_PROGRESS = "skill-install:progress";
+// Lifecycle management surface for the skill management UI (PRD §22.3).
+export const SKILL_INSTALL_UPDATE = "skill-install:update";
+export const SKILL_INSTALL_REPAIR = "skill-install:repair";
+export const SKILL_INSTALL_DISABLE = "skill-install:disable";
+export const SKILL_INSTALL_ENABLE = "skill-install:enable";
+export const SKILL_INSTALL_UNINSTALL = "skill-install:uninstall";
+/** Explicit /skill-name invocation (PRD §9.5) — same invocation service as use_skill. */
+export const PROMPT_SKILL_INVOKE = "prompt-skill:invoke";
+/** Renderer-only approval-token channel (review D1) — never a model tool. */
+export const SKILL_INSTALL_APPROVAL_TOKEN = "skill-install:approval-token";
+/** Execute one APPROVED plan command (renderer diagnostics view; TODO 5 / FR-16). */
+export const SKILL_INSTALL_RUN_COMMAND = "skill-install:run-command";
+/** Reveal-source action (audit R9 / PRD §22.3): open the activation
+ *  location in the OS file manager. The path comes from the installation
+ *  row in the main process — the renderer sends only the installation id. */
+export const SKILL_INSTALL_REVEAL_SOURCE = "skill-install:reveal-source";
 /** Main->renderer refresh hint after a scheduled turn persists (FR-11). */
 export const AI_CHAT_V2_CONVERSATION_UPDATED =
   "ai-chat-v2:conversation-updated";
@@ -473,6 +511,37 @@ export const AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS =
   "ai-chat-v2:voice-model-download-progress";
 export const AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD =
   "ai-chat-v2:voice-model-cancel-download";
+
+// ==================== AI Chat Workspace Redesign Channels ====================
+// Redesigned three-region chat workspace (docs/prd/ai-chat-workspace-ui-redesign-*.md).
+// Invoke channels are request/response; event channels are main→renderer.
+export const AI_CHAT_WORKSPACE_BOOTSTRAP = "ai-chat-workspace:bootstrap";
+export const AI_CHAT_WORKSPACE_SELECT = "ai-chat-workspace:select";
+export const AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL =
+  "ai-chat-workspace:unsubscribe-detail";
+export const AI_CHAT_WORKSPACE_START_RUN = "ai-chat-workspace:start-run";
+export const AI_CHAT_WORKSPACE_CANCEL_RUN = "ai-chat-workspace:cancel-run";
+export const AI_CHAT_WORKSPACE_HISTORY_PAGE = "ai-chat-workspace:history-page";
+export const AI_CHAT_WORKSPACE_MARK_READ = "ai-chat-workspace:mark-read";
+export const AI_CHAT_WORKSPACE_RENAME = "ai-chat-workspace:rename";
+export const AI_CHAT_WORKSPACE_DELETE = "ai-chat-workspace:delete";
+export const AI_CHAT_WORKSPACE_DUPLICATE = "ai-chat-workspace:duplicate";
+export const AI_CHAT_WORKSPACE_EXPORT = "ai-chat-workspace:export";
+export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
+/** Main→Renderer: redacted sidebar projection updates (no content bodies). */
+export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
+  "ai-chat-workspace:summary-event";
+/** Main→Renderer: selected-conversation detailed run events. */
+export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
+/** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
+export const AI_CHAT_WORKSPACE_GET_FLAG = "ai-chat-workspace:get-flag";
+export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
+/** Audit R2 G01: renderer→main bounded metrics push (diagnostics export). */
+export const AI_CHAT_RENDERER_METRICS_PUSH =
+  "ai-chat-renderer-metrics:push";
+/** R8 §2: renderer-originated workspace action counts (bounded labels). */
+export const AI_CHAT_WORKSPACE_ACTION_COUNT =
+  "ai-chat-v2:workspace-action-count";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
@@ -636,6 +705,7 @@ export const AGENT_DEFINITION_LIST = "agent-runtime:definition-list";
 export const AGENT_TASK_DETAIL = "agent-runtime:task-detail";
 export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
 export const AGENT_TASK_LIST = "agent-runtime:task-list";
+export const AGENT_TASK_CANCEL = "agent-runtime:task-cancel";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
 
@@ -648,6 +718,43 @@ export const AGENT_MANAGEMENT_CREATE = "agent-definition:create";
 export const AGENT_MANAGEMENT_UPDATE = "agent-definition:update";
 export const AGENT_MANAGEMENT_TOGGLE = "agent-definition:toggle";
 export const AGENT_MANAGEMENT_DELETE = "agent-definition:delete";
+
+// ==================== Managed Browser Channels (design §22) ====================
+// Session channels are AI-facing (registerAiValidatedHandler — USER_AI_ENABLED
+// is checked FIRST); settings/cache channels are management-only
+// (registerValidatedHandler). Event channels are main → renderer pushes.
+export const MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS =
+  "managed-browser:list-eligible-accounts";
+export const MANAGED_BROWSER_LIST_ACTIVE = "managed-browser:list-active";
+export const MANAGED_BROWSER_START = "managed-browser:start";
+export const MANAGED_BROWSER_STATUS = "managed-browser:status";
+export const MANAGED_BROWSER_HANDOFF = "managed-browser:handoff";
+export const MANAGED_BROWSER_VERIFY_MANUAL_LOGIN =
+  "managed-browser:verify-manual-login";
+export const MANAGED_BROWSER_RESUME = "managed-browser:resume";
+export const MANAGED_BROWSER_STOP = "managed-browser:stop";
+export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
+export const MANAGED_BROWSER_CANCEL_ACTIVE = "managed-browser:cancel-active";
+export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
+  "managed-browser:capture-screenshot";
+export const MANAGED_BROWSER_EXTEND_HANDOFF = "managed-browser:extend-handoff";
+export const MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS =
+  "managed-browser:get-effective-settings";
+export const MANAGED_BROWSER_GET_CACHE_STATUS =
+  "managed-browser:get-cache-status";
+export const MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION =
+  "managed-browser:issue-clear-confirmation";
+export const MANAGED_BROWSER_CLEAR_CACHE = "managed-browser:clear-cache";
+export const MANAGED_BROWSER_UPDATE_SETTINGS =
+  "managed-browser:update-settings";
+// Event channels (main → renderer)
+export const MANAGED_BROWSER_STATUS_EVENT = "managed-browser:status-changed";
+export const MANAGED_BROWSER_PROGRESS_EVENT = "managed-browser:progress";
+export const MANAGED_BROWSER_APPROVAL_EVENT =
+  "managed-browser:approval-required";
+export const MANAGED_BROWSER_CHAT_NOTICE_EVENT = "managed-browser:chat-notice";
+export const MANAGED_BROWSER_CACHE_PROGRESS_EVENT =
+  "managed-browser:cache-progress";
 
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";
@@ -664,6 +771,11 @@ export const PLUGIN_TOGGLE_MCP_TOOL = "plugin:toggle-mcp-tool";
 export const PLUGIN_TEST_MCP_CONNECTION = "plugin:test-mcp-connection";
 export const PLUGIN_DISCOVER_MCP_TOOLS = "plugin:discover-mcp-tools";
 export const PLUGIN_INSTALL_FROM_SOURCE = "plugin:install-from-source";
+// Git-free GitHub plugin installation (design §12.4): renderer-driven
+// cancellation keyed by install operationId + main-process capability flags.
+export const PLUGIN_CANCEL_INSTALL = "plugin:cancel-install";
+export const PLUGIN_GET_INSTALL_CAPABILITIES =
+  "plugin:get-install-capabilities";
 export const PLUGIN_GET_MCP_OPTIONS = "plugin:get-mcp-options";
 export const PLUGIN_SET_MCP_OPTION = "plugin:set-mcp-option";
 
@@ -679,11 +791,28 @@ export const PLUGIN_MARKETPLACE_GET_PLUGIN = "plugin:marketplace:get-plugin";
 export const PLUGIN_MARKETPLACE_INSTALL_PLUGIN =
   "plugin:marketplace:install-plugin";
 
+// ==================== Community Plugins Channels (Community Plugin Page PRD §7.3) ====================
+// NON-AI-gated: Free (Community) users must be able to browse the catalog
+// (precedent: plugin-ipc.ts — "plugin management is NOT an AI feature").
+export const PLUGIN_COMMUNITY_LIST = "plugin:community:list";
+export const PLUGIN_COMMUNITY_DETAIL = "plugin:community:detail";
+export const PLUGIN_COMMUNITY_INSTALL = "plugin:community:install";
+/** Renderer→Main: open the marketing plans page (Upgrade CTA) via shell.openExternal. */
+export const PLUGIN_COMMUNITY_OPEN_PLANS = "plugin:community:open-plans";
+
 // AI user memory (durable cross-session memory)
 export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
 // AI Artifacts (read; creation happens through the Chat V2 stream tool)
 export const AI_ARTIFACT_GET = "ai-artifact:get";
 export const AI_ARTIFACT_LIST = "ai-artifact:list";
+
+// Plugin file artifacts (host-owned store; design §13.4)
+export const PLUGIN_ARTIFACT_LIST = "plugin-artifact:list";
+export const PLUGIN_ARTIFACT_PREVIEW = "plugin-artifact:preview";
+export const PLUGIN_ARTIFACT_EXPORT = "plugin-artifact:export";
+export const PLUGIN_ARTIFACT_DELETE = "plugin-artifact:delete";
+/** G03: execution journals (interrupted/salvaged runs) for a conversation. */
+export const PLUGIN_ARTIFACT_LIST_JOURNAL = "plugin-artifact:list-journal";
 export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";
 export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
 export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";
@@ -691,6 +820,70 @@ export const AI_USER_MEMORY_DELETE = "ai:user-memory:delete";
 export const AI_USER_MEMORY_RUN_AUTO_DREAM = "ai:user-memory:auto-dream:run";
 export const AI_USER_MEMORY_AUTO_DREAM_STATUS =
   "ai:user-memory:auto-dream:status";
+
+// Portable workspace memory (Markdown files under .aifetchly/memory/)
+// Non-AI operations — available without an AI subscription (design §20.4).
+export const AI_PORTABLE_WORKSPACE_MEMORY_STATUS =
+  "ai:portable-workspace-memory:status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_LIST =
+  "ai:portable-workspace-memory:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CREATE =
+  "ai:portable-workspace-memory:create";
+export const AI_PORTABLE_WORKSPACE_MEMORY_UPDATE =
+  "ai:portable-workspace-memory:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE =
+  "ai:portable-workspace-memory:archive-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE =
+  "ai:portable-workspace-memory:delete-portable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW =
+  "ai:portable-workspace-memory:enable:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_ENABLE =
+  "ai:portable-workspace-memory:enable";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW =
+  "ai:portable-workspace-memory:export:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_EXPORT =
+  "ai:portable-workspace-memory:export";
+export const AI_PORTABLE_WORKSPACE_MEMORY_RESCAN =
+  "ai:portable-workspace-memory:rescan";
+export const AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST =
+  "ai:portable-workspace-memory:diagnostics:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST =
+  "ai:portable-workspace-memory:conflicts:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE =
+  "ai:portable-workspace-memory:conflict:resolve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE =
+  "ai:portable-workspace-memory:policy:update";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE =
+  "ai:portable-workspace-memory:promote";
+export const AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE =
+  "ai:portable-workspace-memory:privatize";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE =
+  "ai:portable-workspace-memory:review:approve";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT =
+  "ai:portable-workspace-memory:review:reject";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST =
+  "ai:portable-workspace-memory:review:list";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION =
+  "ai:portable-workspace-memory:review:approve-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION =
+  "ai:portable-workspace-memory:review:reject-deletion";
+export const AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE =
+  "ai:portable-workspace-memory:reveal-file";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS =
+  "ai:portable-workspace-memory:git-status";
+export const AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE =
+  "ai:portable-workspace-memory:get-state";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW =
+  "ai:portable-workspace-memory:bridge:preview";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY =
+  "ai:portable-workspace-memory:bridge:apply";
+export const AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE =
+  "ai:portable-workspace-memory:bridge:remove";
+export const AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE =
+  "ai:portable-workspace-memory:identity:regenerate";
+// Renderer push event (main → renderer): one summary per reconciliation.
+export const AI_PORTABLE_WORKSPACE_MEMORY_CHANGED =
+  "ai:portable-workspace-memory:changed";
 
 // Workspace Management Channels
 export const AI_WORKSPACE_SET = "ai-workspace:set";
@@ -727,6 +920,18 @@ export const LOCAL_AI_RUNTIME_CHECK_UPDATE = "local-ai-runtime:check-update";
 export const LOCAL_AI_RUNTIME_REPAIR = "local-ai-runtime:repair";
 export const LOCAL_AI_RUNTIME_REMOVE = "local-ai-runtime:remove";
 export const LOCAL_AI_RUNTIME_PROGRESS = "local-ai-runtime:progress";
+
+/* Computer Use (computer-use design §7.9, §10) */
+export const COMPUTER_USE_STATUS = "computer-use:status";
+export const COMPUTER_USE_LIST_WINDOWS = "computer-use:list-windows";
+export const COMPUTER_USE_SESSION_START = "computer-use:session-start";
+export const COMPUTER_USE_SESSION_STOP = "computer-use:session-stop";
+export const COMPUTER_USE_SESSION_PAUSE = "computer-use:session-pause";
+export const COMPUTER_USE_SESSION_RESUME = "computer-use:session-resume";
+export const COMPUTER_USE_SETTINGS_GET = "computer-use:settings-get";
+export const COMPUTER_USE_SETTINGS_SET = "computer-use:settings-set";
+export const COMPUTER_USE_VALIDATE_HOTKEY = "computer-use:validate-hotkey";
+export const COMPUTER_USE_GROUNDING_READINESS = "computer-use:grounding-readiness";
 
 // Hooks system — Phase 4 management UI channels.
 export const HOOKS_LIST = "hooks:list";
@@ -769,6 +974,23 @@ export const OUTBOUND_EMAIL_BATCH_SEND = "outbound:email:batch:send";
 export const OUTBOUND_EMAIL_BATCH_DISCARD = "outbound:email:batch:discard";
 export const OUTBOUND_EMAIL_BATCH_STATUS = "outbound:email:batch:status";
 export const OUTBOUND_EMAIL_BATCH_PROGRESS = "outbound:email:batch:progress";
+
+// ======== Application lifecycle (exit & system tray) channels ========
+// PRD: docs/prd/application-exit-and-system-tray-prd.md; design §10.
+// Lifecycle IPC is NOT an AI feature — no AI entitlement check.
+// CLOSE_CHOICE_* events are main↔renderer dialog plumbing; the lifecycle
+// state channels let the renderer reflect shutdown progress and block new
+// task actions while the main process is quitting.
+export const APPLICATION_LIFECYCLE_GET_STATE =
+  "application:lifecycle:get-state";
+export const APPLICATION_CLOSE_CHOICE_REQUEST =
+  "application:lifecycle:close-choice:request";
+export const APPLICATION_CLOSE_CHOICE_ACK =
+  "application:lifecycle:close-choice:ack";
+export const APPLICATION_CLOSE_CHOICE_SUBMIT =
+  "application:lifecycle:close-choice:submit";
+export const APPLICATION_LIFECYCLE_STATE_CHANGED =
+  "application:lifecycle:state-changed";
 
 // ======== E2E test-support channels ========
 // Registered ONLY under AIFETCHLY_E2E=1 (see src/main-process/e2e/E2ESeedIpc.ts).

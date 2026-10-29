@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 /**
  * Local embedding worker.
@@ -20,6 +21,7 @@
  * when the runtime is not installed.
  */
 import * as fs from "node:fs";
+import { log } from "@/modules/Logger";
 import { LOCAL_XENOVA_ALL_MINILM_DIMENSIONS } from "@/service/embedding/LocalEmbeddingModels";
 import {
   type LocalEmbeddingBatchMessage,
@@ -56,6 +58,13 @@ interface WorkerParentPort {
 
 const parentPort = (process as unknown as { parentPort?: WorkerParentPort })
   .parentPort;
+// §7 graceful shutdown (design §7): ack, close, exit within the
+// parent's remaining budget. The parent still observes exit and
+// force-verifies — the ack is never treated as exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 
 // Pipeline is cached after first successful load. Keyed by underlying model so
 // re-initializing with the same model is a no-op.
@@ -105,7 +114,7 @@ function postMessageSafe(message: LocalEmbeddingOutboundMessage): void {
   } catch (postError) {
     const errorMessage =
       postError instanceof Error ? postError.message : String(postError);
-    console.error(
+    log.error(
       `[LocalEmbeddingWorker] Failed to post message: ${errorMessage}`
     );
   }
@@ -176,7 +185,7 @@ async function createExtractorWithFallback(
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
       if (remoteHost && remoteHost !== remoteHosts[remoteHosts.length - 1]) {
-        console.warn(
+        log.warn(
           `[LocalEmbeddingWorker] Failed to load ${underlyingModel} from ${remoteHost}: ${message}. Trying next configured host.`
         );
       }
@@ -277,14 +286,25 @@ async function dispatch(raw: unknown): Promise<void> {
 }
 
 if (parentPort) {
-  parentPort.on("message", async (event: ParentPortMessageEvent) => {
+  parentPort.on("message", async (event: ParentPortMessageEvent) => {  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    let raw: unknown = event.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return; // non-JSON is not a shutdown request
+      }
+    }
+    shutdownResponder.handle(raw);
+  });
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(event.data);
     } catch (parseError) {
       const errorMessage =
         parseError instanceof Error ? parseError.message : String(parseError);
-      console.error(`[LocalEmbeddingWorker] Non-JSON inbound: ${errorMessage}`);
+      log.error(`[LocalEmbeddingWorker] Non-JSON inbound: ${errorMessage}`);
       sendError("unknown", "Inbound message is not valid JSON");
       return;
     }
@@ -293,13 +313,13 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: unknown) => {
-  console.error("[LocalEmbeddingWorker] Uncaught exception:", error);
+  log.error("[LocalEmbeddingWorker] Uncaught exception:", error);
   sendFatalErrorToActiveRequests(error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[LocalEmbeddingWorker] Unhandled rejection:", reason);
+  log.error("[LocalEmbeddingWorker] Unhandled rejection:", reason);
   sendFatalErrorToActiveRequests(reason);
   process.exit(1);
 });

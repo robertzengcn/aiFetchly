@@ -11,14 +11,14 @@ export function SplitArrayIntoGroups<Type>(
   return groups;
 }
 
-const StringIsNumber = (value) => isNaN(Number(value)) === false;
-export function ToArray(enumme) {
-  return Object.keys(enumme)
-    .filter(StringIsNumber)
-    .map((key) => enumme[key]);
-}
-export function CapitalizeFirstLetter(string: string) {
-  return string.charAt(0).toUpperCase() + string.slice(1);
+const StringIsNumber = (value: string): boolean => isNaN(Number(value)) === false;
+export function ToArray(enumme: Record<string, unknown>): string[] {
+    return Object.keys(enumme)
+        .filter(StringIsNumber)
+        .map(key => enumme[key] as string);
+  }
+export function CapitalizeFirstLetter(string: string): string {
+    return string.charAt(0).toUpperCase() + string.slice(1);
 }
 export function convertNumberToBoolean(num: number): boolean {
   return num !== 0;

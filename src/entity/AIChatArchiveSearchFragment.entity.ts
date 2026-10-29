@@ -30,29 +30,29 @@ import { Order } from "./order.decorator";
 ])
 export class AIChatArchiveSearchFragmentEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(2)
   @Column("int", { nullable: false })
-  sourceRowId: number;
+  sourceRowId!: number;
 
   @Order(3)
   @Column("varchar", { length: 20, nullable: false })
-  field: string;
+  field!: string;
 
   @Order(4)
   @Column("int", { nullable: false })
-  startCodePoint: number;
+  startCodePoint!: number;
 
   @Order(5)
   @Column("int", { nullable: false })
-  endCodePoint: number;
+  endCodePoint!: number;
 
   @Order(6)
   @Column("text", { nullable: false })
-  fragmentText: string;
+  fragmentText!: string;
 }

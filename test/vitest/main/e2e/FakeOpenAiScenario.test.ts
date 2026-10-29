@@ -7,6 +7,8 @@ import type { OpenAIChatCompletionChunk } from "@/api/aiChatApi";
 import {
   resolveScenario,
   STREAM_TEXT_FINAL,
+  STREAM_IMAGE_B64,
+  STREAM_IMAGE_TEXT,
   FAKE_TOOL_NAME,
 } from "../../../e2e/scenarios/aiChatScenarios";
 import {
@@ -15,15 +17,23 @@ import {
   stopChunk,
   toolCallChunk,
   toolCallFinishChunk,
+  imagesChunk,
   MODELS_RESPONSE,
   FAKE_MODEL_ID,
   SECTION_SUMMARY_CONTENT,
   NON_STREAMING_DEFAULT_CONTENT,
+  WORKSPACE_AUTO_DREAM_PLAN_CONTENT,
   completionResponse,
   isSectionSummaryRequest,
+  isWorkspaceAutoDreamRequest,
   nonStreamingContent,
   parseChatRequestBody,
 } from "../../../e2e/scenarios/openAiProtocol";
+import {
+  buildWorkspaceAutoDreamSystemPrompt,
+  buildWorkspaceAutoDreamUserPrompt,
+  parseWorkspaceAutoDreamModelOutput,
+} from "@/service/AIWorkspaceAutoDreamPromptBuilder";
 
 /**
  * Feed SSE bytes through the PRODUCTION OpenAIStreamParser and collect chunks.
@@ -119,6 +129,44 @@ describe("FakeOpenAI scenarios vs production OpenAIStreamParser", () => {
     expect(textOf(chunks)).toBe("x");
     expect(chunks[chunks.length - 1].choices?.[0]?.finish_reason).toBe("stop");
   });
+
+  it("stream-generated-image parses through the production parser and carries delta.images", async () => {
+    const plan = resolveScenario("stream-generated-image");
+    expect(plan.kind).toBe("sse");
+    if (plan.kind !== "sse") return;
+    const chunks = await parseSse(
+      encodeSseFrames(plan.frames.map((f) => f.payload))
+    );
+    expect(textOf(chunks)).toBe(STREAM_IMAGE_TEXT);
+    const finish = chunks[chunks.length - 1];
+    expect(finish.choices?.[0]?.finish_reason).toBe("stop");
+    // The generated image rides completion metadata exactly the way the
+    // production accumulator collects it.
+    const imageChunk = chunks.find(
+      (c) => (c.choices?.[0]?.delta?.images ?? []).length > 0
+    );
+    expect(imageChunk).toBeTruthy();
+    expect(imageChunk?.choices?.[0]?.delta?.images?.[0]?.b64_json).toBe(
+      STREAM_IMAGE_B64
+    );
+  });
+
+  it("imagesChunk builder emits a parser-accepted payload", async () => {
+    const chunks = await parseSse(
+      encodeSseFrames([
+        imagesChunk([
+          { type: "image", b64_json: STREAM_IMAGE_B64, mime_type: "image/png" },
+        ]),
+        stopChunk(),
+      ])
+    );
+    const imageChunk = chunks.find(
+      (c) => (c.choices?.[0]?.delta?.images ?? []).length > 0
+    );
+    expect(imageChunk?.choices?.[0]?.delta?.images?.[0]?.mime_type).toBe(
+      "image/png"
+    );
+  });
 });
 
 describe("FakeOpenAI non-streaming completion path vs production consumers", () => {
@@ -186,6 +234,73 @@ describe("FakeOpenAI non-streaming completion path vs production consumers", () 
         { role: "user", content: "Say hello" },
       ])
     ).toBe(NON_STREAMING_DEFAULT_CONTENT);
+  });
+
+  it("a real workspace auto-dream prompt is detected and the plan parses through the production parser", () => {
+    const messages = [
+      { role: "system", content: buildWorkspaceAutoDreamSystemPrompt() },
+      {
+        role: "user",
+        content: buildWorkspaceAutoDreamUserPrompt({
+          workspaceKey: "e2e-key",
+          workspaceRoot: "/tmp/e2e-root",
+          activeMemories: [],
+          packets: [
+            {
+              sourceKind: "chat_v2",
+              sourceId: "conv-1",
+              title: "setup chat",
+              updatedAt: "2026-10-19T00:00:00.000Z",
+              workspace: {
+                workspaceId: 1,
+                workspaceKey: "e2e-key",
+                workspaceRoot: "/tmp/e2e-root",
+                displayName: "e2e-root",
+              },
+              messages: [
+                {
+                  id: "m1",
+                  role: "user",
+                  content: "setup warmup",
+                  createdAt: "2026-10-19T00:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    ];
+    expect(isWorkspaceAutoDreamRequest(messages)).toBe(true);
+    expect(nonStreamingContent(messages)).toBe(
+      WORKSPACE_AUTO_DREAM_PLAN_CONTENT
+    );
+    // The scripted plan must survive the PRODUCTION parser (same filter the
+    // service runs before apply): valid type/title/content, single-workspace
+    // workspaceKey defaulting, and an autonomous sourceId string.
+    const parsed = parseWorkspaceAutoDreamModelOutput(
+      WORKSPACE_AUTO_DREAM_PLAN_CONTENT,
+      new Set(["e2e-key"]),
+      []
+    );
+    expect(parsed.ok).toBe(true);
+    expect(parsed.create).toHaveLength(1);
+    expect(parsed.create[0]).toMatchObject({
+      type: "decision",
+      sourceKind: "chat_v2",
+      sourceId: "e2e-auto-dream-source",
+      workspaceKey: "e2e-key",
+    });
+  });
+
+  it("the user-memory auto-dream prompt is NOT misdetected as the workspace variant", () => {
+    expect(
+      isWorkspaceAutoDreamRequest([
+        {
+          role: "system",
+          content: "You consolidate durable user memories for AiFetchly.",
+        },
+      ])
+    ).toBe(false);
   });
 
   it("parseChatRequestBody extracts stream flag, model, and roles", () => {

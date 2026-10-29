@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { AiChatApi } from "@/api/aiChatApi";
-import type { ElectronStoreService } from "@/modules/electronstoreservice";
 
 const mockTokenGetValue = vi.hoisted(() =>
   vi.fn<(key: string) => string>((key: string) => {
@@ -12,6 +11,16 @@ const mockTokenGetValue = vi.hoisted(() =>
 function defaultTokenGetValue(key: string): string {
   if (key === "user_ai_enabled") return "true";
   return "";
+}
+
+/**
+ * Test-only typed view of AiChatApi private helpers. Casting through
+ * `unknown` keeps the private-method access explicit without `any`.
+ */
+interface AiChatApiInternals {
+  sanitizeErrorInfo(input: string): string;
+  validateScreenshot(input: string): void;
+  validatePageSize(input: string): void;
 }
 
 // Mock HttpClient: use a single shared instance so tests can assert on postJson calls
@@ -49,20 +58,16 @@ vi.mock("@/modules/lib/httpclient", () => {
 // Mock Token service: Token has private store: ElectronStoreService and methods setValue, getValue
 // USER_AI_ENABLED constant from @/config/usersetting is 'user_ai_enabled'
 vi.mock("@/modules/token", () => ({
+  // Vitest 4: vi.fn().mockImplementation(() => ({})) is not constructable.
   Token: class {
-    constructor() {
-      const storeMock = {
-        setValue: vi.fn(),
-        getValue: vi.fn(),
-        deleteValue: vi.fn(),
-        clearStore: vi.fn(),
-      };
-      return {
-        store: storeMock as unknown as ElectronStoreService,
-        setValue: vi.fn(),
-        getValue: mockTokenGetValue,
-      };
-    }
+    store = {
+      setValue: vi.fn(),
+      getValue: vi.fn(),
+      deleteValue: vi.fn(),
+      clearStore: vi.fn(),
+    };
+    setValue = vi.fn();
+    getValue = mockTokenGetValue;
   },
 }));
 
@@ -602,7 +607,7 @@ describe("AiChatApi - Error Sanitization", () => {
       "$name",
       ({ input, shouldNotContain, shouldContain, maxLength }) => {
         const sanitized = (
-          api as unknown as { sanitizeErrorInfo: (input: string) => string }
+          api as unknown as AiChatApiInternals
         ).sanitizeErrorInfo(input);
 
         if (shouldNotContain) {
@@ -625,16 +630,16 @@ describe("AiChatApi - Error Sanitization", () => {
   });
 
   it("should handle empty error info", () => {
-    const sanitized = (
-      api as unknown as { sanitizeErrorInfo: (input: string) => string }
-    ).sanitizeErrorInfo("");
+    const sanitized = (api as unknown as AiChatApiInternals).sanitizeErrorInfo(
+      ""
+    );
     expect(sanitized).toBe("");
   });
 
   it("should handle error info with only whitespace", () => {
-    const sanitized = (
-      api as unknown as { sanitizeErrorInfo: (input: string) => string }
-    ).sanitizeErrorInfo("   \n\t   ");
+    const sanitized = (api as unknown as AiChatApiInternals).sanitizeErrorInfo(
+      "   \n\t   "
+    );
     expect(sanitized).toBe("");
   });
 });
@@ -651,49 +656,49 @@ describe("AiChatApi - Screenshot Validation", () => {
   describe("validateScreenshot", () => {
     it("should accept valid PNG data URI", () => {
       expect(() => {
-        (
-          api as unknown as { validateScreenshot: (screenshot: string) => void }
-        ).validateScreenshot("data:image/png;base64,iVBORw0KGgo");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/png;base64,iVBORw0KGgo"
+        );
       }).not.toThrow();
     });
 
     it("should accept valid JPEG data URI", () => {
       expect(() => {
-        (
-          api as unknown as { validateScreenshot: (screenshot: string) => void }
-        ).validateScreenshot("data:image/jpeg;base64,/9j/4AAQ");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/jpeg;base64,/9j/4AAQ"
+        );
       }).not.toThrow();
     });
 
     it("should accept valid WebP data URI", () => {
       expect(() => {
-        (
-          api as unknown as { validateScreenshot: (screenshot: string) => void }
-        ).validateScreenshot("data:image/webp;base64,UklGR");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/webp;base64,UklGR"
+        );
       }).not.toThrow();
     });
 
     it("should reject text data URI", () => {
       expect(() => {
-        (
-          api as unknown as { validateScreenshot: (screenshot: string) => void }
-        ).validateScreenshot("data:text/plain;base64,invalid");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:text/plain;base64,invalid"
+        );
       }).toThrow("Invalid screenshot format");
     });
 
     it("should reject malformed data URI", () => {
       expect(() => {
-        (
-          api as unknown as { validateScreenshot: (screenshot: string) => void }
-        ).validateScreenshot("data:image/png;");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "data:image/png;"
+        );
       }).toThrow("Invalid screenshot format");
     });
 
     it("should accept raw base64 string (for wrapping)", () => {
       expect(() => {
-        (
-          api as unknown as { validateScreenshot: (screenshot: string) => void }
-        ).validateScreenshot("iVBORw0KGgoAAAANSUhEUg");
+        (api as unknown as AiChatApiInternals).validateScreenshot(
+          "iVBORw0KGgoAAAANSUhEUg"
+        );
       }).not.toThrow();
     });
   });
@@ -714,41 +719,31 @@ describe("AiChatApi - Page Size Validation", () => {
     it("should accept page content within limit", () => {
       const content = "x".repeat(49 * 1024); // 49KB
       expect(() => {
-        (
-          api as unknown as { validatePageSize: (pageContent: string) => void }
-        ).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should reject page content exceeding limit", () => {
       const content = "x".repeat(51 * 1024); // 51KB
       expect(() => {
-        (
-          api as unknown as { validatePageSize: (pageContent: string) => void }
-        ).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).toThrow("Page content too large");
     });
 
     it("should accept page content exactly at limit", () => {
       const content = "x".repeat(50 * 1024); // Exactly 50KB
       expect(() => {
-        (
-          api as unknown as { validatePageSize: (pageContent: string) => void }
-        ).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).not.toThrow();
     });
 
     it("should include size information in error", () => {
       const content = "x".repeat(60 * 1024); // 60KB
       expect(() => {
-        (
-          api as unknown as { validatePageSize: (pageContent: string) => void }
-        ).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).toThrow(/61440/);
       expect(() => {
-        (
-          api as unknown as { validatePageSize: (pageContent: string) => void }
-        ).validatePageSize(content);
+        (api as unknown as AiChatApiInternals).validatePageSize(content);
       }).toThrow(/51200/);
     });
   });
@@ -759,12 +754,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockTokenGetValue.mockImplementation((key: string) => {
-      if (key === "USER_AI_ENABLED" || key === "user_ai_enabled") {
-        return "true";
-      }
-      return "";
-    });
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
     api = new AiChatApi();
   });
 
@@ -813,6 +803,104 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       ],
       default_model: "agnes-2.0-flash",
     });
+  });
+
+  it("preserves small_model capability metadata on an OpenAI-shaped response", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      object: "list",
+      data: [
+        {
+          id: "agnes-2.0-flash",
+          object: "model",
+          created: 1,
+          owned_by: "ai-server",
+          context_size: 256000,
+        },
+      ],
+      default_model: "agnes-2.0-flash",
+      small_model: {
+        available: true,
+        resolved_model: "agnes-2.0-haiku",
+        context_size: 200000,
+        max_tokens: 4096,
+      },
+    });
+
+    const result = await api.listOpenAIModels();
+
+    // OpenAI pass-through must preserve top-level default_model AND small_model
+    // (previously the pass-through branch returned {object, data} only).
+    expect(result.default_model).toBe("agnes-2.0-flash");
+    expect(result.small_model).toEqual({
+      available: true,
+      resolved_model: "agnes-2.0-haiku",
+      context_size: 200000,
+      max_tokens: 4096,
+    });
+  });
+
+  it("preserves small_model capability metadata on the legacy models-shaped response", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      models: [
+        {
+          name: "agnes-2.0-flash",
+          available: true,
+          max_tokens: 0,
+          context_size: 256000,
+        },
+      ],
+      default_model: "agnes-2.0-flash",
+      small_model: {
+        available: true,
+        resolved_model: "agnes-2.0-haiku",
+        context_size: 200000,
+      },
+    });
+
+    const result = await api.listOpenAIModels();
+
+    expect(result.default_model).toBe("agnes-2.0-flash");
+    expect(result.small_model).toEqual({
+      available: true,
+      resolved_model: "agnes-2.0-haiku",
+      context_size: 200000,
+    });
+  });
+
+  it("ignores malformed small_model fields without rejecting the model list", async () => {
+    mockGetShared.mockResolvedValueOnce({
+      object: "list",
+      data: [
+        {
+          id: "m1",
+          object: "model",
+          created: 1,
+          owned_by: "ai-server",
+          context_size: 128000,
+        },
+      ],
+      // Malformed: non-boolean available, non-integer tokens, negative context.
+      small_model: {
+        available: "yes",
+        resolved_model: 42,
+        context_size: -10,
+        max_tokens: "big",
+      },
+    });
+
+    const result = await api.listOpenAIModels();
+
+    // The model list is still returned; malformed optional fields are dropped.
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0].id).toBe("m1");
+    // available is not a boolean -> small_model is not preserved as a usable
+    // capability (normalized to absent or a safe shape). Either way the list
+    // itself is unaffected.
+    if (result.small_model) {
+      expect(result.small_model.available).toBe(false);
+      expect(result.small_model.context_size).toBeUndefined();
+      expect(result.small_model.max_tokens).toBeUndefined();
+    }
   });
 
   it("retries model listing when the backend is temporarily unreachable", async () => {
@@ -875,6 +963,10 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
           owned_by: "legacy-ai-server",
         },
       ],
+      // The legacy endpoint's default_model recommendation is preserved so
+      // the renderer model selector can still seed itself (small-model
+      // contract tests cover small_model the same way).
+      default_model: "gpt-4o-mini",
     });
   });
 
@@ -1432,9 +1524,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       new Response(
         new ReadableStream({
           start(controller) {
-            controller.enqueue(
-              encoder.encode("data: [DONE]\n\n")
-            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           },
         }),
@@ -1470,9 +1560,7 @@ describe("AiChatApi - OpenAI compatibility fallback", () => {
       new Response(
         new ReadableStream({
           start(controller) {
-            controller.enqueue(
-              encoder.encode("data: [DONE]\n\n")
-            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           },
         }),
@@ -1534,6 +1622,7 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
     mockPostStreamShared.mockReset();
     mockPostJsonShared.mockReset();
     mockGetShared.mockReset();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
   });
 
   it("retries a network failure then succeeds and emits retry + recovery_status", async () => {

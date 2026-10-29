@@ -30,55 +30,55 @@ import { Order } from "./order.decorator";
 ])
 export class AIChatCompactionSectionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  sectionId: string;
+  sectionId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("varchar", { length: 64, nullable: false })
-  epoch: string;
+  epoch!: string;
 
   @Order(4)
   @Column("int", { nullable: false })
-  revision: number;
+  revision!: number;
 
   @Order(5)
   @Column("int", { nullable: false })
-  ordinal: number;
+  ordinal!: number;
 
   @Order(6)
   @Column("varchar", { length: 128, nullable: false })
-  workKey: string;
+  workKey!: string;
 
   @Order(7)
   @Column("bigint", { nullable: false, default: 0 })
-  sourceStartTimestampMs: number;
+  sourceStartTimestampMs!: number;
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  sourceStartRowId: number;
+  sourceStartRowId!: number;
 
   @Order(9)
   @Column("bigint", { nullable: false, default: 0 })
-  sourceEndTimestampMs: number;
+  sourceEndTimestampMs!: number;
 
   @Order(10)
   @Column("int", { nullable: false, default: 0 })
-  sourceEndRowId: number;
+  sourceEndRowId!: number;
 
   @Order(11)
   @Column("text", { nullable: false })
-  sourceManifestJson: string;
+  sourceManifestJson!: string;
 
   @Order(12)
   @Column("text", { nullable: false })
-  summaryJson: string;
+  summaryJson!: string;
 
   @Order(13)
   @Column("int", { nullable: true })
@@ -94,7 +94,7 @@ export class AIChatCompactionSectionEntity extends AuditableEntity {
 
   @Order(16)
   @Column("varchar", { length: 20, nullable: false, default: "staged" })
-  status: string;
+  status!: string;
 
   @Order(17)
   @Column("varchar", { length: 64, nullable: true })
@@ -102,5 +102,5 @@ export class AIChatCompactionSectionEntity extends AuditableEntity {
 
   @Order(18)
   @Column("varchar", { length: 20, nullable: false, default: "v1" })
-  promptSchemaVersion: string;
+  promptSchemaVersion!: string;
 }

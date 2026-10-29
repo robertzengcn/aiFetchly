@@ -3,6 +3,7 @@ import {
   EmailResult,
 } from "@/entityTypes/emailextraction-type";
 import { ProxyParseItem } from "@/entityTypes/proxyType";
+import { log } from "@/modules/Logger";
 import { proxyEntityToUrl } from "@/modules/lib/function";
 import { SMstruct } from "@/entityTypes/scrapeType";
 import { Cluster } from "puppeteer-cluster";
@@ -22,7 +23,7 @@ export class EmailSearch {
     callback?: (arg: EmailResult) => void
   ) {
     const proxyStrList: Array<string> = [];
-    console.log("proxy are following");
+    log.info("proxy are following");
     // console.log(data.proxys)
     if (data.proxys) {
       data.proxys.forEach((value) => {

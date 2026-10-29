@@ -424,9 +424,6 @@ function handleCardClick(metricType: string) {
     case 'emails':
       router.push('/emailextraction/tasklist');
       break;
-    case 'yellowpages':
-      router.push('/yellowpages/list');
-      break;
     case 'emailssent':
       router.push('/emailmarketing/buckemailtask/list/');
       break;

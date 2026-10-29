@@ -1,4 +1,5 @@
 import { HookAuditEntry, HookAuditStatus } from "@/entityTypes/hookTypes";
+import { log } from "@/modules/Logger";
 
 /**
  * Structured audit logging for hook runs.
@@ -60,7 +61,7 @@ export const ConsoleHookAuditLogger: HookAuditLogger = {
         reason: entry.reason ? redactSecrets(entry.reason) : undefined,
       };
       // eslint-disable-next-line no-console
-      console.log(`[hook-audit] ${JSON.stringify(sanitized)}`);
+      log.info(`[hook-audit] ${JSON.stringify(sanitized)}`);
     } catch {
       // Never let audit logging crash the chat stream.
     }
@@ -113,7 +114,7 @@ class PersistentHookAuditLoggerImpl implements PersistentHookAuditLogger {
       })
       .catch((err: unknown) => {
         // eslint-disable-next-line no-console
-        console.error("[HookAuditService] persistent log failed:", err);
+        log.error("[HookAuditService] persistent log failed:", err);
       });
   }
 }

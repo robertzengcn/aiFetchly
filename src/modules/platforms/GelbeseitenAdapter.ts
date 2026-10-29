@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
@@ -20,11 +21,11 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
      * Handle page load events and initial setup for gelbeseiten.de
      */
     async onPageLoad(page: Page): Promise<void> {
-        console.log('Handling page load for gelbeseiten.de');
+        log.info('Handling page load for gelbeseiten.de');
         
         // Wait for page to fully load first
         await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {
-            console.log('Page load timeout reached, continuing...');
+            log.info('Page load timeout reached, continuing...');
         });
 
         // Handle cookie consent with shadow root support - wait a bit for dynamic content
@@ -36,7 +37,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
         
         for (let attempt = 1; attempt <= maxRetries && !shadowRootCookieResult; attempt++) {
             try {
-                console.log(`Attempting to find cookie button in shadow root (attempt ${attempt}/${maxRetries})`);
+                log.info(`Attempting to find cookie button in shadow root (attempt ${attempt}/${maxRetries})`);
                 
                 // Handle shadow root cookie consent - common pattern for modern cookie dialogs
                 shadowRootCookieResult = await page.evaluate(() => {
@@ -63,7 +64,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                     // Primary target: #cmpbntyestxt
                     const primaryButton = findInShadowRoots(document, '#cmpbntyestxt');
                     if (primaryButton) {
-                        console.log('Found primary cookie button #cmpbntyestxt in shadow root');
+                        log.info('Found primary cookie button #cmpbntyestxt in shadow root');
                         primaryButton.click();
                         return true;
                     }
@@ -83,7 +84,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                         try {
                             const button = findInShadowRoots(document, selector);
                             if (button) {
-                                console.log(`Found cookie button in shadow root with selector: ${selector}`);
+                                log.info(`Found cookie button in shadow root with selector: ${selector}`);
                                 button.click();
                                 return true;
                             }
@@ -96,14 +97,14 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                 });
                 
                 if (shadowRootCookieResult) {
-                    console.log(`Successfully clicked cookie button in shadow root on attempt ${attempt}`);
+                    log.info(`Successfully clicked cookie button in shadow root on attempt ${attempt}`);
                     break;
                 } else if (attempt < maxRetries) {
-                    console.log(`Cookie button not found on attempt ${attempt}, waiting before retry...`);
+                    log.info(`Cookie button not found on attempt ${attempt}, waiting before retry...`);
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             } catch (error) {
-                console.log(`Error handling shadow root cookie consent on attempt ${attempt}:`, error);
+                log.info(`Error handling shadow root cookie consent on attempt ${attempt}:`, error);
                 if (attempt < maxRetries) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
@@ -134,10 +135,10 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                 try {
                     const cookieButton = await page.$(selector);
                     if (cookieButton) {
-                        console.log(`Found cookie button on gelbeseiten.de using selector: ${selector}`);
+                        log.info(`Found cookie button on gelbeseiten.de using selector: ${selector}`);
                         await cookieButton.click();
                         await new Promise(resolve => setTimeout(resolve, 1000));
-                        console.log('Accepted cookies on gelbeseiten.de');
+                        log.info('Accepted cookies on gelbeseiten.de');
                         break;
                     }
                 } catch (error) {
@@ -145,7 +146,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                 }
             }
         } catch (error) {
-            console.log('No cookie consent dialog found or already handled');
+            log.info('No cookie consent dialog found or already handled');
         }
 
         // Handle location popup if present (common on German business sites)
@@ -165,7 +166,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                     if (locationButton) {
                         await locationButton.click();
                         await new Promise(resolve => setTimeout(resolve, 1000));
-                        console.log('Accepted location on gelbeseiten.de');
+                        log.info('Accepted location on gelbeseiten.de');
                         break;
                     }
                 } catch (error) {
@@ -173,12 +174,12 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                 }
             }
         } catch (error) {
-            console.log('No location popup found or already handled');
+            log.info('No location popup found or already handled');
         }
 
         // Wait for page to fully load
         await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {
-            console.log('Page load timeout reached, continuing...');
+            log.info('Page load timeout reached, continuing...');
         });
     }
 
@@ -188,7 +189,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
      */
     async extractEmailFromDetailPage(page: Page): Promise<string | undefined> {
         try {
-            console.log('🔧 Extracting email from gelbeseiten.de detail page using custom method');
+            log.info('🔧 Extracting email from gelbeseiten.de detail page using custom method');
             
             // Look for elements with data-link attributes containing mailto
             const emailElement = await page.$('[data-link^="mailto:"]');
@@ -202,7 +203,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                     const emailMatch = dataLink.match(/mailto:([^?&\s]+)/);
                     if (emailMatch && emailMatch[1]) {
                         const extractedEmail = emailMatch[1].trim();
-                        console.log(`📧 Successfully extracted email from data-link: ${extractedEmail}`);
+                        log.info(`📧 Successfully extracted email from data-link: ${extractedEmail}`);
                         return extractedEmail;
                     }
                 }
@@ -226,7 +227,7 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                             const emailMatch = href.match(/mailto:([^?&\s]+)/);
                             if (emailMatch && emailMatch[1]) {
                                 const extractedEmail = emailMatch[1].trim();
-                                console.log(`📧 Extracted email from href (${selector}): ${extractedEmail}`);
+                                log.info(`📧 Extracted email from href (${selector}): ${extractedEmail}`);
                                 return extractedEmail;
                             }
                         }
@@ -234,14 +235,14 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                         // Try data-email attribute
                         const dataEmail = await element.evaluate(el => el.getAttribute('data-email'));
                         if (dataEmail) {
-                            console.log(`📧 Extracted email from data-email (${selector}): ${dataEmail}`);
+                            log.info(`📧 Extracted email from data-email (${selector}): ${dataEmail}`);
                             return dataEmail.trim();
                         }
                         
                         // Try text content as last resort
                         const textContent = await element.evaluate(el => el.textContent?.trim());
                         if (textContent && this.isValidEmail(textContent)) {
-                            console.log(`📧 Extracted email from text content (${selector}): ${textContent}`);
+                            log.info(`📧 Extracted email from text content (${selector}): ${textContent}`);
                             return textContent;
                         }
                     }
@@ -251,11 +252,11 @@ export class AdapterGelbeseiten extends BasePlatformAdapter {
                 }
             }
             
-            console.log('📧 No email found on gelbeseiten.de detail page');
+            log.info('📧 No email found on gelbeseiten.de detail page');
             return undefined;
             
         } catch (error) {
-            console.error('❌ Error extracting email from gelbeseiten.de detail page:', error);
+            log.error('❌ Error extracting email from gelbeseiten.de detail page:', error);
             return undefined;
         }
     }

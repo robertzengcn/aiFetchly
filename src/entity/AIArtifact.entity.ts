@@ -19,23 +19,23 @@ import { Order } from "./order.decorator";
 @Index(["artifactId"], { unique: true })
 export class AIArtifactEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  artifactId: string;
+  artifactId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("varchar", { length: 20, nullable: false, default: "html" })
-  type: "html";
+  type!: "html";
 
   @Order(4)
   @Column("varchar", { length: 160, nullable: false })
-  title: string;
+  title!: string;
 
   @Order(5)
   @Column("varchar", { length: 500, nullable: true })
@@ -43,13 +43,13 @@ export class AIArtifactEntity extends AuditableEntity {
 
   @Order(6)
   @Column("varchar", { length: 80, nullable: false, default: "text/html" })
-  mimeType: "text/html";
+  mimeType!: "text/html";
 
   @Order(7)
   @Column("text", { nullable: false })
-  content: string;
+  content!: string;
 
   @Order(8)
   @Column("int", { nullable: false, default: 1 })
-  version: number;
+  version!: number;
 }

@@ -10,6 +10,7 @@ import {
   TOKENEXPIRY,
   REFRESHTOKENEXPIRY,
 } from "@/config/usersetting";
+import { log } from "@/modules/Logger";
 import { BrowserWindow } from "electron";
 import { NATIVATECOMMAND } from "@/config/channellist";
 import type { NativateDatatype } from "@/entityTypes/commonType";
@@ -17,8 +18,6 @@ import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { SqliteDb } from "@/config/SqliteDb";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { SearchController } from "@/controller/SearchController";
-import { YellowPagesController } from "@/controller/YellowPagesController";
-import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { WebSocketClient } from "@/modules/WebSocketClient";
 import { VectorDatabasePool } from "@/modules/factories/VectorDatabasePool";
 import { stopChatScheduler } from "@/main-process/chatSchedulerLifecycleRegistry";
@@ -37,8 +36,6 @@ export class User {
     WebSocketClient.resetInstance();
     await ScheduleManager.destroyInstance();
     SearchController.resetInstance();
-    YellowPagesController.resetInstance();
-    YellowPagesProcessManager.resetInstance();
     await VectorDatabasePool.clearAllInstances();
     await SqliteDb.destroyInstance();
 
@@ -62,14 +59,14 @@ export class User {
         // `BrowserWindow` type before accessing window-only members.
         const mainWindow = allWindows[0] as BrowserWindow | undefined;
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
-          console.log("Sending navigation command to renderer");
+          log.info("Sending navigation command to renderer");
           mainWindow.webContents.send(NATIVATECOMMAND, {
             path: "login",
           } as NativateDatatype);
         }
       }
     } catch (ipcError) {
-      console.error("Failed to send navigation command to renderer:", ipcError);
+      log.error("Failed to send navigation command to renderer:", ipcError);
     }
   }
   //private tokenname= "social-market-token";
@@ -78,7 +75,7 @@ export class User {
       const remoteModel = new RemoteSource();
       await remoteModel.removeRemoteToken();
     } catch (error) {
-      console.error("Error removing remote token:", error);
+      log.error("Error removing remote token:", error);
       // Continue with local cleanup even if remote token removal fails
     }
     await this.removeToken();

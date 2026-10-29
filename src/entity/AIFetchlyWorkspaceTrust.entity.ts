@@ -23,42 +23,42 @@ import { Order } from "./order.decorator";
 @Index(["workspaceRootHash"], { unique: true })
 export class AIFetchlyWorkspaceTrustEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /** SHA-256 hex of {@link normalizeWorkspaceRoot}({@link workspaceRootPath}). */
   @Order(1)
   @Column("varchar", { length: 128, nullable: false, unique: true })
-  workspaceRootHash: string;
+  workspaceRootHash!: string;
 
   /** Plaintext root path, also stored for UX surfacing (T-17-03 accept). */
   @Order(2)
   @Column("varchar", { length: 1024, nullable: false })
-  workspaceRootPath: string;
+  workspaceRootPath!: string;
 
   /** Optional conversation that originated the trust grant (A2 nullable). */
   @Order(3)
   @Column("varchar", { length: 64, nullable: true })
-  conversationId: string | null;
+  conversationId!: string | null;
 
   // ---- 5 per-capability flags (TRS-02 / tech-design §13.2) ---------------
   // Default false + nullable:false => a missing/new row reads all-false.
   @Order(4)
   @Column("boolean", { default: false, nullable: false })
-  trustInstructions: boolean;
+  trustInstructions!: boolean;
 
   @Order(5)
   @Column("boolean", { default: false, nullable: false })
-  trustCommands: boolean;
+  trustCommands!: boolean;
 
   @Order(6)
   @Column("boolean", { default: false, nullable: false })
-  trustAgents: boolean;
+  trustAgents!: boolean;
 
   @Order(7)
   @Column("boolean", { default: false, nullable: false })
-  trustHooks: boolean;
+  trustHooks!: boolean;
 
   @Order(8)
   @Column("boolean", { default: false, nullable: false })
-  trustSkills: boolean;
+  trustSkills!: boolean;
 }

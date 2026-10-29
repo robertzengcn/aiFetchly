@@ -1,5 +1,8 @@
 // test/vitest/main/service/AIChatQueryEngine.test.ts
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { AIChatQueryEngine } from "@/service/AIChatQueryEngine";
 import type { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import type { OpenAIChatImage, OpenAIChatMessage } from "@/api/aiChatApi";
@@ -15,6 +18,17 @@ import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { HookRegistry } from "@/service/hooks/HookRegistry";
 import { SkillExecutor } from "@/service/SkillExecutor";
+import { GeneratedImageReferenceError } from "@/entityTypes/generatedImageReferenceTypes";
+import {
+  buildGeneratedImageProtocolUrl,
+  parseGeneratedImageProtocolIdentity,
+  sanitizeGeneratedImagePathPart,
+} from "@/service/AIChatGeneratedImageProtocol";
+import type {
+  PreparedGeneratedImageArtifact,
+  ResolveGeneratedImagesResult,
+} from "@/entityTypes/generatedImageReferenceTypes";
+import type { AIChatQueryEngineDeps } from "@/service/AIChatQueryEngine";
 
 // --- Mock AIChatV2Module -----------------------------------------------
 const mockSaveUserMessage = vi.fn().mockResolvedValue({ messageId: "user-1" });
@@ -582,6 +596,30 @@ describe("AIChatQueryEngine", () => {
       }
     });
 
+    it("attaches stable image-edit errorCode on failed image-edit turns", async () => {
+      const fakeRun = vi.fn().mockResolvedValue({
+        type: "failed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        error: new Error("image edit model unavailable on the provider"),
+        partialContent: "",
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+      const { sink, events } = makeEventCollector();
+
+      await engine.submitMessage({
+        request: { message: "add a dog beside the lion" },
+        eventSink: sink,
+      });
+
+      const errorEvent = events.find((e) => e.type === "error");
+      expect(errorEvent).toBeDefined();
+      if (errorEvent && errorEvent.type === "error") {
+        expect(errorEvent.errorCode).toBe("image_edit_unavailable");
+        expect(errorEvent.errorMessage).toBe("IMAGE_EDIT_UNAVAILABLE");
+      }
+    });
+
     it("emits error when pre-stream setup throws", async () => {
       mockCreateConversationIfNeeded.mockImplementationOnce(() => {
         throw new Error("DB locked");
@@ -969,6 +1007,9 @@ describe("AIChatQueryEngine", () => {
         conversationId: "v2-test",
       });
       expect(result.ok).toBe(true);
+      // The continuation is owner-observed and gated by the required-save
+      // barrier (TODO-02); settle microtasks before asserting its transcript.
+      await new Promise((r) => setTimeout(r, 20));
 
       const serialized = JSON.stringify(capturedMessages ?? []);
       // The model-only handoff carrying the prepared image reaches the loop.
@@ -976,6 +1017,76 @@ describe("AIChatQueryEngine", () => {
       expect(serialized).toContain("data:image/png;base64,SECRET");
       // The metadata-only role:tool message is present too.
       expect(serialized).toContain('"role":"tool"');
+    });
+    it("seeds the resumed loop with the approved tool's outputImages (batch harvest)", async () => {
+      let capturedSeed: readonly unknown[] | undefined;
+      const fakeRun = vi.fn(async (input: AIChatQueryLoopInput) => {
+        capturedSeed = input.seededToolImages;
+        return {
+          type: "completed" as const,
+          conversationId: "v2-test",
+          assistantMessageId: "a-1",
+          fullContent: "",
+          finishReason: "stop",
+        } as AIChatQueryLoopResult;
+      });
+      const engine = createEngineWithFakeLoop(fakeRun);
+
+      (
+        engine as unknown as {
+          pendingPermissions: Map<string, unknown>;
+        }
+      ).pendingPermissions.set("v2-test", {
+        conversationId: "v2-test",
+        assistantMessageId: "a-1",
+        conversationMessages: [
+          { role: "user", content: "warm them all" },
+        ] as OpenAIChatMessage[],
+        abortController: new AbortController(),
+        request: { message: "warm them all" },
+        openAITools: [],
+        nextRound: 1,
+        toolCallId: "call-batch",
+        toolName: "process_artifact_batch",
+        toolArguments: { instruction: "warm" },
+        planContext: undefined,
+        eventSink: { emit: vi.fn() },
+        toolCatalogState: undefined,
+      });
+
+      // The async batch tool resolves as a bare SkillExecutionResult whose
+      // payload carries slimmed outputImages (the shape pollAsyncJobToCompletion
+      // wraps under a second `result` envelope in the in-loop path).
+      vi.mocked(SkillExecutor.execute).mockResolvedValue({
+        success: true,
+        result: {
+          status: "partial",
+          outputImages: [
+            {
+              url: "aifetchly-generated-image://local/u/agent-v2-x/agent-assistant-agt-1/image-1.png",
+              file_name: "image-1.png",
+              mime_type: "image/png",
+              delivery: "local_file",
+            },
+          ],
+        },
+      } as never);
+
+      const result = await engine.resumeToolAfterPermission({
+        toolId: "call-batch",
+        conversationId: "v2-test",
+      });
+      expect(result.ok).toBe(true);
+      // The continuation is owner-observed and gated by the required-save
+      // barrier (TODO-02); settle microtasks before asserting its transcript.
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Without seeding, images produced by the directly-executed approved
+      // tool would never reach the resumed turn's result.images (and so never
+      // persist or render) — the live-E2E regression this guards against.
+      expect(capturedSeed?.length).toBe(1);
+      const seeded = capturedSeed?.[0] as { url?: string };
+      expect(seeded?.url).toContain("agent-v2-x");
     });
 
     it("preserves outbound intent context when continuing after draft approval", async () => {
@@ -1030,6 +1141,9 @@ describe("AIChatQueryEngine", () => {
       });
 
       expect(result.ok).toBe(true);
+      // The continuation is owner-observed and gated by the required-save
+      // barrier (TODO-02); settle microtasks before asserting its input.
+      await new Promise((r) => setTimeout(r, 20));
       expect(resumedInput?.sourceUserMessageId).toBe(
         "user-confirmation-message"
       );
@@ -1221,6 +1335,604 @@ describe("AIChatQueryEngine compact integration", () => {
     });
 
     expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generated-image reference resolution (query-engine integration)
+// ---------------------------------------------------------------------------
+
+const GEN_ARTIFACT_DATA_URL = "data:image/png;base64,R0VOX0dFTkVSQVRFRA==";
+const GEN_REFERENCE = {
+  messageId: "assistant-gen-1",
+  imageIndex: 0,
+} as const;
+
+function makeGenArtifact(
+  index: number,
+  dataUrl: string = GEN_ARTIFACT_DATA_URL
+): PreparedGeneratedImageArtifact {
+  return {
+    reference: { messageId: "assistant-gen-1", imageIndex: index },
+    fileName: `gen-${index}.png`,
+    mimeType: "image/png",
+    width: 64,
+    height: 64,
+    preparedSizeBytes: 128,
+    dataUrl,
+    detail: "auto",
+  };
+}
+
+/** Fake resolver dep returning a successful result for the given artifacts. */
+function makeResolverOk(
+  artifacts: PreparedGeneratedImageArtifact[],
+  overrides?: Partial<ResolveGeneratedImagesResult>
+): Pick<AIChatQueryEngineDeps, "generatedImageReferenceResolver"> {
+  return {
+    generatedImageReferenceResolver: {
+      resolveGeneratedImages: vi.fn(
+        async (): Promise<ResolveGeneratedImagesResult> => ({
+          artifacts,
+          metadata: artifacts.map((a) => ({
+            messageId: a.reference.messageId,
+            imageIndex: a.reference.imageIndex,
+            fileName: a.fileName,
+            protocolUrl:
+              "aifetchly-generated-image://local/user%40example.com/v2-test-conv/assistant-gen-1/" +
+              a.fileName,
+          })),
+          totalPreparedBytes: artifacts.reduce(
+            (sum, a) => sum + a.preparedSizeBytes,
+            0
+          ),
+          totalDataUrlChars: artifacts.reduce(
+            (sum, a) => sum + a.dataUrl.length,
+            0
+          ),
+          ...overrides,
+        })
+      ),
+    },
+  };
+}
+
+function uploadedImageFile(name: string): {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentBase64: string;
+  kind: "image";
+} {
+  return {
+    fileName: name,
+    mimeType: "image/png",
+    sizeBytes: 4,
+    contentBase64: "QUFB",
+    kind: "image",
+  };
+}
+
+describe("AIChatQueryEngine generated-image references", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+  });
+
+  function makeFakeAssembler(): {
+    assembler: AIChatContextAssembler;
+    assembleMock: ReturnType<typeof vi.fn>;
+  } {
+    const assembleMock = vi.fn().mockResolvedValue({
+      messages: [{ role: "user", content: "captured" }],
+      tokenEstimate: 0,
+      usedSessionMemory: false,
+      usedFullCompact: false,
+      compactTriggered: false,
+      warnings: [],
+    });
+    return {
+      assembler: {
+        assemble: assembleMock,
+      } as unknown as AIChatContextAssembler,
+      assembleMock,
+    };
+  }
+
+  it("resolves generated-image references before persisting the user message", async () => {
+    const order: string[] = [];
+    mockSaveUserMessage.mockImplementationOnce(async () => {
+      order.push("saveUserMessage");
+      return { messageId: "user-1" };
+    });
+    const artifact = makeGenArtifact(0);
+    const resolver = {
+      generatedImageReferenceResolver: {
+        resolveGeneratedImages: vi.fn(
+          async (): Promise<ResolveGeneratedImagesResult> => {
+            order.push("resolve");
+            return {
+              artifacts: [artifact],
+              metadata: [
+                {
+                  messageId: artifact.reference.messageId,
+                  imageIndex: artifact.reference.imageIndex,
+                  fileName: artifact.fileName,
+                },
+              ],
+              totalPreparedBytes: artifact.preparedSizeBytes,
+              totalDataUrlChars: artifact.dataUrl.length,
+            };
+          }
+        ),
+      },
+    };
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "completed" as const,
+      conversationId: "v2-test-conv",
+      assistantMessageId: "assistant-test",
+      fullContent: "done",
+      finishReason: "stop",
+    });
+    const engine = createEngineWithFakeLoop(fakeRun, resolver);
+    const { sink } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "make it blue",
+        generatedImageReferences: [GEN_REFERENCE],
+      },
+      eventSink: sink,
+    });
+
+    expect(order).toEqual(["resolve", "saveUserMessage"]);
+    expect(fakeRun).toHaveBeenCalledOnce();
+  });
+
+  it("passes exact multimodal parts to the assembler with dataUrls in memory only", async () => {
+    const { assembler, assembleMock } = makeFakeAssembler();
+    const artifact = makeGenArtifact(0);
+    const engine = createEngineWithFakeLoop(
+      vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "done",
+        finishReason: "stop",
+      }),
+      { contextAssembler: assembler, ...makeResolverOk([artifact]) }
+    );
+    const { sink } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "make it blue",
+        uploadedFiles: [uploadedImageFile("cat.png")],
+        generatedImageReferences: [GEN_REFERENCE],
+      },
+      eventSink: sink,
+    });
+
+    const assembleInput = assembleMock.mock.calls[0][0] as {
+      currentUserContentParts?: unknown;
+    };
+    expect(assembleInput.currentUserContentParts).toEqual([
+      { type: "text", text: "make it blue" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,QUFB", detail: "auto" },
+      },
+      {
+        type: "image_url",
+        image_url: { url: GEN_ARTIFACT_DATA_URL, detail: "auto" },
+      },
+    ]);
+  });
+
+  it("persists reference display metadata and never persists base64 payloads", async () => {
+    const engine = createEngineWithFakeLoop(
+      vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "done",
+        finishReason: "stop",
+      }),
+      makeResolverOk([makeGenArtifact(0)])
+    );
+    const { sink } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "make it blue",
+        generatedImageReferences: [GEN_REFERENCE],
+      },
+      eventSink: sink,
+    });
+
+    expect(mockSaveUserMessage).toHaveBeenCalledTimes(1);
+    const savedArg = mockSaveUserMessage.mock.calls[0][0] as {
+      metadata?: {
+        generatedImageReferences?: Array<Record<string, unknown>>;
+      };
+    };
+    expect(savedArg.metadata?.generatedImageReferences).toEqual([
+      expect.objectContaining({
+        messageId: "assistant-gen-1",
+        imageIndex: 0,
+        fileName: "gen-0.png",
+      }),
+    ]);
+    const serialized = JSON.stringify(savedArg);
+    expect(serialized).not.toContain("base64");
+    expect(serialized).not.toContain(GEN_ARTIFACT_DATA_URL);
+  });
+
+  it("emits errorCode chunk and skips persistence + loop when resolution fails", async () => {
+    const fakeRun = vi.fn();
+    const failingResolver = {
+      generatedImageReferenceResolver: {
+        resolveGeneratedImages: vi.fn(async () => {
+          throw new GeneratedImageReferenceError("generated_image_missing");
+        }),
+      },
+    };
+    const engine = createEngineWithFakeLoop(fakeRun, failingResolver);
+    const { sink, events } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "edit this",
+        generatedImageReferences: [GEN_REFERENCE],
+      },
+      eventSink: sink,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    if (errorEvent && errorEvent.type === "error") {
+      expect(errorEvent.errorCode).toBe("generated_image_missing");
+      expect(errorEvent.errorMessage.length).toBeGreaterThan(0);
+      expect(errorEvent.conversationId).toBe("v2-test-conv");
+    }
+    expect(mockSaveUserMessage).not.toHaveBeenCalled();
+    expect(fakeRun).not.toHaveBeenCalled();
+  });
+
+  it("rejects when combined uploaded + referenced images exceed the limit", async () => {
+    const fakeRun = vi.fn();
+    const engine = createEngineWithFakeLoop(
+      fakeRun,
+      makeResolverOk([makeGenArtifact(0)])
+    );
+    const { sink, events } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "combine all of these",
+        uploadedFiles: [
+          uploadedImageFile("a.png"),
+          uploadedImageFile("b.png"),
+          uploadedImageFile("c.png"),
+        ],
+        generatedImageReferences: [{ messageId: "m", imageIndex: 0 }],
+      },
+      eventSink: sink,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    if (errorEvent && errorEvent.type === "error") {
+      expect(errorEvent.errorCode).toBe("generated_image_reference_limit");
+    }
+    expect(mockSaveUserMessage).not.toHaveBeenCalled();
+    expect(fakeRun).not.toHaveBeenCalled();
+  });
+
+  it("rejects with generated_image_too_large over the payload budget", async () => {
+    const fakeRun = vi.fn();
+    const engine = createEngineWithFakeLoop(
+      fakeRun,
+      makeResolverOk([], { totalDataUrlChars: 6_000_001 })
+    );
+    const { sink, events } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "use it",
+        generatedImageReferences: [GEN_REFERENCE],
+      },
+      eventSink: sink,
+    });
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent).toBeDefined();
+    if (errorEvent && errorEvent.type === "error") {
+      expect(errorEvent.errorCode).toBe("generated_image_too_large");
+    }
+    expect(mockSaveUserMessage).not.toHaveBeenCalled();
+    expect(fakeRun).not.toHaveBeenCalled();
+  });
+
+  it("substitutes a neutral instruction for blank text", async () => {
+    const { assembler, assembleMock } = makeFakeAssembler();
+    const engine = createEngineWithFakeLoop(
+      vi.fn().mockResolvedValue({
+        type: "completed" as const,
+        conversationId: "v2-test-conv",
+        assistantMessageId: "assistant-test",
+        fullContent: "done",
+        finishReason: "stop",
+      }),
+      { contextAssembler: assembler, ...makeResolverOk([makeGenArtifact(0)]) }
+    );
+    const { sink } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: {
+        conversationId: "v2-test-conv",
+        message: "",
+        generatedImageReferences: [GEN_REFERENCE],
+      },
+      eventSink: sink,
+    });
+
+    const assembleInput = assembleMock.mock.calls[0][0] as {
+      currentUserContentParts?: Array<{ type: string; text?: string }>;
+    };
+    expect(assembleInput.currentUserContentParts?.[0]).toEqual({
+      type: "text",
+      text: "Describe the selected image.",
+    });
+  });
+
+  it("requests without references skip resolution entirely (regression)", async () => {
+    const resolverDeps = makeResolverOk([]);
+    const resolveSpy =
+      resolverDeps.generatedImageReferenceResolver!.resolveGeneratedImages;
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "completed" as const,
+      conversationId: "v2-test-conv",
+      assistantMessageId: "assistant-test",
+      fullContent: "ok",
+      finishReason: "stop",
+    });
+    const engine = createEngineWithFakeLoop(fakeRun, resolverDeps);
+    const { sink, events } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: { conversationId: "v2-test-conv", message: "hello" },
+      eventSink: sink,
+    });
+
+    expect(resolveSpy).not.toHaveBeenCalled();
+    expect(mockSaveUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "hello" })
+    );
+    const savedArg = mockSaveUserMessage.mock.calls[0][0] as {
+      metadata?: { generatedImageReferences?: unknown };
+    };
+    expect(savedArg.metadata?.generatedImageReferences).toBeUndefined();
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(fakeRun).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Generated-image re-homing (batch sub-agent outputs -> parent identity)
+// ---------------------------------------------------------------------------
+
+describe("AIChatQueryEngine generated-image rehoming", () => {
+  const EMAIL = "user@example.com";
+  const PARENT_CONV = "v2-test-conv";
+  const PARENT_MSG = "assistant-test";
+  const AGENT_CONV = "agent-v2-x";
+  const AGENT_MSG = "agent-assistant-y";
+
+  const tempDirs: string[] = [];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetPlanState.mockResolvedValue(null);
+    mockEnsurePlanForConversation.mockResolvedValue(null);
+    mockApprovePlan.mockReset();
+  });
+  async function makeTempDir(): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-chat-rehome-"));
+    tempDirs.push(dir);
+    return dir;
+  }
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs
+        .splice(0)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true }))
+    );
+  });
+
+  function userRoot(root: string): string {
+    return path.join(root, "ai-chat-generated-images", EMAIL);
+  }
+
+  async function seedImage(
+    root: string,
+    conversationId: string,
+    messageId: string,
+    bytes: Buffer
+  ): Promise<string> {
+    const dir = path.join(
+      userRoot(root),
+      sanitizeGeneratedImagePathPart(conversationId),
+      sanitizeGeneratedImagePathPart(messageId)
+    );
+    await fs.mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, "image-1.png");
+    await fs.writeFile(filePath, bytes);
+    return filePath;
+  }
+
+  /**
+   * A generatedImageStorage fake whose rehomeImages performs REAL copies on
+   * disk (mirroring the production service contract) so the engine test
+   * exercises actual file movement, not just mock plumbing.
+   */
+  function makeRealCopyStorage(userDataRoot: string): {
+    storeImages(input: {
+      images: OpenAIChatImage[];
+    }): Promise<OpenAIChatImage[]>;
+    rehomeImages(input: {
+      images: OpenAIChatImage[];
+      targetConversationId: string;
+      targetMessageId: string;
+    }): Promise<OpenAIChatImage[]>;
+  } {
+    return {
+      storeImages: async (input) => input.images,
+      rehomeImages: async (input) => {
+        const targetConv = sanitizeGeneratedImagePathPart(
+          input.targetConversationId
+        );
+        const targetMsg = sanitizeGeneratedImagePathPart(input.targetMessageId);
+        const out: OpenAIChatImage[] = [];
+        for (let index = 0; index < input.images.length; index += 1) {
+          const image = input.images[index];
+          const identity = image.url
+            ? parseGeneratedImageProtocolIdentity(image.url, userDataRoot)
+            : null;
+          if (
+            !identity ||
+            (identity.conversationPathPart === targetConv &&
+              identity.messagePathPart === targetMsg)
+          ) {
+            out.push(image);
+            continue;
+          }
+          const dir = path.join(userRoot(userDataRoot), targetConv, targetMsg);
+          await fs.mkdir(dir, { recursive: true });
+          const fileName = `image-${index + 1}.png`;
+          const destPath = path.join(dir, fileName);
+          await fs.copyFile(identity.candidatePath, destPath);
+          out.push({
+            ...image,
+            delivery: "local_file",
+            url: buildGeneratedImageProtocolUrl({
+              userEmail: EMAIL,
+              conversationId: targetConv,
+              messageId: targetMsg,
+              fileName,
+            }),
+            local_path: destPath,
+            file_name: fileName,
+          });
+        }
+        return out;
+      },
+    };
+  }
+
+  it("persists mixed parent-native + agent-owned images ALL under the parent identity, order preserved", async () => {
+    const root = await makeTempDir();
+    const nativeBytes = Buffer.from([1, 1, 1, 1]);
+    const agentBytes = Buffer.from([2, 2, 2, 2]);
+    const nativePath = await seedImage(
+      root,
+      PARENT_CONV,
+      PARENT_MSG,
+      nativeBytes
+    );
+    const agentPath = await seedImage(root, AGENT_CONV, AGENT_MSG, agentBytes);
+
+    const nativeDescriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: EMAIL,
+        conversationId: PARENT_CONV,
+        messageId: PARENT_MSG,
+        fileName: "image-1.png",
+      }),
+      local_path: nativePath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+    const agentDescriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "local_file",
+      url: buildGeneratedImageProtocolUrl({
+        userEmail: EMAIL,
+        conversationId: AGENT_CONV,
+        messageId: AGENT_MSG,
+        fileName: "image-1.png",
+      }),
+      local_path: agentPath,
+      file_name: "image-1.png",
+      mime_type: "image/png",
+    };
+
+    const fakeRun = vi.fn().mockResolvedValue({
+      type: "completed" as const,
+      conversationId: PARENT_CONV,
+      assistantMessageId: PARENT_MSG,
+      fullContent: "batch done",
+      finishReason: "stop",
+      model: "gpt-image",
+      images: [nativeDescriptor, agentDescriptor],
+    });
+    const engine = createEngineWithFakeLoop(fakeRun, {
+      generatedImageStorage: makeRealCopyStorage(root),
+    });
+    const { sink, events } = makeEventCollector();
+
+    await engine.submitMessage({
+      request: { message: "run the batch" },
+      eventSink: sink,
+    });
+
+    // Both saved descriptors carry parent segments.
+    expect(mockSaveAssistantMessage).toHaveBeenCalledTimes(1);
+    const savedArg = mockSaveAssistantMessage.mock.calls[0][0] as {
+      metadata?: { generatedImages?: OpenAIChatImage[] };
+    };
+    const savedImages = savedArg.metadata?.generatedImages ?? [];
+    expect(savedImages).toHaveLength(2);
+
+    for (const image of savedImages) {
+      const identity = parseGeneratedImageProtocolIdentity(
+        image.url ?? "",
+        root
+      );
+      if (!identity) {
+        throw new Error(
+          `expected parseable protocol URL: ${String(image.url)}`
+        );
+      }
+      expect(identity.conversationPathPart).toBe(PARENT_CONV);
+      expect(identity.messagePathPart).toBe(PARENT_MSG);
+    }
+
+    // Order preserved: [0] is the untouched parent-native descriptor...
+    expect(savedImages[0].local_path).toBe(nativePath);
+    expect(savedImages[0].file_name).toBe("image-1.png");
+    // ...and [1] is the re-homed agent output backed by a real copied file.
+    expect(savedImages[1].local_path).toBe(
+      path.join(userRoot(root), PARENT_CONV, PARENT_MSG, "image-2.png")
+    );
+    await expect(fs.readFile(savedImages[1].local_path ?? "")).resolves.toEqual(
+      agentBytes
+    );
+
+    // The complete event carries the same re-homed descriptors.
+    const completeEvent = events.find((e) => e.type === "complete");
+    if (completeEvent?.type === "complete") {
+      expect(completeEvent.images).toEqual(savedImages);
+    } else {
+      throw new Error("expected a complete event");
+    }
   });
 });
 

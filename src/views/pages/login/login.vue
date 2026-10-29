@@ -53,7 +53,6 @@
       </v-dialog>
 </template>
 <script setup lang="ts">
-//import { UserModule } from '@/views/store/modules/user'
 import {openPage, getLoginUrl, checkLoginSucceeded} from "@/views/api/users"
 import { onMounted, onUnmounted, ref } from "vue";
 import {NATIVATECOMMAND, LOGIN_STATUS} from "@/config/channellist"
@@ -127,14 +126,14 @@ const redirectToLogin = async () => {
                 // actually completed (e.g. the main-process window reference
                 // went stale mid-login). Probe the main process before
                 // showing a false "timeout": if a user email is persisted,
-                // treat this as success and navigate to the Dashboard.
+                // treat this as success and navigate to the AI chat workspace.
                 try {
                     const loginDone = await checkLoginSucceeded();
                     if (loginDone) {
                         isLoading.value = false;
                         showLoginUrl.value = false;
-                        router.push({ name: 'Dashboard' }).catch((err) => {
-                            console.warn('Navigation to Dashboard failed:', err);
+                        router.push({ name: 'AI_Chat_Workspace' }).catch((err) => {
+                            console.warn('Navigation to AI workspace failed:', err);
                         });
                         return;
                     }

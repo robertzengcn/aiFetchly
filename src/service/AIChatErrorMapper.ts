@@ -2,6 +2,29 @@
 
 import { AIProviderError } from "./aiProvider/AIProviderError";
 import { isAIChatRecoverableError } from "./AIChatRecoveryTypes";
+import { log } from "@/modules/Logger";
+// Import the renderer-safe sentinel constants into local scope for use in the
+// functions below, and re-export them so existing main-process importers keep
+// working unchanged. The constants live in the pure, Node-free
+// AIChatErrorSentinels module so the renderer can import them without pulling
+// `@/modules/Logger` (and thus `node:module.createRequire`) into the browser
+// bundle. See AIChatErrorSentinels.ts for the rationale.
+import {
+  QUOTA_EXHAUSTED_SENTINEL,
+  AUTH_EXPIRED_SENTINEL,
+  IMAGE_EDIT_UNAVAILABLE_SENTINEL,
+  IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  CONTEXT_WINDOW_EXCEEDED_SENTINEL,
+  type ImageEditErrorCode,
+} from "./AIChatErrorSentinels";
+export {
+  QUOTA_EXHAUSTED_SENTINEL,
+  AUTH_EXPIRED_SENTINEL,
+  IMAGE_EDIT_UNAVAILABLE_SENTINEL,
+  IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  CONTEXT_WINDOW_EXCEEDED_SENTINEL,
+} from "./AIChatErrorSentinels";
+export type { ImageEditErrorCode } from "./AIChatErrorSentinels";
 import { UnresolvedPastedTextError } from "./pastedText/UnresolvedPastedTextError";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 
@@ -10,8 +33,9 @@ import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
  * HTTP 402 / "Payment Required" — i.e. the user's subscription token quota
  * is exhausted. The renderer detects this and shows a translated, actionable
  * recharge prompt instead of the raw sentinel.
+ *
+ * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
-export const QUOTA_EXHAUSTED_SENTINEL = "QUOTA_EXHAUSTED";
 
 /**
  * Pattern for HTTP 402 / payment-required / quota-exhausted errors. A hosted
@@ -66,9 +90,36 @@ const TRANSIENT_ERROR_PATTERN =
  * loop's auto-retry — use {@link isContentLevelTransientError} instead, so
  * transport-layer conditions (502/429/timeout) are not retried at two layers.
  */
+/**
+ * True when the error indicates the conversation exceeded the model's
+ * context window. This is NOT a transient error — retrying with the same
+ * oversized input will always fail. Used to:
+ *   - exclude it from {@link isTransientRetryableError}
+ *   - trigger an emergency auto-compact on failed turns so the next turn
+ *     has a smaller context.
+ */
+export function isContextWindowExceededError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const lowerMsg = (err.message || "").toLowerCase();
+  return (
+    lowerMsg.includes("context_window_exceeded") ||
+    lowerMsg.includes("context window") ||
+    lowerMsg.includes("context length") ||
+    lowerMsg.includes("contextwindowexceeded") ||
+    lowerMsg.includes("longer than the model")
+  );
+}
+
 export function isTransientRetryableError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   if (err.name === "AbortError") return false;
+  // Context window exceeded is NOT transient — retrying with the same
+  // oversized input will always fail. Exclude it before the pattern check
+  // so the user gets the actionable "conversation too long" message instead
+  // of "service is busy, try again".
+  if (isContextWindowExceededError(err)) {
+    return false;
+  }
   if (isAIChatRecoverableError(err)) {
     return (
       err.reason === "server_error" ||
@@ -113,8 +164,9 @@ export function isContentLevelTransientError(err: unknown): boolean {
  * HTTP 401/403 (session/access token expired or rejected). The main process
  * signs the user out and navigates to login; the renderer maps this sentinel
  * to a short translated message if the UI is still visible briefly.
+ *
+ * Re-exported from {@link ./AIChatErrorSentinels} — see that module.
  */
-export const AUTH_EXPIRED_SENTINEL = "AUTH_EXPIRED";
 
 const AUTH_EXPIRED_MESSAGE_PATTERN =
   /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|Forbidden/i;
@@ -179,14 +231,134 @@ export function describeErrorDetail(err: unknown): string {
 }
 
 /**
+ * Server/transport phrasings meaning "no edit-capable (image-to-image) model
+ * is configured" — the edit request cannot succeed until model configuration
+ * changes, so it must be distinguishable from transient failures.
+ */
+const IMAGE_EDIT_UNAVAILABLE_PATTERN =
+  /image_edit_unavailable|no image[- ]to[- ]image|edit[- ]capable model|image edit model (is )?(not |un)configured|edit model unavailable|image editing (is )?not (configured|available|enabled)/i;
+
+/**
+ * Server/transport phrasings meaning the provider rejected or failed the
+ * image edit operation itself (distinct from invalid local references).
+ */
+const IMAGE_EDIT_PROVIDER_FAILED_PATTERN =
+  /image_edit_provider_failed|image (generation|edit(ting)?) failed|failed to (edit|generate) (the )?image|edit_image failed|image edit (was )?rejected/i;
+
+/**
+ * Classify a chat image-edit failure from server/transport error text.
+ * Returns the stable code used for renderer localization and telemetry, or
+ * null when the error is not image-edit-specific. Quota and auth failures
+ * are never classified as image-edit failures regardless of wording.
+ */
+export function imageEditErrorCode(err: unknown): ImageEditErrorCode | null {
+  const message =
+    err instanceof Error
+      ? err.message || ""
+      : typeof err === "string"
+      ? err
+      : "";
+  if (message.length === 0) return null;
+  if (
+    /402|Payment Required|insufficient_quota|quota_exceeded|insufficient balance/i.test(
+      message
+    ) ||
+    /401|403|unauthorized|forbidden|auth(session)? expired|token expired|api[- ]?key|invalid key|permission denied/i.test(
+      message
+    )
+  ) {
+    return null;
+  }
+  if (IMAGE_EDIT_UNAVAILABLE_PATTERN.test(message)) {
+    return "image_edit_unavailable";
+  }
+  if (IMAGE_EDIT_PROVIDER_FAILED_PATTERN.test(message)) {
+    return "image_edit_provider_failed";
+  }
+  // Provider rejection of an image operation: both words present, e.g.
+  // "provider error while editing the attached image".
+  if (/provider/i.test(message) && /\bimage\b/i.test(message)) {
+    return "image_edit_provider_failed";
+  }
+  return null;
+}
+
+/**
  * Map unknown errors to user-safe messages.
  * Raw server bodies, stack traces, and sensitive request details
  * are logged but never surfaced to the renderer.
+ *
+ * B15: durable-queue errors (validation, limits, preparation, queue/steering
+ * gates) keep a stable `[CODE]` prefix so the renderer can map them to
+ * six-language UI copy centrally. Codes are bounded and carry no prompts,
+ * file content/paths, tokens, or payloads.
  */
+export const PENDING_ERROR_CODES: ReadonlySet<string> = new Set([
+  "QUEUE_LIMIT_REACHED",
+  "CONTENT_TOO_LONG",
+  "EMPTY_MESSAGE",
+  "PENDING_NOT_FOUND",
+  "PENDING_NOT_CLAIMABLE",
+  "CONVERSATION_MISMATCH",
+  "IDEMPOTENCY_CONFLICT",
+  "ATTACHMENTS_NOT_STEERABLE",
+  "PREPARATION_FAILED",
+  "AI_FEATURE_DISABLED",
+  "QUEUE_DISABLED",
+  "INVALID_REQUEST",
+  "STEERING_DISABLED",
+  "TURN_NOT_STEERABLE",
+  "STEERING_COMMIT_RACE",
+  "RUN_ENVELOPE_FAILED",
+  "DISPATCH_PROMOTE_FAILED",
+  "RUN_TERMINAL_PERSIST_FAILED",
+]);
+
+/**
+ * Stable bounded code for queue/preparation/terminal errors, or null.
+ * Reads the typed `code` property (module/queue errors) so user guidance
+ * survives userSafeError instead of collapsing to generic unexpected-error
+ * text. Never reflects message bodies — codes only.
+ */
+export function pendingErrorCode(err: unknown): string | null {
+  if (err instanceof Error) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && PENDING_ERROR_CODES.has(code)) {
+      return code;
+    }
+  }
+  if (typeof err === "object" && err !== null) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && PENDING_ERROR_CODES.has(code)) {
+      return code;
+    }
+  }
+  return null;
+}
+
 export function userSafeError(err: unknown): string {
   if (err instanceof Error) {
+    // B15: typed queue/preparation/terminal errors keep their stable code
+    // prefix (bounded, localizable downstream). Module messages are already
+    // user-safe guidance (limits, recovery actions) — surface them verbatim
+    // instead of the generic unexpected-error fallback below.
+    const pendingCode = pendingErrorCode(err);
+    if (pendingCode) {
+      return `[${pendingCode}] ${err.message || pendingCode}`;
+    }
     if (err.name === "AbortError") {
       return "Generation stopped.";
+    }
+    // Image-edit failures keep actionable, distinguishable messages instead
+    // of the provider direct-surface and generic fallbacks below. Must run
+    // BEFORE the AIProviderError branch: the server reports edit-model
+    // gaps and provider rejections through provider error messages too.
+    const imageEditCode = imageEditErrorCode(err);
+    if (imageEditCode === "image_edit_unavailable") {
+      return IMAGE_EDIT_UNAVAILABLE_SENTINEL;
+    }
+    if (imageEditCode === "image_edit_provider_failed") {
+      return IMAGE_EDIT_PROVIDER_FAILED_SENTINEL;
     }
     // AIProviderError messages are crafted to be user-safe (auth, network,
     // model-unavailable, etc.). Surface them directly instead of letting the
@@ -228,6 +400,19 @@ export function userSafeError(err: unknown): string {
     if (/413|Request Entity Too Large|Payload Too Large/i.test(msg)) {
       return "The attachment is too large for the AI server. Please try a smaller image or file.";
     }
+    // Context window exceeded: the conversation history (including tool
+    // call/result pairs) grew beyond the model's context length. This is
+    // NOT a transient error — retrying with the same input will always
+    // fail. Emit the stable sentinel (R8 P2-8 / FR-REC-004) so renderers
+    // map it to the localized actionable copy (start a new conversation or
+    // clear history) instead of carrying a prose string across locales.
+    if (
+      /context_window_exceeded|context window|context length|contextwindowexceeded|longer than the model/i.test(
+        msg
+      )
+    ) {
+      return CONTEXT_WINDOW_EXCEEDED_SENTINEL;
+    }
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";
     }
@@ -238,7 +423,7 @@ export function userSafeError(err: unknown): string {
     if (isTransientRetryableError(err)) {
       return "The AI service is busy or had a transient issue. Please try again in a moment.";
     }
-    console.error(
+    log.error(
       `[ai-chat-v2] unmapped error: ${msg} — ${describeErrorDetail(err)}`
     );
     return "An unexpected error occurred. Please try again.";

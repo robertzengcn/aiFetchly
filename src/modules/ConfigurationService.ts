@@ -1,5 +1,6 @@
 "use strict";
 import { RagConfigApi } from "@/api/ragConfigApi";
+import { log } from "@/modules/Logger";
 import { EmbeddingConfig } from "@/entityTypes/commonType";
 
 /**
@@ -39,7 +40,7 @@ export interface ConfigurationService {
  * ```typescript
  * const configService = new ConfigurationServiceImpl();
  * const config = await configService.getDefaultModelConfig();
- * console.log('Using model:', config.model);
+ * log.info('Using model:', config.model);
  * ```
  */
 export class ConfigurationServiceImpl implements ConfigurationService {
@@ -72,8 +73,8 @@ export class ConfigurationServiceImpl implements ConfigurationService {
      * @example
      * ```typescript
      * const config = await configService.getDefaultModelConfig();
-     * console.log('Model:', config.model);
-     * console.log('Dimensions:', config.dimensions);
+     * log.info('Model:', config.model);
+     * log.info('Dimensions:', config.dimensions);
      * ```
      */
     async getDefaultModelConfig(): Promise<EmbeddingConfig> {
@@ -86,7 +87,7 @@ export class ConfigurationServiceImpl implements ConfigurationService {
         const cached = this.getFromCache(cacheKey);
         if (cached) {
             this.cacheHits++;
-            console.log('Configuration retrieved from cache');
+            log.info('Configuration retrieved from cache');
             return cached;
         }
 
@@ -96,12 +97,12 @@ export class ConfigurationServiceImpl implements ConfigurationService {
             const response = await this.ragConfigApi.getDefaultConfig();
             if (response.status && response.data) {
                 this.setCache(cacheKey, response.data, this.DEFAULT_TTL);
-                console.log('Configuration retrieved from remote API');
+                log.info('Configuration retrieved from remote API');
                 return response.data;
             }
             throw new Error('Failed to retrieve configuration from API');
         } catch (error) {
-            console.error('Failed to retrieve configuration:', error);
+            log.error('Failed to retrieve configuration:', error);
             // Return fallback configuration
             return this.getFallbackConfig();
         }
@@ -111,9 +112,9 @@ export class ConfigurationServiceImpl implements ConfigurationService {
         try {
             await this.ragConfigApi.refreshCache();
             this.cache.clear();
-            console.log('Configuration cache refreshed');
+            log.info('Configuration cache refreshed');
         } catch (error) {
-            console.error('Failed to refresh cache:', error);
+            log.error('Failed to refresh cache:', error);
             throw error;
         }
     }
@@ -123,7 +124,7 @@ export class ConfigurationServiceImpl implements ConfigurationService {
             const response = await this.ragConfigApi.isOnline();
             return response.status && response.data === true;
         } catch (error) {
-            console.error('Failed to check online status:', error);
+            log.error('Failed to check online status:', error);
             return false;
         }
     }

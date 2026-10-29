@@ -66,17 +66,23 @@ vi.mock("@/modules/token", () => ({
   },
 }));
 
-vi.mock("@/config/usersetting", () => ({
-  Token: class {
-    getValue(name: string) {
-      return name === "user_dbpath" ? tmpDir : "";
-    }
-  },
-  USER_AI_ENABLED: "true",
-  TOKENNAME: "user-social-market-token",
-  USERSDBPATH: "user_dbpath",
-  USERSERVICE: "user_service",
-}));
+vi.mock("@/config/usersetting", async (importOriginal) => {
+  // T01 (R9): partial mock — the rollout keys used by AIChatWorkspaceRollout
+  // through the IPC/login import chain stay defined.
+  const actual = await importOriginal<typeof import("@/config/usersetting")>();
+  return {
+    ...actual,
+    Token: class {
+      getValue(name: string) {
+        return name === "user_dbpath" ? tmpDir : "";
+      }
+    },
+    USER_AI_ENABLED: "true",
+    TOKENNAME: "user-social-market-token",
+    USERSDBPATH: "user_dbpath",
+    USERSERVICE: "user_service",
+  };
+});
 
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import { AiTaskOperationModule } from "@/modules/AiTaskOperationModule";

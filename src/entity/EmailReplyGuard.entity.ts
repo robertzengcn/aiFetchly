@@ -43,35 +43,35 @@ import type { GuardPhase } from "@/entityTypes/emailReplyReliabilityTypes";
 @Index(["phase", "leaseExpiresAt"])
 export class EmailReplyGuardEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   /** `rfc:<sha256(normalizedId)>` or `row:<storedMessageId>` (§4.1). varchar(80). */
   @Column("varchar", { length: 80 })
-  replyKey: string;
+  replyKey!: string;
 
   /** Representative received row, navigation only — NOT sole identity authority. */
   @Column("integer")
-  messageId: number;
+  messageId!: number;
 
   @Column("varchar", { length: 20, default: "idle" })
-  phase: GuardPhase;
+  phase!: GuardPhase;
 
   /** 64-byte random hex fencing token. Nullable when phase = idle. */
   @Column("varchar", { length: 128, nullable: true })
-  ownerToken: string | null;
+  ownerToken!: string | null;
 
   /** Lease expiry; null when phase = idle. */
   @Column("datetime", { nullable: true })
-  leaseExpiresAt: Date | null;
+  leaseExpiresAt!: Date | null;
 
   /** Bound draft row when phase >= draft_ready. */
   @Column("integer", { nullable: true })
-  activeDraftId: number | null;
+  activeDraftId!: number | null;
 
   /** Bound attempt row when phase = sending. */
   @Column("integer", { nullable: true })
-  activeAttemptId: number | null;
+  activeAttemptId!: number | null;
 }

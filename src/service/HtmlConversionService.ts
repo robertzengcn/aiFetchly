@@ -1,5 +1,6 @@
 import TurndownService from "turndown";
 import sanitizeHtml from "sanitize-html";
+import { log } from "@/modules/Logger";
 
 /**
  * Service for converting HTML content to markdown format
@@ -80,7 +81,7 @@ export class HtmlConversionService {
         .replace(/^\s*\n/gm, "") // Remove empty lines at start
         .trim();
     } catch (error) {
-      console.error("Error converting HTML to markdown:", error);
+      log.error("Error converting HTML to markdown:", error);
       // Fallback: return the original HTML content if conversion fails
       return htmlContent;
     }
@@ -181,7 +182,7 @@ export class HtmlConversionService {
 
       return cleaned;
     } catch (error) {
-      console.error("Error cleaning HTML content:", error);
+      log.error("Error cleaning HTML content:", error);
       return htmlContent;
     }
   }

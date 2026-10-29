@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
@@ -33,6 +34,16 @@ const { continueTaskMock, retryTaskMock, attachSuccessorMock } = vi.hoisted(
 );
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  awaitChatV2Turn: vi.fn(),
+  createChatV2PendingMessage: vi.fn(),
+  // Message-queue lifecycle (dev): the merged AiChatV2.vue subscribes to
+  // pending-queue events on mount and may steer/cancel/resume them.
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   attachChatV2SuccessorStream: attachSuccessorMock,
@@ -372,6 +383,7 @@ async function clickContinue(wrapper: ReturnType<typeof mountChat>) {
 
 describe("AiChatV2 B09 execution acceptance binding", () => {
   beforeEach(() => {
+    installQueueSendBridge();
     vi.clearAllMocks();
     continueTaskMock.mockResolvedValue({ executionId: "exec-new", status: "created" });
     retryTaskMock.mockResolvedValue({ executionId: "exec-new", status: "created" });

@@ -1,7 +1,7 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
-import { BuckEmailType } from "./buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { SortBy } from "@/entityTypes/commonType";
 import { getRecorddatetime, getStatusName } from "@/modules/lib/function";
@@ -79,12 +79,31 @@ export class BuckEmailTaskModel extends BaseDb {
     await this.repository.save(entity);
   }
 
+  /** T08: read a task's current error-file path (preserved on reconcile). */
+  async getTaskErrorFilePath(id: number): Promise<string | undefined> {
+    const entity = await this.repository.findOne({ where: { id } });
+    return entity?.error_file;
+  }
+
   async updateTaskErrorFile(id: number, errorLog: string): Promise<void> {
     const entity = await this.repository.findOne({ where: { id } });
     if (!entity) return;
 
     entity.error_file = errorLog;
     await this.repository.save(entity);
+  }
+
+  /**
+   * FR-06/AC-09 at-exit reconciliation support: ids of tasks currently in a
+   * given status (the shutdown participant queries Processing).
+   */
+  async listTaskIdsByStatus(status: TaskStatus): Promise<number[]> {
+    const entities = await this.repository
+      .createQueryBuilder("task")
+      .select("task.id", "id")
+      .where("task.status = :status", { status })
+      .getRawMany<{ id: number }>();
+    return entities.map((e) => Number(e.id)).filter((n) => Number.isInteger(n));
   }
 
   async updateTaskStatus(id: number, status: TaskStatus): Promise<void> {

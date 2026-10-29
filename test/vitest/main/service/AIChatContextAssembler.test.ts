@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { AIChatContextAssembler } from "@/service/AIChatContextAssembler";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import type { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { ai_custom_context_directive } from "@/config/settinggroupInit";
@@ -383,6 +384,51 @@ describe("AIChatContextAssembler", () => {
     });
   });
 
+  it("threads row.messageId into generated-image annotations without leaking paths", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    // Reset the bounded-read staging leaked from the previous test
+    // (clearAllMocks keeps implementations) so the bounded window serves
+    // this history — merged product semantics (bounded-first fallback).
+    mockGetRecentMessages.mockReset();
+    mockGetRecentMessages.mockResolvedValue([]);
+    mockGetConversationMessages.mockResolvedValue([
+      row({
+        messageId: "assistant-123",
+        role: "assistant",
+        content: "Here's your house!",
+        timestamp: new Date(2),
+        metadata: JSON.stringify({
+          generatedImages: [
+            {
+              url: "aifetchly-generated-image://local/u/c/m/image-1.png",
+              file_name: "image-1.png",
+              local_path: "/home/user/data/generated/image-1.png",
+            },
+          ],
+        }),
+      }),
+    ]);
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "next",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    // eslint-disable-next-line no-console
+    console.log("DEBUG_ASM", JSON.stringify(r.messages.map((m) => ({ role: m.role, c: (m.content as string)?.slice(0, 40) }))));
+    const assistantMsg = r.messages[r.messages.length - 2];
+    expect(assistantMsg.role).toBe("assistant");
+    const text = assistantMsg.content as string;
+    expect(text).toContain("Here's your house!");
+    expect(text).toContain(
+      "[1] message=assistant-123 image=0 file=image-1.png"
+    );
+    expect(text).not.toContain("aifetchly-generated-image://");
+    expect(text).not.toContain("/home/user/data/generated");
+  });
+
   it("does not duplicate the current user message when it was already saved", async () => {
     mockGetByConversation.mockResolvedValue(null);
     mockGetActiveSummary.mockResolvedValue(null);
@@ -492,6 +538,61 @@ describe("AIChatContextAssembler", () => {
     });
     expect(mockDurableRetrieve).not.toHaveBeenCalled();
     expect(r.usedDurableMemory).toBe(false);
+  });
+
+  it("augments assistant messages with generated image references for the model", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    const generatedMeta = JSON.stringify({
+      source: "chat-v2",
+      generatedImages: [
+        {
+          type: "image",
+          url: "aifetchly-generated-image://local/user@example.com/conv1/msg1/image-1.png",
+          file_name: "image-1.png",
+          local_path: "/home/user/.config/aiFetchly/ai-chat-generated-images/user@example.com/conv1/msg1/image-1.png",
+        },
+      ],
+    });
+    mockGetConversationMessages.mockResolvedValue([
+      row({
+        messageId: "u1",
+        role: "user",
+        content: "please generate a image with a house in it",
+        timestamp: new Date(1),
+      }),
+      row({
+        messageId: "a1",
+        role: "assistant",
+        content: "Here's your generated image of a house!",
+        timestamp: new Date(2),
+        metadata: generatedMeta,
+      }),
+    ]);
+    const asm = new AIChatContextAssembler();
+    const r = await asm.assemble({
+      conversationId: "v2-x",
+      currentUserMessage: "please add tree in front of the house",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+
+    // Find the assistant message in the assembled messages.
+    const assistantMsg = r.messages.find(
+      (m) =>
+        m.role === "assistant" &&
+        typeof m.content === "string" &&
+        m.content.includes("Here's your generated image")
+    );
+    expect(assistantMsg).toBeTruthy();
+    // The content must include the generated_images annotation so the model
+    // can reference the prior image in the next turn — via compact semantic
+    // markers only, never URLs or local paths.
+    const text = assistantMsg!.content as string;
+    expect(text).toContain("<generated_images>");
+    expect(text).toContain("[1] message=a1 image=0 file=image-1.png");
+    expect(text).not.toContain("aifetchly-generated-image://");
+    expect(text).not.toContain("/home/user/.config/aiFetchly");
   });
 });
 
@@ -1400,5 +1501,89 @@ describe("AIChatContextAssembler — adversarial history framing (AC-22 storage 
     expect(userMsg).toContain("[Retained earlier turns — originals not loaded]");
     // The receipt references the turn for retrieval but quotes nothing.
     expect(userMsg).not.toContain(ADVERSARIAL);
+  });
+});
+
+/**
+ * Audit 2026-10-20 G01 (design §18.1): specialized-result projection fallbacks
+ * count per bounded tool label; a TOOL_RESULT row without a projection counts
+ * under `tool:<name>` while a missing projection for a non-tool row stays
+ * anonymous and a lookup failure keeps its `lookup_error` label.
+ */
+describe("AIChatContextAssembler specialized projection fallback counters (G01)", () => {
+  it("labels a tool-result fallback by the tool name from execution metadata", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetRecentMessages.mockResolvedValue([
+      row({
+        messageId: "tool-result-t1",
+        role: "assistant",
+        content: "raw oversized tool result body",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: JSON.stringify({ toolName: "browser_navigate" }),
+      }),
+    ]);
+    const assembler = new AIChatContextAssembler({
+      projectionLookup: {
+        lookup: vi.fn().mockResolvedValue(new Map()),
+      },
+    });
+    await assembler.assemble({
+      conversationId: "v2-fb1",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const snapshot = aiChatQueueCounters.snapshot();
+    expect(
+      snapshot[
+        'ai_chat_workspace_projection_fallback_total{reason="tool:browser_navigate"}'
+      ]
+    ).toBe(1);
+  });
+
+  it("keeps corrupt metadata anonymous and does NOT count ordinary rows (R8 P2-13)", async () => {
+    mockGetByConversation.mockResolvedValue(null);
+    mockGetActiveSummary.mockResolvedValue(null);
+    mockGetRecentMessages.mockResolvedValue([
+      row({
+        messageId: "tool-result-t2",
+        role: "assistant",
+        content: "raw tool result",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: "{corrupt-json",
+      }),
+      row({
+        messageId: "plain-m",
+        role: "user",
+        content: "plain row without projection",
+        messageType: MessageType.MESSAGE,
+        metadata: undefined,
+      }),
+    ]);
+    const assembler = new AIChatContextAssembler({
+      projectionLookup: {
+        lookup: vi.fn().mockResolvedValue(new Map()),
+      },
+    });
+    await assembler.assemble({
+      conversationId: "v2-fb2",
+      currentUserMessage: "hi",
+      baseSystemPrompt: "sysp",
+      mode: "chat",
+    });
+    const snapshot = aiChatQueueCounters.snapshot();
+    expect(
+      snapshot[
+        'ai_chat_workspace_projection_fallback_total{reason="tool:tool_unknown"}'
+      ]
+    ).toBe(1);
+    // R8 P2-13: an ordinary user/assistant row is NOT a projection
+    // fallback — counting it poisons the soak metric (PRD §20).
+    expect(
+      snapshot[
+        'ai_chat_workspace_projection_fallback_total{reason="non_tool_row"}'
+      ]
+    ).toBeUndefined();
   });
 });

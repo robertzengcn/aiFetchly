@@ -1,6 +1,6 @@
 import { ZodError } from "zod";
 import { incrementOutboundMetric } from "@/service/outboundEmail/OutboundEmailMetrics";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { EmailItem } from "@/entityTypes/emailmarketingType";
 import {
   Buckemailstruct,

@@ -15,6 +15,21 @@ vi.mock("@/views/api/aiMessageTask", () => ({
 }));
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  subscribeCompactionProgress: vi.fn().mockReturnValue(() => undefined),
+  unsubscribeCompactionProgress: vi.fn(),
+  getCompactionStatus: vi.fn().mockResolvedValue(null),
+  startCompaction: vi.fn().mockResolvedValue({ started: true }),
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  subscribeAutoCompacted: vi.fn(),
+  unsubscribeAutoCompacted: vi.fn(),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
+  getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getOpenAIChatModels: () => apiMocks.getOpenAIChatModels(),
 }));
 

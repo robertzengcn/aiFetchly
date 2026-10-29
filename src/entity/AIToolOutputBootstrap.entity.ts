@@ -21,20 +21,20 @@ import { Order } from "./order.decorator";
 @Index(["profileId", "bootstrapKey"], { unique: true })
 export class AIToolOutputBootstrapEntity extends AuditableEntity {
     @PrimaryColumn("int")
-    id: number;
+    id!: number;
 
     @Order(1)
     @Column("varchar", { length: 100, nullable: false })
-    profileId: string;
+    profileId!: string;
 
     /** Stable step name, e.g. "additive-entities-v1". */
     @Order(2)
     @Column("varchar", { length: 100, nullable: false })
-    bootstrapKey: string;
+    bootstrapKey!: string;
 
     @Order(3)
     @Column("int", { nullable: false, default: 0 })
-    schemaVersion: number;
+    schemaVersion!: number;
 
     /**
      * Opaque resume position for a bounded, keyset-paged backfill.
@@ -48,5 +48,5 @@ export class AIToolOutputBootstrapEntity extends AuditableEntity {
 
     @Order(5)
     @Column("boolean", { nullable: false, default: false })
-    completed: boolean;
+    completed!: boolean;
 }

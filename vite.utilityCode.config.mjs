@@ -51,6 +51,10 @@ export default ({ mode }) => {
         resolve: {
             alias: {
                 "@": path.resolve(__dirname, "./src"),
+                // Must be absolute: a relative alias replacement resolves against
+                // the importing module's directory (src/modules/node_modules/...),
+                // which breaks vitest collection with ERR_MODULE_NOT_FOUND.
+                "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
                 "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
                 "bufferutil": path.resolve(__dirname, "./node_modules/bufferutil"),
                 "utf-8-validate": path.resolve(__dirname, "./node_modules/utf-8-validate"),
@@ -96,6 +100,18 @@ export default ({ mode }) => {
             // globalSetup is config-scoped: each vitest config that wants
             // type safety references this helper.
             globalSetup: ['./test/vitest/_typecheck/globalSetup.ts'],
+            // WS-2: coverage (only active when run with --coverage).
+            coverage: {
+                provider: 'v8',
+                reporter: ['text', 'html', 'lcov'],
+                reportsDirectory: './coverage/utilitycode',
+                include: [
+                    'src/main-process/**', 'src/service/**', 'src/modules/**',
+                    'src/model/**', 'src/controller/**', 'src/utils/**',
+                    'src/config/**', 'src/schemas/**', 'src/entity/**', 'src/entityTypes/**',
+                ],
+                exclude: ['**/*.test.ts', 'test/**', 'src/**/*.d.ts', '**/index.ts'],
+            },
             // Per-worker temp-dir isolation (V01 / re-audit checkbox 1).
             // pluginImportService / pluginDiagnosticsService / pluginLoaderService
             // tests fall back to the shared `os.tmpdir()/aifetchly-test` DB via

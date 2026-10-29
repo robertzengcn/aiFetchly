@@ -16,27 +16,27 @@ import type {
 @Index(["draftId"])
 export class EmailReplyAuditLogEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column("integer", { nullable: true })
-  messageId: number | null;
+  messageId!: number | null;
 
   @Column("integer", { nullable: true })
-  draftId: number | null;
+  draftId!: number | null;
 
   @Column("varchar", { length: 50 })
-  action: EmailReplyAuditAction;
+  action!: EmailReplyAuditAction;
 
   @Column("varchar", { length: 20, default: "system" })
-  actor: EmailReplyAuditActor;
+  actor!: EmailReplyAuditActor;
 
   @Column("text", { nullable: true })
-  reason: string | null;
+  reason!: string | null;
 
   /** Sanitized metadata (truncated previews, source counts). No secrets. */
   @Column("text", { nullable: true })
-  metadataJson: string | null;
+  metadataJson!: string | null;
 }

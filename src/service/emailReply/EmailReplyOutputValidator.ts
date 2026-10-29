@@ -73,28 +73,84 @@ interface CompiledPattern {
 // gesture is the human gate. Genuine prompt/tool/retrieval leakage below
 // stays a hard block — only AI-self-disclosure was lifted.
 const LEAKAGE_PATTERNS: readonly CompiledPattern[] = [
-  code("leakage_system_prompt", /system (?:prompt|instructions?|policy)\b/i, "Generated text references the system prompt or instructions"),
-  code("leakage_system_policy", /\bSYSTEM POLICY\b|\bREQUIRED OUTPUT SCHEMA\b/i, "Generated text echoes the structured prompt section headers"),
-  code("leakage_tool_definition", /\[(?:tool|function|command)\]|\btool_call\b|\bfunction_call\b/i, "Generated text exposes tool/function definition syntax"),
-  code("leakage_retrieval_metadata", /\b(?:chunk|document|source)\s*(?:id|\[)|\bknowledge source id\b|\bretrieval (?:score|chunk)\b/i, "Generated text exposes retrieval/knowledge metadata"),
-  code("leakage_angle_brackets", /<[#/]?(?:system|imagine|instructions?|context|tool)>/i, "Generated text contains prompt-style angle-bracket tags"),
+  code(
+    "leakage_system_prompt",
+    /system (?:prompt|instructions?|policy)\b/i,
+    "Generated text references the system prompt or instructions"
+  ),
+  code(
+    "leakage_system_policy",
+    /\bSYSTEM POLICY\b|\bREQUIRED OUTPUT SCHEMA\b/i,
+    "Generated text echoes the structured prompt section headers"
+  ),
+  code(
+    "leakage_tool_definition",
+    /\[(?:tool|function|command)\]|\btool_call\b|\bfunction_call\b/i,
+    "Generated text exposes tool/function definition syntax"
+  ),
+  code(
+    "leakage_retrieval_metadata",
+    /\b(?:chunk|document|source)\s*(?:id|\[)|\bknowledge source id\b|\bretrieval (?:score|chunk)\b/i,
+    "Generated text exposes retrieval/knowledge metadata"
+  ),
+  code(
+    "leakage_angle_brackets",
+    /<[#/]?(?:system|imagine|instructions?|context|tool)>/i,
+    "Generated text contains prompt-style angle-bracket tags"
+  ),
 ];
 
 // ---- Unsupported commitments (advisory warning) ----
 const COMMITMENT_PATTERNS: readonly CompiledPattern[] = [
-  warn("commitment_refund", /\brefund[s]?\b|reimburse/i, "Draft mentions a refund/reimbursement (unsupported commitment)"),
-  warn("commitment_discount", /\bdiscount\b|\b\d+\s*%\s*off\b|\bcoupon\b/i, "Draft offers a discount (unsupported commitment)"),
-  warn("commitment_guaranteed_price", /\bguarantee(?:d)?\s+(?:price|rate|cost|quote)\b|\block(?:ed)?[- ]?in price\b/i, "Draft guarantees a price (unsupported commitment)"),
-  warn("commitment_guaranteed_date", /\bguarantee(?:d)?\s+(?:delivery|arrival|by|date)|definitely (?:arrive|deliver|ship)/i, "Draft guarantees a delivery date (unsupported commitment)"),
-  warn("commitment_legal", /\blawsuit\b|\battorney\b|\blegal (?:action|counsel|advice)\b|\bsue\b/i, "Draft makes a legal commitment/interpretation"),
-  warn("commitment_credential", /\bpassword\b|\bcredentials?\b|\breset (?:your )?(?:password|login)\b|\b2fa\b|\bauth code\b/i, "Draft references credentials/password"),
-  warn("commitment_account_change", /\b(?:delete|close|cancel|upgrade|downgrade)\s+(?:your\s+)?account\b|\bchange(?:\s+the)?\s+account\b/i, "Draft promises an account change"),
-  warn("commitment_payment_instruction", /\bwire (?:transfer|funds?)\b|\bbank (?:account|routing)\b|\bcredit card number\b|\bpaypal\b|\bbitcoin\b|\bcrypto(?:currency)? wallet\b|\bvenmo\b|\bzelle\b/i, "Draft gives payment instructions"),
+  warn(
+    "commitment_refund",
+    /\brefund[s]?\b|reimburse/i,
+    "Draft mentions a refund/reimbursement (unsupported commitment)"
+  ),
+  warn(
+    "commitment_discount",
+    /\bdiscount\b|\b\d+\s*%\s*off\b|\bcoupon\b/i,
+    "Draft offers a discount (unsupported commitment)"
+  ),
+  warn(
+    "commitment_guaranteed_price",
+    /\bguarantee(?:d)?\s+(?:price|rate|cost|quote)\b|\block(?:ed)?[- ]?in price\b/i,
+    "Draft guarantees a price (unsupported commitment)"
+  ),
+  warn(
+    "commitment_guaranteed_date",
+    /\bguarantee(?:d)?\s+(?:delivery|arrival|by|date)|definitely (?:arrive|deliver|ship)/i,
+    "Draft guarantees a delivery date (unsupported commitment)"
+  ),
+  warn(
+    "commitment_legal",
+    /\blawsuit\b|\battorney\b|\blegal (?:action|counsel|advice)\b|\bsue\b/i,
+    "Draft makes a legal commitment/interpretation"
+  ),
+  warn(
+    "commitment_credential",
+    /\bpassword\b|\bcredentials?\b|\breset (?:your )?(?:password|login)\b|\b2fa\b|\bauth code\b/i,
+    "Draft references credentials/password"
+  ),
+  warn(
+    "commitment_account_change",
+    /\b(?:delete|close|cancel|upgrade|downgrade)\s+(?:your\s+)?account\b|\bchange(?:\s+the)?\s+account\b/i,
+    "Draft promises an account change"
+  ),
+  warn(
+    "commitment_payment_instruction",
+    /\bwire (?:transfer|funds?)\b|\bbank (?:account|routing)\b|\bcredit card number\b|\bpaypal\b|\bbitcoin\b|\bcrypto(?:currency)? wallet\b|\bvenmo\b|\bzelle\b/i,
+    "Draft gives payment instructions"
+  ),
 ];
 
 // ---- Attachment-inspection claims (advisory warning) ----
 const ATTACHMENT_CLAIM_PATTERNS: readonly CompiledPattern[] = [
-  warn("attachment_inspection_claim", /\b(?:i|we)\s+(?:opened|read|checked|verified|inspected|reviewed)\s+(?:the\s+)?attach/i, "Draft claims the attachment was opened/read (the system never opens attachments)"),
+  warn(
+    "attachment_inspection_claim",
+    /\b(?:i|we)\s+(?:opened|read|checked|verified|inspected|reviewed)\s+(?:the\s+)?attach/i,
+    "Draft claims the attachment was opened/read (the system never opens attachments)"
+  ),
 ];
 
 // ---- Recipient-in-body detection (advisory warning) ----
@@ -119,8 +175,9 @@ function warn(codeStr: string, re: RegExp, message: string): CompiledPattern {
  * collapses repeated punctuation/whitespace, and maps common leetspeak.
  */
 export function normalizeForValidation(text: string): string {
-  return text
-    .replace(/[\u200B-\u200D\uFEFF]/g, "") // zero-width chars
+  return (
+    text
+    .replace(/[-\u200B-\u200D\uFEFF]/g, "") // hyphens + zero-width chars (ZWSP, ZWNJ, ZWJ, BOM)
     .replace(/[4@]/g, "a")
     .replace(/[3]/g, "e")
     .replace(/[1!|]/g, "i")
@@ -128,13 +185,15 @@ export function normalizeForValidation(text: string): string {
     .replace(/[$]/g, "s")
     .replace(/[.+,]{2,}/g, " ")
     .replace(/\s+/g, " ")
-    .toLowerCase();
+    .toLowerCase()
+  );
 }
 
 /**
  * Validate generated reply content. {@link subject} and {@link bodyText} are
- * checked as-is (evidence quotes come from the original); matching runs against
- * the normalized form so obfuscation cannot bypass it.
+ * checked as-is (evidence quotes come from the original). Pattern findings
+ * (leakage, commitments) match the RAW combined text; forbidden-PHRASE
+ * matching runs against the normalized form so obfuscation cannot bypass it.
  */
 export function validateReplyOutput(
   subject: string,
@@ -171,7 +230,10 @@ export function validateReplyOutput(
     });
   }
 
-  const forbidden = [...DEFAULT_FORBIDDEN_PHRASES, ...(config.forbiddenPhrases ?? [])];
+  const forbidden = [
+    ...DEFAULT_FORBIDDEN_PHRASES,
+    ...(config.forbiddenPhrases ?? []),
+  ];
   for (const phrase of forbidden) {
     const p = normalizeForValidation(phrase);
     if (p && normalized.includes(p)) {

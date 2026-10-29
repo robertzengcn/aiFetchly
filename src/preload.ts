@@ -16,6 +16,7 @@ import {
   VIDEODOWNLOAD_MESSAGE,
   VIDEODOWNLOAD,
   VIDEODOWNLOAD_TASK_LIST,
+  SOCIALPLATFORM_LIST,
   SEARCHSCRAPERAPI,
   LISTSESARCHRESUT,
   SEARCHEVENT,
@@ -35,6 +36,7 @@ import {
   EMAILMARKETINGTEMPDETAIL,
   EMAILMARKETINGTEMPUPDATE,
   EMAILMARKETINGFILTERLIST,
+  EMAILMARKETINGTEMPPREVIEW,
   EMAILMARKETFILTERDETAIL,
   EMAILMARKETFILTERUPDATE,
   EMAILSERVICEUPDATE,
@@ -159,6 +161,7 @@ import {
   CRON_NEXT_RUN_TIME,
   GET_LOGIN_URL,
   USER_CHECK_LOGIN,
+  CHECK_LOGIN_SUCCEEDED,
   USER_SIGNOUT,
   GET_APP_INFO,
   APP_OPEN_WEBSITE,
@@ -172,25 +175,17 @@ import {
   CREATE_SEARCH_TASK_ONLY,
   EXPORT_SEARCH_RESULTS,
   KILL_SEARCH_PROCESS,
-  // Yellow Pages Management Channels
-  YELLOW_PAGES_PLATFORMS,
-  YELLOW_PAGES_LIST,
-  YELLOW_PAGES_DETAIL,
-  YELLOW_PAGES_CREATE,
-  YELLOW_PAGES_UPDATE,
-  YELLOW_PAGES_DELETE,
-  YELLOW_PAGES_START,
-  YELLOW_PAGES_STOP,
-  YELLOW_PAGES_PAUSE,
-  YELLOW_PAGES_RESUME,
-  YELLOW_PAGES_PROGRESS,
-  YELLOW_PAGES_RESULTS,
-  YELLOW_PAGES_EXPORT,
-  YELLOW_PAGES_BULK,
-  YELLOW_PAGES_HEALTH,
-  YELLOW_PAGES_STATISTICS,
-  YELLOW_PAGES_KILL_PROCESS,
-  YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
+  // Platform Management Channels (PRD §28.1: shared platform registry —
+  // R9-preceding allowlist fix d23b41884; the yellow-pages-only channels
+  // were removed with the yellow-pages feature per PRD §17.2)
+  PLATFORM_LIST,
+  PLATFORM_DETAIL,
+  PLATFORM_CREATE,
+  PLATFORM_UPDATE,
+  PLATFORM_DELETE,
+  PLATFORM_VALIDATE,
+  PLATFORM_STATISTICS,
+  PLATFORM_TOGGLE,
   // Language Preference Channels
   LANGUAGE_PREFERENCE_GET,
   LANGUAGE_PREFERENCE_UPDATE,
@@ -245,11 +240,36 @@ import {
   AI_CHAT_V2_MODELS,
   AI_CHAT_V2_CONVERSATIONS,
   AI_CHAT_V2_HISTORY,
+  AI_CHAT_V2_PENDING_CREATE,
+  AI_CHAT_V2_PENDING_LIST,
+  AI_CHAT_V2_PENDING_STEER,
+  AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_PENDING_RESUME,
+  AI_CHAT_V2_PENDING_EVENT,
   AI_CHAT_V2_STREAM,
   AI_CHAT_V2_STREAM_STOP,
   AI_CHAT_V2_STREAM_CHUNK,
   AI_CHAT_V2_STREAM_COMPLETE,
   AI_CHAT_V2_OPEN_FROM_NOTIFY,
+  AI_CHAT_WORKSPACE_BOOTSTRAP,
+  AI_CHAT_WORKSPACE_SELECT,
+  AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL,
+  AI_CHAT_WORKSPACE_START_RUN,
+  AI_CHAT_WORKSPACE_CANCEL_RUN,
+  AI_CHAT_WORKSPACE_HISTORY_PAGE,
+  AI_CHAT_WORKSPACE_MARK_READ,
+  AI_CHAT_WORKSPACE_RENAME,
+  AI_CHAT_WORKSPACE_DELETE,
+  AI_CHAT_WORKSPACE_DUPLICATE,
+  AI_CHAT_WORKSPACE_EXPORT,
+  AI_CHAT_WORKSPACE_ACTIVITY,
+  AI_CHAT_WORKSPACE_GET_FLAG,
+  AI_CHAT_WORKSPACE_SET_FLAG,
+  AI_CHAT_RENDERER_METRICS_PUSH,
+  // R8 §2: renderer-originated workspace action counts (bounded labels).
+  AI_CHAT_WORKSPACE_ACTION_COUNT,
+  AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+  AI_CHAT_WORKSPACE_DETAIL_EVENT,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
   AI_CHAT_V2_PLAN_STATE,
@@ -258,7 +278,9 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
   AI_CHAT_V2_AT_MENTION_SUGGEST,
+  AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
   AI_CHAT_V2_GOAL_CREATE,
   AI_CHAT_V2_GOAL_GET,
   AI_TOOL_RESULT_GET,
@@ -285,8 +307,28 @@ import {
   AI_CHAT_V2_CONVERSATION_UPDATED,
   AI_CHAT_V2_SCHEDULED_STREAM,
   AI_CHAT_V2_AUTO_COMPACTED,
+  // Skill installation channels (natural-language-skill-installation §15.1)
+  SKILL_INSTALL_PREPARE,
+  SKILL_INSTALL_APPROVE,
+  SKILL_INSTALL_APPROVE_DEPENDENCY,
+  SKILL_INSTALL_RUN_COMMAND,
+  SKILL_INSTALL_SUBMIT_SECRET,
+  SKILL_INSTALL_STATUS,
+  SKILL_INSTALL_CANCEL,
+  SKILL_INSTALL_RETRY,
+  SKILL_INSTALL_LIST,
+  SKILL_INSTALL_UPDATE,
+  SKILL_INSTALL_REPAIR,
+  SKILL_INSTALL_DISABLE,
+  SKILL_INSTALL_ENABLE,
+  SKILL_INSTALL_UNINSTALL,
+  SKILL_INSTALL_PROGRESS,
+  PROMPT_SKILL_INVOKE,
+  SKILL_INSTALL_APPROVAL_TOKEN,
+  SKILL_INSTALL_REVEAL_SOURCE,
   // AiChatV2 Recoverable History Channels (technical-design §13)
   AI_CHAT_V2_HISTORY_SEARCH,
+  AI_CHAT_V2_READ_PASTE_CACHE,
   AI_CHAT_V2_HISTORY_READ,
   AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
@@ -316,6 +358,11 @@ import {
   AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
   AI_ARTIFACT_GET,
   AI_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_PREVIEW,
+  PLUGIN_ARTIFACT_EXPORT,
+  PLUGIN_ARTIFACT_DELETE,
+  PLUGIN_ARTIFACT_LIST_JOURNAL,
   // Dashboard Channels
   DASHBOARD_SUMMARY,
   DASHBOARD_TRENDS,
@@ -392,6 +439,7 @@ import {
   AI_MESSAGE_TASK_RUN_DETAIL,
   AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
   AGENT_DEFINITION_LIST,
+  AGENT_TASK_CANCEL,
   AGENT_TASK_DETAIL,
   AGENT_TASK_TRANSCRIPT,
   AGENT_TASK_LIST,
@@ -409,6 +457,8 @@ import {
   DELETEEMAILSEARCHTASK,
   // Plugin Management Channels
   PLUGIN_IMPORT,
+  PLUGIN_CANCEL_INSTALL,
+  PLUGIN_GET_INSTALL_CAPABILITIES,
   PLUGIN_INSTALL_FROM_SOURCE,
   PLUGIN_VALIDATE_PACKAGE,
   PLUGIN_LIST,
@@ -430,6 +480,11 @@ import {
   PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
   PLUGIN_MARKETPLACE_GET_PLUGIN,
   PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
+  // Community Plugins Channels (NON-AI-gated; Free users browse the catalog)
+  PLUGIN_COMMUNITY_LIST,
+  PLUGIN_COMMUNITY_DETAIL,
+  PLUGIN_COMMUNITY_INSTALL,
+  PLUGIN_COMMUNITY_OPEN_PLANS,
   // AI user memory (durable cross-session memory)
   AI_USER_MEMORY_LIST,
   AI_USER_MEMORY_CREATE,
@@ -452,11 +507,42 @@ import {
   AI_WORKSPACE_MEMORY_DELETE,
   AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
   AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CREATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_UPDATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
+  AI_PORTABLE_WORKSPACE_MEMORY_ENABLE,
+  AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW,
+  AI_PORTABLE_WORKSPACE_MEMORY_EXPORT,
+  AI_PORTABLE_WORKSPACE_MEMORY_RESCAN,
+  AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
+  AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE,
+  AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION,
+  AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE,
+  AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS,
+  AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW,
+  AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY,
+  AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE,
+  AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE,
+  AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
   // Slash Command + AiFetchly Config Channels
   SLASH_COMMAND_LIST,
   SLASH_COMMAND_DISPATCH,
   AIFETCHLY_CONFIG_RELOAD,
   AIFETCHLY_CONFIG_STATUS,
+  AIFETCHLY_CONFIG_CHANGED,
   // Workspace Watcher Channels
   AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
   AIFETCHLY_WORKSPACE_WATCH_RELEASE,
@@ -484,6 +570,29 @@ import {
   DIAGNOSTICS_LIST_CRASHES,
   // AI Content Reporting — NOT AI-gated (safety/support function, PRD FR-4.4)
   AI_CONTENT_REPORT_CREATE,
+  // Managed Browser Channels (design §22)
+  MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
+  MANAGED_BROWSER_LIST_ACTIVE,
+  MANAGED_BROWSER_START,
+  MANAGED_BROWSER_STATUS,
+  MANAGED_BROWSER_HANDOFF,
+  MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
+  MANAGED_BROWSER_RESUME,
+  MANAGED_BROWSER_STOP,
+  MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_CANCEL_ACTIVE,
+  MANAGED_BROWSER_CAPTURE_SCREENSHOT,
+  MANAGED_BROWSER_EXTEND_HANDOFF,
+  MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
+  MANAGED_BROWSER_GET_CACHE_STATUS,
+  MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
+  MANAGED_BROWSER_CLEAR_CACHE,
+  MANAGED_BROWSER_UPDATE_SETTINGS,
+  MANAGED_BROWSER_STATUS_EVENT,
+  MANAGED_BROWSER_PROGRESS_EVENT,
+  MANAGED_BROWSER_APPROVAL_EVENT,
+  MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
   // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
   AI_CONTENT_REPORT_CAPABILITIES,
   // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle
@@ -494,6 +603,13 @@ import {
   OUTBOUND_EMAIL_BATCH_DISCARD,
   OUTBOUND_EMAIL_BATCH_STATUS,
   OUTBOUND_EMAIL_BATCH_PROGRESS,
+  // Application lifecycle (exit & system tray) — plain channels, NOT
+  // AI-gated (design §10). Events flow main→renderer; choices flow back.
+  APPLICATION_LIFECYCLE_GET_STATE,
+  APPLICATION_CLOSE_CHOICE_REQUEST,
+  APPLICATION_CLOSE_CHOICE_ACK,
+  APPLICATION_CLOSE_CHOICE_SUBMIT,
+  APPLICATION_LIFECYCLE_STATE_CHANGED,
   // E2E test-support channels — no handler exists outside AIFETCHLY_E2E=1, so
   // a production/dev invoke always fails with "No handler registered" (see
   // src/main-process/e2e/E2ESeedIpc.ts).
@@ -512,6 +628,16 @@ import {
   LOCAL_AI_RUNTIME_REPAIR,
   LOCAL_AI_RUNTIME_REMOVE,
   LOCAL_AI_RUNTIME_PROGRESS,
+  COMPUTER_USE_STATUS,
+  COMPUTER_USE_LIST_WINDOWS,
+  COMPUTER_USE_SESSION_START,
+  COMPUTER_USE_SESSION_STOP,
+  COMPUTER_USE_SESSION_PAUSE,
+  COMPUTER_USE_SESSION_RESUME,
+  COMPUTER_USE_SETTINGS_GET,
+  COMPUTER_USE_SETTINGS_SET,
+  COMPUTER_USE_VALIDATE_HOTKEY,
+  COMPUTER_USE_GROUNDING_READINESS,
 } from "@/config/channellist";
 
 // window.ipcRenderer = ipcRenderer
@@ -519,9 +645,12 @@ import {
 // contextBridge.exposeInMainWorld('electronAPI', {
 //     userLogin: (data) => ipcRenderer.invoke('user:login', data)
 // })
+// IPC payloads must not be logged in production (they may carry tokens/PII).
+const isDev = process.env.NODE_ENV !== "production";
+
 contextBridge.exposeInMainWorld("api", {
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  send: (channel, data) => {
+  send: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
@@ -533,6 +662,7 @@ contextBridge.exposeInMainWorld("api", {
       EXTRAMODULECHANNE_UNINSTALL,
       VIDEODOWNLOAD_MESSAGE,
       VIDEODOWNLOAD,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       CHECKALLPROXY,
       REMOVEFAILUREPROXY,
@@ -560,26 +690,27 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_STREAM_STOP,
       AI_CHAT_V2_STREAM,
       AI_CHAT_V2_STREAM_STOP,
+      AI_CHAT_WORKSPACE_UNSUBSCRIBE_DETAIL,
       // AI Email Template Channels
       AI_EMAIL_TEMPLATE_GENERATE_STREAM,
       AI_EMAIL_TEMPLATE_STOP,
     ];
-    console.log("send", channel, data);
+    if (isDev) console.log("send", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("send2", channel, data);
+      if (isDev) console.log("send2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
-  sendBinary: (channel, data) => {
+  sendBinary: (channel: string, data?: unknown) => {
     // whitelist channels for binary data
     const validChannels = [SAVE_TEMP_FILE];
-    console.log("sendBinary", channel, data);
+    if (isDev) console.log("sendBinary", channel, data);
     if (validChannels.includes(channel)) {
-      console.log("sendBinary2", channel, data);
+      if (isDev) console.log("sendBinary2", channel, data);
       ipcRenderer.send(channel, data);
     }
   },
-  receive: (channel, func) => {
+  receive: (channel: string, func: (...args: unknown[]) => void) => {
     const validChannels = [
       "user:Login",
       "socialtask:start",
@@ -590,6 +721,7 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_MESSAGE,
       VIDEODOWNLOAD_MESSAGE,
       VIDEODOWNLOAD,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       SEARCHEVENT,
       CHECKALLPROXYMESSAGE,
@@ -615,6 +747,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_STREAM_CHUNK,
       AI_CHAT_V2_STREAM_COMPLETE,
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
+      AI_CHAT_V2_PENDING_EVENT,
+      AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+      AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
       ANALYZE_WEBSITE_PROGRESS,
       // AI Email Template Channels
@@ -625,6 +760,8 @@ contextBridge.exposeInMainWorld("api", {
       WEBSOCKET_EVENT,
       // Contact Extraction Progress Channel
       CONTACT_EXTRACTION_PROGRESS,
+      // Skill installation progress (main -> renderer, TODO 7)
+      SKILL_INSTALL_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       RAG_IMPORT_WEBSITE_PROGRESS,
       // System Dependency Prompt (main→renderer)
@@ -643,12 +780,25 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Portable workspace memory sync summary (main -> renderer)
+      AI_PORTABLE_WORKSPACE_MEMORY_CHANGED,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Subscription entitlement snapshot broadcast (main -> renderer)
       USER_INFO_UPDATED,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
+      // Application lifecycle events (main -> renderer, design §10)
+      APPLICATION_CLOSE_CHOICE_REQUEST,
+      APPLICATION_LIFECYCLE_STATE_CHANGED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -661,7 +811,7 @@ contextBridge.exposeInMainWorld("api", {
       ipcRenderer.on(channel, wrapped);
     }
   },
-  removeListener: (channel, func) => {
+  removeListener: (channel: string, func: (...args: unknown[]) => void) => {
     // Use same whitelist as receive
     const validChannels = [
       "user:Login",
@@ -673,6 +823,7 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_MESSAGE,
       VIDEODOWNLOAD_MESSAGE,
       VIDEODOWNLOAD,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       SEARCHEVENT,
       CHECKALLPROXYMESSAGE,
@@ -698,6 +849,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_STREAM_CHUNK,
       AI_CHAT_V2_STREAM_COMPLETE,
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
+      AI_CHAT_V2_PENDING_EVENT,
+      AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+      AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
       ANALYZE_WEBSITE_PROGRESS,
       // AI Email Template Channels
@@ -726,10 +880,21 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
+      // Application lifecycle events (main -> renderer, design §10)
+      APPLICATION_CLOSE_CHOICE_REQUEST,
+      APPLICATION_LIFECYCLE_STATE_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -741,19 +906,24 @@ contextBridge.exposeInMainWorld("api", {
       }
     }
   },
-  removeAllListeners: (channel) => {
+  removeAllListeners: (channel: string) => {
     const validChannels = [
       AI_CHAT_STREAM_CHUNK,
       AI_CHAT_STREAM_COMPLETE,
       AI_CHAT_V2_STREAM_CHUNK,
       AI_CHAT_V2_STREAM_COMPLETE,
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
+      AI_CHAT_V2_PENDING_EVENT,
+      AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+      AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
       ANALYZE_WEBSITE_PROGRESS,
       AI_EMAIL_TEMPLATE_GENERATE_CHUNK,
       AI_EMAIL_TEMPLATE_GENERATE_COMPLETE,
       AI_EMAIL_TEMPLATE_ERROR,
       CONTACT_EXTRACTION_PROGRESS,
+      // Skill installation progress (main -> renderer, TODO 7)
+      SKILL_INSTALL_PROGRESS,
       AI_CHAT_V2_VOICE_MODEL_DOWNLOAD_PROGRESS,
       RAG_IMPORT_WEBSITE_PROGRESS,
       GOOGLE_MAPS_SEARCH_RESULT,
@@ -769,22 +939,34 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
+      // Managed Browser events (main -> renderer, design §22)
+      MANAGED_BROWSER_STATUS_EVENT,
+      MANAGED_BROWSER_PROGRESS_EVENT,
+      MANAGED_BROWSER_APPROVAL_EVENT,
+      MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+      MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Subscription entitlement snapshot broadcast (main -> renderer)
       USER_INFO_UPDATED,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
+      // Application lifecycle events (main -> renderer, design §10)
+      APPLICATION_CLOSE_CHOICE_REQUEST,
+      APPLICATION_LIFECYCLE_STATE_CHANGED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
     }
   },
-  invoke: (channel, data) => {
+  invoke: (channel: string, data?: unknown) => {
     // whitelist channels
     const validChannels = [
       "user:Login",
       USER_CHECK_LOGIN,
+      CHECK_LOGIN_SUCCEEDED,
       USER_SIGNOUT,
       "campaign:list",
       "socialtask:list",
@@ -815,6 +997,7 @@ contextBridge.exposeInMainWorld("api", {
       VIDEODOWNLOAD,
       VIDEODOWNLOAD_TASK_LIST,
       LISTSESARCHRESUT,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       TASKSEARCHRESULTLIST,
       "task:create",
@@ -835,6 +1018,7 @@ contextBridge.exposeInMainWorld("api", {
       EMAILMARKETINGTEMPDETAIL,
       EMAILMARKETINGTEMPUPDATE,
       EMAILMARKETINGFILTERLIST,
+      EMAILMARKETINGTEMPPREVIEW,
       EMAILMARKETFILTERDETAIL,
       EMAILMARKETFILTERUPDATE,
       EMAILSERVICEUPDATE,
@@ -878,6 +1062,13 @@ contextBridge.exposeInMainWorld("api", {
       VIDEODOWNLOAD_DETAIL_QUERY,
       SYSTEM_SETTING_LIST,
       SYSTEM_SETTING_UPDATE,
+      // Session Recording Channels
+      "session-recording:toggle",
+      "session-recording:get-status",
+      "session-recording:get-sessions",
+      "session-recording:export",
+      "session-recording:clear",
+      "session-recording:get-directory",
       QUERY_USER_INFO,
       USER_REFRESH_ENTITLEMENT,
       USER_OPEN_PRICING_PLAN,
@@ -929,26 +1120,17 @@ contextBridge.exposeInMainWorld("api", {
       CREATE_SEARCH_TASK_ONLY,
       EXPORT_SEARCH_RESULTS,
       KILL_SEARCH_PROCESS,
-      // Yellow Pages Management Channels
-      YELLOW_PAGES_PLATFORMS,
-      YELLOW_PAGES_LIST,
-      YELLOW_PAGES_DETAIL,
-      YELLOW_PAGES_CREATE,
-      YELLOW_PAGES_UPDATE,
-      YELLOW_PAGES_DELETE,
-      YELLOW_PAGES_START,
-      YELLOW_PAGES_STOP,
-      YELLOW_PAGES_PAUSE,
-      YELLOW_PAGES_RESUME,
-      YELLOW_PAGES_PROGRESS,
-      YELLOW_PAGES_RESULTS,
-      YELLOW_PAGES_EXPORT,
-      YELLOW_PAGES_BULK,
-      YELLOW_PAGES_HEALTH,
-      YELLOW_PAGES_STATISTICS,
-      YELLOW_PAGES_KILL_PROCESS,
-      YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
-      "yellow_pages:get_process_status",
+      // Platform Management Channels (PRD §28.1: shared platform registry —
+      // R9-preceding allowlist fix d23b41884; the yellow-pages-only channels
+      // were removed with the yellow-pages feature per PRD §17.2)
+      PLATFORM_LIST,
+      PLATFORM_DETAIL,
+      PLATFORM_CREATE,
+      PLATFORM_UPDATE,
+      PLATFORM_DELETE,
+      PLATFORM_VALIDATE,
+      PLATFORM_STATISTICS,
+      PLATFORM_TOGGLE,
       // Language Preference Channels
       LANGUAGE_PREFERENCE_GET,
       LANGUAGE_PREFERENCE_UPDATE,
@@ -990,8 +1172,29 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_MODELS,
       AI_CHAT_V2_CONVERSATIONS,
       AI_CHAT_V2_HISTORY,
+      AI_CHAT_V2_PENDING_CREATE,
+      AI_CHAT_V2_PENDING_LIST,
+      AI_CHAT_V2_PENDING_STEER,
+      AI_CHAT_V2_PENDING_CANCEL,
+      AI_CHAT_V2_PENDING_RESUME,
       AI_CHAT_V2_CLEAR_CONVERSATION,
       AI_CHAT_V2_CLEAR_ALL,
+      AI_CHAT_WORKSPACE_BOOTSTRAP,
+      AI_CHAT_WORKSPACE_SELECT,
+      AI_CHAT_WORKSPACE_START_RUN,
+      AI_CHAT_WORKSPACE_CANCEL_RUN,
+      AI_CHAT_WORKSPACE_HISTORY_PAGE,
+      AI_CHAT_WORKSPACE_MARK_READ,
+      AI_CHAT_WORKSPACE_RENAME,
+      AI_CHAT_WORKSPACE_DELETE,
+      AI_CHAT_WORKSPACE_DUPLICATE,
+      AI_CHAT_WORKSPACE_EXPORT,
+      AI_CHAT_WORKSPACE_ACTIVITY,
+      AI_CHAT_WORKSPACE_GET_FLAG,
+      AI_CHAT_WORKSPACE_SET_FLAG,
+      AI_CHAT_RENDERER_METRICS_PUSH,
+      // R8 §2: renderer-originated workspace action counts (bounded labels).
+      AI_CHAT_WORKSPACE_ACTION_COUNT,
       AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
       AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
       AI_CHAT_V2_DENY_TOOL_PERMISSION,
@@ -1001,7 +1204,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_REJECT_PLAN,
       AI_CHAT_V2_REQUEST_PLAN_CHANGES,
       AI_CHAT_V2_PLAN_VERSIONS,
+      AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
       AI_CHAT_V2_AT_MENTION_SUGGEST,
+      AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
       AI_CHAT_V2_GOAL_CREATE,
       AI_CHAT_V2_GOAL_GET,
       AI_TOOL_RESULT_GET,
@@ -1021,10 +1226,29 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_SCHEDULED_LOOP_RESUME,
       AI_CHAT_V2_SCHEDULED_LOOP_STOP,
       AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+      SKILL_INSTALL_PREPARE,
+      SKILL_INSTALL_APPROVE,
+      SKILL_INSTALL_APPROVE_DEPENDENCY,
+      SKILL_INSTALL_RUN_COMMAND,
+      SKILL_INSTALL_SUBMIT_SECRET,
+      SKILL_INSTALL_STATUS,
+      SKILL_INSTALL_CANCEL,
+      SKILL_INSTALL_RETRY,
+      SKILL_INSTALL_LIST,
+      SKILL_INSTALL_UPDATE,
+      SKILL_INSTALL_REPAIR,
+      SKILL_INSTALL_DISABLE,
+      SKILL_INSTALL_ENABLE,
+      SKILL_INSTALL_UNINSTALL,
+      PROMPT_SKILL_INVOKE,
+      SKILL_INSTALL_APPROVAL_TOKEN,
+      SKILL_INSTALL_REVEAL_SOURCE,
+      PROMPT_SKILL_INVOKE,
       AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
       // AiChatV2 Recoverable History Channels (technical-design §13)
       AI_CHAT_V2_HISTORY_SEARCH,
+      AI_CHAT_V2_READ_PASTE_CACHE,
       AI_CHAT_V2_HISTORY_READ,
       AI_CHAT_V2_HISTORY_BROWSE,
       AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
@@ -1045,6 +1269,12 @@ contextBridge.exposeInMainWorld("api", {
       // AI Artifact Channels
       AI_ARTIFACT_GET,
       AI_ARTIFACT_LIST,
+      // Plugin file artifacts
+      PLUGIN_ARTIFACT_LIST,
+      PLUGIN_ARTIFACT_PREVIEW,
+      PLUGIN_ARTIFACT_EXPORT,
+      PLUGIN_ARTIFACT_DELETE,
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
       AI_KEYWORDS_GENERATE,
       // AI Provider (Local/Custom) Settings Channels
       AI_PROVIDER_SETTINGS_GET,
@@ -1119,6 +1349,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
       // Agent Runtime Channels
       AGENT_DEFINITION_LIST,
+      AGENT_TASK_CANCEL,
       AGENT_TASK_DETAIL,
       AGENT_TASK_TRANSCRIPT,
       AGENT_TASK_LIST,
@@ -1140,6 +1371,8 @@ contextBridge.exposeInMainWorld("api", {
       DELETEEMAILSEARCHTASK,
       // Plugin Management Channels
       PLUGIN_IMPORT,
+      PLUGIN_CANCEL_INSTALL,
+      PLUGIN_GET_INSTALL_CAPABILITIES,
       PLUGIN_INSTALL_FROM_SOURCE,
       PLUGIN_VALIDATE_PACKAGE,
       PLUGIN_LIST,
@@ -1162,6 +1395,11 @@ contextBridge.exposeInMainWorld("api", {
       PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
       PLUGIN_MARKETPLACE_GET_PLUGIN,
       PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
+      // Community Plugins Channels
+      PLUGIN_COMMUNITY_LIST,
+      PLUGIN_COMMUNITY_DETAIL,
+      PLUGIN_COMMUNITY_INSTALL,
+      PLUGIN_COMMUNITY_OPEN_PLANS,
       // AI user memory (durable cross-session memory)
       AI_USER_MEMORY_LIST,
       AI_USER_MEMORY_CREATE,
@@ -1184,6 +1422,35 @@ contextBridge.exposeInMainWorld("api", {
       AI_WORKSPACE_MEMORY_DELETE,
       AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
       AI_WORKSPACE_MEMORY_AUTO_DREAM_STATUS,
+      AI_PORTABLE_WORKSPACE_MEMORY_STATUS,
+      AI_PORTABLE_WORKSPACE_MEMORY_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_CREATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_UPDATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_ARCHIVE_PORTABLE,
+      AI_PORTABLE_WORKSPACE_MEMORY_DELETE_PORTABLE,
+      AI_PORTABLE_WORKSPACE_MEMORY_ENABLE_PREVIEW,
+      AI_PORTABLE_WORKSPACE_MEMORY_ENABLE,
+      AI_PORTABLE_WORKSPACE_MEMORY_EXPORT_PREVIEW,
+      AI_PORTABLE_WORKSPACE_MEMORY_EXPORT,
+      AI_PORTABLE_WORKSPACE_MEMORY_RESCAN,
+      AI_PORTABLE_WORKSPACE_MEMORY_DIAGNOSTICS_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_POLICY_UPDATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_PROMOTE,
+      AI_PORTABLE_WORKSPACE_MEMORY_PRIVATIZE,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_APPROVE_DELETION,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVIEW_REJECT_DELETION,
+      AI_PORTABLE_WORKSPACE_MEMORY_REVEAL_FILE,
+      AI_PORTABLE_WORKSPACE_MEMORY_CONFLICTS_LIST,
+      AI_PORTABLE_WORKSPACE_MEMORY_CONFLICT_RESOLVE,
+      AI_PORTABLE_WORKSPACE_MEMORY_GIT_STATUS,
+      AI_PORTABLE_WORKSPACE_MEMORY_GET_STATE,
+      AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_PREVIEW,
+      AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_APPLY,
+      AI_PORTABLE_WORKSPACE_MEMORY_BRIDGE_REMOVE,
+      AI_PORTABLE_WORKSPACE_MEMORY_IDENTITY_REGENERATE,
       // Slash Command + AiFetchly Config Channels
       SLASH_COMMAND_LIST,
       SLASH_COMMAND_DISPATCH,
@@ -1205,6 +1472,17 @@ contextBridge.exposeInMainWorld("api", {
       LOCAL_AI_RUNTIME_CHECK_UPDATE,
       LOCAL_AI_RUNTIME_REPAIR,
       LOCAL_AI_RUNTIME_REMOVE,
+      // Computer Use (session channels are AI-gated in the main process)
+      COMPUTER_USE_STATUS,
+      COMPUTER_USE_LIST_WINDOWS,
+      COMPUTER_USE_SESSION_START,
+      COMPUTER_USE_SESSION_STOP,
+      COMPUTER_USE_SESSION_PAUSE,
+      COMPUTER_USE_SESSION_RESUME,
+      COMPUTER_USE_SETTINGS_GET,
+      COMPUTER_USE_SETTINGS_SET,
+      COMPUTER_USE_VALIDATE_HOTKEY,
+      COMPUTER_USE_GROUNDING_READINESS,
       // Hooks system channels — Phase 4
       HOOKS_LIST,
       HOOKS_CREATE,
@@ -1224,6 +1502,24 @@ contextBridge.exposeInMainWorld("api", {
       DIAGNOSTICS_LIST_CRASHES,
       // AI Content Reporting — safety/support, not AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CREATE,
+      // Managed Browser Channels (design §22)
+      MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
+      MANAGED_BROWSER_LIST_ACTIVE,
+      MANAGED_BROWSER_START,
+      MANAGED_BROWSER_STATUS,
+      MANAGED_BROWSER_HANDOFF,
+      MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
+      MANAGED_BROWSER_RESUME,
+      MANAGED_BROWSER_STOP,
+      MANAGED_BROWSER_APPROVE,
+      MANAGED_BROWSER_CANCEL_ACTIVE,
+      MANAGED_BROWSER_CAPTURE_SCREENSHOT,
+      MANAGED_BROWSER_EXTEND_HANDOFF,
+      MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
+      MANAGED_BROWSER_GET_CACHE_STATUS,
+      MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
+      MANAGED_BROWSER_CLEAR_CACHE,
+      MANAGED_BROWSER_UPDATE_SETTINGS,
       // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CAPABILITIES,
       // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle.
@@ -1240,6 +1536,10 @@ contextBridge.exposeInMainWorld("api", {
       E2E_SEED_RECEIVED_MESSAGE,
       E2E_SEED_AUTO_REPLY_AUDIT,
       E2E_SEED_REPLY_DRAFT,
+      // Application lifecycle (exit & system tray, design §10) — NOT AI-gated
+      APPLICATION_LIFECYCLE_GET_STATE,
+      APPLICATION_CLOSE_CHOICE_ACK,
+      APPLICATION_CLOSE_CHOICE_SUBMIT,
     ];
     if (validChannels.includes(channel)) {
       return ipcRenderer.invoke(channel, data);

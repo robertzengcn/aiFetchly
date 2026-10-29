@@ -84,7 +84,10 @@ export class ComAdapterTest192 {
         "applyCookies",
       ];
       for (const method of requiredMethods) {
-        if (typeof adapter[method] !== "function") {
+        if (
+        typeof (adapter as unknown as Record<string, unknown>)[method] !==
+        "function"
+      ) {
           throw new Error(`Required method missing: ${method}`);
         }
       }

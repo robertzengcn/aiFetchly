@@ -1,5 +1,6 @@
 // import {LlmFactory} from '@/modules/llm/LlmFactory';
 import { LlmImpl } from '@/modules/interface/LlmImpl';
+import { log } from "@/modules/Logger";
 import {LanguageItem} from '@/entityTypes/commonType'
 import {LlmCongfig,TraditionalTranslateCongfig} from '@/entityTypes/commonType'
 // import {deepseeklocalgroup} from "@/config/settinggroupInit";
@@ -39,7 +40,7 @@ export class TranslateProducer {
      * @deprecated LlmFactory has been removed. This method is no longer functional.
      */
     getTransTool(toolName:string,llmconfig?:LlmCongfig,transConfig?:TraditionalTranslateCongfig):LlmImpl|void{
-        console.warn('TranslateProducer.getTransTool() is deprecated. LlmFactory has been removed.');
+        log.warn('TranslateProducer.getTransTool() is deprecated. LlmFactory has been removed.');
         throw new Error('LlmFactory has been removed. Use remote API-based translation instead.');
     }
     //translate with translate tool

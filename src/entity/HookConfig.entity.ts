@@ -24,58 +24,58 @@ import {
 @Index(["enabled"])
 export class HookConfigEntity {
   @PrimaryColumn({ type: "text" })
-  id: string;
+  id!: string;
 
   @Column({ name: "event_name", type: "text" })
-  eventName: string;
+  eventName!: string;
 
   @Column({ name: "matcher", type: "text", nullable: true })
-  matcher: string | null;
+  matcher!: string | null;
 
   /** Glob-lite condition matched against tool input argument values. */
   @Column({ name: "if_condition", type: "text", nullable: true })
-  ifCondition: string | null;
+  ifCondition!: string | null;
 
   /** "command" for UI-created rows. "callback" reserved for future schema reuse. */
   @Column({ name: "hook_type", type: "text" })
-  hookType: string;
+  hookType!: string;
 
   @Column({ type: "text" })
-  command: string;
+  command!: string;
 
   @Column({ name: "cwd", type: "text", nullable: true })
-  cwd: string | null;
+  cwd!: string | null;
 
   @Column({ name: "timeout_ms", type: "integer", default: 5000 })
-  timeoutMs: number;
+  timeoutMs!: number;
 
   /** "warn" | "block" */
   @Column({ name: "failure_mode", type: "text", default: "warn" })
-  failureMode: string;
+  failureMode!: string;
 
   @Column({ name: "status_message", type: "text", nullable: true })
-  statusMessage: string | null;
+  statusMessage!: string | null;
 
   /** JSON-serialized string[] of env var names. */
   @Column({ name: "env_allowlist", type: "text", nullable: true })
-  envAllowlist: string | null;
+  envAllowlist!: string | null;
 
   /** Always "user" for rows created via UI. */
   @Column({ type: "text", default: "user" })
-  source: string;
+  source!: string;
 
   @Column({ type: "boolean", default: false })
-  enabled: boolean;
+  enabled!: boolean;
 
   @Column({ name: "last_run_at", type: "datetime", nullable: true })
-  lastRunAt: Date | null;
+  lastRunAt!: Date | null;
 
   @Column({ name: "last_run_status", type: "text", nullable: true })
-  lastRunStatus: string | null;
+  lastRunStatus!: string | null;
 
   @CreateDateColumn({ name: "created_at" })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ name: "updated_at" })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

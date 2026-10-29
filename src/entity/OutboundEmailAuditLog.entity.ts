@@ -12,45 +12,45 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index(["eventCode"])
 export class OutboundEmailAuditLogEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /** `user`, `ai`, or `system`. */
   @Column("varchar", { length: 20 })
-  actorType: string;
+  actorType!: string;
 
   /** Stable, machine-readable event code (e.g. `intent_resolved`). */
   @Column("varchar", { length: 100 })
-  eventCode: string;
+  eventCode!: string;
 
   @Column("varchar", { length: 100, nullable: true })
-  conversationId: string | null;
+  conversationId!: string | null;
 
   @Column("varchar", { length: 100, nullable: true })
-  sourceUserMessageId: string | null;
+  sourceUserMessageId!: string | null;
 
   @Column("int", { nullable: true })
-  intentDecisionId: number | null;
+  intentDecisionId!: number | null;
 
   @Column("int", { nullable: true })
-  batchId: number | null;
+  batchId!: number | null;
 
   @Column("int", { nullable: true })
-  draftId: number | null;
+  draftId!: number | null;
 
   @Column("int", { nullable: true })
-  revisionId: number | null;
+  revisionId!: number | null;
 
   @Column("int", { nullable: true })
-  authorizationId: number | null;
+  authorizationId!: number | null;
 
   @Column("int", { nullable: true })
-  sendAttemptId: number | null;
+  sendAttemptId!: number | null;
 
   /** Policy/validator versions in effect when the event occurred (JSON). */
   @Column("text", { nullable: true })
-  versionsJson: string | null;
+  versionsJson!: string | null;
 
   /** Sanitized metadata; no secrets, tokens, or full prompts (JSON). */
   @Column("text", { nullable: true })
-  metadataJson: string | null;
+  metadataJson!: string | null;
 }

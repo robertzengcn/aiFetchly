@@ -1,5 +1,6 @@
 "use strict";
-import { HttpClient, HttpResponseError } from "@/modules/lib/httpclient";
+import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpResponseError } from "@/modules/lib/httpResponseError";
 import {
   CommonApiresp,
   ChatApiResponse,
@@ -26,6 +27,10 @@ import {
   type AIChatRetryProfile,
 } from "@/service/AIChatRetryPolicy";
 import { describeErrorDetail } from "@/service/AIChatErrorMapper";
+import type {
+  ChatProviderIterationOptions,
+  ChatProviderStreamEvent,
+} from "@/service/aiProvider/ChatProviderClient";
 
 /**
  * Chat request interface
@@ -126,6 +131,13 @@ export interface ToolExecutionResult {
    * renderer.
    */
   readonly modelArtifacts?: readonly ModelArtifact[];
+  /**
+   * Transient prompt-skill instruction block (natural-language-skill-
+   * installation design §10.5). Same non-persistence contract as
+   * modelArtifacts: the query loop consumes it to append a model-only
+   * handoff message with the verified skill instructions.
+   */
+  readonly promptSkillContext?: import("../entityTypes/promptSkillTypes").PromptSkillContextAttachment;
 }
 
 /**
@@ -598,6 +610,22 @@ export interface OpenAIModel {
   is_free?: boolean;
 }
 
+/**
+ * Capability metadata for the hosted virtual `small` model route. All fields
+ * are optional except `available`; malformed values are ignored by
+ * `normalizeModelsResponse` rather than rejecting the whole model list.
+ */
+export interface OpenAISmallModelCapability {
+  /** Whether a small model is configured and healthy in the current environment. */
+  readonly available: boolean;
+  /** The real model id that the `small`/`haiku` alias currently resolves to. */
+  readonly resolved_model?: string;
+  /** Usable input-plus-output context window for the resolved model. */
+  readonly context_size?: number;
+  /** Maximum supported output tokens for the resolved model. */
+  readonly max_tokens?: number;
+}
+
 /** OpenAI-compatible models list response */
 export interface OpenAIModelsResponse {
   object: string;
@@ -608,6 +636,15 @@ export interface OpenAIModelsResponse {
    * the frontend uses it to seed the model selector on first use.
    */
   default_model?: string;
+  /**
+   * Hosted AiFetchly small-model route capability, when reported by the
+   * server's `/api/ai/v1/models` endpoint. The `small`/`haiku` alias is a
+   * virtual route resolved server-side to the best healthy small setting;
+   * this metadata lets AiFetchly budget lightweight background workloads
+   * against the resolved model's real context window before sending.
+   * Absent on older servers and on local/custom providers.
+   */
+  small_model?: OpenAISmallModelCapability;
 }
 
 /** OpenAI-compatible chat completion choice (non-streaming) */
@@ -666,6 +703,13 @@ export interface OpenAIChatCompletionChunk {
   created: number;
   model: string;
   choices: OpenAIStreamChoice[];
+  /**
+   * Stream-level error payload, present on the terminal chunk when the
+   * server ends the stream with finish_reason="error" (e.g. upstream
+   * context_window_exceeded). Consumers map it separately from transport
+   * failures.
+   */
+  error?: { message: string; type?: string; code?: string };
   /** Present on the final chunk when stream_options.include_usage is true. */
   usage?: OpenAIUsage;
 }
@@ -812,9 +856,23 @@ const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
 /**
  * True when `err` is an HTTP 404 surfaced by `HttpClient` (`postJson`
  * discards the response body, so only the numeric status is observable).
+ *
+ * Uses duck-typing in addition to `instanceof` so mirrored test doubles
+ * (same `name`/`status` shape, different class identity after module
+ * mocking) are still recognized as 404s.
  */
 function isHttpNotFoundError(err: unknown): boolean {
-  return err instanceof HttpResponseError && err.status === 404;
+  if (err instanceof HttpResponseError && err.status === 404) {
+    return true;
+  }
+  if (typeof err === "object" && err !== null) {
+    const status = (err as { status?: unknown }).status;
+    const name = (err as { name?: unknown }).name;
+    if (status === 404 && name === "HttpResponseError") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export class AiChatApi {
@@ -1145,7 +1203,7 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeStreamResponse(response, onEvent, options?.signal);
+    await this._consumeStreamResponse(response, onEvent);
   }
 
   /**
@@ -1191,13 +1249,25 @@ export class AiChatApi {
   /**
    * Consume an SSE stream response and invoke onEvent for each parsed event.
    * Shared by streamMessage and streamEmailTemplateGeneration.
-   * When signal is aborted, reader.read() rejects with AbortError; we exit cleanly and rethrow.
+   * Aborting the signal the stream fetch was created with makes reader.read()
+   * reject with AbortError; this method itself needs no signal reference.
    */
   private async _consumeStreamResponse(
     response: Response,
-    onEvent: (event: StreamEvent) => void,
-    signal?: AbortSignal
+    onEvent: (event: StreamEvent) => void
   ): Promise<void> {
+    for await (const event of this._iterateStreamEvents(response)) {
+      onEvent(event);
+    }
+  }
+
+  /**
+   * Stage B §7: native iteration of the legacy SSE event stream. Cancelling
+   * iteration cancels the owned body and releases the reader lock.
+   */
+  private async *_iterateStreamEvents(
+    response: Response
+  ): AsyncGenerator<StreamEvent, void, void> {
     if (!response.body) {
       throw new Error("Response body is null");
     }
@@ -1209,11 +1279,6 @@ export class AiChatApi {
     try {
       let streamActive = true;
       while (streamActive) {
-        // Honor an abort between reads so cancellation is responsive even
-        // when the underlying read hasn't rejected yet.
-        if (signal?.aborted) {
-          break;
-        }
         let result: ReadableStreamReadResult<Uint8Array>;
         try {
           result = await reader.read();
@@ -1245,10 +1310,10 @@ export class AiChatApi {
           // after plan_created when the server flushed multiple events together).
           if (!trimmedLine) {
             if (currentEvent.event && currentEvent.data) {
-              onEvent({
+              yield {
                 event: currentEvent.event,
                 data: currentEvent.data,
-              } as StreamEvent);
+              } as StreamEvent;
               currentEvent = {};
             }
             continue;
@@ -1259,7 +1324,7 @@ export class AiChatApi {
                 ? pythonDictToJson(trimmedLine)
                 : trimmedLine;
               const event: StreamEvent = JSON.parse(jsonStr);
-              onEvent(event);
+              yield event;
               continue;
             } catch {
               // fall through to SSE parsing
@@ -1293,7 +1358,7 @@ export class AiChatApi {
         }
       }
       if (currentEvent.event && currentEvent.data) {
-        onEvent(currentEvent as StreamEvent);
+        yield currentEvent as StreamEvent;
       }
       if (buffer.trim() && buffer.trim().startsWith("{")) {
         try {
@@ -1302,7 +1367,7 @@ export class AiChatApi {
             ? pythonDictToJson(bufferStr)
             : bufferStr;
           const event: StreamEvent = JSON.parse(jsonStr);
-          onEvent(event);
+          yield event;
         } catch {
           // ignore
         }
@@ -1967,11 +2032,9 @@ export class AiChatApi {
    */
   async listOpenAIModels(): Promise<OpenAIModelsResponse> {
     if (!process.env.WORKER_TYPE) {
-      const resolved = (await this.getProviderResolver()).resolveForModelList();
-      if (!resolved.canUse) {
-        throw new Error(resolved.message);
-      }
-      if (resolved.kind === "local") {
+      const resolved = (await this.getProviderResolver()).resolveForChat();
+      // Narrow to the success union first — ChatProviderDenial has no `kind`.
+      if (resolved.canUse && resolved.kind === "local") {
         return this.localClient(resolved.config, resolved.apiKey).listModels();
       }
       return this.listOpenAIModelsHosted();
@@ -2082,10 +2145,19 @@ export class AiChatApi {
     // Pass-through when already OpenAI-shaped.
     if (Array.isArray((response as { data?: unknown }).data)) {
       const obj = response as { object?: unknown; data: unknown[] };
-      return {
+      const passthrough: OpenAIModelsResponse = {
         object: typeof obj.object === "string" ? obj.object : "list",
         data: obj.data as OpenAIModel[],
       };
+      const defaultModel = this.getStringField(response, "default_model");
+      if (defaultModel) {
+        passthrough.default_model = defaultModel;
+      }
+      const smallModel = this.extractSmallModelCapability(response);
+      if (smallModel) {
+        passthrough.small_model = smallModel;
+      }
+      return passthrough;
     }
     const modelsRaw = (response as { models?: unknown }).models;
     if (!Array.isArray(modelsRaw)) {
@@ -2121,7 +2193,40 @@ export class AiChatApi {
     if (defaultModel) {
       result.default_model = defaultModel;
     }
+    const smallModel = this.extractSmallModelCapability(response);
+    if (smallModel) {
+      result.small_model = smallModel;
+    }
     return result;
+  }
+
+  /**
+   * Validate the optional `small_model` capability metadata. Malformed
+   * payloads (non-boolean `available`, non-numeric sizes) are dropped
+   * entirely so downstream routing never trusts a half-parsed capability.
+   */
+  private extractSmallModelCapability(
+    response: Record<string, unknown>
+  ): OpenAISmallModelCapability | undefined {
+    const raw = response.small_model;
+    if (!this.isRecord(raw)) return undefined;
+    if (typeof raw.available !== "boolean") return undefined;
+    return {
+      available: raw.available,
+      ...(typeof raw.resolved_model === "string" && raw.resolved_model
+        ? { resolved_model: raw.resolved_model }
+        : {}),
+      ...(typeof raw.context_size === "number" &&
+      Number.isFinite(raw.context_size) &&
+      raw.context_size > 0
+        ? { context_size: raw.context_size }
+        : {}),
+      ...(typeof raw.max_tokens === "number" &&
+      Number.isFinite(raw.max_tokens) &&
+      raw.max_tokens > 0
+        ? { max_tokens: raw.max_tokens }
+        : {}),
+    };
   }
 
   /**
@@ -2332,6 +2437,13 @@ export class AiChatApi {
    * @param onChunk - Callback invoked for each parsed streaming chunk
    * @param options - Optional abort signal, retry callback, and recovery callback.
    */
+  /**
+   * Stage B §5.1 (generator-streaming PRD FR-001): the callback API is a
+   * compatibility FACADE over `openAIChatCompletionStreamEvents` — one
+   * provider implementation, callbacks invoked in the iterator's causal
+   * order. Legacy `onRetry`/`onRecoveryStatus` keep emitting for backward
+   * compatibility (the renderer's `retry_connect` badge).
+   */
   async openAIChatCompletionStream(
     request: OpenAIChatCompletionRequest,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void,
@@ -2344,43 +2456,61 @@ export class AiChatApi {
       onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
     }
   ): Promise<void> {
+    for await (const event of this.openAIChatCompletionStreamEvents(request, {
+      signal: options?.signal,
+      ...(options?.retryProfile !== undefined
+        ? { retryProfile: options.retryProfile }
+        : {}),
+    })) {
+      if (event.type === "chunk") {
+        onChunk(event.chunk);
+      } else if (event.type === "retry") {
+        options?.onRetry?.(event.info);
+      } else if (event.type === "recovery") {
+        options?.onRecoveryStatus?.(event.info);
+      }
+    }
+  }
+
+  /**
+   * Stage B §5.1 (FR-001): incremental provider events — chunks, retry
+   * decisions, and recovery-status notifications in causal order. Cancelling
+   * iteration aborts the underlying request and releases the body reader.
+   */
+  async *openAIChatCompletionStreamEvents(
+    request: OpenAIChatCompletionRequest,
+    options?: ChatProviderIterationOptions
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     if (!process.env.WORKER_TYPE) {
       const resolved = (await this.getProviderResolver()).resolveForChat();
       if (!resolved.canUse) {
         throw new Error(resolved.message);
       }
       if (resolved.kind === "local") {
-        await this.localClient(resolved.config, resolved.apiKey).stream(
+        yield* this.localClient(resolved.config, resolved.apiKey).streamEvents(
           request,
-          onChunk,
           options
         );
         return;
       }
-      await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+      yield* this.openAIChatCompletionStreamEventsHosted(request, options);
       return;
     }
     // Worker processes have no provider settings; keep the hosted-only gate.
     await this.ensureAIEnabled();
-    await this.openAIChatCompletionStreamHosted(request, onChunk, options);
+    yield* this.openAIChatCompletionStreamEventsHosted(request, options);
   }
 
   /**
-   * Hosted aiFetchly streaming completion. Preserves the existing retry,
-   * legacy-endpoint fallback, and SSE parsing behavior exactly.
+   * Hosted aiFetchly streaming completion as a provider event generator
+   * (Stage B §5.1/§7). Preserves the existing retry, legacy-endpoint
+   * fallback, and SSE parsing behavior exactly — retry/recovery decisions
+   * are yielded in their original causal order instead of callbacks.
    */
-  private async openAIChatCompletionStreamHosted(
+  private async *openAIChatCompletionStreamEventsHosted(
     request: OpenAIChatCompletionRequest,
-    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
-    options?: {
-      signal?: AbortSignal;
-      onRetry?: (info: StreamRetryInfo) => void;
-      /** Recovery profile (default: foreground). Background = 1 retry, persistent = 6h. */
-      retryProfile?: AIChatRecoveryProfile;
-      /** Structured recovery status callback (Layer 1/2). */
-      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
-    }
-  ): Promise<void> {
+    options?: ChatProviderIterationOptions
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     const data: OpenAIChatCompletionRequest = {
       messages: request.messages,
       stream: true,
@@ -2452,11 +2582,11 @@ export class AiChatApi {
       } catch (error) {
         // 404 → fall back to the legacy streaming endpoint (no retry).
         if (this.isNotFoundError(error)) {
-          return this.openAIChatCompletionStreamViaLegacyEndpoint(
+          yield* this.openAIChatCompletionStreamEventsViaLegacyEndpoint(
             request,
-            onChunk,
             fetchOptions
           );
+          return;
         }
         const classified = classifier.classifyThrown(error);
         // Never retry user-initiated aborts.
@@ -2480,21 +2610,27 @@ export class AiChatApi {
           throw classified;
         }
         const layer = "api_retry";
-        options?.onRecoveryStatus?.({
-          layer,
-          reason: classified.reason,
-          attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts + 1,
-          delayMs: decision.delayMs,
-          consecutiveOverloadCount: consecutiveOverload,
-          message: classified.message,
-        });
-        options?.onRetry?.({
-          attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts + 1,
-          delayMs: decision.delayMs,
-          error: classified.message,
-        });
+        yield {
+          type: "recovery",
+          info: {
+            layer,
+            reason: classified.reason,
+            attempt: decision.attempt,
+            maxAttempts: profile.maxAttempts + 1,
+            delayMs: decision.delayMs,
+            consecutiveOverloadCount: consecutiveOverload,
+            message: classified.message,
+          },
+        };
+        yield {
+          type: "retry",
+          info: {
+            attempt: decision.attempt,
+            maxAttempts: profile.maxAttempts + 1,
+            delayMs: decision.delayMs,
+            error: classified.message,
+          },
+        };
         await this.sleepWithAbort(decision.delayMs, options?.signal);
         attempt = decision.attempt;
         continue;
@@ -2535,21 +2671,27 @@ export class AiChatApi {
         }
         const layer =
           classified.reason === "overload" ? "overload_retry" : "api_retry";
-        options?.onRecoveryStatus?.({
-          layer,
-          reason: classified.reason,
-          attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts + 1,
-          delayMs: decision.delayMs,
-          consecutiveOverloadCount: consecutiveOverload,
-          message: classified.message,
-        });
-        options?.onRetry?.({
-          attempt: decision.attempt,
-          maxAttempts: profile.maxAttempts + 1,
-          delayMs: decision.delayMs,
-          error: `HTTP ${res.status}`,
-        });
+        yield {
+          type: "recovery",
+          info: {
+            layer,
+            reason: classified.reason,
+            attempt: decision.attempt,
+            maxAttempts: profile.maxAttempts + 1,
+            delayMs: decision.delayMs,
+            consecutiveOverloadCount: consecutiveOverload,
+            message: classified.message,
+          },
+        };
+        yield {
+          type: "retry",
+          info: {
+            attempt: decision.attempt,
+            maxAttempts: profile.maxAttempts + 1,
+            delayMs: decision.delayMs,
+            error: `HTTP ${res.status}`,
+          },
+        };
         await this.sleepWithAbort(decision.delayMs, options?.signal);
         attempt = decision.attempt;
         continue;
@@ -2571,7 +2713,9 @@ export class AiChatApi {
       throw new Error("Response body is null");
     }
 
-    await this._consumeOpenAIStreamResponse(response, onChunk);
+    for await (const chunk of this._iterateOpenAIStreamResponse(response)) {
+      yield { type: "chunk", chunk };
+    }
   }
 
   /**
@@ -2634,11 +2778,10 @@ export class AiChatApi {
     });
   }
 
-  private async openAIChatCompletionStreamViaLegacyEndpoint(
+  private async *openAIChatCompletionStreamEventsViaLegacyEndpoint(
     request: OpenAIChatCompletionRequest,
-    onChunk: (chunk: OpenAIChatCompletionChunk) => void,
     fetchOptions: RequestInit
-  ): Promise<void> {
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     const legacyRequest = this.buildLegacyChatRequestFromOpenAI(request);
     this._debugLogRequest(
       "/api/ai/ask/stream (legacy fallback)",
@@ -2656,16 +2799,15 @@ export class AiChatApi {
     }
 
     let chunkIndex = 0;
-    const signal = fetchOptions.signal ?? undefined;
-    await this._consumeStreamResponse(
-      response,
-      (event) => {
-        const eventType = String(event.event ?? "");
-        const content =
-          typeof event.data?.content === "string" ? event.data.content : "";
+    for await (const event of this._iterateStreamEvents(response)) {
+      const eventType = String(event.event ?? "");
+      const content =
+        typeof event.data?.content === "string" ? event.data.content : "";
 
-        if (eventType === StreamEventType.TOKEN && content) {
-          onChunk({
+      if (eventType === StreamEventType.TOKEN && content) {
+        yield {
+          type: "chunk",
+          chunk: {
             id: `legacy-${Date.now()}-${chunkIndex}`,
             object: "chat.completion.chunk",
             created: Date.now(),
@@ -2677,16 +2819,19 @@ export class AiChatApi {
                 finish_reason: null,
               },
             ],
-          });
-          return;
-        }
+          },
+        };
+        continue;
+      }
 
-        if (
-          eventType === StreamEventType.DONE ||
-          eventType === StreamEventType.COMPLETE ||
-          eventType === StreamEventType.CONVERSATION_END
-        ) {
-          onChunk({
+      if (
+        eventType === StreamEventType.DONE ||
+        eventType === StreamEventType.COMPLETE ||
+        eventType === StreamEventType.CONVERSATION_END
+      ) {
+        yield {
+          type: "chunk",
+          chunk: {
             id: `legacy-${Date.now()}-${chunkIndex}`,
             object: "chat.completion.chunk",
             created: Date.now(),
@@ -2698,24 +2843,23 @@ export class AiChatApi {
                 finish_reason: "stop",
               },
             ],
-          });
-          return;
-        }
+          },
+        };
+        continue;
+      }
 
-        if (eventType === StreamEventType.ERROR) {
-          const errorMessage =
-            content ||
-            (typeof event.data === "object" &&
-            event.data &&
-            "errorMessage" in event.data &&
-            typeof event.data.errorMessage === "string"
-              ? event.data.errorMessage
-              : "Unknown error");
-          throw new Error(errorMessage);
-        }
-      },
-      signal
-    );
+      if (eventType === StreamEventType.ERROR) {
+        const errorMessage =
+          content ||
+          (typeof event.data === "object" &&
+          event.data &&
+          "errorMessage" in event.data &&
+          typeof event.data.errorMessage === "string"
+            ? event.data.errorMessage
+            : "Unknown error");
+        throw new Error(errorMessage);
+      }
+    }
   }
 
   private buildLegacyChatRequestFromOpenAI(
@@ -2773,10 +2917,21 @@ export class AiChatApi {
         ? { id: model.name }
         : {}),
     }));
-    return {
+    const result: OpenAIModelsResponse = {
       object: "list",
       data: models,
     };
+    if (this.isRecord(response)) {
+      const defaultModel = this.getStringField(response, "default_model");
+      if (defaultModel) {
+        result.default_model = defaultModel;
+      }
+      const smallModel = this.extractSmallModelCapability(response);
+      if (smallModel) {
+        result.small_model = smallModel;
+      }
+    }
+    return result;
   }
 
   private unwrapLegacyPayload<T>(response: unknown): T {
@@ -3246,6 +3401,20 @@ export class AiChatApi {
     response: Response,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void
   ): Promise<void> {
+    for await (const chunk of this._iterateOpenAIStreamResponse(response)) {
+      onChunk(chunk);
+    }
+  }
+
+  /**
+   * Stage B §7 (FR-001): native incremental iteration of the hosted OpenAI
+   * SSE body. Yields normalized chunks; error events and API envelopes
+   * throw; the plain-JSON recovery path is preserved. Cancelling iteration
+   * cancels the owned body and releases the reader lock in `finally`.
+   */
+  private async *_iterateOpenAIStreamResponse(
+    response: Response
+  ): AsyncGenerator<OpenAIChatCompletionChunk, void, void> {
     if (!response.body) {
       throw new Error("Response body is null");
     }
@@ -3256,8 +3425,16 @@ export class AiChatApi {
     let currentEventType: string | undefined;
     let loggedPayloadCount = 0;
     let emittedPayloadCount = 0;
+    /** TODO-04: the protocol said [DONE] — stop parsing ANY later bytes. */
+    let sawDoneMarker = false;
+    /** Review F6: true only when the body reached physical EOF fully drained. */
+    let completedNaturally = false;
 
-    const emitPayload = (payload: unknown, eventType?: string): void => {
+    /** Validate + normalize one payload; throws for error payloads. */
+    const processPayload = (
+      payload: unknown,
+      eventType?: string
+    ): OpenAIChatCompletionChunk | null => {
       if (loggedPayloadCount < 8) {
         console.log(
           `[ai-chat-v2] openai-stream payload ${
@@ -3285,10 +3462,9 @@ export class AiChatApi {
             eventType
           )}`
         );
-        return;
+        return null;
       }
-      emittedPayloadCount += 1;
-      onChunk(chunk);
+      return chunk;
     };
 
     try {
@@ -3344,6 +3520,7 @@ export class AiChatApi {
           if (trimmedLine.startsWith("data:")) {
             const jsonStr = trimmedLine.substring(5).trim();
             if (jsonStr === "[DONE]") {
+              sawDoneMarker = true;
               streamActive = false;
               break;
             }
@@ -3357,13 +3534,19 @@ export class AiChatApi {
               );
               continue;
             }
-            emitPayload(payload, currentEventType);
+            const chunk = processPayload(payload, currentEventType);
+            if (chunk) {
+              emittedPayloadCount += 1;
+              yield chunk;
+            }
           }
         }
       }
 
-      // Process any remaining data in buffer
-      const trimmedBuffer = buffer.trim();
+      completedNaturally = true;
+      // Process any remaining data in buffer — but NEVER after the protocol
+      // terminated with [DONE]: late buffered payload is not output (TODO-04).
+      const trimmedBuffer = sawDoneMarker ? "" : buffer.trim();
       if (
         trimmedBuffer &&
         trimmedBuffer !== "data: [DONE]" &&
@@ -3382,7 +3565,11 @@ export class AiChatApi {
           payload = undefined;
         }
         if (payload !== undefined) {
-          emitPayload(payload, currentEventType);
+          const chunk = processPayload(payload, currentEventType);
+          if (chunk) {
+            emittedPayloadCount += 1;
+            yield chunk;
+          }
         }
       }
 
@@ -3393,7 +3580,7 @@ export class AiChatApi {
       // emitted and the body is non-empty, try to parse the entire body as
       // a single JSON payload and feed it through the normal normalization
       // path (which already handles the non-streaming "message" shape).
-      if (emittedPayloadCount === 0) {
+      if (emittedPayloadCount === 0 && !sawDoneMarker) {
         const trimmedBody = rawBody.trim();
         if (
           trimmedBody &&
@@ -3415,11 +3602,25 @@ export class AiChatApi {
             payload = undefined;
           }
           if (payload !== undefined) {
-            emitPayload(payload, currentEventType);
+            const chunk = processPayload(payload, currentEventType);
+            if (chunk) {
+              emittedPayloadCount += 1;
+              yield chunk;
+            }
           }
         }
       }
     } finally {
+      // Review F6 (TODO-04 parity with the local parser): cancel the owned
+      // body on early close, failure, or post-[DONE] (protocol completion is
+      // not physical EOF; trailing bytes hold the socket).
+      if (!completedNaturally || sawDoneMarker) {
+        try {
+          await reader.cancel().catch(() => undefined);
+        } catch {
+          // releaseLock below still runs.
+        }
+      }
       reader.releaseLock();
     }
   }

@@ -1,3 +1,6 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Google Maps Module — orchestration layer shared by AI skill and UI page.
  *
@@ -8,6 +11,7 @@
  */
 
 import { app } from "electron";
+import { log } from "@/modules/Logger";
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -160,6 +164,7 @@ export class GoogleMapsModule extends BaseModule {
     );
 
     return new Promise((resolve, reject) => {
+      let ownedWorkerRecordId: string | null = null;
       const requestId = externalRequestId ?? uuidv4();
 
       let worker: ChildProcess;
@@ -181,15 +186,24 @@ export class GoogleMapsModule extends BaseModule {
             ELECTRON_USER_DATA_PATH: app.getPath("userData"),
           },
         });
-        console.debug(
+        log.debug(
           `[GoogleMaps] Spawning worker: path=${resolvedWorkerPath}, cwd=${process.cwd()}, nodePath=${String(
             workerEnv.NODE_PATH
           )}`
         );
-        worker = spawn(process.execPath, [resolvedWorkerPath], {
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-          env: workerEnv,
-        });
+        const ownedProcess = spawnOwned(
+          "google-maps",
+          () =>
+            spawn(process.execPath, [resolvedWorkerPath], {
+              stdio: ["pipe", "pipe", "pipe", "ipc"],
+              env: workerEnv,
+            })
+        );
+        worker = ownedProcess;
+        ownedWorkerRecordId =
+          getOwnedProcessRegistry()
+            .listByOwner("google-maps")
+            .find((r) => r.pid === ownedProcess.pid)?.id ?? null;
       } catch (err) {
         reject(
           new Error(
@@ -208,7 +222,7 @@ export class GoogleMapsModule extends BaseModule {
 
       worker.stdout?.on("data", (chunk: Buffer) => {
         workerStdout = appendWorkerOutput(workerStdout, chunk);
-        console.debug(
+        log.debug(
           `[GoogleMaps] Worker stdout (${requestId}): ${chunk
             .toString("utf8")
             .trimEnd()}`
@@ -216,14 +230,14 @@ export class GoogleMapsModule extends BaseModule {
       });
       worker.stderr?.on("data", (chunk: Buffer) => {
         workerStderr = appendWorkerOutput(workerStderr, chunk);
-        console.error(
+        log.error(
           `[GoogleMaps] Worker stderr (${requestId}): ${chunk
             .toString("utf8")
             .trimEnd()}`
         );
       });
 
-      console.debug(
+      log.debug(
         `[GoogleMaps] Worker spawned: requestId=${requestId}, pid=${String(
           worker.pid
         )}, execPath=${process.execPath}`
@@ -231,7 +245,7 @@ export class GoogleMapsModule extends BaseModule {
 
       const timeoutTimer = setTimeout(() => {
         this.activeSearches.delete(requestId);
-        console.error(
+        log.error(
           `[GoogleMaps] Worker timed out: requestId=${requestId}, pid=${String(
             worker.pid
           )}`
@@ -249,14 +263,27 @@ export class GoogleMapsModule extends BaseModule {
       this.activeSearches.set(requestId, search);
 
       worker.on("message", (raw: unknown) => {
-        console.debug(
+        log.debug(
           `[GoogleMaps] Worker message (${requestId}): ${JSON.stringify(raw)}`
         );
         const data = parseWorkerMessage(raw);
         if (!data) {
-          console.warn(
+          log.warn(
             `[GoogleMaps] Ignoring invalid worker message (${requestId})`
           );
+          return;
+        }
+        if (data.type === "descendant-report") {
+          // T01 (design §7): store the worker-reported browser identity —
+          // ppid-validated by the registry; retained even if this worker
+          // exits first so force verification can reach it.
+          void getOwnedProcessRegistry()
+            .recordDescendantReport(
+              ownedWorkerRecordId ?? "",
+              Number(data.pid),
+              String(data.label ?? "browser")
+            )
+            .catch(() => undefined);
           return;
         }
         if (data.type === "progress" && data.requestId === requestId) {
@@ -305,7 +332,7 @@ export class GoogleMapsModule extends BaseModule {
             result.summary,
             result.results
           ).catch((saveErr: unknown) => {
-            console.error(
+            log.error(
               "[GoogleMaps] Failed to save search result:",
               saveErr
             );
@@ -316,7 +343,7 @@ export class GoogleMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
-        console.error(
+        log.error(
           `[GoogleMaps] Worker process error (${requestId}, pid=${String(
             worker.pid
           )}):`,
@@ -335,7 +362,7 @@ export class GoogleMapsModule extends BaseModule {
             stderr: workerStderr,
             stdout: workerStdout,
           });
-          console.error(
+          log.error(
             `[GoogleMaps] Worker exited unexpectedly (${requestId}, pid=${String(
               worker.pid
             )}): ${diagnostic}`
@@ -350,7 +377,7 @@ export class GoogleMapsModule extends BaseModule {
             )
           );
         } else {
-          console.debug(
+          log.debug(
             `[GoogleMaps] Worker exited after request completion (${requestId}): code=${String(
               code
             )}, signal=${String(signal)}`

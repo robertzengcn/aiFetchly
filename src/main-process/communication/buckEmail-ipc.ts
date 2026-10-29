@@ -14,7 +14,7 @@ import {
   UNIFIED_EMAIL_SEND_LOG_DETAIL,
 } from "@/config/channellist";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
   buckEmailTaskListInputSchema,

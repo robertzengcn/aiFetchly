@@ -1,4 +1,5 @@
 import * as crypto from "crypto";
+import { log } from "@/modules/Logger";
 import * as fs from "fs";
 import * as path from "path";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
@@ -61,7 +62,7 @@ function validateArgsRequiredFields(
 }
 
 function auditPythonAux(tool: string, payload: Record<string, unknown>): void {
-  console.log(
+  log.info(
     `[SkillAudit] ${JSON.stringify({
       tool,
       ...payload,

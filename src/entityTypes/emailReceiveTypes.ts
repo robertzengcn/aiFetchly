@@ -207,7 +207,16 @@ export type EmailReplyAuditAction =
   | "send_claimed"
   | "delivery_unknown"
   | "reconciliation_noted"
-  | "draft_reopened";
+  | "draft_reopened"
+  /**
+   * Assisted-inconclusive lifecycle bookkeeping (spec
+   * 2026-10-29-email-send-inconclusive-detection-assisted-design.md): a
+   * human-confirmed send proceeded after the mailbox probe was inconclusive
+   * (probe-execution unknowns only). Deliberately NOT mirrored into the
+   * auto-reply decision table — the send itself writes the decision-visible
+   * rows (send_claimed / reply_sent); this row is forensic evidence.
+   */
+  | "detection_inconclusive_proceeded";
 
 /** Who triggered an audit action. */
 export type EmailReplyAuditActor = "user" | "ai" | "system";

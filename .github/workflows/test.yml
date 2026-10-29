@@ -1,0 +1,291 @@
+name: Test Suite
+
+# WS-2: the CI test gate. The green vitest main suite (+ tsc type-check gate)
+# is the BLOCKING gate; the mocha integration suite is non-blocking until its
+# DB/network-dependent tests are hardened. Fires on every push/PR to the active
+# dev branches (packaging lives in build.yml on the `test` branch).
+on:
+  push:
+    # Temporary: the installer branch needs its Windows gate recorded before
+    # merge (final-audit item 3). Remove 'worktree-natural-language-skill-installation'
+    # from this list when the PR merges.
+    branches: [dev, master, test, worktree-natural-language-skill-installation]
+  pull_request:
+    branches: [dev, master, test]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # undici@8 requires Node >=22.19.0; keep aligned with build.yml / ci.yml
+          # and with package.json engines (node >=22.0.0). The old 20.19.3 pin
+          # made `yarn install --frozen-lockfile` abort with EENGINE.
+          node-version: 22.19.0
+
+      # Native modules (better-sqlite3, sqlite-vec, isolated-vm) need a C/C++
+      # toolchain + cmake to build from source on Linux.
+      - name: Install build toolchain for native modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 build-essential cmake
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run vitest suite + type-check gate (BLOCKING)
+        # The vitest main suite (IPC, service, modules, ...) is green and runs
+        # the tsc --noEmit gate first via globalSetup (do NOT set
+        # AIFETCHLY_SKIP_TSC in CI). This is the HARD gate — a PR that breaks a
+        # test or introduces a type error fails CI. (WS-2 R2.3 / R2.5)
+        run: yarn testmain
+
+      - name: Run mocha integration suite (non-blocking)
+        # mocha tests under test/modules include DB/network-dependent cases not
+        # yet hardened; keep non-blocking until they are quarantined or mocked.
+        continue-on-error: true
+        run: yarn test
+
+      - name: E2E fixture collection gate (B01 — BLOCKING)
+        # The Electron E2E suite previously failed collection with a duplicate
+        # `const env` in the shared launch fixture (no scenario executed).
+        # `--list` compiles/collects every spec without launching Electron, so
+        # fixture syntax errors fail CI fast. Full `yarn test:e2e` (build +
+        # Electron launch under xvfb) remains the release gate (G02).
+        run: yarn test:e2e:collect
+
+      # NOTE: coverage artifact upload is intentionally omitted —
+      # `yarn testmain --coverage` hangs on the full suite (coverage
+      # instrumentation interacts with some test). Re-enable coverage in CI once
+      # root-caused (WS-2 R2.4 follow-up). Per-file coverage still works via
+      # `yarn testmain run <file> --coverage`.
+
+  # ---------------------------------------------------------------------------
+  # Windows shell verification matrix (natural-language-skill-installation
+  # PRD §16.4 / §26.3): runs the process-provider diagnostic matrix on a REAL
+  # Windows runner — PowerShell sentinel/UTF-8/unicode/stderr+exit, cmd echo,
+  # native Git, timeout tree-kill, the PROCESS_OUTPUT_EMPTY_UNEXPECTED
+  # sentinel, and paths with spaces. This is the release gate for the
+  # observed "exit 0 with empty captured output" defect.
+  # ---------------------------------------------------------------------------
+  windows-shell-matrix:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      # Python 3.12+ removed distutils; bundled node-gyp still imports it.
+      # Pin 3.11 so native-module install scripts succeed (same as build.yml).
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (skip package scripts)
+        # The @bitdisaster/exe-icon-extractor node-gyp build breaks on the
+        # windows-2022 image (napi argument-list mismatch). None of the
+        # provider tests load it — skip ALL package scripts, then run only
+        # OUR postinstall steps explicitly.
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Run required postinstall steps
+        run: |
+          node scripts/patch-node-abi.js
+          node scripts/patch-remote-rebuild.js
+          node scripts/rebuild-better-sqlite.js || echo "better-sqlite3 rebuild unavailable; provider tests do not require it"
+
+      - name: Run Windows process-provider diagnostic matrix (BLOCKING)
+        # The vitest globalSetup runs the tsc --noEmit gate first; the
+        # provider test then executes the live PowerShell/cmd/Git matrix.
+        run: npx vitest run --config vite.main.config.mjs test/vitest/main/process/PlatformProcessProvider.test.ts
+
+  # ---------------------------------------------------------------------------
+  # NL-7 (FR-10, §32): managed-copy activation evidence on macOS. Linux and
+  # Windows already have recorded evidence (test job + windows-shell-matrix).
+  # ---------------------------------------------------------------------------
+  managed-copy-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run managed-copy activation suites (BLOCKING)
+        # SkillActivationService (managed copy / link / rollback) plus the
+        # SkillInstallationModule activation + rollback lifecycle suites.
+        run: yarn testmain run test/vitest/main/SkillActivationService.test.ts test/vitest/main/SkillInstallationModule.test.ts
+
+  # ---------------------------------------------------------------------------
+  # GF-1 (git-free PRD §20.7/§21.1/§28 DoD): packaged smoke with Git absent
+  # on all three OS families — installs the public fixture repo
+  # robertzengcn/aifetchly-plugin-smoke-fixture with NO git on PATH and
+  # asserts zero Git process spawns plus a successful plugin row.
+  # Dispatchable so evidence runs can be recorded from any branch.
+  # ---------------------------------------------------------------------------
+  packaged-smoke-github:
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-22.04 pinned (not -latest): 9 consecutive eviction
+        # shutdown-signals ~2 min into the vite builds on the -latest
+        # pool; the pinned image runs a different runner pool (mirrors
+        # the windows-2022 pin).
+        os: [ubuntu-22.04, windows-2022, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      FORGE_DISABLE_ASAR: "1"
+      FORGE_SKIP_NATIVE_REBUILD: "1"
+      # ubuntu-latest (7 GB) evictions mid-prune: leave the kernel
+      # headroom to keep the runner agent alive — an in-process OOM
+      # surfaces a diagnosable error instead of an opaque shutdown.
+      NODE_OPTIONS: --max-old-space-size=4096
+      ELECTRON_FORGE_VITE_CONCURRENT: "1"
+      VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
+      PKG_SMOKE_GITHUB: "1"
+      # macOS packaging occasionally exceeds the guard's 15-minute default
+      # hard timeout (one eviction observed at ~15min with the run otherwise
+      # healthy); give the slower runners headroom.
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: "1800000"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: yarn
+
+      - name: Set up Python for node-gyp
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Configure node-gyp Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_BIN="$(python -c 'import sys; print(sys.executable)')"
+          echo "npm_config_python=${PYTHON_BIN}" >> "$GITHUB_ENV"
+          echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
+
+      - name: Install Linux system dependencies for native modules
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev xvfb
+
+      # Same disk + swap hardening the ci.yml package-smoke job needs:
+      # unpacked packaging duplicates node_modules into /tmp AND out/,
+      # which exhausts the 14 GB runner SSD and gets the job evicted
+      # ("runner has received a shutdown signal").
+      - name: Free up disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          echo "Disk after cleanup:"; df -h /
+
+      - name: Add swap to absorb finalize memory spikes (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          if swapon --show 2>/dev/null | grep -q swapfile; then
+            echo "/swapfile already active — skipping creation."
+          else
+            sudo fallocate -l 4G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile >/dev/null
+            sudo swapon /swapfile
+          fi
+          ACTIVE_KB=$(free -k | awk '/^Swap:/ {print $2}')
+          if [ -z "${ACTIVE_KB}" ] || [ "${ACTIVE_KB}" -eq 0 ]; then
+            echo "::error::Swap is not active after setup. Aborting so packaging doesn't OOM."
+            exit 1
+          fi
+
+      - name: Install dependencies (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: yarn install --frozen-lockfile
+
+      - name: Install dependencies (skip package scripts, Windows)
+        if: runner.os == 'Windows'
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Run required postinstall steps (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/patch-node-abi.js
+          node scripts/patch-remote-rebuild.js
+          node scripts/rebuild-better-sqlite.js || echo "better-sqlite3 rebuild unavailable; smoke does not require it"
+
+      - name: Build package (unpacked)
+        timeout-minutes: 40
+        # Ubuntu (7 GB) evictions mid-prune: the runner context is only
+        # available here — cap the heap on Linux so the kernel keeps
+        # headroom for the runner agent through the galactus prune spike.
+        env:
+          NODE_OPTIONS: "--max-old-space-size=${{ runner.os == 'Linux' && '3072' || '4096' }}"
+        run: yarn package:ci
+
+      - name: Verify packaged workers and renderer HTML layout
+        run: yarn verify-packaged-app
+
+      - name: Packaged smoke + git-free GitHub install (GF-1)
+        run: yarn packaged-smoke
+        # xvfb only exists/is needed on Linux.
+        if: runner.os != 'Linux'
+
+      - name: Packaged smoke + git-free GitHub install (GF-1, Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn packaged-smoke

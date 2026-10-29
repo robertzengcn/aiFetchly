@@ -20,36 +20,36 @@ import type {
 @Index(["mode", "createdAt"])
 export class OutboundEmailIntentEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("varchar", { length: 100 })
-  conversationId: string;
+  conversationId!: string;
 
   @Column("varchar", { length: 100 })
-  sourceUserMessageId: string;
+  sourceUserMessageId!: string;
 
   @Column("varchar", { length: 30 })
-  mode: OutboundEmailDeliveryMode;
+  mode!: OutboundEmailDeliveryMode;
 
   @Column("varchar", { length: 50 })
-  reasonCode: OutboundEmailIntentReasonCode;
+  reasonCode!: OutboundEmailIntentReasonCode;
 
   @Column("real")
-  confidence: number;
+  confidence!: number;
 
   /** Validated evidence array (JSON-serialized OutboundEmailIntentEvidence[]). */
   @Column("text")
-  evidenceJson: string;
+  evidenceJson!: string;
 
   /** SHA-256 of the canonical user-authored text the decision was derived from. */
   @Column("varchar", { length: 64 })
-  sourceTextHash: string;
+  sourceTextHash!: string;
 
   /** Resolver/evaluation version for audit and re-checks. */
   @Column("varchar", { length: 50 })
-  resolverVersion: string;
+  resolverVersion!: string;
 
   /** Only set for a contextual affirmation linking to the prior assistant question. */
   @Column("varchar", { length: 100, nullable: true })
-  previousAssistantMessageId: string | null;
+  previousAssistantMessageId!: string | null;
 }

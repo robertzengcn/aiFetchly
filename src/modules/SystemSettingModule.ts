@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { SystemSettingModel } from "@/model/SystemSetting.model";
 import { SystemSettingEntity } from "@/entity/SystemSetting.entity";
 import { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
@@ -18,6 +19,13 @@ export class SystemSettingModule extends BaseModule {
     settingValue: string | null
   ): Promise<SystemSettingEntity> {
     return this.systemSettingModel.updateSystemSetting(settingId, settingValue);
+  }
+
+  /** Look up the raw setting row by key (for id-based updates). */
+  public async getSettingItem(
+    key: string
+  ): Promise<SystemSettingEntity | null> {
+    return this.systemSettingModel.getSettingItem(key);
   }
 
   /**
@@ -71,7 +79,9 @@ export class SystemSettingModule extends BaseModule {
     }
 
     // Combine modelName and dimension into the required format
-    const combinedModelName = `${normalizeEmbeddingModelId(modelName)}:${dimension}`;
+    const combinedModelName = `${normalizeEmbeddingModelId(
+      modelName
+    )}:${dimension}`;
 
     return this.systemSettingModel.updateDefaultEmbeddingModel(
       combinedModelName,
@@ -98,7 +108,7 @@ export class SystemSettingModule extends BaseModule {
     // colon via the shared parser instead of String.split(":").
     const parsed = parseStoredEmbeddingModel(modelValue);
     if (!parsed) {
-      console.warn(`Invalid default embedding model format: ${modelValue}`);
+      log.warn(`Invalid default embedding model format: ${modelValue}`);
       return null;
     }
 

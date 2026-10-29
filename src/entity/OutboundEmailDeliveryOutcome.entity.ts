@@ -12,46 +12,46 @@ import type { OutboundEmailRecipientOutcomeStatus } from "@/entityTypes/outbound
 @Index(["batchId", "status"])
 export class OutboundEmailDeliveryOutcomeEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("int")
-  sendAttemptId: number;
+  sendAttemptId!: number;
 
   @Column("int")
-  batchId: number;
+  batchId!: number;
 
   /** Unique with attempt. */
   @Column("int")
-  draftId: number;
+  draftId!: number;
 
   /** Exact revision sent. */
   @Column("int")
-  revisionId: number;
+  revisionId!: number;
 
   /** Correlation check against the authorized envelope. */
   @Column("varchar", { length: 64 })
-  envelopeHash: string;
+  envelopeHash!: string;
 
   /** Canonical recipient. */
   @Column("varchar", { length: 320 })
-  recipientAddress: string;
+  recipientAddress!: string;
 
   @Column("varchar", { length: 30 })
-  status: OutboundEmailRecipientOutcomeStatus;
+  status!: OutboundEmailRecipientOutcomeStatus;
 
   /** Provider message id, stored when available. */
   @Column("varchar", { length: 500, nullable: true })
-  providerMessageId: string | null;
+  providerMessageId!: string | null;
 
   /** Sanitized error code. */
   @Column("varchar", { length: 100, nullable: true })
-  errorCode: string | null;
+  errorCode!: string | null;
 
   /** Provider accepted the request. */
   @Column("datetime", { nullable: true })
-  submittedAt: Date | null;
+  submittedAt!: Date | null;
 
   /** Terminal local status time. */
   @Column("datetime", { nullable: true })
-  completedAt: Date | null;
+  completedAt!: Date | null;
 }

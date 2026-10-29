@@ -1,4 +1,5 @@
 import { BaseModule } from '@/modules/baseModule';
+import { log } from "@/modules/Logger";
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { ValidationResult } from '@/modules/interface/IBasePlatformAdapter';
 import * as fs from 'fs';
@@ -33,7 +34,7 @@ export class PlatformRegistry extends BaseModule {
         this.platforms.set(config.id, config);
         await this.savePlatformConfig(config);
         
-        console.log(`✅ Registered platform: ${config.name} (${config.id})`);
+        log.info(`✅ Registered platform: ${config.name} (${config.id})`);
     }
 
     /**
@@ -92,7 +93,7 @@ export class PlatformRegistry extends BaseModule {
         this.platforms.set(platformId, updated);
         await this.savePlatformConfig(updated);
         
-        console.log(`✅ Updated platform: ${updated.name} (${platformId})`);
+        log.info(`✅ Updated platform: ${updated.name} (${platformId})`);
     }
 
     /**
@@ -107,7 +108,7 @@ export class PlatformRegistry extends BaseModule {
         this.platforms.delete(platformId);
         await this.removePlatformConfig(platformId);
         
-        console.log(`✅ Removed platform: ${platform.name} (${platformId})`);
+        log.info(`✅ Removed platform: ${platform.name} (${platformId})`);
     }
 
     /**
@@ -217,7 +218,7 @@ export class PlatformRegistry extends BaseModule {
                     this.platforms.set(config.id, config);
                     //console.log(`✅ Loaded platform: ${config.name} (${config.id})`);
                 } else {
-                    console.error(
+                    log.error(
                         `❌ Invalid platform config (${config.id}):`,
                         validation.errors
                     );

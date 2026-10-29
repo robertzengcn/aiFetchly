@@ -152,7 +152,7 @@ describe("AiChatApi hosted completion call budget (B13)", () => {
           (options as { signal?: AbortSignal } | undefined)?.signal
         );
         if (calls === 1) {
-          throw new HttpResponseError(404, "Not Found");
+          throw new HttpResponseError("Not Found", 404, "");
         }
         return completionResponse();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,5 +1,9 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="campaign-list"
+      title-key="route.campaign_list"
+      content-width="full"
+    >
         <!-- <v-row align="center" no-gutters style="margin: 0 -8px">
             <v-col cols="12" sm="4">
                 <v-card class="elevation-0 tjjj pa-4 mx-2 mb-sm-0 mb-4" append-icon="">
@@ -154,9 +158,11 @@
         </v-dialog> -->
         <!--table end-->
 <CampaignTable />
-    </div>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
 import { ref, onMounted } from 'vue';
 import CampaignTable from '@/views/pages/campaign/widgets/CampaignTable.vue'
@@ -178,7 +184,7 @@ const onTest = () => {
     // });
 };
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const loadItems =({ page, itemsPerPage, sortBy }) =>{
+const loadItems =({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) =>{
     console.log(page, itemsPerPage, sortBy)
 }
 </script>

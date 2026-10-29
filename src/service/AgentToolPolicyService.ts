@@ -2,8 +2,10 @@
 import type {
   AgentDefinitionView,
   AgentExecutionMode,
+  AgentSource,
   ToolPolicyDecision,
 } from "@/entityTypes/agentTypes";
+import { getClaudeAgentToolAlias } from "@/service/pluginCompat/claudeAgentTools";
 
 /** Globally blocked tool-name substrings for every v1 agent. */
 const V1_BLOCKED_PATTERNS: ReadonlyArray<{
@@ -32,14 +34,13 @@ const V1_BLOCKED_PATTERNS: ReadonlyArray<{
  * Mandatory infrastructure tools auto-injected into every agent's exposed
  * tool set (as long as the agent has at least one tool of its own).
  *
- * Rationale: the async-tool polling architecture requires the inner agent
- * to be able to poll/cancel any job it spawns. If a tool routes to "async"
- * (run_subagent, extract_contact_info with 8+ URLs, etc.), the agent
- * receives a { async: true, job_id } envelope and must call
- * check_tool_job_status to observe progress and cancel_tool_job to give up.
- * Declaring these per-agent was fragile — an omission was silent and the
- * inner agent stalled. Listing them here makes the contract structural:
- * any present or future agent with any tool access can poll its own jobs.
+ * Rationale: async tool jobs may outlive a single tool round (run_subagent,
+ * extract_contact_info with 8+ URLs, etc.). Managed async returns the real
+ * final result to the model, but the agent may still need to observe prior
+ * job state or cancel a still-running job (cancel_tool_job). Declaring
+ * these per-agent was fragile — an omission was silent and the inner agent
+ * stalled. Listing them here makes the contract structural: any present or
+ * future agent with any tool access can inspect/cancel its own jobs.
  *
  * These tools are conversation-scoped and read-only/cleanup, so exposing
  * them broadly carries no privilege-escalation risk. They still pass
@@ -66,6 +67,8 @@ export interface FilterExposedInput {
   allowedTools: string[];
   availableToolNames: string[];
   blockedTools?: string[];
+  /** Plugin agents may use the Claude coding tools they declare. */
+  source?: AgentSource;
 }
 
 export class AgentToolPolicyService {
@@ -80,17 +83,33 @@ export class AgentToolPolicyService {
   checkToolCall(input: ToolPolicyCheckInput): ToolPolicyDecision {
     const { toolName } = input;
 
+    const alias = getClaudeAgentToolAlias(toolName);
+    const executeName = alias?.aifetchlyName ?? toolName;
     for (const rule of V1_BLOCKED_PATTERNS) {
-      if (rule.pattern.test(toolName)) {
-        return {
-          allowed: false,
-          reason: `${rule.reason} (tool: ${toolName})`,
-          blockedEventType: "agent_blocked_tool",
-        };
+      const matches =
+        rule.pattern.test(toolName) || rule.pattern.test(executeName);
+      if (!matches) continue;
+      if (
+        pluginMayUseDeclaredCodingTool(
+          input.definition,
+          toolName,
+          executeName,
+          rule.reason
+        )
+      ) {
+        continue;
       }
+      return {
+        allowed: false,
+        reason: `${rule.reason} (tool: ${toolName})`,
+        blockedEventType: "agent_blocked_tool",
+      };
     }
 
-    if (input.blockedTools?.includes(toolName)) {
+    if (
+      input.blockedTools?.includes(toolName) ||
+      input.blockedTools?.includes(executeName)
+    ) {
       return {
         allowed: false,
         reason: `Tool ${toolName} is blocked by workflow constraints.`,
@@ -138,17 +157,66 @@ export class AgentToolPolicyService {
     if (input.allowedTools.length === 0) return [];
 
     const blocked = new Set(input.blockedTools ?? []);
-    const allowed = new Set<string>([
+    const available = new Set(input.availableToolNames);
+    const declared = [
       ...input.allowedTools,
       ...MANDATORY_INFRASTRUCTURE_TOOLS,
-    ]);
+    ];
     const out: string[] = [];
-    for (const name of input.availableToolNames) {
-      if (!allowed.has(name)) continue;
-      if (blocked.has(name)) continue;
-      if (V1_BLOCKED_PATTERNS.some((r) => r.pattern.test(name))) continue;
-      out.push(name);
+    const seen = new Set<string>();
+    for (const declaredName of declared) {
+      const alias = getClaudeAgentToolAlias(declaredName);
+      const modelName = alias?.claudeName ?? declaredName;
+      const executeName = alias?.aifetchlyName ?? declaredName;
+      if (
+        blocked.has(declaredName) ||
+        blocked.has(modelName) ||
+        blocked.has(executeName)
+      ) {
+        continue;
+      }
+      if (!available.has(executeName)) continue;
+      if (isDeniedCodingTool(modelName, executeName, input)) continue;
+      if (seen.has(modelName)) continue;
+      seen.add(modelName);
+      out.push(modelName);
     }
     return out.sort();
   }
+}
+
+function pluginMayUseDeclaredCodingTool(
+  definition: AgentDefinitionView,
+  modelName: string,
+  executeName: string,
+  reason: string
+): boolean {
+  if (definition.source !== "plugin") return false;
+  if (/email|social/i.test(reason)) return false;
+  return (
+    definition.allowedTools.includes(modelName) ||
+    definition.allowedTools.includes(executeName)
+  );
+}
+
+function isDeniedCodingTool(
+  modelName: string,
+  executeName: string,
+  input: FilterExposedInput
+): boolean {
+  for (const candidate of [modelName, executeName]) {
+    for (const rule of V1_BLOCKED_PATTERNS) {
+      if (!rule.pattern.test(candidate)) continue;
+      if (/email|social/i.test(rule.reason)) return true;
+      if (
+        input.source === "plugin" &&
+        (input.allowedTools.includes(modelName) ||
+          input.allowedTools.includes(executeName))
+      ) {
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
 }

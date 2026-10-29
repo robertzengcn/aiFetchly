@@ -9,31 +9,31 @@ import type { AIChatPlanStatus } from "@/entityTypes/aiChatPlanTypes";
 @Index(["status"])
 export class AIChatPlanEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  planId: string;
+  planId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("varchar", { length: 32, nullable: false })
-  status: AIChatPlanStatus;
+  status!: AIChatPlanStatus;
 
   @Order(4)
   @Column("varchar", { length: 200, nullable: false })
-  title: string;
+  title!: string;
 
   @Order(5)
   @Column("text", { nullable: false })
-  objective: string;
+  objective!: string;
 
   @Order(6)
   @Column("int", { nullable: false, default: 0 })
-  currentVersion: number;
+  currentVersion!: number;
 
   @Order(7)
   @Column("datetime", { nullable: true })

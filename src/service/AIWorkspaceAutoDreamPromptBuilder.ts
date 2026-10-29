@@ -5,6 +5,7 @@ import type {
 import { isAIWorkspaceMemoryType } from "@/entityTypes/aiWorkspaceMemoryTypes";
 import type { WorkspaceAwareAutoDreamSourcePacket } from "@/service/AIAutoDreamSourceCollector";
 import { looksSecretlike } from "@/service/MemorySecretFilter";
+import { extractJsonObject } from "@/service/autoDreamJsonExtract";
 
 const MAX_TITLE_LEN = 200;
 const MAX_CONTENT_LEN = 8000;
@@ -67,8 +68,8 @@ export function buildWorkspaceAutoDreamSystemPrompt(): string {
 export function buildWorkspaceAutoDreamUserPrompt(input: {
   workspaceKey: string;
   workspaceRoot: string;
-  activeMemories: AIWorkspaceMemoryView[];
-  packets: WorkspaceAwareAutoDreamSourcePacket[];
+  activeMemories: readonly AIWorkspaceMemoryView[];
+  packets: readonly WorkspaceAwareAutoDreamSourcePacket[];
 }): string {
   const memLines = input.activeMemories.length
     ? input.activeMemories
@@ -115,9 +116,9 @@ export function buildWorkspaceAutoDreamUserPrompt(input: {
 export function parseWorkspaceAutoDreamModelOutput(
   raw: string,
   validWorkspaceKeys: ReadonlySet<string>,
-  existing: AIWorkspaceMemoryView[]
+  existing: readonly AIWorkspaceMemoryView[]
 ): WorkspaceAutoDreamParseResult {
-  const cleaned = stripCodeFence(raw).trim();
+  const cleaned = extractJsonObject(raw);
   if (!cleaned) {
     return { ok: false, create: [], update: [], archive: [], error: "empty" };
   }
@@ -161,11 +162,11 @@ function filterCreate(
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
-    const workspaceKey = obj.workspaceKey;
-    if (
-      typeof workspaceKey !== "string" ||
-      !validWorkspaceKeys.has(workspaceKey)
-    ) {
+    const workspaceKey = resolveCreateWorkspaceKey(
+      obj.workspaceKey,
+      validWorkspaceKeys
+    );
+    if (!workspaceKey) {
       continue;
     }
     const type = obj.type;
@@ -181,8 +182,7 @@ function filterCreate(
     if (typeof sourceId !== "string") continue;
     const confidence = clampConfidence(obj.confidence);
     const sourceMessageIds = readStringArray(obj.sourceMessageIds);
-    const reason =
-      typeof obj.reason === "string" ? obj.reason : "auto_dream";
+    const reason = typeof obj.reason === "string" ? obj.reason : "auto_dream";
     out.push({
       workspaceKey,
       type,
@@ -216,7 +216,11 @@ function filterUpdate(
       memoryId,
       reason: typeof obj.reason === "string" ? obj.reason : "auto_dream",
     };
-    if (typeof title === "string" && isValidTitle(title) && !looksSecretlike(title))
+    if (
+      typeof title === "string" &&
+      isValidTitle(title) &&
+      !looksSecretlike(title)
+    )
       entry.title = title.trim().slice(0, MAX_TITLE_LEN);
     if (
       typeof content === "string" &&
@@ -224,7 +228,8 @@ function filterUpdate(
       !looksSecretlike(content)
     )
       entry.content = content.trim().slice(0, MAX_CONTENT_LEN);
-    if (confidence !== undefined) entry.confidence = clampConfidence(confidence);
+    if (confidence !== undefined)
+      entry.confidence = clampConfidence(confidence);
     out.push(entry);
   }
   return out;
@@ -274,15 +279,22 @@ function clampConfidence(v: unknown): number {
   return Math.max(0, Math.min(100, Math.round(v)));
 }
 
-function stripCodeFence(raw: string): string {
-  const s = raw.trim();
-  if (s.startsWith("```")) {
-    const end = s.lastIndexOf("```");
-    if (end > 3) {
-      const inner = s.slice(3, end);
-      const nl = inner.indexOf("\n");
-      return nl >= 0 ? inner.slice(nl + 1) : inner;
-    }
+/**
+ * A single-workspace consolidation run has exactly one valid key. Small
+ * models often omit it or copy it incorrectly; defaulting is safer than
+ * silently dropping every create (which looks like "Run Auto Summary did
+ * nothing" in the panel).
+ */
+function resolveCreateWorkspaceKey(
+  raw: unknown,
+  validWorkspaceKeys: ReadonlySet<string>
+): string | null {
+  if (typeof raw === "string" && validWorkspaceKeys.has(raw)) {
+    return raw;
   }
-  return s;
+  if (validWorkspaceKeys.size === 1) {
+    const [only] = validWorkspaceKeys;
+    return only ?? null;
+  }
+  return null;
 }

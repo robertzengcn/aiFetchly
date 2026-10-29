@@ -1,4 +1,5 @@
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
+import { log } from "@/modules/Logger";
 import { AiChatApi } from "@/api/aiChatApi";
 import type {
   OpenAIChatMessage,
@@ -89,6 +90,17 @@ export interface CreateDraftInput {
   goal?: string;
   extraInstructions?: string;
   useKnowledgeLibrary?: boolean;
+  /**
+   * Reviewed flag (spec docs/superpowers/specs/2026-10-29-email-reply-reviewed-flag-design.md):
+   * true when the mailbox owner reviewed the message and explicitly asked for
+   * the reply in conversation (`reviewed` on the AI tool / `humanReviewed` on
+   * the UI IPC). Exempts ONLY the classification-family blocks
+   * (needs_human_review / unknown) for the WHOLE invocation — the pre-draft
+   * gate, the post-refinement re-gate, and the post-generation race recheck.
+   * Machine-safety blocks (bounce/auto_reply/unsubscribe/no-reply/blocked
+   * patterns/limits) and the duplicate guard are never exempted.
+   */
+  humanReviewed?: boolean;
 }
 
 /**
@@ -726,6 +738,9 @@ export class EmailReplyDraftGenerationService {
           new EmailReplyPolicyOrchestrator().evaluate({
             stage: "pre_draft",
             messageId: message.id,
+            // Reviewed flag: the invocation-level human confirmation exempts
+            // the classification-family blocks at every gate in this call.
+            humanConfirmed: input.humanReviewed === true,
           })
         )
       );
@@ -1371,7 +1386,7 @@ export class EmailReplyDraftGenerationService {
         if (e instanceof LlmTransportError && e.deadlineExceeded) {
           throw e;
         }
-        console.error(
+        log.error(
           "Model classification stage failed; enforcing undecided-classification refusal:",
           e
         );
@@ -1386,6 +1401,9 @@ export class EmailReplyDraftGenerationService {
       //        the stored value stands) → typed classification_unknown
       //        refusal. Never draft for an undecided sender — that would
       //        bypass the safety net the old hard block provided.
+      //        EXCEPTION (reviewed flag): when the owner explicitly asked
+      //        for the reply (`humanReviewed`), THEIR confirmation resolves
+      //        the undecided classification for this human-assisted draft.
       //     b) refined to a concrete classification → re-run the
       //        authoritative pre-draft gate. A refined hard block
       //        (bounce / auto_reply / unsubscribe / needs_human_review)
@@ -1395,28 +1413,35 @@ export class EmailReplyDraftGenerationService {
         message.classification == null ||
         message.classification === "unknown"
       ) {
-        const code = "classification_unknown";
-        const refusalReason =
-          "[classification_unknown] Sender classification could not be determined (classification stage failed); no draft created";
-        await this.recordFailure(
-          message.emailServiceId,
-          message.id,
-          requestCorrelationId,
-          refusalReason,
-          { stage: "post_classification", code }
-        );
+        if (input.humanReviewed !== true) {
+          const code = "classification_unknown";
+          const refusalReason =
+            "[classification_unknown] Sender classification could not be determined (classification stage failed); no draft created";
+          await this.recordFailure(
+            message.emailServiceId,
+            message.id,
+            requestCorrelationId,
+            refusalReason,
+            { stage: "post_classification", code }
+          );
+          incrementReplyMetric("policy_decision", {
+            stage: "post_classification",
+            code,
+            allowed: false,
+          });
+          return {
+            success: false,
+            error: refusalReason,
+            requestCorrelationId,
+            code,
+            next_action: nextActionForCode(code),
+          };
+        }
         incrementReplyMetric("policy_decision", {
           stage: "post_classification",
-          code,
-          allowed: false,
+          code: "allowed" as const,
+          allowed: true,
         });
-        return {
-          success: false,
-          error: refusalReason,
-          requestCorrelationId,
-          code,
-          next_action: nextActionForCode(code),
-        };
       }
       // Refined to a concrete classification — the gate that suppressed the
       // unknown block must now re-decide with the refined verdict. Bounded
@@ -1427,6 +1452,8 @@ export class EmailReplyDraftGenerationService {
         new EmailReplyPolicyOrchestrator().evaluate({
           stage: "pre_draft",
           messageId: message.id,
+          // Reviewed flag: same exemption as the initial gate above.
+          humanConfirmed: input.humanReviewed === true,
         })
       );
       incrementReplyMetric("policy_decision", {
@@ -1532,7 +1559,7 @@ export class EmailReplyDraftGenerationService {
         if (e instanceof LlmTransportError && e.deadlineExceeded) {
           throw e;
         }
-        console.error(
+        log.error(
           "Failed to build conversation context; drafting without it:",
           e
         );
@@ -1822,6 +1849,9 @@ export class EmailReplyDraftGenerationService {
     const recheckDecision = await new EmailReplyPolicyOrchestrator().evaluate({
       stage: "pre_draft",
       messageId: message.id,
+      // Reviewed flag: the invocation-level human confirmation covers the
+      // whole createDraft invocation, including this race recheck.
+      humanConfirmed: input.humanReviewed === true,
     });
     if (!recheckDecision.allowed) {
       // T07: release the reservation — the cluster state changed under us and
@@ -2335,7 +2365,7 @@ export class EmailReplyDraftGenerationService {
         })
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Optional post-commit auto audit for draft ${savedDraftId} did not complete; returning the committed draft:`,
         error instanceof Error ? error.message : String(error)
       );
@@ -2935,7 +2965,7 @@ export class EmailReplyDraftGenerationService {
         args.warnings.length > 0 ? args.warnings.join("; ") : "draft created";
       await this.autoAuditModuleForNow().create(log);
     } catch (e) {
-      console.error("Failed to write auto-reply draft audit:", e);
+      log.error("Failed to write auto-reply draft audit:", e);
     }
   }
 
@@ -3014,7 +3044,7 @@ export class EmailReplyDraftGenerationService {
         })
       );
     } catch (error) {
-      console.error(
+      log.error(
         `Failed to release generation reservation ${reservation.guardId} (recoverable by sweep):`,
         error
       );

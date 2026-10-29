@@ -28,6 +28,7 @@ import type {
   AIFetchlyConfigSnapshot,
 } from "@/entityTypes/aifetchlyConfigTypes";
 import { AIFetchlyConfigLoader } from "./AIFetchlyConfigLoader";
+import { log } from "@/modules/Logger";
 import {
   AIFetchlyContextStore,
   getGlobalAIFetchlyContextStore,
@@ -287,7 +288,7 @@ export class AIFetchlyConfigManager {
       try {
         listener();
       } catch (err) {
-        console.error(
+        log.error(
           "[aifetchly-config] onConfigChanged listener threw:",
           err
         );

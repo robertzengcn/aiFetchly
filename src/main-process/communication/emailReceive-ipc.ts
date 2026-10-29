@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import {
   registerValidatedHandler,
   registerAiValidatedHandler,
@@ -475,7 +476,7 @@ export function registerEmailReceiveIpcHandlers(): void {
         audit.reason = "User edited reply draft";
         await new EmailReplyAuditLogModule().create(audit);
       } catch (e) {
-        console.error("Failed to write draft_edited audit:", e);
+        log.error("Failed to write draft_edited audit:", e);
       }
       return { id: input.id };
     }

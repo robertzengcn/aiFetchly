@@ -82,9 +82,16 @@ vi.mock("@/service/SkillExecutor", () => ({
   SkillExecutor: { execute: vi.fn() },
 }));
 
+// R9 T04: key-aware Token mock — a blanket "true" also fed USERSDBPATH,
+// making every worker open the same cwd-relative `./true/` scraper.db;
+// concurrent full-suite workers then hit `database is locked` during
+// between-round DB bookkeeping and the turn fails. Empty dbpath takes the
+// per-worker isolated TMPDIR fallback (test/vitest/_setup/isolatedTmpDir.ts).
 vi.mock("@/modules/token", () => ({
   Token: vi.fn().mockImplementation(function () {
-    return { getValue: vi.fn().mockReturnValue("true") };
+    return { getValue: vi.fn(
+        (key: string) => (key === "user_dbpath" ? "" : "true")
+      ) };
   }),
 }));
 
@@ -468,8 +475,7 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
     });
 
     expect(holders.saveUserMessageIfAbsent).toHaveBeenCalledTimes(1);
-    const saved = holders.saveUserMessageIfAbsent.mock
-      .calls.at(-1)?.[0] as {
+    const saved = holders.saveUserMessageIfAbsent.mock.calls.at(-1)?.[0] as {
       messageId: string;
       content: string;
     };
@@ -491,10 +497,14 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
     });
 
     const firstId = (
-      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     const secondId = (
-      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     expect(firstId).toBe(secondId);
     expect(firstId).toBe("user-sub_retry1");
@@ -513,10 +523,14 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
     });
 
     const firstId = (
-      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[0]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     const secondId = (
-      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as { messageId: string }
+      holders.saveUserMessageIfAbsent.mock.calls[1]?.[0] as {
+        messageId: string;
+      }
     ).messageId;
     expect(firstId).not.toBe(secondId);
   });
@@ -532,8 +546,9 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
       },
     });
 
-    const saved = holders.saveUserMessageIfAbsent.mock.calls
-      .at(-1)?.[0] as { content: string };
+    const saved = holders.saveUserMessageIfAbsent.mock.calls.at(-1)?.[0] as {
+      content: string;
+    };
     expect(saved.content).toBe("plain");
   });
 
@@ -547,5 +562,40 @@ describe("AIChatQueryEngine submissionId idempotency (§13.3)", () => {
 
     expect(holders.saveUserMessage).toHaveBeenCalledTimes(1);
     expect(holders.saveUserMessageIfAbsent).not.toHaveBeenCalled();
+  });
+
+  it("threads outboundSendPreAuthorized through runPersistedTurn into the loop input", async () => {
+    // Scheduled-loop pre-authorization must survive the submitMessage →
+    // runPersistedTurn split: the flag is main-process-only (the renderer
+    // cannot set it), and dropping it anywhere on that path would silently
+    // disable the pre-allowlisted outbound send gate.
+    const { engine, loop } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "scheduled outreach" },
+      outboundSendPreAuthorized: true,
+    });
+
+    expect(loop.run).toHaveBeenCalledTimes(1);
+    const loopInput = loop.run.mock.calls[0][0] as {
+      outboundSendPreAuthorized?: boolean;
+    };
+    expect(loopInput.outboundSendPreAuthorized).toBe(true);
+  });
+
+  it("leaves outboundSendPreAuthorized unset for ordinary interactive submits", async () => {
+    const { engine, loop } = buildEngine();
+
+    await engine.submitMessage({
+      eventSink: { emit: vi.fn() },
+      request: { message: "interactive" },
+    });
+
+    expect(loop.run).toHaveBeenCalledTimes(1);
+    const loopInput = loop.run.mock.calls[0][0] as {
+      outboundSendPreAuthorized?: boolean;
+    };
+    expect(loopInput.outboundSendPreAuthorized).toBeUndefined();
   });
 });

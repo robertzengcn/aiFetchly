@@ -118,7 +118,9 @@ jobs:
   package-smoke:
     name: Package smoke test
     needs: lint-and-test
-    runs-on: ubuntu-latest
+    # ubuntu-22.04 pinned: evictions on the -latest pool (see the
+    # packaged-smoke-github matrix note in test.yml).
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     env:
       # Unpacked layout avoids ASAR finalize OOM on GHA (see forge.config.js).
@@ -137,7 +139,9 @@ jobs:
       # mid-"Finalizing package" with no error. 4096 matches build.yml/release.yml
       # and stays safely under RAM. Pair with the swap setup step below so
       # transient allocation spikes during galactus prune don't get us killed.
-      NODE_OPTIONS: --max-old-space-size=4096
+      # Leave kernel headroom on the 7 GB ubuntu runner (evictions
+      # mid-prune; mac/win green with the same pipeline).
+      NODE_OPTIONS: --max-old-space-size=3072
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
 
@@ -253,9 +257,13 @@ jobs:
         # or if main_window/index.html is missing from the package.
         run: yarn verify-packaged-app
 
-      - name: Packaged application smoke (T-13)
+      - name: Packaged application smoke (T-13 + GF-1 git-free GitHub)
         # Launch the packaged executable with an isolated user-data dir and verify
-        # the first window, renderer HTML, and preload bridge (design §17.2).
+        # the first window, renderer HTML, and preload bridge (design §17.2);
+        # PKG_SMOKE_GITHUB=1 additionally installs the public fixture repo
+        # with NO git on PATH and asserts zero git spawns + a plugin row.
+        env:
+          PKG_SMOKE_GITHUB: "1"
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn packaged-smoke
 

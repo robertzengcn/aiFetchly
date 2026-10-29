@@ -1,6 +1,6 @@
 //import { EmailMarketingTaskEntity } from "@/entity/EmailMarketingTask.entity";
 import { EmailMarketingTaskModel } from "@/model/EmailMarketingTask.model";
-import { EmailMarketingTaskdbEntity, EmailMarketingTaskStatus } from "@/model/emailMarketingTaskdb";
+import { EmailMarketingTaskdbEntity, EmailMarketingTaskStatus } from "@/entityTypes/emailMarketingTask-type";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { BaseModule } from "@/modules/baseModule";
 

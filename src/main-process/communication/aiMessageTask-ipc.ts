@@ -1,4 +1,5 @@
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
+import { log } from "@/modules/Logger";
 import { AiMessageTaskRunModule } from "@/modules/AiMessageTaskRunModule";
 import { listSchedulableBuiltInTools } from "@/service/AiMessageToolCatalogService";
 import {
@@ -36,7 +37,7 @@ import {
  * AIProviderResolver.resolveForChat() (hosted subscription OR local provider).
  */
 export function registerAiMessageTaskIpcHandlers(): void {
-  console.log("AI Message Task IPC handlers registered");
+  log.info("AI Message Task IPC handlers registered");
 
   registerValidatedHandler(
     AI_MESSAGE_TASK_CREATE,

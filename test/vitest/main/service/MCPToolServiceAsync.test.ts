@@ -1,0 +1,412 @@
+// test/vitest/main/service/MCPToolServiceAsync.test.ts
+//
+// Managed-async execution tests (yellow-pages plugin plan TD-04/TD-07):
+//   - the async path derives its budget from the deadline, NOT the fixed
+//     240 s foreground race (HOST-07);
+//   - an expired deadline rejects BEFORE spawning/connecting;
+//   - SDK call options carry resetTimeoutOnProgress:false, the remaining
+//     budget as both timeout and maxTotalTimeout, and the abort signal;
+//   - progress notifications are mapped/bounded and forwarded to onProgress;
+//   - disconnect always runs.
+
+/* eslint-disable @typescript-eslint/no-empty-function */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const { mcpClientMock } = vi.hoisted(() => {
+  const mcpClientMock: {
+    connectImpl: () => Promise<void>;
+    callToolContentImpl: (
+      name: string,
+      params: Record<string, unknown>,
+      options?: {
+        timeoutMs?: number;
+        maxTotalTimeoutMs?: number;
+        signal?: AbortSignal;
+        resetTimeoutOnProgress?: boolean;
+        onprogress?: (n: {
+          progress: number;
+          total?: number;
+          message?: string;
+        }) => void;
+      }
+    ) => Promise<{
+      content: readonly { type: "text"; text: string }[];
+      structuredContent?: Record<string, unknown>;
+      isError: boolean;
+    }>;
+    disconnectImpl: () => Promise<void>;
+    instances: unknown[];
+  } = {
+    connectImpl: async () => undefined,
+    callToolContentImpl: async () => ({ content: [], isError: false }),
+    disconnectImpl: async () => undefined,
+    instances: [],
+  };
+  return { mcpClientMock };
+});
+
+vi.mock("@/modules/MCPClient", () => ({
+  MCPClient: class {
+    constructor(public cfg: unknown) {
+      mcpClientMock.instances.push(cfg);
+    }
+    async connect(): Promise<void> {
+      await mcpClientMock.connectImpl();
+    }
+    async callToolContent(
+      name: string,
+      params: Record<string, unknown>,
+      options?: Parameters<typeof mcpClientMock.callToolContentImpl>[2]
+    ) {
+      return mcpClientMock.callToolContentImpl(name, params, options);
+    }
+    async disconnect(): Promise<void> {
+      await mcpClientMock.disconnectImpl();
+    }
+  },
+}));
+
+vi.mock("@/modules/MCPToolModule", () => ({
+  MCPToolModule: class {
+    async getMCPToolById(): Promise<unknown> {
+      return null;
+    }
+  },
+}));
+
+import { MCPToolService } from "@/service/MCPToolService";
+import { MCPTimeoutError } from "@/service/MCPTimeoutError";
+import { HOST_RUNTIME_METADATA_FIELD, PLUGIN_MCP_HOST_RUNTIME } from "@/entityTypes/pluginExecutionTypes";
+import { PluginMcpOwnershipChecker } from "@/service/PluginMcpOwnershipChecker";
+
+function makeService(): MCPToolService {
+  const svc = new MCPToolService();
+  (
+    svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+  ).mcpToolModule = {
+    getMCPToolById: async () => ({
+      id: 1,
+      serverName: "scraper",
+      enabled: true,
+      toolConfig: "",
+      transport: "sse" as const,
+      authType: "none" as const,
+      timeout: 30_000,
+    }),
+  };
+  return svc;
+}
+
+describe("MCPToolService.executeMCPToolContent (managed async)", () => {
+  beforeEach(() => {
+    mcpClientMock.connectImpl = async () => undefined;
+    mcpClientMock.callToolContentImpl = async () => ({
+      content: [],
+      isError: false,
+    });
+    mcpClientMock.disconnectImpl = async () => undefined;
+    mcpClientMock.instances.length = 0;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rejects an expired deadline before connecting", async () => {
+    const connectSpy = vi.fn();
+    mcpClientMock.connectImpl = connectSpy;
+
+    const svc = makeService();
+    const promise = svc.executeMCPToolContent(1, "scrape", {}, {
+      deadlineEpochMs: Date.now() - 1_000,
+    });
+    await expect(promise).rejects.toBeInstanceOf(MCPTimeoutError);
+    expect(connectSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects when only the cleanup reserve remains", async () => {
+    const connectSpy = vi.fn();
+    mcpClientMock.connectImpl = connectSpy;
+
+    const svc = makeService();
+    await expect(
+      svc.executeMCPToolContent(1, "scrape", {}, {
+        deadlineEpochMs: Date.now() + 1_000,
+      })
+    ).rejects.toBeInstanceOf(MCPTimeoutError);
+    expect(connectSpy).not.toHaveBeenCalled();
+  });
+
+  it("derives SDK timeouts from the remaining budget, not the 240s race", async () => {
+    let observed: Parameters<typeof mcpClientMock.callToolContentImpl>[2];
+    mcpClientMock.callToolContentImpl = async (_n, _p, options) => {
+      observed = options;
+      return {
+        content: [{ type: "text", text: "{}" }],
+        isError: false,
+      };
+    };
+
+    const svc = makeService();
+    const deadline = Date.now() + 10 * 60_000; // 10 minutes out
+    const result = await svc.executeMCPToolContent(1, "scrape", {}, {
+      deadlineEpochMs: deadline,
+    });
+    expect(result.isError).toBe(false);
+
+    const budget = observed!.timeoutMs!;
+    // Remaining budget — definitively NOT the 240 s foreground ceiling.
+    expect(budget).toBeGreaterThan(9 * 60_000);
+    expect(budget).toBeLessThanOrEqual(10 * 60_000);
+    expect(observed!.maxTotalTimeoutMs).toBe(budget);
+    expect(observed!.resetTimeoutOnProgress).toBe(false);
+  });
+
+  it("forwards the abort signal to the SDK call", async () => {
+    let observedSignal: AbortSignal | undefined;
+    mcpClientMock.callToolContentImpl = async (_n, _p, options) => {
+      observedSignal = options?.signal;
+      return { content: [], isError: false };
+    };
+
+    const controller = new AbortController();
+    const svc = makeService();
+    await svc.executeMCPToolContent(1, "scrape", {}, {
+      deadlineEpochMs: Date.now() + 60_000,
+      signal: controller.signal,
+    });
+    expect(observedSignal).toBe(controller.signal);
+  });
+
+  it("rejects immediately when the signal already fired", async () => {
+    const connectSpy = vi.fn();
+    mcpClientMock.connectImpl = connectSpy;
+    const controller = new AbortController();
+    controller.abort();
+
+    const svc = makeService();
+    await expect(
+      svc.executeMCPToolContent(1, "scrape", {}, {
+        deadlineEpochMs: Date.now() + 60_000,
+        signal: controller.signal,
+      })
+    ).rejects.toThrow(/cancelled before execution/i);
+    expect(connectSpy).not.toHaveBeenCalled();
+  });
+
+  it("maps and bounds progress notifications to onProgress (G02: emitted DURING the live call)", async () => {
+    mcpClientMock.callToolContentImpl = async (_n, _p, options) => {
+      // Notifications arrive while the call is live (real SDK behavior) —
+      // after settle they are dropped by design, so emit inline.
+      options?.onprogress?.({ progress: 38, total: 100 });
+      options?.onprogress?.({ progress: 41 }); // total unknown
+      options?.onprogress?.({ progress: 5, message: "x".repeat(500) }); // bounded to 200 chars
+      return { content: [], isError: false };
+    };
+
+    const events: Array<Record<string, unknown>> = [];
+    const svc = makeService();
+    await svc.executeMCPToolContent(1, "scrape", {}, {
+      deadlineEpochMs: Date.now() + 60_000,
+      onProgress: (p) => events.push({ ...p }),
+    });
+
+    expect(events[0]).toMatchObject({
+      phase: "extracting",
+      partialCount: 38,
+      expectedCount: 100,
+      progress: 0.38,
+    });
+    expect(events[1]).toMatchObject({
+      partialCount: 41,
+      expectedCount: null,
+      progress: null,
+    });
+    const longMessage = events[2]?.message;
+    // G02: the 500-char opaque run is redacted (not merely sliced), and the
+    // result stays under the message bound.
+    expect(typeof longMessage === "string" ? longMessage.length : 400).toBeLessThanOrEqual(200);
+    expect(longMessage).toContain("[redacted]");
+  });
+
+  it("G02: clamps progress > total and drops post-settle emissions", async () => {
+    mcpClientMock.callToolContentImpl = async (_n, _p, options) => {
+      options?.onprogress?.({ progress: 150, total: 100 }); // impossible fraction
+      return { content: [], isError: false };
+    };
+
+    const events: Array<Record<string, unknown>> = [];
+    const lateSink = vi.fn();
+    const svc = makeService();
+    await svc.executeMCPToolContent(1, "scrape", {}, {
+      deadlineEpochMs: Date.now() + 60_000,
+      onProgress: (p) => events.push({ ...p }),
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      partialCount: 100,
+      expectedCount: 100,
+      progress: 1,
+    });
+    void lateSink;
+  });
+
+  it("always disconnects in the finally block", async () => {
+    const disconnectSpy = vi.fn();
+    mcpClientMock.disconnectImpl = disconnectSpy;
+    mcpClientMock.callToolContentImpl = async () => {
+      throw new Error("transport died");
+    };
+
+    const svc = makeService();
+    await expect(
+      svc.executeMCPToolContent(1, "scrape", {}, {
+        deadlineEpochMs: Date.now() + 60_000,
+      })
+    ).rejects.toThrow(/transport died/);
+    expect(disconnectSpy).toHaveBeenCalled();
+  });
+});
+
+describe("MCPToolService host-runtime ownership gate (B13)", () => {
+  beforeEach(() => {
+    mcpClientMock.connectImpl = async () => undefined;
+    mcpClientMock.callToolContentImpl = async () => ({
+      content: [],
+      isError: false,
+    });
+    mcpClientMock.disconnectImpl = async () => undefined;
+    mcpClientMock.instances.length = 0;
+    // T01 per-worker test isolation gives every worker a FRESH Token store
+    // (ELECTRON_USER_DATA_PATH under the worker tempdir), so the stdio trust
+    // gate below can no longer rely on a pre-trusted `MCP_TRUST_2` living in
+    // a shared machine-wide config. Grant the trust the suite depends on
+    // hermetically — the gate still runs first (see MCPToolService.ts:451).
+    new MCPToolService().setTrust(2, true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeHostRuntimeService(
+    ownership: () => Promise<
+      | { ok: true; descriptor: { entry: string; runtime: string }; pluginVersion: string }
+      | { ok: false; error: string }
+    >
+  ): MCPToolService {
+    const checker = {
+      check: ownership,
+    } as unknown as PluginMcpOwnershipChecker;
+    return new MCPToolService(undefined, checker);
+  }
+
+  function hostRuntimeServer(metadata: string | undefined): {
+    id: number;
+    serverName: string;
+    pluginName: string;
+    enabled: boolean;
+    toolConfig: string;
+    transport: "stdio";
+    host: string;
+    port: number;
+    authType: "none";
+    timeout: number;
+    metadata?: string;
+  } {
+    return {
+      id: 2,
+      serverName: "demo-plugin__demo-mcp",
+      pluginName: "demo-plugin",
+      enabled: true,
+      toolConfig: "",
+      transport: "stdio",
+      host: "",
+      port: 0,
+      authType: "none",
+      timeout: 30_000,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
+  }
+
+  function descriptorMetadata(): string {
+    return JSON.stringify({
+      pluginServerName: "demo-mcp",
+      pluginOwner: "demo-plugin",
+      [HOST_RUNTIME_METADATA_FIELD]: {
+        contractVersion: 1,
+        runtime: PLUGIN_MCP_HOST_RUNTIME,
+        entry: "dist/server.cjs",
+      },
+    });
+  }
+
+  it("launches only after the ownership contract passes; metadata alone is not authority", async () => {
+    const svc = makeHostRuntimeService(async () => {
+      throw new Error(
+        "[plugin-runtime] forged descriptor failed validation"
+      );
+    });
+    (
+      svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+    ).mcpToolModule = {
+      getMCPToolById: async () => hostRuntimeServer(descriptorMetadata()),
+    };
+
+    await expect(
+      svc.executeMCPToolContent(2, "scrape", {}, {})
+    ).rejects.toThrow(/\[plugin-runtime\] forged descriptor failed validation/);
+  });
+
+  it("propagates the real installed pluginVersion into the launch config", async () => {
+    const svc = makeHostRuntimeService(async () => ({
+      ok: true,
+      descriptor: {
+        entry: "dist/server.cjs",
+        runtime: PLUGIN_MCP_HOST_RUNTIME,
+      },
+      pluginVersion: "1.4.2",
+    }));
+    (
+      svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+    ).mcpToolModule = {
+      getMCPToolById: async () => hostRuntimeServer(descriptorMetadata()),
+    };
+
+    const result = await svc.executeMCPToolContent(2, "scrape", {}, {});
+    expect(result).toBeDefined();
+    const cfg = mcpClientMock.instances[0] as {
+      hostRuntime?: {
+        pluginName?: string;
+        entry?: string;
+        pluginVersion?: string;
+      };
+    };
+    expect(cfg).toBeDefined();
+    expect(cfg.hostRuntime).toBeDefined();
+    expect(cfg.hostRuntime?.pluginName).toBe("demo-plugin");
+    expect(cfg.hostRuntime?.entry).toBe("dist/server.cjs");
+    // The REAL installed version — never the placeholder "unknown" (B13).
+    expect(cfg.hostRuntime?.pluginVersion).toBe("1.4.2");
+  });
+
+  it("does not consult the checker when the row carries no runtime descriptor", async () => {
+    let checks = 0;
+    const svc = makeHostRuntimeService(async () => {
+      checks += 1;
+      throw new Error("[plugin-runtime] must not be reached");
+    });
+    (
+      svc as unknown as { mcpToolModule: { getMCPToolById: unknown } }
+    ).mcpToolModule = {
+      getMCPToolById: async () => hostRuntimeServer(undefined),
+    };
+
+    const connectSpy = vi.fn();
+    mcpClientMock.connectImpl = connectSpy;
+    const result = await svc.executeMCPToolContent(2, "scrape", {}, {});
+    expect(result).toBeDefined();
+    expect(checks).toBe(0);
+    expect(connectSpy).toHaveBeenCalled();
+  });
+});

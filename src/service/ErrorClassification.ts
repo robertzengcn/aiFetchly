@@ -144,26 +144,25 @@ export class ErrorClassifier {
 
   /**
    * Check if error is network-related
-   *
-   * NB: generic keywords (network/connection/fetch/...) are matched against
-   * the MESSAGE only. They must NOT be substring-matched against the stack:
-   * every stack contains the absolute source path (e.g. ".../aiFetchly/..."),
-   * and "fetch" is a substring of "aiFetchly", which would wrongly classify
-   * every error as network. Only specific libuv/errno tokens are safe to
-   * match against the stack. "request"/"timeout" are excluded here because
-   * timeouts have their own TIMEOUT category (checked separately below).
    */
   private static isNetworkError(message: string, stack: string): boolean {
-    const messageKeywords = [
+    // Message-level network signals. 'request' and 'timeout' are intentionally
+    // excluded: 'timeout' has its own category, and both are too generic — they
+    // caused most errors to be misclassified as network.
+    const networkMessageKeywords = [
       "network",
       "connection",
       "fetch",
+      "socket",
       "econnrefused",
       "enotfound",
       "econnreset",
       "etimedout",
     ];
-    const stackKeywords = [
+    // Only unambiguous errno codes are matched against the stack. Matching
+    // generic words against the stack catches Node/vitest internals
+    // (node:internal/process, 'fetch', 'connection') and misclassifies.
+    const networkStackCodes = [
       "econnrefused",
       "enotfound",
       "econnreset",
@@ -171,8 +170,8 @@ export class ErrorClassifier {
     ];
 
     return (
-      messageKeywords.some((keyword) => message.includes(keyword)) ||
-      stackKeywords.some((keyword) => stack.includes(keyword))
+      networkMessageKeywords.some((keyword) => message.includes(keyword)) ||
+      networkStackCodes.some((code) => stack.includes(code))
     );
   }
 
@@ -247,10 +246,12 @@ export class ErrorClassifier {
    * Check if error is execution-related
    */
   private static isExecutionError(message: string, stack: string): boolean {
+    // Bare 'process' is excluded: it appears in every Node stack
+    // (node:internal/process/...), so matching it against the stack classified
+    // nearly every error as execution. 'child process' is specific enough.
     const executionKeywords = [
       "execution",
       "failed to execute",
-      "process",
       "child process",
       "spawn",
       "fork",

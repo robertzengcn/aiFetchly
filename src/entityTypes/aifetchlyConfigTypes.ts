@@ -79,6 +79,13 @@ export type SlashCommandSource = "built-in" | "user" | "workspace" | "plugin";
 export type SlashCommandType = "prompt" | "local" | "skill";
 
 export interface AIFetchlyConfigSnapshot {
+  /**
+   * Portable workspace-memory scan (worker → main). Present when the scanner
+   * ran; `undefined` means portable memory scanning was skipped entirely.
+   * Owned by portableWorkspaceMemoryTypes — re-exported here so the snapshot
+   * stays the single transport for the watcher worker.
+   */
+  readonly portableMemory?: import("./portableWorkspaceMemoryTypes").PortableMemoryScanSnapshot;
   readonly source: "user" | "workspace";
   readonly sourceId: string;
   readonly rootPath: string;
@@ -99,6 +106,12 @@ export interface AIFetchlyConfigSnapshot {
   readonly agents: readonly unknown[];
   readonly hooks: readonly unknown[];
   readonly skills: readonly unknown[];
+  /**
+   * Portable prompt skills discovered under skills/ as SKILL.md directories
+   * (including symlinks/junctions) — natural-language-skill-installation
+   * design §10.9. Manifest-based executable skills stay in `skills`.
+   */
+  readonly promptSkills?: readonly unknown[];
   readonly diagnostics: readonly AIFetchlyConfigDiagnostic[];
 }
 
@@ -106,6 +119,8 @@ export interface AIFetchlyConfigDiff {
   readonly added: readonly string[];
   readonly changed: readonly string[];
   readonly removed: readonly string[];
+  /** True when the portable-memory snapshot (identity/records/hashes) changed. */
+  readonly portableMemoryChanged: boolean;
   readonly commandsChanged: boolean;
   readonly agentsChanged: boolean;
   readonly skillsChanged: boolean;

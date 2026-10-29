@@ -1,0 +1,291 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
+import { MessageType } from "@/entityTypes/commonType";
+import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+
+const windowInvokeMock = vi.fn();
+const startChatRunMock = vi.fn();
+
+vi.mock("@/views/utils/apirequest", () => ({
+  windowInvoke: (...args: unknown[]) => windowInvokeMock(...args),
+  windowReceive: vi.fn().mockReturnValue(() => undefined),
+  windowRemoveListener: vi.fn(),
+}));
+
+vi.mock("@/views/api/aiChatWorkspace", () => ({
+  // chatWorkspace store contract
+  bootstrapWorkspace: vi.fn(),
+  subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  // selectedConversation store contract
+  cancelChatRun: vi.fn(),
+  createClientRequestId: vi.fn().mockReturnValue("req-1"),
+  loadHistoryPage: vi.fn(),
+  markConversationRead: vi.fn().mockResolvedValue(undefined),
+  selectConversation: vi.fn(),
+  startChatRun: (...args: unknown[]) => startChatRunMock(...args),
+  subscribeDetailEvents: vi.fn().mockReturnValue(() => undefined),
+  unsubscribeDetail: vi.fn(),
+}));
+
+import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
+import { useSelectedConversationStore } from "@/views/store/selectedConversation";
+import { selectConversation } from "@/views/api/aiChatWorkspace";
+
+/**
+ * Seed the store through the real selection handshake, then (optionally)
+ * drive one live turn start through the detail-event path so isBusy reflects
+ * the scenario under test — the same way a running turn marks the shell busy.
+ */
+async function seedStore(runtimeStatus: "idle" | "running"): Promise<void> {
+  const seeded: ChatV2MessageView[] = [
+    {
+      id: "m-history",
+      conversationId: "conv-1",
+      role: "assistant",
+      content: "earlier turn",
+      timestamp: new Date(2026, 8, 18, 10, 0, 0).toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    },
+  ];
+  vi.mocked(selectConversation).mockResolvedValue({
+    conversationId: "conv-1",
+    acceptedGeneration: 1,
+    messages: seeded,
+    nextBefore: null,
+    hasOlder: false,
+    runtimeStatus: "idle",
+    activeRunId: null,
+    title: "Queue chat",
+  });
+  const store = useSelectedConversationStore();
+  await store.loadSelection("conv-1");
+  await flushPromises();
+  if (runtimeStatus === "running") {
+    store.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 1,
+      emittedAt: new Date(2026, 8, 18, 10, 0, 1).toISOString(),
+      eventType: "start",
+      payload: {
+        eventType: "start",
+        conversationId: "conv-1",
+        messageId: "a-running",
+      },
+    });
+  }
+}
+
+beforeEach(() => {
+  setActivePinia(createPinia());
+  windowInvokeMock.mockReset();
+  startChatRunMock.mockReset();
+  useChatWorkspaceStore().bootstrapError; // touch store without bootstrapping
+});
+
+describe("selectedConversation queue-delegated sends (message-queue §9.2)", () => {
+  it("a pending-queue response replaces the optimistic row with the pending bubble", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    expect(store.isBusy).toBe(true);
+
+    // Main-process delegation: the coordinator accepted the busy send into
+    // the durable queue and answered with the pending-row run marker.
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-1",
+      status: "queued",
+    });
+
+    await store.sendMessage("follow-up B", { model: "gpt-test" });
+    await flushPromises();
+
+    expect(startChatRunMock).toHaveBeenCalledTimes(1);
+    expect(startChatRunMock.mock.calls[0][0]).toMatchObject({
+      conversationId: "conv-1",
+      message: "follow-up B",
+      model: "gpt-test",
+    });
+    // The optimistic user row is gone — the pending bubble (driven by the
+    // pendingMessages store's lifecycle subscription) is the surface.
+    expect(store.messages.some((m) => m.content === "follow-up B")).toBe(false);
+    // The running turn keeps run identity (the pending row is not a run);
+    // truthy activeRunId still satisfies the composer's accepted-send rule.
+    expect(store.activeRunId).toBe("run-1");
+    expect(store.errorMessage).toBeNull();
+  });
+
+  it("a coordinator-queued response keeps the optimistic row", async () => {
+    await seedStore("idle");
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "run-2",
+      status: "queued",
+    });
+
+    const store = useSelectedConversationStore();
+    await store.sendMessage("capacity queued A");
+    await flushPromises();
+
+    expect(
+      store.messages.some(
+        (m) => m.role === "user" && m.content === "capacity queued A"
+      )
+    ).toBe(true);
+    expect(store.activeRunId).toBe("run-2");
+  });
+
+  it("a queued acceptance stays busy before the first stream event (FR-SUB-009 P1-7)", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    // The host turn ends BEFORE the queued send's IPC response resolves
+    // (slow round-trip): the presenter flushes to idle, and when the
+    // accept finally answers `pending-…` / `queued` the durable turn
+    // already owns this conversation.
+    store.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 2,
+      emittedAt: new Date(2026, 8, 18, 10, 0, 2).toISOString(),
+      eventType: "complete",
+      payload: {
+        eventType: "complete",
+        conversationId: "conv-1",
+        messageId: "a-running",
+        fullContent: "done",
+      },
+    });
+    expect(store.isBusy).toBe(false);
+
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-9",
+      status: "queued",
+    });
+    await store.sendMessage("queued follow-up");
+    await flushPromises();
+
+    // No stream event arrived yet — the queued runtime status must SURVIVE
+    // the accept-path sync, or Clear / /goal treat this conversation as
+    // idle while a durable turn is pending (the R8 P1-7 hole).
+    expect(store.runtimeStatus).toBe("queued");
+    expect(store.isBusy).toBe(true);
+  });
+
+  /**
+   * R9: the queued acceptance must never DOWNGRADE a live running host
+   * turn — the pending bubble's Steer affordance requires
+   * runtimeStatus === "running", and the P1-7 hydration (unconditional in
+   * the first cut) hid it and broke the §21.6-2/§21.6-3 steering E2E.
+   */
+  it("a queued acceptance never downgrades a running host turn (R9 steering)", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    // The host turn is STILL RUNNING when the queued accept resolves.
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-10",
+      status: "queued",
+    });
+    await store.sendMessage("steer candidate");
+    await flushPromises();
+
+    // The host turn owns the conversation: the status stays running (the
+    // Steer button's gate) and the conversation stays busy either way.
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.isBusy).toBe(true);
+  });
+
+  it("a rejection surfaces the error and REMOVES the optimistic row (T8/D5: no draft duplication)", async () => {
+    await seedStore("running");
+    startChatRunMock.mockRejectedValue(
+      new Error("A run is already active for this conversation.")
+    );
+
+    const store = useSelectedConversationStore();
+    await store.sendMessage("rejected B");
+    await flushPromises();
+
+    expect(store.errorMessage).toContain("already active");
+    // The draft stays in the composer — the transcript must not show the
+    // text twice (audit D5). The denial bubble alone marks the failure.
+    expect(store.messages.some((m) => m.content === "rejected B")).toBe(false);
+    expect(
+      store.messages.some(
+        (m) =>
+          m.role === "assistant" &&
+          m.content.includes("already active")
+      )
+    ).toBe(true);
+  });
+
+  it("an AI-disabled (subscription-required) rejection appends a visible assistant notice", async () => {
+    await seedStore("idle");
+    const subscriptionMessage =
+      "Hosted aiFetchly AI requires a subscription. Configure a local AI provider or upgrade your plan to use AI Chat.";
+    startChatRunMock.mockRejectedValue(new Error(subscriptionMessage));
+
+    const store = useSelectedConversationStore();
+    const accepted = await store.sendMessage("hello with no subscription");
+    await flushPromises();
+
+    expect(accepted).toBe(false);
+    expect(store.errorMessage).toContain("subscription");
+    // T8/D5: the optimistic user row is REMOVED — the draft stays in the
+    // composer for retry after purchasing (no transcript duplication).
+    expect(
+      store.messages.some(
+        (m) => m.role === "user" && m.content === "hello with no subscription"
+      )
+    ).toBe(false);
+    // Pre-V2 parity: the denial is also an assistant bubble so the transcript
+    // shows the purchase notice instead of staying silent.
+    const notice = store.messages.find(
+      (m) => m.role === "assistant" && m.content === subscriptionMessage
+    );
+    expect(notice).toBeDefined();
+  });
+
+  it("appendDeliveredUserRow adds the persisted row once (id-keyed)", async () => {
+    await seedStore("idle");
+    const store = useSelectedConversationStore();
+
+    store.appendDeliveredUserRow({
+      id: "user-pending-p-1",
+      content: "delivered B",
+      timestamp: new Date(2026, 8, 18, 10, 0, 5).toISOString(),
+    });
+    store.appendDeliveredUserRow({
+      id: "user-pending-p-1",
+      content: "delivered B",
+      timestamp: new Date(2026, 8, 18, 10, 0, 5).toISOString(),
+    });
+
+    const rows = store.messages.filter((m) => m.id === "user-pending-p-1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].content).toBe("delivered B");
+    expect(rows[0].role).toBe("user");
+  });
+
+  it("an idle send runs through startRun with the optimistic row", async () => {
+    await seedStore("idle");
+    const store = useSelectedConversationStore();
+    expect(store.isBusy).toBe(false);
+
+    startChatRunMock.mockResolvedValue({
+      runId: "run-3",
+      status: "running",
+      conversationId: "conv-1",
+    });
+
+    await store.sendMessage("fresh A");
+    await flushPromises();
+
+    expect(
+      store.messages.some((m) => m.role === "user" && m.content === "fresh A")
+    ).toBe(true);
+    expect(store.activeRunId).toBe("run-3");
+  });
+});

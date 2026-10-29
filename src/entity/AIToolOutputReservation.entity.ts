@@ -17,35 +17,35 @@ import { Order } from "./order.decorator";
 @Index(["executionId"])
 export class AIToolOutputReservationEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Order(1)
     @Column("varchar", { length: 64, nullable: false })
-    reservationId: string;
+    reservationId!: string;
 
     @Order(2)
     @Column("varchar", { length: 100, nullable: false })
-    profileId: string;
+    profileId!: string;
 
     @Order(3)
     @Column("varchar", { length: 100, nullable: false })
-    conversationId: string;
+    conversationId!: string;
 
     @Order(4)
     @Column("varchar", { length: 64, nullable: false })
-    outputEpoch: string;
+    outputEpoch!: string;
 
     @Order(5)
     @Column("varchar", { length: 100, nullable: false })
-    executionId: string;
+    executionId!: string;
 
     @Order(6)
     @Column("int", { nullable: false, default: 0 })
-    reservedBytes: number;
+    reservedBytes!: number;
 
     @Order(7)
     @Column("int", { nullable: false, default: 0 })
-    usedBytes: number;
+    usedBytes!: number;
 
     @Order(8)
     @Column("datetime", { nullable: true })
@@ -57,5 +57,5 @@ export class AIToolOutputReservationEntity extends AuditableEntity {
 
     @Order(10)
     @Column("varchar", { length: 32, nullable: false, default: "held" })
-    reservationState: string;
+    reservationState!: string;
 }

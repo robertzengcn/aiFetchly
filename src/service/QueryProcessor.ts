@@ -1,4 +1,5 @@
 import { RagSearchController } from '@/controller/RagSearchController';
+import { log } from "@/modules/Logger";
 import { SqliteDb } from '@/config/SqliteDb';
 
 export interface ProcessedQuery {
@@ -120,7 +121,7 @@ export class QueryProcessor {
 
             return processedQueryObj;
         } catch (error) {
-            console.error('Error processing query:', error);
+            log.error('Error processing query:', error);
             throw new Error(`Query processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     }

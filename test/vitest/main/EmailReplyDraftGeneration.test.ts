@@ -32,6 +32,7 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import type { EmailReplyAuditLogEntity } from "@/entity/EmailReplyAuditLog.entity";
 import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { EmailMessageClassification } from "@/entityTypes/emailReceiveTypes";
 
 // createDraft is AI-gated; the guard/reuse tests must pass the gate so they
 // reach the code under test instead of short-circuiting on the enable check.
@@ -2164,6 +2165,152 @@ describe("createDraft refines a stored deterministic-unknown classification (FR-
     const stored = await messageModule.read(messageId);
     expect(stored?.classification).toBe("needs_human_review");
     expect(stored?.classificationSource).toBe("review");
+  });
+});
+
+/**
+ * Reviewed flag (spec docs/superpowers/specs/2026-10-29-email-reply-reviewed-flag-design.md):
+ * `humanReviewed` on {@link EmailReplyDraftGenerationService.createDraft}
+ * carries an explicit human confirmation ("the owner reviewed the message and
+ * asked for the reply"). It exempts ONLY classification-family blocks
+ * (needs_human_review / unknown) across the WHOLE invocation — the pre-draft
+ * gate, the post-refinement re-gate, and the post-generation race recheck —
+ * never machine-safety blocks (bounce/auto_reply/unsubscribe), never the
+ * duplicate guard. Self-contained seed helpers (scoped to this block).
+ */
+describe("createDraft honors humanReviewed (reviewed flag)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> & {
+      classification?: EmailMessageClassification;
+      provenance?: { source: string; version: string };
+    }
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = over.emailServiceId ?? 4253;
+    msg.providerUid = `p-reviewed-${Math.random()}`;
+    msg.messageId = `<reviewed-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "david@example.com";
+    msg.fromName = "David";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = over.subject ?? "Question about your product";
+    msg.bodyText = over.bodyText ?? "Hello, I would like to know more.";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = null;
+    msg.classificationConfidence = null;
+    msg.replyStatus = over.replyStatus ?? "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    if (over.classification !== undefined) {
+      await messageModule.updateClassification(
+        saved.id,
+        over.classification,
+        over.classificationConfidence ?? 0.5
+      );
+      await messageModule.updateClassificationProvenance(
+        saved.id,
+        over.provenance?.source ?? "deterministic",
+        over.provenance?.version ?? "deterministic-v1"
+      );
+    }
+    return saved.id;
+  }
+
+  it("refuses a stored needs_human_review message without the flag (unchanged)", async () => {
+    const messageId = await seedMessage({
+      classification: "needs_human_review",
+      classificationConfidence: 0.5,
+      provenance: { source: "review", version: "model-constrained-v1" },
+    });
+    const { factory, requests } = fakeApiFactory([]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("sensitive_topic");
+    // No AI work paid before the refusal (the message classification is
+    // concrete, so the refinement classifier never fires either).
+    expect(requests).toHaveLength(0);
+  });
+
+  it("drafts a stored needs_human_review message when humanReviewed=true (generation call only)", async () => {
+    const messageId = await seedMessage({
+      classification: "needs_human_review",
+      classificationConfidence: 0.5,
+      provenance: { source: "review", version: "model-constrained-v1" },
+    });
+    const { factory, requests } = fakeApiFactory([
+      completionResponse(validReplyJson),
+    ]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+      humanReviewed: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) return;
+    // Exactly one AI call: generation only — the stored classification is
+    // concrete, so the refinement stage never fires.
+    expect(requests).toHaveLength(1);
+  });
+
+  it("keeps machine classifications hard-blocked even with humanReviewed", async () => {
+    const messageId = await seedMessage({
+      classification: "unsubscribe",
+      classificationConfidence: 0.95,
+    });
+    const { factory, requests } = fakeApiFactory([]);
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+      humanReviewed: true,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.code).toBe("unsubscribe");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("proceeds to draft when the classifier call fails and humanReviewed=true", async () => {
+    // Reality check: classifyMessage catches classifier errors itself and
+    // routes to review -> needs_human_review (persisted, source review). With
+    // humanConfirmed the post-refinement re-gate exempts it -> generation runs.
+    const messageId = await seedMessage({
+      classification: "unknown",
+      classificationConfidence: 0.5,
+    });
+    let call = 0;
+    const requestsSnapshot: OpenAIChatCompletionRequest[] = [];
+    const factory: AiChatApiFactory = () => ({
+      openAIChatCompletion: async (req) => {
+        call += 1;
+        if (call === 1) throw new Error("classifier down"); // classification call
+        requestsSnapshot.push(req);
+        return completionResponse(validReplyJson); // generation call
+      },
+    });
+    const svc = buildService({ apiFactory: factory });
+    const result = await svc.createDraft({
+      messageId,
+      useKnowledgeLibrary: false,
+      humanReviewed: true,
+    });
+    expect(result.success).toBe(true);
+    // Generation only — the failed classification call was already counted.
+    expect(requestsSnapshot).toHaveLength(1);
   });
 });
 

@@ -1,10 +1,15 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="email-filter-list"
+      title-key="route.email_filter"
+      content-width="full"
+    >
        
 <EmailFilterTable />
-    </div>
+    </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 import { ref } from 'vue';
 import EmailFilterTable from '@/views/pages/emailfilter/widgets/EmailFilterTable.vue'
@@ -16,7 +21,7 @@ const dialog = ref(false);
 // });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-const loadItems =({ page, itemsPerPage, sortBy }) =>{
+const loadItems =({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) =>{
     console.log(page, itemsPerPage, sortBy)
 }
 </script>

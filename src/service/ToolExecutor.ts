@@ -1,11 +1,11 @@
 import { SearchModule } from "@/modules/SearchModule";
+import { log } from "@/modules/Logger";
 import { SearchTaskStatus } from "@/model/SearchTask.model";
-import { YellowPagesController } from "@/controller/YellowPagesController";
-import { TaskStatus as YellowPagesTaskStatus } from "@/modules/interface/ITaskManager";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { ToolExecutionService } from "@/service/ToolExecutionService";
-import { formatYellowPagesResultsForLLM } from "@/main-process/communication/ai-chat-ipc";
 import { MCPToolService } from "@/service/MCPToolService";
+import { normalizeMcpToolOutcome } from "@/service/McpResultNormalizer";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
 import { parseMcpToolName } from "@/service/pluginCompat/McpToolNaming";
 import { MCPToolModule } from "@/modules/MCPToolModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
@@ -14,9 +14,15 @@ import { WebsiteAnalysisService } from "@/service/WebsiteAnalysisService";
 import { RateLimiter, RateLimitConfig } from "./RateLimiter";
 import { AiChatApi, BatchKeywordGenerationRequestItem } from "@/api/aiChatApi";
 import { extractContactFromUrls } from "@/main-process/communication/contactExtraction-ipc";
+import {
+  verifyContactInfoForAi,
+  serializeContactVerificationResult,
+} from "@/service/ContactVerificationAiTools";
+import { ContactVerificationService } from "@/service/contact-verification/ContactVerificationService";
+import { EXTRACT_CONTACT_VERIFY_NEXT_STEP } from "@/schemas/contactVerification";
 import { DocumentService } from "@/service/DocumentService";
 import { FileToolService } from "@/service/FileToolService";
-import { WorkspaceResolver } from "@/service/WorkspaceResolver";
+import { getDefaultFilesystemContextService } from "@/service/ConversationFilesystemContextService";
 import { FILE_TOOL_RATE_LIMITS } from "@/config/fileToolConfig";
 import {
   GOOGLE_MAPS_DEFAULT_MAX_RESULTS,
@@ -36,6 +42,63 @@ import {
   shortErrorStack,
   splitTelemetryMessage,
 } from "@/service/ShortErrorStack";
+
+/**
+ * Format nested Standard verification as compact preview lines for the
+ * extract_contact_info summary. Statuses are a preview; the model must still
+ * call verify_contact_info before presenting or exporting.
+ */
+function formatContactVerificationPreview(
+  verification: Record<string, unknown> | undefined
+): string {
+  if (!verification) {
+    return "";
+  }
+  const groups = verification.contacts;
+  if (!Array.isArray(groups) || groups.length === 0) {
+    return "";
+  }
+  const lines: string[] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== "object") {
+      continue;
+    }
+    const rec = group as Record<string, unknown>;
+    const emails = Array.isArray(rec.emails) ? rec.emails : [];
+    const phones = Array.isArray(rec.phones) ? rec.phones : [];
+    for (const item of emails) {
+      const line = formatVerifiedValueLine("Email", item);
+      if (line) {
+        lines.push(line);
+      }
+    }
+    for (const item of phones) {
+      const line = formatVerifiedValueLine("Phone", item);
+      if (line) {
+        lines.push(line);
+      }
+    }
+  }
+  if (lines.length === 0) {
+    return "";
+  }
+  return `   Verification preview:\n${lines.join("\n")}\n`;
+}
+
+function formatVerifiedValueLine(kind: string, item: unknown): string | null {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const rec = item as Record<string, unknown>;
+  const original = typeof rec.original === "string" ? rec.original : "";
+  const status = typeof rec.status === "string" ? rec.status : "";
+  if (!original) {
+    return null;
+  }
+  return status
+    ? `   ${kind} ${original}: ${status}`
+    : `   ${kind} ${original}`;
+}
 
 /** Human-readable label for SearchTaskStatus numeric values (1–4). */
 function searchTaskStatusLabel(status: SearchTaskStatus | null): string {
@@ -72,10 +135,10 @@ const RATE_LIMIT_CONFIG = {
     maxConcurrent: 2,
     cooldownMs: 1000,
   },
-  yellowPages: {
-    maxPerMinute: 15,
-    maxConcurrent: 3,
-    cooldownMs: 800,
+  contactVerification: {
+    maxPerMinute: 20,
+    maxConcurrent: 5,
+    cooldownMs: 500,
   },
   fileRead: FILE_TOOL_RATE_LIMITS.fileRead,
   fileSearch: FILE_TOOL_RATE_LIMITS.fileSearch,
@@ -115,13 +178,10 @@ class RateLimiterManager {
       return RATE_LIMIT_CONFIG.websiteAnalysis;
     } else if (toolName === "extract_contact_info") {
       return RATE_LIMIT_CONFIG.contactExtraction;
+    } else if (toolName === "verify_contact_info") {
+      return RATE_LIMIT_CONFIG.contactVerification;
     } else if (toolName.includes("email") || toolName.includes("extract")) {
       return RATE_LIMIT_CONFIG.emailExtraction;
-    } else if (
-      toolName.includes("yellow") ||
-      toolName.includes("yellowpages")
-    ) {
-      return RATE_LIMIT_CONFIG.yellowPages;
     } else if (toolName === "file_read") {
       return RATE_LIMIT_CONFIG.fileRead;
     } else if (toolName === "glob_files" || toolName === "grep_files") {
@@ -259,7 +319,7 @@ export class ToolExecutor {
 
       // Check rate limit status before execution
       const status = rateLimiter.getStatus();
-      console.log(`Executing tool '${toolName}' - Rate limit status:`, status);
+      log.info(`Executing tool '${toolName}' - Rate limit status:`, status);
 
       return await this.executeInternal(
         toolName,
@@ -284,7 +344,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     // Check if this is an MCP tool (format: mcp_<serverId>_<toolName>)
     if (toolName.startsWith("mcp_")) {
-      return await this.executeMCPTool(toolName, toolParams);
+      return await this.executeMCPTool(toolName, toolParams, context);
     }
 
     switch (toolName) {
@@ -298,12 +358,6 @@ export class ToolExecutor {
           toolParams,
           context
         );
-
-      case "search_yellow_pages":
-        return await this.executeYellowPagesSearch(toolParams);
-
-      case "get_available_yellow_pages_platforms":
-        return await this.executeGetYellowPagesPlatforms(toolParams);
 
       case "extract_emails_from_urls":
         return await this.executeEmailExtraction(toolParams);
@@ -325,6 +379,9 @@ export class ToolExecutor {
 
       case "extract_contact_info":
         return await this.executeContactExtraction(toolParams, context);
+
+      case "verify_contact_info":
+        return await this.executeContactVerification(toolParams, context);
 
       case "search_maps_businesses":
         return await this.executeMapsSearch(toolParams, context);
@@ -355,10 +412,17 @@ export class ToolExecutor {
    * Tool name formats:
    *   Legacy:  mcp_<serverId>_<toolName>
    *   Plugin:  mcp__<plugin>__<server>__<toolName>
+   *
+   * Managed-async plugin calls (context carrying a deadline/signal, HOST-03)
+   * route through `executeMCPToolContent` + `normalizeMcpToolOutcome` so the
+   * plugin's own `success` semantics survive into `ToolExecutionResult`
+   * instead of being nested inside an outer `{success: true, result}` wrap
+   * (PRD §14.2/§21.7). Foreground calls keep the legacy behavior untouched.
    */
   private static async executeMCPTool(
     toolName: string,
-    toolParams: Record<string, unknown>
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
   ): Promise<Record<string, unknown>> {
     try {
       const mcpService = new MCPToolService();
@@ -389,6 +453,47 @@ export class ToolExecutor {
             success: false,
             error: `MCP server "${parsed.unscopedServerName}" not found for plugin "${parsed.pluginName}"`,
           };
+        }
+
+        const isManagedAsync =
+          context?.deadlineEpochMs !== undefined || context?.signal !== undefined;
+        // B02: normalization is selected by the REGISTERED result contract,
+        // not by any signal/deadline. Only plugin tools with an active
+        // registered policy take the versioned domain-envelope path; a
+        // deadline on an unregistered tool keeps legacy semantics.
+        const contractRegistered =
+          getPluginToolPolicyRegistry().resolveByToolName(toolName) !== null;
+        if (isManagedAsync && contractRegistered) {
+          const outcome = await mcpService.executeMCPToolContent(
+            server.id,
+            parsed.toolName,
+            toolParams,
+            {
+              deadlineEpochMs: context?.deadlineEpochMs,
+              deadlinePerfMs: context?.deadlinePerfMs,
+              // H1: one execution id for context, staging, journal, promotion;
+              // ledger-authorized recovery rides the host context file, never
+              // model arguments.
+              executionId: context?.executionId,
+              authorizedRecovery: context?.authorizedRecovery,
+              signal: context?.signal,
+              onProgress: context?.emitProgress
+                ? (progress) => {
+                    context.emitProgress?.({
+                      phase: progress.phase,
+                      message: progress.message,
+                      progress: progress.progress,
+                      partialCount: progress.partialCount,
+                      expectedCount: progress.expectedCount,
+                    });
+                  }
+                : undefined,
+            }
+          );
+          const normalized = normalizeMcpToolOutcome(outcome);
+          // The normalized success verdict is authoritative; a contradictory
+          // nested flag cannot override it (design §10.4).
+          return { ...normalized.payload, success: normalized.success };
         }
 
         const result = await mcpService.executeMCPTool(
@@ -429,7 +534,7 @@ export class ToolExecutor {
         result,
       };
     } catch (error) {
-      console.error("MCP tool execution error:", error);
+      log.error("MCP tool execution error:", error);
       return ToolExecutor.toErrorResult(
         error,
         "Unknown error executing MCP tool"
@@ -706,195 +811,14 @@ export class ToolExecutor {
         expectedCount: numResults,
       });
     } catch (err) {
-      console.warn(
+      log.warn(
         `[ToolExecutor] partial snapshot for search task ${taskId} failed:`,
         err
       );
     }
   }
 
-  /**
-   * Execute Yellow Pages search
-   */
-  private static async executeYellowPagesSearch(
-    toolParams: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    const yellowPagesController = YellowPagesController.getInstance();
-    const platform =
-      typeof toolParams.platform === "string" ? toolParams.platform : "";
-    const searchTerm =
-      typeof toolParams.search_term === "string" ? toolParams.search_term : "";
-    const location =
-      typeof toolParams.location === "string" ? toolParams.location : "";
-    const numResults =
-      typeof toolParams.num_results === "number" ? toolParams.num_results : 20;
 
-    if (!platform || !searchTerm || !location) {
-      throw new Error(
-        "Platform, search_term, and location are required parameters"
-      );
-    }
-
-    // Calculate max_pages based on num_results (assuming ~20 results per page)
-    const maxPages = Math.max(1, Math.ceil(numResults / 20));
-
-    // Create task
-    const taskId = await yellowPagesController.createTask({
-      name: `AI Chat Search: ${searchTerm} in ${location}`,
-      platform: platform,
-      keywords: [searchTerm],
-      location: location,
-      max_pages: maxPages,
-      concurrency: 1,
-      headless: true,
-      delay_between_requests: 2000,
-    });
-
-    // Start the task
-    await yellowPagesController.startTask(taskId);
-
-    // Poll task status until complete or error (max 10 minutes)
-    let taskStatus: YellowPagesTaskStatus | null = null;
-    const maxWaitTime = 600000; // 10 minutes
-    const pollInterval = 2000; // 2 seconds
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < maxWaitTime) {
-      const taskInfo = await yellowPagesController.getTask(taskId);
-      taskStatus = taskInfo.status;
-
-      if (
-        taskStatus === YellowPagesTaskStatus.Completed ||
-        taskStatus === YellowPagesTaskStatus.Failed
-      ) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
-    }
-
-    // Check if task completed successfully
-    if (taskStatus !== YellowPagesTaskStatus.Completed) {
-      const taskInfo = await yellowPagesController.getTask(taskId);
-      const errorMsg =
-        taskInfo.task.error_log ||
-        `Task ${taskId} did not complete successfully. Status: ${taskStatus}`;
-      throw new Error(errorMsg);
-    }
-
-    // Get search results
-    const taskResults = await yellowPagesController.getTaskResults(taskId, {
-      page: 0,
-      size: numResults,
-    });
-
-    // Format results for LLM consumption
-    const formattedResults = formatYellowPagesResultsForLLM(taskResults.data);
-    const cleanResults = taskResults.data
-      .slice(0, numResults)
-      .map((result) => ({
-        business_name: result.business_name,
-        phone: result.phone,
-        email: result.email,
-        website: result.website,
-        address: result.address,
-        rating: result.rating,
-        review_count: result.review_count,
-        categories: result.categories,
-        platform: result.platform,
-      }));
-
-    // Create comprehensive tool result
-    return {
-      success: true,
-      taskId: taskId,
-      platform: platform,
-      search_term: searchTerm,
-      location: location,
-      totalResults: taskResults.data.length,
-      resultsReturned: Math.min(numResults, taskResults.data.length),
-      // Formatted summary for LLM
-      summary: formattedResults,
-      // Clean structured data
-      results: cleanResults,
-    };
-  }
-
-  /**
-   * Get available Yellow Pages platforms
-   */
-  private static async executeGetYellowPagesPlatforms(
-    toolParams: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
-    const yellowPagesController = YellowPagesController.getInstance();
-    let platforms = await yellowPagesController.getAvailablePlatforms();
-
-    // Filter by country code if provided
-    const countryCode =
-      typeof toolParams.country_code === "string"
-        ? toolParams.country_code.toUpperCase().trim()
-        : undefined;
-
-    if (countryCode) {
-      platforms = platforms.filter(
-        (platform) => platform.country?.toUpperCase() === countryCode
-      );
-    }
-
-    // Format platforms for LLM consumption
-    // `id` is the canonical identifier — pass it verbatim as `platform` to
-    // search_yellow_pages (names like "YellowPages.com" also resolve).
-    const formattedPlatforms = platforms.map((platform) => ({
-      id: platform.id,
-      name: platform.name,
-      display_name: platform.display_name,
-      country: platform.country,
-      language: platform.language,
-      is_active: platform.is_active,
-      location_required: platform.locationRequired || false,
-      authentication_required:
-        platform.authentication?.requiresAuthentication || false,
-      requires_cookies: platform.authentication?.requiresCookies || false,
-      rate_limit: platform.rate_limit,
-    }));
-
-    // Create formatted summary for LLM
-    const countryFilterNote = countryCode
-      ? ` (filtered by country code: ${countryCode})`
-      : "";
-    const formattedSummary =
-      platforms.length > 0
-        ? `Available Yellow Pages Platforms${countryFilterNote} (${
-            platforms.length
-          }):\n\n${platforms
-            .map(
-              (p, idx) =>
-                `${idx + 1}. **${p.display_name}** — use id \`${
-                  p.id
-                }\` for search_yellow_pages\n   Country: ${
-                  p.country
-                }, Language: ${p.language}\n   ${
-                  p.is_active ? "✅ Active" : "❌ Inactive"
-                }${
-                  p.locationRequired ? " | Location Required" : ""
-                }\n   Rate Limit: ${p.rate_limit} requests/hour${
-                  p.authentication?.requiresCookies
-                    ? " | Requires Cookies/Authentication"
-                    : ""
-                }`
-            )
-            .join("\n\n")}`
-        : countryCode
-        ? `No Yellow Pages platforms found for country code: ${countryCode}`
-        : "No Yellow Pages platforms are currently available.";
-
-    return {
-      success: true,
-      totalPlatforms: platforms.length,
-      countryCode: countryCode || null,
-      summary: formattedSummary,
-      platforms: formattedPlatforms,
-    };
-  }
 
   /**
    * Execute email extraction from URLs
@@ -1437,6 +1361,26 @@ export class ToolExecutor {
   }
 
   /**
+   * Execute verify_contact_info: validate/normalize email + phone contacts via
+   * the shared AI tool boundary. Delegates to the same `verifyContactInfoForAi`
+   * the SkillRegistry uses (design §14.4 — one shared function so behavior
+   * cannot diverge). The AI gate runs inside the shared function.
+   */
+  private static async executeContactVerification(
+    toolParams: Record<string, unknown>,
+    context?: ModuleExecutionContext
+  ): Promise<Record<string, unknown>> {
+    const result = await verifyContactInfoForAi(toolParams, context);
+    if (result.success && result.result) {
+      return result.result;
+    }
+    return {
+      success: false,
+      error: result.error ?? "Contact verification failed",
+    };
+  }
+
+  /**
    * Execute extract_contact_info: extract contact info (emails, phones, address, social links) from URLs.
    */
   private static async executeContactExtraction(
@@ -1462,6 +1406,40 @@ export class ToolExecutor {
     const successful = results.filter((r) => r.success);
     const failed = results.filter((r) => !r.success);
 
+    // Compose Standard verification for every successful URL result that
+    // contains emails or phones BEFORE returning to the model (PRD FR-13,
+    // design §8.5/§15.4). Nested verification is a preview; the model must
+    // still call verify_contact_info on the compiled list before presenting
+    // or exporting (see EXTRACT_CONTACT_VERIFY_NEXT_STEP).
+    const formattedResults = await Promise.all(
+      results.map(async (r) => {
+        const emails = r.data?.emails;
+        const phones = r.data?.phones;
+        const hasContacts =
+          r.success &&
+          ((emails && emails.length > 0) || (phones && phones.length > 0));
+        const verification = hasContacts
+          ? await ToolExecutor.verifyExtractionContacts(r.url, emails, phones)
+          : undefined;
+        return {
+          url: r.url,
+          success: r.success,
+          emails,
+          phones,
+          address: r.data?.address,
+          socialLinks: r.data?.socialLinks,
+          verification,
+          error: r.error,
+        };
+      })
+    );
+
+    const anyContacts = formattedResults.some(
+      (r) =>
+        r.success &&
+        ((r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0))
+    );
+
     const formattedSummary =
       results.length > 0
         ? `Contact Extraction Results:\n\n` +
@@ -1470,21 +1448,27 @@ export class ToolExecutor {
           `Successful: ${successful.length}\n` +
           `Failed: ${failed.length}\n\n` +
           (successful.length > 0
-            ? `Extracted:\n${successful
-                .map(
-                  (r, idx) =>
+            ? `Extracted:\n${formattedResults
+                .filter((r) => r.success)
+                .map((r, idx) => {
+                  const preview = formatContactVerificationPreview(
+                    r.verification
+                  );
+                  return (
                     `${idx + 1}. ${r.url}\n` +
-                    (r.data?.emails?.length
-                      ? `   Emails: ${r.data.emails.join(", ")}\n`
+                    (r.emails?.length
+                      ? `   Emails: ${r.emails.join(", ")}\n`
                       : "") +
-                    (r.data?.phones?.length
-                      ? `   Phones: ${r.data.phones.join(", ")}\n`
+                    (r.phones?.length
+                      ? `   Phones: ${r.phones.join(", ")}\n`
                       : "") +
-                    (r.data?.address ? `   Address: ${r.data.address}\n` : "") +
-                    (r.data?.socialLinks?.length
-                      ? `   Social: ${r.data.socialLinks.join(", ")}`
-                      : "")
-                )
+                    (r.address ? `   Address: ${r.address}\n` : "") +
+                    (r.socialLinks?.length
+                      ? `   Social: ${r.socialLinks.join(", ")}\n`
+                      : "") +
+                    preview
+                  );
+                })
                 .join("\n")}\n\n`
             : "") +
           (failed.length > 0
@@ -1508,6 +1492,10 @@ export class ToolExecutor {
         } URL(s) were not processed; retry extract_contact_info for the remaining URLs if needed.`
       : "";
 
+    const verifyNextStep = anyContacts
+      ? `\n\n${EXTRACT_CONTACT_VERIFY_NEXT_STEP}`
+      : "";
+
     return {
       success: true,
       ...(outcome.timedOut && { partial: true, timedOut: true }),
@@ -1515,16 +1503,117 @@ export class ToolExecutor {
       processedUrls: results.length,
       successful: successful.length,
       failed: failed.length,
-      summary: formattedSummary + partialNote,
-      results: results.map((r) => ({
-        url: r.url,
-        success: r.success,
-        emails: r.data?.emails,
-        phones: r.data?.phones,
-        address: r.data?.address,
-        socialLinks: r.data?.socialLinks,
-        error: r.error,
-      })),
+      summary: formattedSummary + partialNote + verifyNextStep,
+      ...(anyContacts
+        ? {
+            verification_required: true,
+            verification_tool: "verify_contact_info",
+          }
+        : { verification_required: false }),
+      results: formattedResults,
+    };
+  }
+
+  /**
+   * Run the shared verifier on a single URL's extracted emails/phones and
+   * return the snake_case verification block (design §15.4 compatibility
+   * fallback). Never throws — on unexpected failure, synthesize `unknown`
+   * results and mark partial (§15.2). Does NOT use the legacy page-level
+   * `address` as strong country evidence (national phones stay ambiguous
+   * without per-block evidence).
+   */
+  private static async verifyExtractionContacts(
+    url: string,
+    emails: readonly string[] | undefined,
+    phones: readonly string[] | undefined
+  ): Promise<Record<string, unknown>> {
+    const service = new ContactVerificationService();
+    try {
+      const internal = await service.verify({
+        contacts: [
+          {
+            sourceUrl: url,
+            emails: emails ?? [],
+            phones: phones ?? [],
+            // Intentionally no countryEvidence here — the worker is not
+            // capturing per-block evidence in this release, so national
+            // phones correctly classify as ambiguous_region (the safe
+            // default per design §15.4).
+          },
+        ],
+      });
+      return serializeContactVerificationResult(internal);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Synthesize unknown/partial-ambiguous results without raw contacts.
+      return ToolExecutor.synthesizePartialVerification(
+        message,
+        emails,
+        phones
+      );
+    }
+  }
+
+  /**
+   * Build a partial verification block when the verifier threw unexpectedly
+   * (design §15.2). Every email becomes `unknown`, every phone becomes
+   * `ambiguous_region`; `partial: true`; the extraction stays `success: true`.
+   * The limitation message carries no raw contact values or stack paths.
+   */
+  private static synthesizePartialVerification(
+    _message: string,
+    emails: readonly string[] | undefined,
+    phones: readonly string[] | undefined
+  ): Record<string, unknown> {
+    const emailResults = (emails ?? []).map(() => ({
+      original: "",
+      status: "unknown",
+      checks: {
+        syntax_valid: false,
+        placeholder: false,
+        disposable_domain: false,
+        suspicious_local_part: false,
+        role_based: false,
+        domain_resolves: null,
+        mail_routing: "not_checked",
+      },
+      reasons: ["Standard verification could not complete for this contact"],
+      checked_at: new Date(0).toISOString(),
+      rules_version: "unknown",
+    }));
+    const phoneResults = (phones ?? []).map(() => ({
+      original: "",
+      status: "ambiguous_region",
+      reasons: ["Standard verification could not complete for this contact"],
+      checked_at: new Date(0).toISOString(),
+      rules_version: "unknown",
+    }));
+    return {
+      success: true,
+      verification_depth: "standard",
+      verification_performed: true,
+      partial: true,
+      limitations: [
+        "Standard verification could not complete; contacts were marked uncertain. Mailbox existence and phone line activity were not checked.",
+      ],
+      summary: {
+        input_emails: emails?.length ?? 0,
+        input_phones: phones?.length ?? 0,
+        unique_emails: emails?.length ?? 0,
+        unique_phones: phones?.length ?? 0,
+        likely_valid: 0,
+        needs_review: (phones?.length ?? 0) + (emails?.length ?? 0),
+        invalid: 0,
+        unknown: emails?.length ?? 0,
+      },
+      contacts: [
+        { source_url: undefined, emails: emailResults, phones: phoneResults },
+      ],
+      data_versions: {
+        rules: "unknown",
+        disposable_domains: "unknown",
+        phone_metadata: "unknown",
+      },
     };
   }
 
@@ -1743,31 +1832,17 @@ export class ToolExecutor {
   }
 
   /**
-   * Per-workspace FileToolService cache, keyed by workspace root path.
-   * Replaces the previous single global singleton so that each
-   * approved workspace gets its own strict-mode service instance.
+   * Per-workspace FileToolService cache, keyed by canonical workspace root
+   * path. Each approved workspace gets its own strict-mode service instance,
+   * resolved through the shared ConversationFilesystemContextService so file
+   * and shell tools can never observe different roots.
    */
   private static fileToolServices: Map<string, FileToolService> = new Map();
 
   /**
-   * Legacy fallback service used when no workspace has been resolved
-   * (e.g. conversations without an approved workspace). Runs in
-   * default-roots soft mode so existing skills keep working.
+   * Returns a FileToolService scoped to the given canonical workspace root.
    */
-  private static fallbackFileToolService: FileToolService | null = null;
-
-  /**
-   * Returns a FileToolService scoped to the given workspace root.
-   * When no root is provided, returns the legacy default-roots
-   * service so non-workspace callers keep working.
-   */
-  private static getFileToolService(workspaceRoot?: string): FileToolService {
-    if (!workspaceRoot) {
-      if (!ToolExecutor.fallbackFileToolService) {
-        ToolExecutor.fallbackFileToolService = new FileToolService();
-      }
-      return ToolExecutor.fallbackFileToolService;
-    }
+  private static getFileToolService(workspaceRoot: string): FileToolService {
     const key = workspaceRoot;
     let service = ToolExecutor.fileToolServices.get(key);
     if (!service) {
@@ -1788,28 +1863,25 @@ export class ToolExecutor {
     toolParams: Record<string, unknown>,
     conversationId: string
   ): Promise<Record<string, unknown>> {
-    // Resolve the active workspace (if any) for this conversation so
-    // the FileToolService runs in strict mode when a workspace is set.
-    // Falls back to the legacy default-roots service otherwise.
-    let workspaceRoot: string | undefined;
-    try {
-      const resolver = new WorkspaceResolver();
-      const resolved = await resolver.resolve(conversationId);
-      if (resolved) {
-        workspaceRoot = resolved.rootPath;
-      }
-    } catch {
-      // Resolver failures must not block tool execution; fall back to
-      // the default-roots service. A later hardening task can decide
-      // whether to refuse outright.
-      workspaceRoot = undefined;
-    }
-    if (!workspaceRoot) {
-      console.warn(
-        `executeFileTool: no approved workspace for conversation ${conversationId}; ` +
-          "falling back to legacy default-roots service."
+    // Resolve the SAME shared conversation filesystem scope the shell tool
+    // uses (natural-language-skill-installation design §6.2, PRD §15).
+    // Missing/unresolvable workspace fails closed — the home directory is
+    // never a silent substitute root.
+    const resolution = await getDefaultFilesystemContextService().resolve(
+      conversationId
+    );
+    if (!resolution.ok) {
+      log.warn(
+        `executeFileTool: refusing ${toolName} for conversation ${conversationId}: ` +
+          `${resolution.code}`
       );
+      return {
+        success: false,
+        error: resolution.message,
+        error_code: resolution.code,
+      };
     }
+    const workspaceRoot = resolution.context.canonicalWorkspaceRoot;
 
     const service = ToolExecutor.getFileToolService(workspaceRoot);
 

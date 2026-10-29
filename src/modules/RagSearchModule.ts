@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   VectorSearchService,
   SearchResult,
@@ -53,7 +54,10 @@ import {
   type EmbeddingHeaderSource,
 } from "@/service/knowledgeMetadataHeader";
 import type { KnowledgeCustomMetadata } from "@/schemas/knowledge/customMetadata";
-import { EmbeddingBillingError } from "@/modules/rag/embeddingErrors";
+import {
+  EmbeddingBillingError,
+  isEmbeddingBillingError,
+} from "@/modules/rag/embeddingErrors";
 // import { Token } from "./token";
 // import { USERSDBPATH } from "@/config/usersetting";
 export interface SearchRequest {
@@ -119,7 +123,10 @@ function toEmbeddingHeaderSource(doc: {
   let documentDate: string | undefined;
   if (doc.documentDate instanceof Date && !isNaN(doc.documentDate.getTime())) {
     documentDate = doc.documentDate.toISOString().slice(0, 10);
-  } else if (typeof doc.documentDate === "string" && doc.documentDate.length > 0) {
+  } else if (
+    typeof doc.documentDate === "string" &&
+    doc.documentDate.length > 0
+  ) {
     documentDate = doc.documentDate.slice(0, 10);
   }
   return {
@@ -145,6 +152,20 @@ function toEmbeddingHeaderSource(doc: {
  *
  * Extends BaseModule to inherit database connection management.
  */
+/**
+ * WS-5 R5.1 — injectable collaborators for {@link RagSearchModule}.
+ * Each is optional in the constructor; omitting one yields the real service.
+ */
+export interface RagSearchModuleDeps {
+  searchService: VectorSearchService;
+  configurationService: ConfigurationService;
+  documentService: DocumentService;
+  chunkingService: ChunkingService;
+  ragConfigApi: RagConfigApi;
+  systemSettingModule: SystemSettingModule;
+  systemSettingGroupModule: SystemSettingGroupModule;
+}
+
 export class RagSearchModule extends BaseModule {
   private searchService: VectorSearchService;
   private configurationService: ConfigurationService;
@@ -155,24 +176,28 @@ export class RagSearchModule extends BaseModule {
   private systemSettingGroupModule: SystemSettingGroupModule;
   private ragChunkModule: RAGChunkModule;
 
-  constructor() {
+  /**
+   * WS-5 R5.1 — collaborators are constructor-injected so unit tests can
+   * substitute fakes. Production callers pass no args (real services); tests
+   * pass a Partial with the collaborators they fake.
+   */
+  constructor(deps?: Partial<RagSearchModuleDeps>) {
     super();
-    //get user data path
-    // const tokenService = new Token()
-    // const userdataPath = tokenService.getValue(USERSDBPATH)
-    // Initialize services with database
-    // const dbPath = getUserdbpath();
     // Use the shared app-owned vector index base so every component resolves
     // the same per-document index files (see VectorIndexPaths.ts).
-    const vectorStoreService = new VectorStoreService(getVectorIndexBaseDir());
-    this.searchService = new VectorSearchService(vectorStoreService);
-    this.configurationService = new ConfigurationServiceImpl();
-    this.documentService = new DocumentService();
-    this.chunkingService = new ChunkingService();
-    this.ragConfigApi = new RagConfigApi();
-    this.systemSettingModule = new SystemSettingModule();
-    this.systemSettingGroupModule = new SystemSettingGroupModule();
+    this.searchService =
+      deps?.searchService ??
+      new VectorSearchService(new VectorStoreService(getVectorIndexBaseDir()));
+    this.configurationService =
+      deps?.configurationService ?? new ConfigurationServiceImpl();
+    this.documentService = deps?.documentService ?? new DocumentService();
+    this.chunkingService = deps?.chunkingService ?? new ChunkingService();
+    this.ragConfigApi = deps?.ragConfigApi ?? new RagConfigApi();
     this.ragChunkModule = new RAGChunkModule();
+    this.systemSettingModule =
+      deps?.systemSettingModule ?? new SystemSettingModule();
+    this.systemSettingGroupModule =
+      deps?.systemSettingGroupModule ?? new SystemSettingGroupModule();
   }
 
   /**
@@ -182,11 +207,9 @@ export class RagSearchModule extends BaseModule {
   async initialize(): Promise<void> {
     try {
       // No local embedding service needed - will use remote API
-      // console.log(
-      //   "RAG search module initialized successfully (using remote API)"
-      // );
+      log.info("RAG search module initialized successfully (using remote API)");
     } catch (error) {
-      console.error("Failed to initialize RAG search module:", error);
+      log.error("Failed to initialize RAG search module:", error);
       throw new Error("Failed to initialize RAG search module");
     }
   }
@@ -280,7 +303,7 @@ export class RagSearchModule extends BaseModule {
         document,
       };
     } catch (error) {
-      console.error("Error uploading document:", error);
+      log.error("Error uploading document:", error);
 
       // Update processing status to error if document was created
       if (
@@ -306,10 +329,7 @@ export class RagSearchModule extends BaseModule {
             );
           }
         } catch (updateError) {
-          console.error(
-            "Failed to update document status to error:",
-            updateError
-          );
+          log.error("Failed to update document status to error:", updateError);
         }
         throw error;
       }
@@ -329,7 +349,7 @@ export class RagSearchModule extends BaseModule {
               "Document upload failed"
             );
           } catch (logError) {
-            console.error("Failed to save error log for document:", logError);
+            log.error("Failed to save error log for document:", logError);
           }
 
           await this.documentService.updateDocumentStatus(
@@ -339,10 +359,7 @@ export class RagSearchModule extends BaseModule {
           );
         }
       } catch (updateError) {
-        console.error(
-          "Failed to update document status to error:",
-          updateError
-        );
+        log.error("Failed to update document status to error:", updateError);
       }
 
       throw new Error(
@@ -390,7 +407,7 @@ export class RagSearchModule extends BaseModule {
           requestedIndexPath,
           headerSource
         );
-        console.log(
+        log.info(
           `[RagSearchModule] Embedded ${chunks.length} chunks locally for document ${documentId}`
         );
         return {
@@ -410,7 +427,7 @@ export class RagSearchModule extends BaseModule {
           requestedIndexPath,
           headerSource
         );
-        console.log(
+        log.info(
           `[RagSearchModule] Embedded ${chunks.length} chunks via remote model ${provider.modelName} for document ${documentId}`
         );
         return {
@@ -428,7 +445,12 @@ export class RagSearchModule extends BaseModule {
         );
       }
     } catch (error) {
-      console.error("Error generating embeddings:", error);
+      // Preserve the billing-denied signal unchanged so uploadDocument (and
+      // ultimately the UI) can branch on the typed error.
+      if (isEmbeddingBillingError(error)) {
+        throw error;
+      }
+      log.error("Error generating embeddings:", error);
       try {
         await this.documentService.saveErrorLog(
           documentId,
@@ -436,7 +458,7 @@ export class RagSearchModule extends BaseModule {
           "Failed to generate embeddings for document chunks"
         );
       } catch (logError) {
-        console.error(
+        log.error(
           "Failed to save error log during embedding generation:",
           logError
         );
@@ -469,7 +491,7 @@ export class RagSearchModule extends BaseModule {
   }> {
     const remoteFailureMessage =
       remoteError instanceof Error ? remoteError.message : String(remoteError);
-    console.warn(
+    log.warn(
       `[RagSearchModule] Remote embedding failed after retry for document ${documentId}, falling back to local model. Remote error: ${remoteFailureMessage}`
     );
 
@@ -512,7 +534,7 @@ export class RagSearchModule extends BaseModule {
       );
     }
 
-    console.log(
+    log.info(
       `[RagSearchModule] Embedded ${chunks.length} chunks via local fallback for document ${documentId}`
     );
     return {
@@ -612,7 +634,7 @@ export class RagSearchModule extends BaseModule {
         suggestions,
       };
     } catch (error) {
-      console.error("RAG search failed:", error);
+      log.error("RAG search failed:", error);
       throw new Error(
         `RAG search failed: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -631,7 +653,7 @@ export class RagSearchModule extends BaseModule {
     try {
       return await this.searchService.getSearchSuggestions(query, limit);
     } catch (error) {
-      console.error("Failed to get suggestions:", error);
+      log.error("Failed to get suggestions:", error);
       return [];
     }
   }
@@ -656,7 +678,7 @@ export class RagSearchModule extends BaseModule {
     try {
       return await this.searchService.getSearchAnalytics();
     } catch (error) {
-      console.error("Failed to get analytics:", error);
+      log.error("Failed to get analytics:", error);
       throw new Error("Failed to get search analytics");
     }
   }
@@ -745,7 +767,7 @@ export class RagSearchModule extends BaseModule {
         embeddingProvider: "Remote API",
       };
     } catch (error) {
-      console.error("Failed to get search stats:", error);
+      log.error("Failed to get search stats:", error);
       throw new Error("Failed to get search statistics");
     }
   }
@@ -769,7 +791,7 @@ export class RagSearchModule extends BaseModule {
     try {
       return await this.documentService.getDocuments(filters);
     } catch (error) {
-      console.error("Failed to get documents:", error);
+      log.error("Failed to get documents:", error);
       throw new Error("Failed to retrieve documents");
     }
   }
@@ -783,7 +805,7 @@ export class RagSearchModule extends BaseModule {
     try {
       return await this.documentService.findDocumentById(id);
     } catch (error) {
-      console.error("Failed to get document:", error);
+      log.error("Failed to get document:", error);
       throw new Error("Failed to retrieve document");
     }
   }
@@ -806,7 +828,7 @@ export class RagSearchModule extends BaseModule {
     try {
       await this.documentService.updateDocumentMetadata(id, metadata);
     } catch (error) {
-      console.error("Failed to update document:", error);
+      log.error("Failed to update document:", error);
       throw new Error("Failed to update document");
     }
   }
@@ -830,7 +852,7 @@ export class RagSearchModule extends BaseModule {
         context
       );
     } catch (logError) {
-      console.error("Failed to save document error log:", logError);
+      log.error("Failed to save document error log:", logError);
       throw new Error("Failed to save document error log");
     }
   }
@@ -844,7 +866,7 @@ export class RagSearchModule extends BaseModule {
     try {
       return await this.documentService.getDocumentErrorLog(documentId);
     } catch (error) {
-      console.error("Failed to get document error log:", error);
+      log.error("Failed to get document error log:", error);
       throw new Error("Failed to get document error log");
     }
   }
@@ -861,13 +883,13 @@ export class RagSearchModule extends BaseModule {
       // Note: RAGDocumentModule handles deleting the vector index file using the stored vectorIndexPath
       const success = await this.documentService.deleteDocument(id, deleteFile);
       if (success) {
-        console.log(`Deleted document ${id} from database`);
+        log.info(`Deleted document ${id} from database`);
       } else {
-        console.warn(`Failed to delete document ${id} from database`);
+        log.warn(`Failed to delete document ${id} from database`);
       }
       return success;
     } catch (error) {
-      console.error("Failed to delete document:", error);
+      log.error("Failed to delete document:", error);
       return false;
     }
   }
@@ -897,7 +919,7 @@ export class RagSearchModule extends BaseModule {
         byType: stats.byFileType,
       };
     } catch (error) {
-      console.error("Failed to get document stats:", error);
+      log.error("Failed to get document stats:", error);
       throw new Error("Failed to retrieve document statistics");
     }
   }
@@ -969,7 +991,7 @@ export class RagSearchModule extends BaseModule {
         message: `Document chunked successfully into ${chunks.length} chunks`,
       };
     } catch (error) {
-      console.error("Error chunking document:", error);
+      log.error("Error chunking document:", error);
 
       // Update processing status to error
       try {
@@ -979,10 +1001,7 @@ export class RagSearchModule extends BaseModule {
           "error"
         );
       } catch (updateError) {
-        console.error(
-          "Failed to update document status to error:",
-          updateError
-        );
+        log.error("Failed to update document status to error:", updateError);
       }
 
       return {
@@ -1072,14 +1091,14 @@ export class RagSearchModule extends BaseModule {
 
       // Generate embeddings. The result carries the FINAL model metadata,
       // which may differ from the requested model after a local fallback.
-      const reembedDoc = await this.documentService.findDocumentById(documentId);
+      const reembedDoc = await this.documentService.findDocumentById(
+        documentId
+      );
       const embeddingResult = await this.generateChunkEmbeddings(
         chunksWithoutEmbeddings,
         modelName,
         dimension,
-        reembedDoc
-          ? toEmbeddingHeaderSource(reembedDoc)
-          : { fileName: "" }
+        reembedDoc ? toEmbeddingHeaderSource(reembedDoc) : { fileName: "" }
       );
 
       // Save final vector index path and model metadata to document entity
@@ -1089,7 +1108,7 @@ export class RagSearchModule extends BaseModule {
           modelName: embeddingResult.modelName,
           vectorDimensions: embeddingResult.dimensions,
         });
-        console.log(
+        log.info(
           `Saved vector index path to document ${documentId}: ${embeddingResult.vectorIndexPath}`
         );
       }
@@ -1104,7 +1123,7 @@ export class RagSearchModule extends BaseModule {
         message: `Generated embeddings for ${chunksWithoutEmbeddings.length} chunks`,
       };
     } catch (error) {
-      console.error("Error generating document embeddings:", error);
+      log.error("Error generating document embeddings:", error);
       return {
         documentId,
         chunksProcessed: 0,
@@ -1125,7 +1144,7 @@ export class RagSearchModule extends BaseModule {
     try {
       // Update the configuration service with the new model
       // This will affect future embedding generations
-      console.log(`Updating embedding model to: ${modelName}`);
+      log.info(`Updating embedding model to: ${modelName}`);
 
       // For now, we'll just log the change since the actual model switching
       // is handled by the remote API configuration
@@ -1134,9 +1153,9 @@ export class RagSearchModule extends BaseModule {
       // 2. Clear existing embeddings if needed
       // 3. Reinitialize embedding services
 
-      console.log(`Embedding model updated to: ${modelName}`);
+      log.info(`Embedding model updated to: ${modelName}`);
     } catch (error) {
-      console.error("Error updating embedding model:", error);
+      log.error("Error updating embedding model:", error);
       throw new Error(
         `Failed to update embedding model: ${
           error instanceof Error ? error.message : "Unknown error"
@@ -1162,7 +1181,7 @@ export class RagSearchModule extends BaseModule {
         dimension,
         embeddingGroup
       );
-      console.log(
+      log.info(
         `Default embedding model saved to settings: ${modelName}:${dimension}`
       );
     } catch (error) {
@@ -1184,7 +1203,7 @@ export class RagSearchModule extends BaseModule {
     try {
       return await this.systemSettingModule.getDefaultEmbeddingModel();
     } catch (error) {
-      console.warn(
+      log.warn(
         "Could not retrieve default embedding model from settings:",
         error
       );
@@ -1216,7 +1235,7 @@ export class RagSearchModule extends BaseModule {
       }
 
       if (!defaultEmbeddingModel) {
-        console.log(
+        log.info(
           "Default embedding model not found in system settings, fetching from API..."
         );
 
@@ -1236,12 +1255,12 @@ export class RagSearchModule extends BaseModule {
               }
             : resolveDefaultEmbeddingFromAvailableModels(modelsResponse);
           if (!resolved) {
-            console.warn(
+            log.warn(
               "Could not resolve default embedding model and dimension from API response"
             );
             return;
           }
-          console.log(
+          log.info(
             `Setting default embedding model to: ${resolved.modelName}:${resolved.dimension}`
           );
 
@@ -1250,9 +1269,11 @@ export class RagSearchModule extends BaseModule {
             resolved.dimension,
             embeddingGroup
           );
-          console.log("Default embedding model updated successfully");
+          log.info("Default embedding model updated successfully");
         } else {
-          console.warn("Unable to resolve a default embedding model");
+          log.warn(
+            "Failed to fetch available models from API, unable to auto-set default model"
+          );
         }
         return;
       }
@@ -1272,15 +1293,15 @@ export class RagSearchModule extends BaseModule {
 
           if (!isCurrentModelAvailable) {
             if (!resolved) {
-              console.warn(
+              log.warn(
                 "Current default model unavailable and API did not return a resolvable default"
               );
               return;
             }
-            console.log(
+            log.info(
               `Current default embedding model '${defaultEmbeddingModel.modelName}' is not available`
             );
-            console.log(
+            log.info(
               `Updating to new default model: ${resolved.modelName}:${resolved.dimension}`
             );
 
@@ -1289,24 +1310,24 @@ export class RagSearchModule extends BaseModule {
               resolved.dimension,
               embeddingGroup
             );
-            console.log("Default embedding model updated to available model");
+            log.info("Default embedding model updated to available model");
           }
         } else {
-          console.warn(
+          log.warn(
             "Failed to fetch available models for validation, keeping current model"
           );
         }
       } catch (validationError) {
-        console.warn(
+        log.warn(
           "Error validating default embedding model availability:",
           validationError
         );
-        console.log(
+        log.info(
           "Keeping current default embedding model due to validation error"
         );
       }
     } catch (error) {
-      console.error("Error checking/setting default embedding model:", error);
+      log.error("Error checking/setting default embedding model:", error);
     }
   }
 
@@ -1316,9 +1337,9 @@ export class RagSearchModule extends BaseModule {
   async cleanup(): Promise<void> {
     try {
       // Cleanup logic here if needed
-      console.log("RAG search module cleaned up");
+      log.info("RAG search module cleaned up");
     } catch (error) {
-      console.error("Error during cleanup:", error);
+      log.error("Error during cleanup:", error);
     }
   }
 
@@ -1493,7 +1514,7 @@ export class RagSearchModule extends BaseModule {
               }
             }
           } catch (neighborError) {
-            console.warn(
+            log.warn(
               `Failed to expand neighbors for chunk ${candidate.chunkId}:`,
               neighborError
             );
@@ -1542,7 +1563,7 @@ export class RagSearchModule extends BaseModule {
         timing: { vectorMs: searchMs, keywordMs, rerankMs, totalMs },
       };
     } catch (error) {
-      console.error("Knowledge search tool failed:", error);
+      log.error("Knowledge search tool failed:", error);
       return {
         success: false,
         query: request.query,
@@ -1614,7 +1635,8 @@ export class RagSearchModule extends BaseModule {
       const uploadedTo: Date | undefined = request.dateRange?.end
         ? new Date(request.dateRange.end)
         : undefined;
-      const documentDateFrom: Date | undefined = request.documentDateRange?.start
+      const documentDateFrom: Date | undefined = request.documentDateRange
+        ?.start
         ? new Date(request.documentDateRange.start)
         : undefined;
       const documentDateTo: Date | undefined = request.documentDateRange?.end
@@ -1637,7 +1659,7 @@ export class RagSearchModule extends BaseModule {
       });
       return ids;
     } catch (error) {
-      console.warn("Failed to resolve document filters:", error);
+      log.warn("Failed to resolve document filters:", error);
       return undefined;
     }
   }

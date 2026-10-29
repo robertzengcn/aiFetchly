@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockUpdateStatus = vi.hoisted(() => vi.fn(async () => undefined));
 const mockIsConnectionOpen = vi.hoisted(() => vi.fn(() => true));
+const mockLogError = vi.hoisted(() => vi.fn());
+
+vi.mock("@/modules/Logger", () => ({
+  log: {
+    info: vi.fn(),
+    error: mockLogError,
+  },
+}));
 
 vi.mock("@/modules/token", () => ({
   Token: class {
@@ -70,6 +78,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   mockIsConnectionOpen.mockReturnValue(true);
   mockUpdateStatus.mockResolvedValue(undefined);
+  mockLogError.mockReset();
 });
 
 describe("ScheduleManager shutdown persistence", () => {
@@ -94,26 +103,22 @@ describe("ScheduleManager shutdown persistence", () => {
     mockUpdateStatus.mockRejectedValue(
       new TypeError("The database connection is not open")
     );
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const manager = ScheduleManager.getInstance();
 
     await manager.handleAppShutdown();
 
-    expect(errorSpy).not.toHaveBeenCalled();
-    errorSpy.mockRestore();
+    expect(mockLogError).not.toHaveBeenCalled();
   });
 
   it("still reports unrelated scheduler status write failures", async () => {
     mockUpdateStatus.mockRejectedValue(new Error("disk is full"));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const manager = ScheduleManager.getInstance();
 
     await manager.handleAppShutdown();
 
-    expect(errorSpy).toHaveBeenCalledWith(
+    expect(mockLogError).toHaveBeenCalledWith(
       "Failed to persist stopped status:",
       expect.objectContaining({ message: "disk is full" })
     );
-    errorSpy.mockRestore();
   });
 });

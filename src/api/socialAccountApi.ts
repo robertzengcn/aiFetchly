@@ -114,7 +114,7 @@ export class SocialAccountApi{
       }
     
       //delete social account
-      public async deleteAccount(id) {
+      public async deleteAccount(id: number) {
         const searchParams: Record<string, any> = new URLSearchParams();
         searchParams.append("id", id);
         const paramstring = searchParams.toString();

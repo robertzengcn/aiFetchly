@@ -1,5 +1,25 @@
 npx lint-staged
 
+# Fast, focused guard: fail the commit if ANY staged .js/.ts/.vue file has
+# an eslint ERROR — most notably `@typescript-eslint/no-unused-vars`, the
+# exact rule that broke CI in AiChatV2.vue (commit 6c1222ce). Runs against
+# staged files only (no Vue/TS compile) so it is fast; `--no-fix` keeps
+# unfixable errors like unused imports as hard failures rather than
+# silently auto-removing nearby fixable issues and exiting 0. The
+# `yarn lint` step below is the full-project backstop.
+STAGED_JS_TS_VUE=$(git diff --cached --name-only --diff-filter=ACM -- '*.js' '*.ts' '*.vue')
+if [ -n "$STAGED_JS_TS_VUE" ]; then
+  echo "husky/pre-commit: checking staged files for eslint errors (no-unused-vars, etc.)"
+  echo "$STAGED_JS_TS_VUE" | xargs npx eslint --no-fix --no-error-on-unmatched-pattern
+  ESLINT_EXIT=$?
+  if [ $ESLINT_EXIT -ne 0 ]; then
+    echo "husky/pre-commit: eslint reported errors above (e.g. unused imports/vars)."
+    echo "  Remove the unused symbol or restore its usage, then re-commit."
+    echo "  (CI runs the same check via 'yarn lint' and will fail otherwise.)"
+    exit $ESLINT_EXIT
+  fi
+fi
+
 # Full-project lint (matches CI's `yarn lint` exactly). Block the commit
 # if ANY file in the project has an eslint error — not just staged files.
 # This catches errors that lint-staged misses (e.g. errors in files the

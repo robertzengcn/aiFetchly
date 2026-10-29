@@ -103,7 +103,11 @@ export function createWorkspaceWatcher(
   const watcher = chokidar.watch(watchPaths, {
     ignored: (testPath: string) =>
       /(^|[/\\])node_modules([/\\]|$)/.test(testPath) ||
-      /(^|[/\\])\.git([/\\]|$)/.test(testPath),
+      /(^|[/\\])\.git([/\\]|$)/.test(testPath) ||
+      // Portable-memory atomic-write temp files (write-file-atomic): the
+      // final rename triggers the debounced scan; temp churn is noise
+      // (design §12.1).
+      /(^|[/\\])(?:[^/\\]*\\.(?:tmp|bak)|\\.[^/\\]*\\.tmp)$/.test(testPath),
     ignoreInitial: true,
     awaitWriteFinish: {
       stabilityThreshold: 500,

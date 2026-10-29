@@ -19,7 +19,6 @@ import {
 import {
   MANIFEST_FILE_NAME,
   artifactDirectory,
-  assertReadableRegularFile,
   mediaTypeFor,
   pathSegmentFor,
   payloadFileName,

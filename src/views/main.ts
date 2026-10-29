@@ -5,7 +5,6 @@ import App from "./App.vue";
 import router from "./router";
 import { vuetify } from "./plugins/vuetify";
 import { loadFonts } from "./plugins/webfontloader";
-import store from "./store";
 import "./permission";
 // import { createI18n } from 'vue-i18n'
 import i18n from "./lang";
@@ -84,7 +83,6 @@ createApp(App)
   .use(createPinia())
   .use(vuetify)
   .use(router)
-  .use(store)
   .use(i18n)
   .mount("#app")
   .$nextTick(() => {

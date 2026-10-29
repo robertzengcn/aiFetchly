@@ -1,0 +1,475 @@
+/**
+ * Model-driven natural-language installation E2E (final-audit TODO 1; PRD
+ * FR-01/FR-18/FR-26–FR-30, §26.5 cases 8/13, §27.1–27.2, DoD).
+ *
+ * Drives the REAL chat loop with the FakeOpenAI server: the acceptance
+ * prompt goes in as a user message, the fake model's FIRST tool call is
+ * skill_install_prepare (no catalog/shell/glob/file detour), the
+ * tool-result continuation reports readiness, and the installed skill is
+ * never invoked. The typed installer IPC is used ONLY for actions the USER
+ * performs (tool-permission approve, plan approval, status polling) — never
+ * to start the installation.
+ */
+
+import * as fs from "fs";
+import * as path from "path";
+import { e2eTest as test, expect } from "../fixtures/base";
+import { assertCleanTeardown } from "../support/assertions";
+import { launchAiFetchly } from "../fixtures/electronApp";
+import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
+import {
+  createTemporaryRoot,
+  writeStateManifest,
+} from "../fixtures/temporaryState";
+import { closeApp } from "../support/processCleanup";
+import type { LaunchedApp } from "../fixtures/electronApp";
+import type { E2ETestRoot } from "../fixtures/types";
+
+interface InstallSnapshot {
+  sessionId: string;
+  installationId: string | null;
+  state: string;
+  nextAction: string;
+  planRevision: string | null;
+  safeSummary: string;
+}
+
+/** The PRD §27.1 acceptance prompt (fixture path substituted inline). */
+function acceptancePrompt(fixture: string): string {
+  return (
+    `Set up ${fixture} for me.\n\n` +
+    "Read install.md first to install this repo, wire up ffmpeg, register " +
+    "the skill, and set up the ElevenLabs API key; ask me to paste it when " +
+    "you need it. After install, don't transcribe anything on your own; " +
+    "just tell me it's ready and wait for me to drop footage into a folder."
+  );
+}
+
+function makeFixtureSkill(root: string): string {
+  const dir = path.join(root, "fixtures", "video-use-nl");
+  fs.mkdirSync(path.join(dir, "helpers"), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "SKILL.md"),
+    "---\nname: video-use\ndescription: Edit and produce videos\n---\n\n" +
+      "# Usage\n\nUse helpers/ for editing.\n\n## Safety\n\nNever delete footage."
+  );
+  fs.writeFileSync(
+    path.join(dir, "install.md"),
+    "# Install\n\nRequires ffmpeg on PATH.\n"
+  );
+  fs.writeFileSync(path.join(dir, "helpers", "cut.py"), "# helper\n");
+  return dir;
+}
+
+async function invoke<T>(
+  app: LaunchedApp,
+  channel: string,
+  payload: unknown
+): Promise<T | null> {
+  return app.mainWindow.evaluate(
+    async ({ channel: c, payload: p }) => {
+      const api = (
+        window as unknown as {
+          api: { invoke: (channel: string, data: unknown) => Promise<unknown> };
+        }
+      ).api;
+      if (!api?.invoke) return null;
+      const resp = (await api.invoke(c, p)) as
+        | { status: boolean; data: T }
+        | null;
+      return resp?.status ? (resp.data as T) : null;
+    },
+    { channel, payload }
+  );
+}
+
+async function sendMessage(app: LaunchedApp, text: string): Promise<void> {
+  const composer = app.mainWindow
+    .getByTestId("ai-chat-composer")
+    .locator("textarea")
+    .first();
+  await composer.fill(text);
+  // The send button can start disabled until the model list resolves —
+  // wait for it to be usable so the click never lands dead.
+  const send = app.mainWindow.getByTestId("ai-chat-send");
+  await expect(send).toBeEnabled({ timeout: 30_000 });
+  await send.click();
+}
+
+/**
+ * Tool-call messages rendered in the conversation. Each permission-gated
+ * tool shows a card naming the tool; we assert on the rendered tool_call
+ * rows via the chat log's tool markers (role=tool messages carry the name).
+ */
+async function renderedToolNames(app: LaunchedApp): Promise<string[]> {
+  // Retargeted: the workspace transcript renders executions as activity
+  // rows (`.row-tool-name` carries the raw tool name for unknown-tool
+  // actions like the installer) instead of legacy `.v2-message__tool-field`.
+  const root = app.mainWindow.getByTestId("workspace-transcript");
+  const names = root.locator(".row-tool-name");
+  await expect(names.first()).toBeVisible({ timeout: 30_000 });
+  const count = await names.count();
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push((await names.nth(i).innerText()).trim());
+  }
+  return out;
+}
+
+async function approveInstall(
+  app: LaunchedApp,
+  sessionId: string,
+  planRevision: string
+): Promise<InstallSnapshot | null> {
+  const token = await invoke<{ approvalToken: string }>(
+    app,
+    "skill-install:approval-token",
+    { sessionId }
+  );
+  expect(token?.approvalToken).toBeTruthy();
+  return invoke<InstallSnapshot>(app, "skill-install:approve", {
+    sessionId,
+    planRevision,
+    approve: true,
+    approvalToken: token?.approvalToken,
+  });
+}
+
+/** Deterministic ffmpeg/ffprobe stubs so the terminal contract is READY on
+ *  any runner (audit qualification: loose multi-state assertions tightened). */
+function makeStubBin(root: string): string {
+  const stubBin = path.join(root, "stub-bin");
+  fs.mkdirSync(stubBin, { recursive: true });
+  const writeStub = (name: string, line: string): void => {
+    const sh = path.join(stubBin, name);
+    fs.writeFileSync(sh, `#!/bin/sh\necho "${line}"\nexit 0\n`);
+    fs.chmodSync(sh, 0o755);
+    fs.writeFileSync(
+      path.join(stubBin, `${name}.cmd`),
+      `@echo off\necho ${line}\r\nexit /b 0\r\n`
+    );
+  };
+  writeStub("ffmpeg", "ffmpeg version e2e-stub");
+  writeStub("ffprobe", "ffprobe version e2e-stub");
+  return stubBin;
+}
+
+test.describe("Model-driven natural-language installation (final-audit 1)", () => {
+  // eslint-disable-next-line no-empty-pattern
+  test("the video-use acceptance prompt routes through skill_install_prepare and ends ready-and-waiting", async ({}, testInfo) => {
+    test.setTimeout(240_000);
+    const fakeAi = await startFakeOpenAiServer();
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    const app = await (async () => {
+      writeStateManifest(root, {
+        authState: "authenticated" as const,
+        aiState: "local-enabled" as const,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+      });
+      const { launchAiFetchly } = await import("../fixtures/electronApp");
+      return launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        // Satisfied dependency probes -> the §18.4 sequence runs straight
+        // to ready (this fixture declares no credentials and no commands).
+        extraEnv: { PATH: makeStubBin(root.rootPath) },
+      });
+    })();
+    const fixture = makeFixtureSkill(root.rootPath);
+
+    // Open the chat dock and wait for the composer.
+    // Chat-first boot race: with an approved workspace the app opens the
+    // chat-first workspace shell (composer already present); otherwise the
+    // dock needs opening. Tolerate both orders.
+    const chatToggle = app.mainWindow.getByTestId("ai-chat-toggle");
+    if (await chatToggle.isVisible().catch(() => false)) {
+      await chatToggle.click();
+    }
+    await expect(
+      app.mainWindow.getByTestId("ai-chat-composer")
+    ).toBeVisible({ timeout: 30_000 });
+
+    // Script the fake model: first (non-continuation) call emits
+    // skill_install_prepare with the fixture source; the tool-result
+    // continuation reports readiness (PRD §27.2 #15 "concise ready message").
+    await fakeAi.setToolCall(
+      "skill_install_prepare",
+      JSON.stringify({ source: fixture })
+    );
+    const readyReport =
+      "video-use is installed and ready. I will not transcribe anything — " +
+      "waiting for you to drop footage into a folder.";
+    await fakeAi.setFollowupText(readyReport);
+
+    await sendMessage(app, acceptancePrompt(fixture));
+
+    // The model's tool call is permission-gated: approve it (the USER
+    // gesture — this is not a test-side installer call).
+    const permissionCard = app.mainWindow.getByTestId("ai-chat-permission-card");
+    await expect(permissionCard).toBeVisible({ timeout: 30_000 });
+    await expect(permissionCard).toContainText("skill_install_prepare");
+    await app.mainWindow
+      .getByTestId("ai-chat-permission-allow-once")
+      .click();
+
+    // The assistant's readiness report renders (the continuation round).
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
+      "installed and ready",
+      { timeout: 60_000 }
+    );
+
+    // FR-26/FR-01: the FIRST and ONLY tool call in the turn is
+    // skill_install_prepare — no catalog search, shell, glob, or file read.
+    const tools = await renderedToolNames(app);
+    expect(tools.length).toBeGreaterThanOrEqual(1);
+    expect(tools[0]).toBe("skill_install_prepare");
+    for (const name of tools) {
+      expect(
+        [
+          "tool_catalog_search",
+          "shell_execute",
+          "glob_files",
+          "file_read",
+          "use_skill",
+        ],
+        `unexpected acquisition-detour tool in the turn: ${name}`
+      ).not.toContain(name);
+    }
+
+    // The prepare result reached the model as a tool result: the fake
+    // server saw a continuation request whose body includes the tool role.
+    const requests = await fakeAi.getRequests();
+    expect(requests.length).toBeGreaterThanOrEqual(2);
+    const continuation = requests.find((r) => r.roles.includes("tool"));
+    expect(continuation).toBeDefined();
+
+    // The provider request exposed the installer tool (always-loaded while
+    // the flag is on) and use_skill.
+    const firstChat = requests.find((r) => r.toolNames?.length);
+    expect(firstChat?.toolNames).toContain("skill_install_prepare");
+    expect(firstChat?.toolNames).toContain("use_skill");
+
+    // Session correlation: the session the card/UI knows about is the one
+    // the tool created — poll the persisted session list to ready.
+    // (The approve is the USER action on the review card.)
+    const status0 = await pollForSession(app, root);
+    expect(status0).not.toBeNull();
+    if (!status0) return;
+    expect(status0.state).toBe("awaiting_approval");
+    expect(status0.nextAction).toBe("review-plan");
+
+    const approved = await approveInstall(
+      app,
+      status0.sessionId,
+      status0.planRevision ?? ""
+    );
+    expect(approved).not.toBeNull();
+    // Deterministic terminal contract (audit qualification): with the
+    // dependency probes satisfied, no declared credentials, and no command
+    // templates, the §18.4 sequence ends EXACTLY at ready.
+    expect(approved?.state).toBe("ready");
+
+    // FR-18 / §27.2 #14: no invocation, no footage work. The turn already
+    // ended with the readiness text; a follow-up question gets a TEXT-ONLY
+    // response (no tool calls) because the fake model emits no tools now.
+    await fakeAi.clearToolCall();
+    await fakeAi.setResponseText(
+      "Still ready and waiting for your footage. Nothing has run."
+    );
+    await sendMessage(app, "is the skill ready yet?");
+    await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
+      "Still ready and waiting",
+      { timeout: 60_000 }
+    );
+    const toolsAfter = await renderedToolNames(app);
+    const newTools = toolsAfter.slice(tools.length);
+    expect(newTools, `no tool calls expected after readiness: ${newTools}`).toHaveLength(0);
+
+    await assertCleanTeardown(app, {
+      expectedExternalOrigins: ["https://github.com"],
+    });
+    await closeApp(app);
+    await fakeAi.stop();
+    root.remove();
+  });
+});
+
+/** Find the live installer session created by the model's tool call.
+ *
+ * The session id is dynamic and not rendered as plain text on the card —
+ * scrape it from the tool-result JSON the chat renders in its
+ * details/<pre> diagnostics blocks ("sessionId":"<32-hex>"), then correlate
+ * through the status channel.
+ */
+async function pollForSession(
+  app: LaunchedApp,
+  root: E2ETestRoot,
+  attempts = 24,
+  intervalMs = 500
+): Promise<InstallSnapshot | null> {
+  for (let i = 0; i < attempts; i++) {
+    // The session id is not rendered in the bounded execution receipt; read
+    // it from the persisted install session row (node:sqlite readonly peek
+    // against the runner-managed database).
+    const { DatabaseSync } = await import("node:sqlite");
+    const dbPath = path.join(root.databasePath, "scraper.db");
+    let sessionId: string | null = null;
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      const rows = db
+        .prepare(
+          "SELECT sessionId FROM skill_installation_sessions ORDER BY createdAt DESC LIMIT 1"
+        )
+        .all() as { sessionId: string }[];
+      db.close();
+      sessionId = rows[0]?.sessionId ?? null;
+    } catch {
+      sessionId = null;
+    }
+    if (sessionId) {
+      const status = await invoke<InstallSnapshot>(
+        app,
+        "skill-install:status",
+        { sessionId }
+      );
+      if (status) return status;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return null;
+}
+
+test.describe("Deferred tool-catalog hydration race (case 14, FR-28/NFR-12)", () => {
+  // eslint-disable-next-line no-empty-pattern
+test("under the deferred catalog the installer flow stays always-loaded and race-free — one session, no synthetic failure", async ({}, testInfo) => {
+    test.setTimeout(240_000);
+    const fakeAi = await startFakeOpenAiServer();
+    const root = createTemporaryRoot({
+      testId: testInfo.titlePath.join(" "),
+      workerIndex: testInfo.workerIndex,
+    });
+    try {
+      const manifest = {
+        authState: "authenticated" as const,
+        aiState: "local-enabled" as const,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        workspacePath: root.workspacePath,
+      };
+      writeStateManifest(root, manifest);
+      const fixture = makeFixtureSkill(root.rootPath);
+
+      // AI_TOOL_SEARCH=on forces the deferred tool catalog ON, the worst
+      // case for installer-tool availability (FR-28): the case-14 race the
+      // PRD worried about. The shipped design (§8.7) keeps the installer
+      // entry point always-loaded in that mode, which this test pins —
+      // the hydrated-deferred-call replay itself is unit-covered
+      // (decideDeferredToolHydration + loop tests).
+      const app = await launchAiFetchly({
+        testRoot: root,
+        fakeAiBaseUrl: fakeAi.providerBaseUrl,
+        // Stub ffmpeg probes (CI has none) so the §18.4 sequence completes
+        // to ready and the single-installation-row proof holds.
+        extraEnv: {
+          AI_TOOL_SEARCH: "on",
+          PATH: makeStubBin(root.rootPath),
+        },
+      });
+      try {
+        // With a workspace set, the app boots into the chat-first workspace
+        // shell (composer already present); otherwise open the chat dock.
+        const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
+        if (await toggle.isVisible().catch(() => false)) {
+          await toggle.click();
+        }
+        await expect(
+          app.mainWindow.getByTestId("ai-chat-composer")
+        ).toBeVisible({ timeout: 30_000 });
+
+        // 1) Installer path first, on a FRESH conversation: the always-loaded
+        //    prepare tool (§8.7) installs the fixture with exactly ONE
+        //    persisted session (idempotent resume, no duplicates).
+        await fakeAi.setToolCall(
+          "skill_install_prepare",
+          JSON.stringify({ source: fixture })
+        );
+        await fakeAi.setFollowupText("Prepared the fixture.");
+        await sendMessage(app, `set up ${fixture} for me`);
+        // The chat-first workspace conversation may default to auto-approve;
+        // click the card only when the ask-policy gates this call. Retry the
+        // approval-vs-remount race: if the click lands while the card is
+        // still remounting (case 14 defers the catalog) it can be dropped —
+        // keep clicking until the follow-up text renders or the card itself
+        // unmounts (already auto-approved).
+        await expect(async () => {
+          const installCard = app.mainWindow.getByTestId(
+            "ai-chat-permission-card"
+          );
+          if (await installCard.isVisible().catch(() => false)) {
+            await app.mainWindow
+              .getByTestId("ai-chat-permission-allow-once")
+              .click();
+          }
+          await expect(
+            app.mainWindow.getByTestId("workspace-transcript")
+          ).toContainText("Prepared the fixture.", { timeout: 5_000 });
+        }).toPass({ timeout: 60_000 });
+        // USER gesture: approve the plan on the review card (renderer token).
+        const preparedStatus = await pollForSession(app, root);
+        expect(preparedStatus).not.toBeNull();
+        if (!preparedStatus) return;
+        expect(preparedStatus.state).toBe("awaiting_approval");
+        const approvedInstall = await approveInstall(
+          app,
+          preparedStatus.sessionId,
+          preparedStatus.planRevision ?? ""
+        );
+        expect(approvedInstall?.state).toBe("ready");
+        const listed = await invoke<{ installationId: string; name: string }[]>(
+          app,
+          "skill-install:list",
+          {}
+        );
+        expect((listed ?? []).filter((r) => r.name === "video-use").length).toBe(
+          1
+        );
+
+        // The deferred catalog is ACTIVE under AI_TOOL_SEARCH=on (the
+        // discovery tool is advertised) while the installer entry point
+        // stays always-loaded by design §8.7 — the model never needs
+        // tool_catalog_search to discover skill_install_prepare, so the
+        // installer flow is immune to the hydration race.
+        const requests = await fakeAi.getRequests();
+        expect(requests.length).toBeGreaterThanOrEqual(2);
+        const firstChat = requests.find((r) => r.toolNames?.length);
+        expect(firstChat).toBeDefined();
+        expect(firstChat?.toolNames).toContain("tool_catalog_search");
+        expect(firstChat?.toolNames).toContain("skill_install_prepare");
+
+        // The tool-driven prepare EXECUTED through the advertised installer
+        // tool: a continuation carried the tool role, the turn ended with
+        // the model's text, and no synthetic deferred-load failure exists
+        // anywhere in the page (NFR-12).
+        const continuation = requests.find((r) => r.roles.includes("tool"));
+        expect(continuation).toBeDefined();
+        const pageText = await app.mainWindow.evaluate(
+          () => document.body.textContent ?? ""
+        );
+        expect(pageText).not.toContain("INSTALL_TOOL_LOAD_RETRY_EXHAUSTED");
+        expect(pageText).not.toContain("could not be loaded automatically");
+
+        await assertCleanTeardown(app, {
+          expectedExternalOrigins: ["https://github.com"],
+        });
+      } finally {
+        await closeApp(app);
+      }
+    } finally {
+      await fakeAi.stop();
+      root.remove();
+    }
+  });
+});

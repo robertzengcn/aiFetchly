@@ -124,7 +124,9 @@ export async function getWebSocketStatus(): Promise<WSStatusResponse> {
 export async function sendWebSocketMessage(message: Record<string, unknown>): Promise<{ status: boolean; msg: string }> {
   try {
     const result = await window.api.invoke(WEBSOCKET_SEND, message);
-    return result as { status: boolean; msg: string };
+    if (!result.status) return { status: false, msg: result.msg };
+    const sent = result.data as boolean;
+    return { status: sent, msg: sent ? 'Message sent' : 'Failed (not connected)' };
   } catch (error) {
     console.error('Failed to send WebSocket message:', error);
     return { status: false, msg: error instanceof Error ? error.message : String(error) };

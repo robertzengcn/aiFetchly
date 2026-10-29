@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
@@ -20,19 +21,19 @@ export class Adapter11880 extends BasePlatformAdapter {
      * Handle page load events and initial setup for 11880.com
      */
     async onPageLoad(page: Page): Promise<void> {
-        console.log('Handling page load for 11880.com');
+        log.info('Handling page load for 11880.com');
         
         // Handle cookie consent if present
         try {
             const cookieButton = await page.$('#cmpwelcomebtnyes > a');
             if (cookieButton) {
-                console.log('Found cookie button on 11880.com');
+                log.info('Found cookie button on 11880.com');
                 await cookieButton.click();
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                console.log('Accepted cookies on 11880.com');
+                log.info('Accepted cookies on 11880.com');
             }
         } catch (error) {
-            console.log('No cookie consent dialog found or already handled');
+            log.info('No cookie consent dialog found or already handled');
         }
 
         // Handle location popup if present
@@ -49,7 +50,7 @@ export class Adapter11880 extends BasePlatformAdapter {
 
         // Wait for page to fully load
         await page.waitForNetworkIdle({ timeout: 10000 }).catch(() => {
-            console.log('Page load timeout reached, continuing...');
+            log.info('Page load timeout reached, continuing...');
         });
     }
 
@@ -190,7 +191,7 @@ export class Adapter11880 extends BasePlatformAdapter {
      * Apply cookies to the page
      */
     async applyCookies(page: Page, cookies: any): Promise<void> {
-        console.log('Applying cookies to 11880.com');
+        log.info('Applying cookies to 11880.com');
         
         if (cookies && Array.isArray(cookies)) {
             await page.setCookie(...cookies);

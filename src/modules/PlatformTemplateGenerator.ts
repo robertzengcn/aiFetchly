@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
@@ -23,8 +24,8 @@ export class PlatformTemplateGenerator extends BaseModule {
    */
   async generatePlatformTemplate(): Promise<void> {
     try {
-      console.log('🏗️  Platform Template Generator')
-      console.log('===============================\n')
+      log.info('🏗️  Platform Template Generator')
+      log.info('===============================\n')
 
       // Get platform details from user
       const platformDetails = await this.promptForPlatformDetails()
@@ -35,16 +36,16 @@ export class PlatformTemplateGenerator extends BaseModule {
       // Save the configuration file
       await this.savePlatformConfig(config)
       
-      console.log('\n✅ Platform template generated successfully!')
-      console.log(`📁 File saved: ${path.join(this.platformsDir, `${config.id}.json`)}`)
-      console.log('\n📝 Next steps:')
-      console.log('1. Review and customize the generated configuration')
-      console.log('2. Update selectors based on the target website')
-      console.log('3. Test the configuration using the PlatformTestingFramework')
-      console.log('4. Register the platform with the PlatformRegistry')
+      log.info('\n✅ Platform template generated successfully!')
+      log.info(`📁 File saved: ${path.join(this.platformsDir, `${config.id}.json`)}`)
+      log.info('\n📝 Next steps:')
+      log.info('1. Review and customize the generated configuration')
+      log.info('2. Update selectors based on the target website')
+      log.info('3. Test the configuration using the PlatformTestingFramework')
+      log.info('4. Register the platform with the PlatformRegistry')
       
     } catch (error) {
-      console.error('❌ Failed to generate platform template:', error)
+      log.error('❌ Failed to generate platform template:', error)
       throw error
     }
   }
@@ -64,7 +65,7 @@ export class PlatformTemplateGenerator extends BaseModule {
       })
     }
 
-    console.log('Please provide the following details for your new platform:\n')
+    log.info('Please provide the following details for your new platform:\n')
 
     const platformId = await question('Platform ID (e.g., "myplatform-com"): ')
     const platformName = await question('Platform Name (e.g., "MyPlatform.com"): ')
@@ -178,7 +179,7 @@ export class PlatformTemplateGenerator extends BaseModule {
     // Ensure platforms directory exists
     if (!fs.existsSync(this.platformsDir)) {
       fs.mkdirSync(this.platformsDir, { recursive: true })
-      console.log(`📁 Created platforms directory: ${this.platformsDir}`)
+      log.info(`📁 Created platforms directory: ${this.platformsDir}`)
     }
 
     // Create filename
@@ -187,7 +188,7 @@ export class PlatformTemplateGenerator extends BaseModule {
 
     // Check if file already exists
     if (fs.existsSync(filePath)) {
-      console.log(`⚠️  Warning: File ${fileName} already exists.`)
+      log.info(`⚠️  Warning: File ${fileName} already exists.`)
       const rl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
@@ -199,7 +200,7 @@ export class PlatformTemplateGenerator extends BaseModule {
       rl.close()
 
       if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-        console.log('❌ Operation cancelled.')
+        log.info('❌ Operation cancelled.')
         return
       }
     }
@@ -208,7 +209,7 @@ export class PlatformTemplateGenerator extends BaseModule {
     const configJson = JSON.stringify(config, null, 2)
     fs.writeFileSync(filePath, configJson)
     
-    console.log(`💾 Saved platform configuration to: ${filePath}`)
+    log.info(`💾 Saved platform configuration to: ${filePath}`)
   }
 
   /**

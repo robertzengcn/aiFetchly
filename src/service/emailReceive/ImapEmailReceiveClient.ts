@@ -54,6 +54,13 @@ export const IMAP_PROBE_GREETING_TIMEOUT_MS = 30_000;
  * Conventional Sent-folder names tried when the server advertises no `\Sent`
  * special-use folder (FR-031 §7.2). Exactly ONE unambiguous match is accepted.
  */
+/**
+ * Conventional Sent-folder names for servers that do NOT advertise
+ * `SPECIal-USE` (RFC 6154) `\Sent` attributes. Exactly ONE unambiguous match
+ * is accepted. Includes the common CJK names used by Chinese enterprise
+ * mailboxes (Aliyun qiye / QQ / NetEase) where the folder is advertised in
+ * Chinese.
+ */
 const SENT_FOLDER_FALLBACK_NAMES = [
   "Sent",
   "Sent Items",
@@ -61,6 +68,8 @@ const SENT_FOLDER_FALLBACK_NAMES = [
   "[Gmail]/Sent Mail",
   "INBOX/Sent",
   "INBOX.Sent",
+  "已发送",
+  "已发送邮件",
 ] as const;
 
 /**
@@ -690,7 +699,7 @@ export class ImapEmailReceiveClient implements EmailReceiveClient {
     const listUnsubscribeHeader = parsed.headers?.get("list-unsubscribe");
 
     // Attachment METADATA only — content is never opened or persisted (FR-021).
-    const attachments = (parsed.attachments ?? []).map((a) => ({
+    const attachments = (parsed.attachments ?? []).map((a: { filename?: string | null; contentType?: string | null; size?: number }) => ({
       filename: a.filename ?? null,
       contentType: a.contentType ?? null,
       size: typeof a.size === "number" ? a.size : 0,

@@ -1,78 +1,86 @@
 import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm";
 import { EmailSearchTaskUrlEntity } from "@/entity/EmailSearchTaskUrl.entity";
-import { EmailsearchUrlEntity } from "./emailsearchUrldb";
+import { EmailsearchUrlEntity } from "@/entityTypes/emailSearchUrl-type";
 
 export class EmailsearchTaskUrlModel extends BaseDb {
-    private repository: Repository<EmailSearchTaskUrlEntity>;
+  private repository: Repository<EmailSearchTaskUrlEntity>;
 
-    constructor(filepath: string) {
-        super(filepath);
-        this.repository = this.sqliteDb.connection.getRepository(EmailSearchTaskUrlEntity);
+  constructor(filepath: string) {
+    super(filepath);
+    this.repository = this.sqliteDb.connection.getRepository(
+      EmailSearchTaskUrlEntity
+    );
+  }
+
+  async create(emailsearchUrl: EmailsearchUrlEntity): Promise<number> {
+    const entity = new EmailSearchTaskUrlEntity();
+    entity.task_id = emailsearchUrl.task_id;
+    entity.url = emailsearchUrl.url;
+
+    const savedEntity = await this.repository.save(entity);
+    return savedEntity.id;
+  }
+
+  async read(id: number): Promise<EmailsearchUrlEntity | null> {
+    const entity = await this.repository.findOne({ where: { id } });
+    if (!entity) return null;
+
+    return {
+      id: entity.id,
+      task_id: entity.task_id,
+      url: entity.url,
+    };
+  }
+
+  async update(emailsearchUrl: EmailsearchUrlEntity): Promise<boolean> {
+    if (!emailsearchUrl.id) {
+      throw new Error("URL ID is required for update");
     }
 
-    async create(emailsearchUrl: EmailsearchUrlEntity): Promise<number> {
-        const entity = new EmailSearchTaskUrlEntity();
-        entity.task_id = emailsearchUrl.task_id;
-        entity.url = emailsearchUrl.url;
+    const entity = await this.repository.findOne({
+      where: { id: emailsearchUrl.id },
+    });
+    if (!entity) return false;
 
-        const savedEntity = await this.repository.save(entity);
-        return savedEntity.id;
-    }
+    entity.task_id = emailsearchUrl.task_id;
+    entity.url = emailsearchUrl.url;
 
-    async read(id: number): Promise<EmailsearchUrlEntity | null> {
-        const entity = await this.repository.findOne({ where: { id } });
-        if (!entity) return null;
+    const result = await this.repository.save(entity);
+    return !!result;
+  }
 
-        return {
-            id: entity.id,
-            task_id: entity.task_id,
-            url: entity.url
-        };
-    }
+  async delete(id: number): Promise<boolean> {
+    const result = await this.repository.delete(id);
+    return result.affected ? true : false;
+  }
 
-    async update(emailsearchUrl: EmailsearchUrlEntity): Promise<boolean> {
-        if (!emailsearchUrl.id) {
-            throw new Error("URL ID is required for update");
-        }
+  async getUrls(
+    taskId: number,
+    page: number,
+    size: number
+  ): Promise<EmailsearchUrlEntity[]> {
+    const entities = await this.repository.find({
+      where: { task_id: taskId },
+      skip: page,
+      take: size,
+    });
 
-        const entity = await this.repository.findOne({ where: { id: emailsearchUrl.id } });
-        if (!entity) return false;
+    return entities.map((entity) => ({
+      id: entity.id,
+      task_id: entity.task_id,
+      url: entity.url,
+    }));
+  }
+  async getAllUrlsByTaskId(taskId: number): Promise<EmailsearchUrlEntity[]> {
+    const entities = await this.repository.find({
+      where: { task_id: taskId },
+    });
 
-        entity.task_id = emailsearchUrl.task_id;
-        entity.url = emailsearchUrl.url;
-
-        const result = await this.repository.save(entity);
-        return !!result;
-    }
-
-    async delete(id: number): Promise<boolean> {
-        const result = await this.repository.delete(id);
-        return result.affected ? true : false;
-    }
-
-    async getUrls(taskId: number, page: number, size: number): Promise<EmailsearchUrlEntity[]> {
-        const entities = await this.repository.find({
-            where: { task_id: taskId },
-            skip: page,
-            take: size
-        });
-
-        return entities.map(entity => ({
-            id: entity.id,
-            task_id: entity.task_id,
-            url: entity.url
-        }));
-    }
-    async getAllUrlsByTaskId(taskId: number): Promise<EmailsearchUrlEntity[]> {
-        const entities = await this.repository.find({
-            where: { task_id: taskId }
-        });
-
-        return entities.map(entity => ({
-            id: entity.id,
-            task_id: entity.task_id,
-            url: entity.url
-        }));
-    }
-} 
+    return entities.map((entity) => ({
+      id: entity.id,
+      task_id: entity.task_id,
+      url: entity.url,
+    }));
+  }
+}

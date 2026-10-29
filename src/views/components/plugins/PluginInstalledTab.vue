@@ -46,9 +46,6 @@
             <td class="plugin-path-cell">
               <span v-if="displayPath(p)" class="plugin-path-text">
                 {{ displayPath(p) }}
-                <v-tooltip activator="parent" location="top">
-                  {{ displayPath(p) }}
-                </v-tooltip>
               </span>
               <span v-else class="text-medium-emphasis">
                 {{ t("plugins.source_path_unknown") }}
@@ -63,7 +60,7 @@
               <v-switch
 :model-value="p.enabled" color="success" hide-details density="compact"
                 @click.stop @update:model-value="(v) => $emit('toggle', p.name, v === true)" />
-              <v-btn icon size="x-small" variant="text" color="error" @click.stop="$emit('uninstall', p.name)">
+              <v-btn icon size="x-small" variant="text" color="error" :data-testid="`installed-uninstall-${p.name}`" @click.stop="$emit('uninstall', p.name)">
                 <v-icon>mdi-delete</v-icon>
                 <v-tooltip activator="parent" location="top">{{ t("plugins.uninstall_button") }}</v-tooltip>
               </v-btn>
@@ -100,7 +97,11 @@ function sourceLabel(source: string): string {
   return t("plugins.source_local");
 }
 function displayPath(p: PluginSummary): string | undefined {
-  return p.sourceUri || p.installPath;
+  const uri = (p.sourceUri ?? "").trim();
+  if (uri) return uri;
+  const inst = (p.installPath ?? "").trim();
+  if (inst) return inst;
+  return undefined;
 }
 function healthLabel(p: PluginSummary): string {
   if (!p.enabled) return t("plugins.status_disabled");

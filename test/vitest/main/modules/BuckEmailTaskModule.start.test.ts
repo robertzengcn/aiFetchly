@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskStatus } from "@/entityTypes/commonType";
 import type { Buckemailstruct } from "@/entityTypes/emailmarketingType";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 
 const campaign: Buckemailstruct = {

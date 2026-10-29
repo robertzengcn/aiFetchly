@@ -77,6 +77,71 @@ describe("contactExtractionWorkerOutboundSchema", () => {
     expect(failed.success).toBe(true);
   });
 
+  it("accepts extract-contact-url-result with verification + contactEvidence", () => {
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: {
+        emails: ["a@b.com"],
+        phones: ["+1 415 555 2671"],
+        contactEvidence: [
+          { kind: "email", value: "a@b.com" },
+          { kind: "phone", value: "+1 415 555 2671" },
+        ],
+        verification: {
+          success: true,
+          verificationDepth: "standard",
+          verificationPerformed: true,
+          partial: false,
+        },
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects extract-contact-url-result with a malformed verification block", () => {
+    // verification must at least carry the stable top-level markers.
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: {
+        emails: ["a@b.com"],
+        verification: { foo: "bar" },
+      },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects contactEvidence with an unknown kind", () => {
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: {
+        contactEvidence: [{ kind: "fax", value: "x" }],
+      },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts extract-contact-url-result with raw compatibility shape (no verification)", () => {
+    // Old-worker / migration compatibility: a result with no verification
+    // field is still valid (the main process composes verification).
+    const r = contactExtractionWorkerOutboundSchema().safeParse({
+      type: "extract-contact-url-result",
+      requestId: "req-1",
+      url: "https://example.com",
+      success: true,
+      data: { emails: ["a@b.com"], phones: [] },
+    });
+    expect(r.success).toBe(true);
+  });
+
   it("rejects extract-contact-url-result with array 'results' (wrong wire shape)", () => {
     // Documents the deliberate wire-format choice: arrays are NOT accepted,
     // because the worker emits one message per URL. If a future batch-mode
@@ -127,9 +192,10 @@ describe("contactExtractionWorkerInboundSchema", () => {
     expect(r.success).toBe(true);
   });
 
-  it("accepts shutdown", () => {
+  it("accepts shutdown (with the design §7 requestId)", () => {
     const r = contactExtractionWorkerInboundSchema().safeParse({
       type: "shutdown",
+      requestId: "req-test",
     });
     expect(r.success).toBe(true);
   });
@@ -148,5 +214,43 @@ describe("contactExtractionWorkerInboundSchema", () => {
       type: "extract-mystery",
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe("contact extraction shutdown protocol (design §7)", () => {
+  it("inbound shutdown requires a requestId and carries optional budget fields", () => {
+    const schema = contactExtractionWorkerInboundSchema();
+    expect(
+      schema.safeParse({ type: "shutdown", requestId: "req-1" }).success
+    ).toBe(true);
+    const full = schema.safeParse({
+      type: "shutdown",
+      requestId: "req-1",
+      reason: "app-shutdown",
+      remainingMs: 2000,
+    });
+    expect(full.success).toBe(true);
+    // Missing requestId is rejected — the ack must be correlatable.
+    expect(schema.safeParse({ type: "shutdown" }).success).toBe(false);
+    // Negative budgets are rejected.
+    expect(
+      schema.safeParse({
+        type: "shutdown",
+        requestId: "req-1",
+        remainingMs: -1,
+      }).success
+    ).toBe(false);
+  });
+
+  it("outbound shutdown-ack echoes the requestId", () => {
+    const schema = contactExtractionWorkerOutboundSchema();
+    const parsed = schema.safeParse({
+      type: "shutdown-ack",
+      requestId: "req-42",
+    });
+    expect(parsed.success).toBe(true);
+    expect(
+      schema.safeParse({ type: "shutdown-ack" }).success
+    ).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ const spies = vi.hoisted(() => ({
   mockUpdate: vi.fn(),
   mockArchive: vi.fn(),
   mockDelete: vi.fn(),
+  mockRunNow: vi.fn(),
   mockWorkspaceRunNow: vi.fn(),
   mockWorkspaceGetStatus: vi.fn(),
 }));
@@ -27,6 +28,7 @@ const {
   mockUpdate,
   mockArchive,
   mockDelete,
+  mockRunNow,
   mockWorkspaceRunNow,
 } = spies;
 
@@ -60,7 +62,19 @@ vi.mock("@/modules/SystemSettingModule", () => ({
 // without running the real consolidation service.
 vi.mock("@/service/AIAutoDreamFactory", () => ({
   getSharedWorkspaceAutoDreamService: () => ({
-    runNow: spies.mockWorkspaceRunNow,
+    // Fan out to both spies: mockRunNow carries the call-shape assertions,
+    // mockWorkspaceRunNow the resolved-value staging (union of both suites).
+    runNow: async (input: unknown) => {
+      spies.mockRunNow(input);
+      spies.mockWorkspaceRunNow(input);
+      // Either suite's staging may drive the result: prefer a resolution,
+      // fall back across spies when one rejects.
+      try {
+        return await spies.mockRunNow.mock.results.at(-1)?.value;
+      } catch {
+        return await spies.mockWorkspaceRunNow.mock.results.at(-1)?.value;
+      }
+    },
     getStatus: spies.mockWorkspaceGetStatus,
   }),
 }));
@@ -99,6 +113,7 @@ describe("ai-workspace-memory-ipc", () => {
     state.aiEnabled = "true";
     // Manual-memory toggle defaults to enabled (setting absent → enabled).
     mockGetSettingValue.mockResolvedValue(null);
+    mockRunNow.mockRejectedValue(new Error("Workspace auto-dream run skipped"));
     // runNow rejects like the real service's "skipped" path unless a test
     // overrides it, so run failures keep surfacing as denied.
     mockWorkspaceRunNow.mockRejectedValue(
@@ -213,8 +228,31 @@ describe("ai-workspace-memory-ipc", () => {
       EVENT,
       JSON.stringify({ conversationId: "conv-1" })
     )) as { status: boolean };
+    // AI enabled, but the service skips when there are no workspace-bound
+    // sources → runNow throws "skipped" → denied.
     // AI enabled, but runNow rejects ("skipped") → denied.
     expect(r.status).toBe(false);
+    expect(mockRunNow).toHaveBeenCalled();
+  });
+
+  it("run-auto-dream forwards conversationId so the panel summarizes the open workspace", async () => {
+    mockRunNow.mockResolvedValue([
+      {
+        runId: "wrun-1",
+        status: "completed",
+        memoriesCreated: 1,
+      },
+    ]);
+    const r = (await handlers[AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM](
+      EVENT,
+      JSON.stringify({ conversationId: "conv-1", force: true })
+    )) as { status: boolean };
+    expect(r.status).toBe(true);
+    expect(mockRunNow).toHaveBeenCalledWith({
+      force: true,
+      reason: "manual_ipc",
+      conversationId: "conv-1",
+    });
     expect(mockWorkspaceRunNow).toHaveBeenCalled();
   });
 

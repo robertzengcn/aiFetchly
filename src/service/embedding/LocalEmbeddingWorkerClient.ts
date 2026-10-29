@@ -1,5 +1,8 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 "use strict";
 import { utilityProcess } from "electron";
+import { log } from "@/modules/Logger";
 import * as fs from "fs";
 import * as path from "path";
 import { v4 as uuidv4 } from "uuid";
@@ -114,12 +117,16 @@ export function buildLocalEmbeddingWorkerNodePathExtras(
 }
 
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
-  const proc = utilityProcess.fork(workerPath, [], {
+  const proc = spawnOwned(
+    "embedding-worker",
+    () =>
+      utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv({
       existingNodePath: buildLocalEmbeddingWorkerNodePathExtras(workerPath),
     }),
-  });
+  })
+  );
   return proc as unknown as UtilityProcessLike;
 };
 
@@ -252,7 +259,7 @@ export class LocalEmbeddingWorkerClient {
         this.workerProcess.kill();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.warn(
+        log.warn(
           `[LocalEmbeddingWorkerClient] Failed to kill worker: ${message}`
         );
       }

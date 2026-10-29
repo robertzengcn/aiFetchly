@@ -13,7 +13,7 @@ export interface Subject {
     detach(observer: Observer): void;
 
     // Notify all observers about an event.
-    notify(...args): void;
+    notify(...args: unknown[]): void;
 }
 
 /**

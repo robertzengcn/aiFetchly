@@ -15,11 +15,45 @@ import {
 import { _electron as electronLauncher } from "playwright";
 import * as path from "path";
 import { E2E_ENV, RENDERER_ORIGIN, type E2ETestRoot } from "./types";
+import type { E2EStateManifestInput } from "./temporaryState";
 
 export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
   /** Loopback base URL of the FakeOpenAI server (main-process provider target). */
   readonly fakeAiBaseUrl?: string;
+  /** Test-steering overrides applied AFTER sanitization (design §13.2 keeps
+   *  the secret filter authoritative; these may only ADD/replace values —
+   *  used for deterministic probes, e.g. a PATH without ffmpeg, or the
+   *  deferred tool-catalog mode). Never used to inject credentials. */
+  readonly extraEnv?: Readonly<Record<string, string>>;
+  /**
+   * E2E-only (FR-WIN-007/009): launch with the deterministic initial window
+   * MAXIMIZED, mirroring a user whose saved choice was maximized. Normal
+   * bounds stay the deterministic 1280x800 so restoring down works.
+   */
+  readonly initialMaximized?: boolean;
+
+  /**
+   * Loopback base URL of the FakePluginHub server. When set, the launch env
+   * carries VITE_PLUGIN_HUB_URL so the main-process community catalog and
+   * install pipeline target the deterministic hub fixture (UPD-GAP-05).
+   */
+  readonly hubBaseUrl?: string;
+  /**
+   * Deterministic native-dialog responses (design §15.6). Patched into the
+   * state manifest AFTER the fixture's write (launch happens last), so a
+   * confirm-pick flow (e.g. workspace folder selection) can automate the
+   * otherwise-native dialog. Paths must be inside the E2E root — the
+   * manifest loader rejects out-of-root paths fail-closed.
+   */
+  readonly dialogResponses?: E2EStateManifestInput["dialogResponses"];
+  /**
+   * Voice-journey specs (audit TODO V01): swap the real microphone for
+   * Chromium's synthetic fake media device so getUserMedia + MediaRecorder
+   * run deterministically under headless/xvfb. No product flag — Chromium
+   * launch args only, mirroring Chrome's own test mode.
+   */
+  readonly voiceFakeMediaStream?: boolean;
 }
 
 export interface NetworkViolation {
@@ -48,7 +82,9 @@ export interface LaunchedApp {
  */
 function buildSanitizedEnv(
   testRoot: E2ETestRoot,
-  fakeAiBaseUrl: string | undefined
+  fakeAiBaseUrl: string | undefined,
+  initialMaximized: boolean | undefined,
+  hubBaseUrl: string | undefined
 ): Record<string, string> {
   // Exact-name allowlist for safe OS/runtime variables. Broad names are matched
   // EXACTLY (not as prefixes) so e.g. `CI` does not also pass `CI_REPOSITORY_URL`
@@ -116,6 +152,13 @@ function buildSanitizedEnv(
 
   // Explicit E2E contract.
   allowed[E2E_ENV.ENABLED] = "1";
+  // The local-AI-runtime catalog check would otherwise poll github.com in the
+  // main process mid-test (the network guard records any non-loopback fetch).
+  // Point it at the fake AI server's origin so the periodic check stays
+  // loopback-only; a 404 catalog is a benign, handled result.
+  allowed["AIFETCHLY_RUNTIME_CATALOG_URL"] = fakeAiBaseUrl
+    ? `${fakeAiBaseUrl.replace(/\/v1$/, "")}/__e2e/runtime-catalog`
+    : "http://127.0.0.1:1/local-ai-runtimes.json";
   allowed[E2E_ENV.ROOT] = testRoot.rootPath;
   allowed[E2E_ENV.STATE_FILE] = testRoot.stateFilePath;
   allowed[E2E_ENV.USER_DATA_PATH] = testRoot.userDataPath;
@@ -127,6 +170,22 @@ function buildSanitizedEnv(
   allowed[E2E_ENV.TOOL_OUTPUT_ROOT] = testRoot.toolOutputRootPath;
   allowed[E2E_ENV.IS_TEST] = "1";
   allowed[E2E_ENV.NODE_ENV] = "test";
+  // Skill-installation isolation: enable the installer and confine config
+  // home, staging, and the credential store to the per-run temp root.
+  allowed[E2E_ENV.SKILL_INSTALL_ENABLED] = "true";
+  allowed[E2E_ENV.CONFIG_HOME] = testRoot.rootPath;
+  allowed[E2E_ENV.SKILL_STAGING_ROOT] = path.join(
+    testRoot.rootPath,
+    "skill-staging"
+  );
+  allowed[E2E_ENV.SKILL_CREDENTIAL_STORE] = path.join(
+    testRoot.rootPath,
+    "skill-state"
+  );
+  // E2E-only deterministic maximized startup (FR-WIN-007/009).
+  if (initialMaximized) {
+    allowed.AIFETCHLY_E2E_INITIAL_MAXIMIZED = "1";
+  }
   const allowedOrigins = [RENDERER_ORIGIN];
   if (fakeAiBaseUrl) {
     allowed[E2E_ENV.AI_BASE_URL] = fakeAiBaseUrl;
@@ -136,7 +195,29 @@ function buildSanitizedEnv(
       /* ignore */
     }
   }
+  if (hubBaseUrl) {
+    // Set explicitly (never inherited from the host env): the main process
+    // resolves the Plugin Hub base from this variable at runtime, and the
+    // E2E bundle does not bake it in at build time. Also allowlist the
+    // origin for the network guard's configured-origins set.
+    allowed["VITE_PLUGIN_HUB_URL"] = hubBaseUrl;
+    try {
+      allowedOrigins.push(new URL(hubBaseUrl).origin);
+    } catch {
+      /* ignore */
+    }
+  }
   allowed[E2E_ENV.ALLOWED_ORIGINS] = allowedOrigins.join(",");
+
+  // The local-AI-runtime catalog refresh otherwise fetches the public GitHub
+  // release asset whenever the AI status is polled; the E2E network guard
+  // default-denies non-loopback traffic, the violation fails teardown, and a
+  // blocked fetch can stall provider resolution. Point the catalog at an
+  // unreachable LOOPBACK port instead: loopback is guard-allowed, the fetch
+  // fails instantly (connection refused), and the runtime surface reports the
+  // catalog as unavailable — deterministically, with no external traffic.
+  allowed.AIFETCHLY_RUNTIME_CATALOG_URL =
+    "http://127.0.0.1:9/local-ai-runtimes.json";
   return allowed;
 }
 
@@ -154,7 +235,34 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
+  // Deterministic native-dialog responses must be patched into the state
+  // manifest BEFORE spawn: the E2E dialog service reads it once at launch.
+  // The patch preserves every field the fixture already wrote.
+  if (options.dialogResponses) {
+    const fs = await import("fs");
+    const existing = JSON.parse(
+      fs.readFileSync(options.testRoot.stateFilePath, "utf8")
+    ) as Record<string, unknown>;
+    fs.writeFileSync(
+      options.testRoot.stateFilePath,
+      JSON.stringify({
+        ...existing,
+        dialogResponses: options.dialogResponses,
+      }),
+      "utf8"
+    );
+  }
+  // Single sanitized-environment construction with all required arguments
+  // (B01): initialMaximized + hubBaseUrl must flow through, then explicit
+  // test extras apply once post-sanitization (host env never leaks in).
+  const env = buildSanitizedEnv(
+    options.testRoot,
+    options.fakeAiBaseUrl,
+    options.initialMaximized,
+    options.hubBaseUrl
+  );
+  // Explicit opt-in extras (post-sanitization): the host env never leaks in.
+  Object.assign(env, options.extraEnv ?? {});
 
   const electronApp = await electronLauncher.launch({
     args: [
@@ -172,6 +280,12 @@ export async function launchAiFetchly(
       // Specs assert translated UI text (e.g. "Delivery Unknown"), so the
       // manifest contract must hold deterministically from first paint.
       "--lang=en",
+      // Voice journeys (V01): fake-device mode makes the recorder produce a
+      // deterministic synthetic tone without any OS audio hardware; fake-ui
+      // auto-grants getUserMedia permission prompts (FR-VOICE capture).
+      ...(options.voiceFakeMediaStream
+        ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
+        : []),
     ],
     cwd: process.cwd(),
     env,
@@ -208,7 +322,15 @@ export async function launchAiFetchly(
   // but still polled once at startup); abort every external origin and record it
   // (design §10.2 — relaxed to loopback so the security goal "no external
   // traffic" is preserved without flagging known-local polls).
+  // Audit V04: generated images load through the app's OWN custom protocol
+  // handler (src/background.ts `protocol.handle`), which serves only
+  // existence- and path-validated files under the redirected userData root.
+  // That is explicitly trusted app-local traffic. A non-special scheme URL
+  // parses with an opaque ("null") origin, so the guard must recognize the
+  // intended scheme + authority by prefix — never a blanket `origin === null`
+  // allowance, which every unrelated opaque origin shares.
   const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+  const TRUSTED_LOCAL_PROTOCOL_PREFIX = "aifetchly-generated-image://local/";
   await mainWindow.route("**/*", (route) => {
     const request = route.request();
     const url = request.url();
@@ -221,7 +343,10 @@ export async function launchAiFetchly(
     } catch {
       origin = url;
     }
-    if (LOOPBACK_HOSTS.has(hostname)) {
+    if (
+      url.startsWith(TRUSTED_LOCAL_PROTOCOL_PREFIX) ||
+      LOOPBACK_HOSTS.has(hostname)
+    ) {
       void route.continue();
       return;
     }
@@ -230,10 +355,15 @@ export async function launchAiFetchly(
   });
 
   try {
-    // Wait for the page to navigate to the Vite renderer origin. Use a regex so
-    // the bare root URL (http://127.0.0.1:5173/) matches — a `**` glob would
-    // require a non-empty path and never resolve.
-    await mainWindow.waitForURL(/127\.0\.0\.1:5173(\/|$)/, { timeout: 60_000 });
+    // Wait for the page to navigate to the Vite renderer origin AND for the
+    // router's initial navigation to settle (a non-empty hash). Resolving on
+    // the bare root URL races the "/" -> "#/aiworkspace" initial redirect:
+    // a spec's goto("#/plugins/...") that fires mid-redirect gets its hash
+    // OVERWRITTEN when the pending redirect lands, silently stranding the
+    // test on the chat center.
+    await mainWindow.waitForURL(new RegExp(
+      `${RENDERER_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/#/`
+    ), { timeout: 60_000 });
     // Preload bridge must be present (implies the page loaded + contextBridge ran).
     await mainWindow.waitForFunction(
       () => Boolean((window as unknown as { api?: unknown }).api),
@@ -242,6 +372,32 @@ export async function launchAiFetchly(
     );
     // Vue app landmark mounted.
     await mainWindow.waitForSelector("#app", { timeout: 60_000 });
+    // Router boot navigation settled (audit-fix R2 G02 follow-up): "#app"
+    // mounts BEFORE the router's initial navigation (+ its async permission
+    // guard) finalizes. A typed-hash navigation issued in that window (the
+    // app boots on "#/") is overwritten by the still-pending boot navigation
+    // to "#/aiworkspace", so every first-post-boot hash navigation bounced
+    // back to the chat center and the audit list / draft detail E2E tests
+    // timed out waiting for a page that would only render on the SECOND
+    // navigation. Waiting for router.isReady() here (resolve the router
+    // through the mounted Vue app instance) makes the returned fixture
+    // settle the boot navigation exactly once, deterministically.
+    await mainWindow.waitForFunction(
+      async () => {
+        const appEl = document.querySelector("#app");
+        const router = (
+          appEl as unknown as
+            | { __vue_app__?: { config: { globalProperties: Record<string, unknown> } } }
+            | null
+        )?.__vue_app__?.config.globalProperties.$router as
+          | { isReady(): Promise<boolean> }
+          | undefined;
+        if (!router) return false;
+        return await router.isReady();
+      },
+      undefined,
+      { timeout: 60_000 }
+    );
   } catch (err) {
     // Readiness failed after Electron already started — close it so CI retries
     // don't accumulate orphan processes. Best-effort; rethrow the real error.

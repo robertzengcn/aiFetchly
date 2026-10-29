@@ -10,11 +10,11 @@ import { Order } from "./order.decorator";
 @Index(["status"])
 export class AgentTaskEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  agentTaskId: string;
+  agentTaskId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: true })
@@ -30,27 +30,27 @@ export class AgentTaskEntity extends AuditableEntity {
 
   @Order(5)
   @Column("varchar", { length: 100, nullable: false })
-  agentConversationId: string;
+  agentConversationId!: string;
 
   @Order(6)
   @Column("varchar", { length: 100, nullable: false })
-  agentId: string;
+  agentId!: string;
 
   @Order(7)
   @Column("int", { nullable: false })
-  agentVersion: number;
+  agentVersion!: number;
 
   @Order(8)
   @Column("varchar", { length: 32, nullable: false })
-  status: string;
+  status!: string;
 
   @Order(9)
   @Column("text", { nullable: false })
-  prompt: string;
+  prompt!: string;
 
   @Order(10)
   @Column("simple-json", { nullable: false })
-  taskPacket: Record<string, unknown>;
+  taskPacket!: Record<string, unknown>;
 
   @Order(11)
   @Column("simple-json", { nullable: true })
@@ -62,7 +62,7 @@ export class AgentTaskEntity extends AuditableEntity {
 
   @Order(13)
   @Column("int", { nullable: false, default: 0 })
-  toolCallsCount: number;
+  toolCallsCount!: number;
 
   @Order(14)
   @Column("datetime", { nullable: true })

@@ -79,4 +79,14 @@ export class WorkspaceResolver {
     this.keyCache.set(rootPath, resolved);
     return resolved;
   }
+
+  /**
+   * Public wrapper for resolveKey — used by the sync coordinator (via
+   * WorkspaceMemoryScopeResolver.resolveFromRoot) to derive the same
+   * canonical workspace key that resolveWithKey produces, so the coordinator
+   * and the service share the same scope.
+   */
+  async resolveKeyPublic(rootPath: string): Promise<WorkspaceKeyResolution> {
+    return this.resolveKey(rootPath);
+  }
 }

@@ -232,7 +232,13 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
     expect(mockFindDue).not.toHaveBeenCalled();
   });
 
-  it("skips work when the global scheduler is stopped", async () => {
+  it("still runs chat-bound interval occurrences when the global scheduler is stopped", async () => {
+    // Chat-created /loop schedules are governed by their own per-conversation
+    // controls (/loop pause|resume|stop) and the schedule row's is_active /
+    // status gates in claimIntervalOccurrence — NOT by the Schedule page's
+    // global Stop/Start chip. That chip defaults to stopped in the DB and is
+    // re-persisted stopped on every clean shutdown, so gating these polls on
+    // it silently starved chat loops (created but never executed).
     mockScheduleManagerGet.mockImplementation(() => ({
       initializeSchedules: vi.fn(async () => undefined),
       start: vi.fn(async () => undefined),
@@ -242,6 +248,15 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
       cleanupInactiveDependencies: mockCleanupInactiveDependencies,
     }));
     mockFindDue.mockResolvedValue([SCHED]);
+    mockClaim.mockResolvedValue({
+      kind: "claimed",
+      runId: 5,
+      occurrence: 1,
+      catchUp: false,
+      scheduledFor: new Date(0),
+      idempotencyKey: "scheduled-loop:3:1",
+      coalescedCount: 0,
+    });
     const scheduler = new BackgroundScheduler(
       "/tmp/sched-test"
     ) as unknown as PrivateScheduler;
@@ -249,9 +264,11 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
 
     await scheduler.processIntervalTasks();
 
-    expect(mockFindDue).not.toHaveBeenCalled();
-    expect(mockClaim).not.toHaveBeenCalled();
-    expect(mockRunChatLoop).not.toHaveBeenCalled();
+    expect(mockClaim).toHaveBeenCalledWith({
+      scheduleId: 3,
+      now: expect.any(Date),
+    });
+    expect(mockRunChatLoop).toHaveBeenCalledTimes(1);
   });
 });
 

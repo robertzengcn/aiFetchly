@@ -1,5 +1,6 @@
 "use strict";
 import { machineIdSync } from 'node-machine-id';
+import { log } from "@/modules/Logger";
 import * as os from 'os';
 import { Token } from '@/modules/token';
 import { DEVICEIDHASH } from '@/config/usersetting';
@@ -65,7 +66,7 @@ export class DeviceFingerprintService {
             const hash = this.tokenService.getValue(DEVICEIDHASH);
             return hash || '';
         } catch (error) {
-            console.error('Failed to get stored deviceIdHash:', error);
+            log.error('Failed to get stored deviceIdHash:', error);
             return '';
         }
     }
@@ -79,7 +80,7 @@ export class DeviceFingerprintService {
                 this.tokenService.setValue(DEVICEIDHASH, hash);
             }
         } catch (error) {
-            console.error('Failed to store deviceIdHash:', error);
+            log.error('Failed to store deviceIdHash:', error);
         }
     }
 }

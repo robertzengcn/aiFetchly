@@ -15,6 +15,7 @@
  */
 
 import type { AIFetchlyInstructionBlock } from "@/entityTypes/aifetchlyConfigTypes";
+import { log } from "@/modules/Logger";
 import {
   AIFetchlyContextStore,
   getGlobalAIFetchlyContextStore,
@@ -61,7 +62,7 @@ export class AIFetchlyContextLoader {
       const workspaceBlocks: AIFetchlyInstructionBlock[] = [];
       return [...globalBlocks, ...workspaceBlocks];
     } catch (err) {
-      console.error(
+      log.error(
         "[aifetchly-context] getInstructionBlocks failed; degrading to no-injection:",
         err
       );

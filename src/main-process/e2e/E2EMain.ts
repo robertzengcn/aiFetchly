@@ -25,6 +25,7 @@ import * as fs from "node:fs";
 import { loadE2EEnvironment } from "./E2EEnvironment";
 import { installE2ENetworkGuard } from "./E2ENetworkGuard";
 import { seedE2EState } from "./E2EStateSeeder";
+import { installE2ESeedBridge } from "./E2ESqlSeedService";
 import { TOOL_OUTPUT_ROOT_ENV } from "@/service/toolResult/toolResultRoot";
 
 async function start(): Promise<void> {
@@ -39,6 +40,14 @@ async function start(): Promise<void> {
   process.env.IS_TEST = "1";
   process.env.NODE_ENV = "test";
 
+  // The local-AI-runtime catalog defaults to GitHub Releases in production
+  // (resolveCatalogSource). E2E forbids external network, so point the catalog
+  // at a closed loopback port before background.ts imports: any catalog probe
+  // fails fast (ECONNREFUSED) instead of recording a network-guard violation
+  // that assertCleanTeardown treats as a dirty run.
+  process.env.AIFETCHLY_RUNTIME_CATALOG_URL ??=
+    "http://127.0.0.1:9/e2e/local-ai-runtimes.json";
+
   // Redirect preserved tool-output artifacts into the per-test temp root so
   // large-tool-result captures never touch the real ~/.aifetchly/tool-outputs.
   // The root is DERIVED from the validated E2E root (never caller-supplied) and
@@ -47,7 +56,6 @@ async function start(): Promise<void> {
   // so production code reads the redirect from first read.
   fs.mkdirSync(environment.toolOutputRootPath, { recursive: true });
   process.env[TOOL_OUTPUT_ROOT_ENV] = environment.toolOutputRootPath;
-
   // Plain `vite build` (unlike forge plugin-vite) resolves the package.json
   // `browser` field for some Node packages (e.g. joi, form-data), pulling
   // browser/worker builds whose UMD wrappers reference `self`/`window` at
@@ -67,6 +75,11 @@ async function start(): Promise<void> {
   // Install the default-deny network guard BEFORE importing production code so
   // any outbound non-loopback request fails closed and is recorded (design §10.1).
   installE2ENetworkGuard(environment);
+
+  // Expose the narrow better-sqlite3 seeding bridge for specs — evaluate
+  // callbacks cannot load native modules themselves (no require / dynamic
+  // import in that realm). E2E-only; never installed in production builds.
+  installE2ESeedBridge();
 
   // Seed deterministic AI/auth/database state from the validated state manifest
   // before the production window/IPC graph initializes (design §8.3).

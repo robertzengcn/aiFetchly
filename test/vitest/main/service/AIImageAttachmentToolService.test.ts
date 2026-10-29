@@ -103,6 +103,7 @@ function makeService(
         close: () => fileHandle.close(),
       };
     },
+    realpath: (p) => fs.promises.realpath(p),
     destinationLabel: "Configured AI Server",
   });
 }
@@ -366,5 +367,110 @@ describe("AIImageAttachmentToolService", () => {
       makeContext({ signal: ac.signal } as Partial<SkillExecutionContext>)
     );
     expect(res.result.code).toBe("cancelled");
+  });
+
+  // --- canonical duplicate detection (P1-5) ---
+  it("deduplicates relative and absolute aliases of the same file", async () => {
+    const abs = writeFile("dupe/target.png", withSig(PNG_SIG));
+    const svc = makeService(makeFakeNormalizer());
+    const res = await svc.execute(
+      { paths: ["dupe/target.png", abs] },
+      makeContext()
+    );
+    expect(res.success).toBe(true);
+    // First occurrence wins; the alias does not attach a second copy.
+    expect(res.result.attached_count).toBe(1);
+    expect(res.modelArtifacts?.length).toBe(1);
+    expect(asResult(res).attachments[0].relative_path).toBe("dupe/target.png");
+    expect(asResult(res).summary).toContain("Skipped 1 duplicate path alias");
+  });
+
+  it("deduplicates an in-workspace symlink alias pointing at the same file", async () => {
+    writeFile("real/img.png", withSig(PNG_SIG));
+    fs.symlinkSync(
+      path.join(workspace, "real", "img.png"),
+      path.join(workspace, "alias.png")
+    );
+    const svc = makeService(makeFakeNormalizer());
+    const res = await svc.execute(
+      { paths: ["alias.png", "real/img.png"] },
+      makeContext()
+    );
+    expect(res.success).toBe(true);
+    expect(res.result.attached_count).toBe(1);
+    expect(res.modelArtifacts?.length).toBe(1);
+  });
+
+  it("keeps distinct files with identical bytes as separate attachments", async () => {
+    writeFile("one.png", withSig(PNG_SIG));
+    writeFile("two.png", withSig(PNG_SIG));
+    const svc = makeService(makeFakeNormalizer());
+    const res = await svc.execute(
+      { paths: ["one.png", "two.png"] },
+      makeContext()
+    );
+    expect(res.success).toBe(true);
+    expect(res.result.attached_count).toBe(2);
+  });
+
+  // --- late-cancellation race (P1-6) ---
+  it("returns cancelled (no artifacts) when the signal aborts while the normalizer is in flight", async () => {
+    writeFile("a.png", withSig(PNG_SIG));
+    const ac = new AbortController();
+    // Normalizer resolves only after a delay; abort fires mid-normalization.
+    const slowNormalizer: ImageNormalizerPort = {
+      normalize: async (_buffer, mime) => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const outMime: PreparedImageMimeType =
+          mime === "image/png" ? "image/png" : "image/jpeg";
+        const dataUrl = `data:${outMime};base64,${"x".repeat(170)}`;
+        return {
+          buffer: Buffer.alloc(100, 0xab),
+          mimeType: outMime,
+          width: 100,
+          height: 100,
+          sha256: "deadbeef".repeat(8),
+          dataUrl,
+          dataUrlChars: dataUrl.length,
+        };
+      },
+    };
+    const svc = makeService(slowNormalizer);
+    const pending = svc.execute(
+      { paths: ["a.png"] },
+      makeContext({ signal: ac.signal } as Partial<SkillExecutionContext>)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    ac.abort();
+    const res = await pending;
+    expect(res.success).toBe(false);
+    expect(res.result.code).toBe("cancelled");
+    // A late normalizer completion must not emit artifacts or start another
+    // AI-server request for an already-abandoned turn.
+    expect(res.modelArtifacts).toBeUndefined();
+  });
+
+  // --- safe artifact summary (P1-7) ---
+  it("summarizeModelArtifacts exposes only counts, types, dimensions, and sizes", async () => {
+    const { summarizeModelArtifacts } = await import(
+      "@/service/AIImageAttachmentToolService"
+    );
+    writeFile("a.png", withSig(PNG_SIG));
+    writeFile("b.jpg", withSig(JPEG_SIG));
+    const svc = makeService(makeFakeNormalizer());
+    const res = await svc.execute({ paths: ["a.png", "b.jpg"] }, makeContext());
+    const artifacts = res.modelArtifacts ?? [];
+    const summary = summarizeModelArtifacts(artifacts);
+    expect(summary.count).toBe(2);
+    expect(summary.mimeTypes).toEqual(
+      expect.arrayContaining(["image/png", "image/jpeg"])
+    );
+    expect(summary.maxWidth).toBe(100);
+    expect(summary.maxHeight).toBe(100);
+    expect(summary.totalPreparedBytes).toBe(200);
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain("dataUrl");
+    expect(serialized).not.toContain("data:image/");
+    expect(serialized).not.toContain("base64");
   });
 });

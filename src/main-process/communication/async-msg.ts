@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { log } from "@/modules/Logger";
 import { SocialTask } from '@/modules/socialtask';
 //import { SocialAccountController } from '@/controller/socialaccount-controller';
 
@@ -11,9 +12,9 @@ type dataResponse = {
     data?: any
 }
 export default function AsyncMsg() {
-    console.log("AsyncMsg");
+    log.info("AsyncMsg");
     ipcMain.on('socialtask:start', async (event, data: unknown) => {
-        console.log("get social task data")
+        log.info("get social task data")
 
         const qdata = JSON.parse(data as string);
         if (!("id" in qdata)) {
@@ -27,7 +28,7 @@ export default function AsyncMsg() {
 
 
         const result = await socialtaskcon.createsocialtask(qdata.id, qdata.runNum).catch(function (error) {
-            console.log(error.message)
+            log.info(error.message)
             return null;
         });
 

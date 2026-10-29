@@ -13,6 +13,7 @@
 // derive the project root from `import.meta.url` so the aliases resolve the same
 // directory regardless of how the config is loaded.
 
+import alias from "@rollup/plugin-alias";
 import * as path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -126,20 +127,9 @@ export function fixInteropNamespacePlugin() {
   };
 }
 
-// Copy a file only when the source exists. Worktree/CI environments may have a
-// sparse node_modules (e.g. no protocol-registry), and an unguarded
-// copyFileSync at buildStart aborts the whole vitest run before tests execute.
-function copyIfExists(src, dest) {
-  if (fs.existsSync(src)) {
-    fs.copyFileSync(src, dest);
-  } else {
-    console.warn(`Skipping copy: ${src} not found`);
-  }
-}
-
-// Custom platform-aware copy plugin. Copies icons, sqlite-vec native extension,
-// and platform protocol-registry templates into the build output directory so
-// the bundled main process can locate them at runtime (mirrors production).
+// Custom platform-aware copy plugin. Copies icons and the sqlite-vec native
+// extension into the build output directory so the bundled main process can
+// locate them at runtime (mirrors production).
 export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
   return {
     name: "platform-copy",
@@ -210,6 +200,31 @@ export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
         console.error("Failed to copy sqlite-vec extension:", error);
       }
 
+      // Copy pdfjs-dist worker so pdf2md-ts's _setupFakeWorkerGlobal
+      // dynamic import resolves in the bundled output. The worker is
+      // a standalone module that pdfjs loads via import(workerSrc).
+      // pdf2md-ts sets workerSrc to a bare specifier without .mjs;
+      // we fix the path in ChunkingService.ts but the file must also
+      // be findable at runtime.
+      try {
+        const pdfWorkerSrc = path.join(
+          "node_modules",
+          "pdfjs-dist",
+          "legacy",
+          "build",
+          "pdf.worker.mjs"
+        );
+        const pdfWorkerDst = path.join(iconDestDir, "pdf.worker.mjs");
+        if (fs.existsSync(pdfWorkerSrc)) {
+          fs.copyFileSync(pdfWorkerSrc, pdfWorkerDst);
+          console.log("Copied pdf.worker.mjs to build directory");
+        } else {
+          console.warn("pdf.worker.mjs not found at:", pdfWorkerSrc);
+        }
+      } catch (error) {
+        console.error("Failed to copy pdf.worker.mjs:", error);
+      }
+
       // Copy platform-specific icons
       if (process.platform === "win32") {
         if (fs.existsSync(`${iconSourceDir}/icon.ico`)) {
@@ -228,76 +243,10 @@ export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
         }
       }
 
-      // Copy platform-specific protocol-registry templates (guarded for worktree
-      // environments where node_modules may be sparse).
-      if (process.platform === "linux") {
-        console.log("Copying Linux templates...");
-        const linuxFiles = [
-          [
-            "node_modules/protocol-registry/src/linux/templates/desktop.ejs",
-            path.join(outDir, "templates/desktop.ejs"),
-          ],
-          [
-            "node_modules/protocol-registry/src/linux/templates/script.ejs",
-            path.join(outDir, "templates/script.ejs"),
-          ],
-          [
-            "node_modules/protocol-registry/src/linux/index.js",
-            path.join(outDir, "index.js"),
-          ],
-          [
-            "node_modules/protocol-registry/src/linux/postinstall.js",
-            path.join(outDir, "postinstall.js"),
-          ],
-        ];
-        for (const [src, dest] of linuxFiles) {
-          copyIfExists(src, dest);
-        }
-      } else if (process.platform === "darwin") {
-        console.log("Copying macOS templates...");
-        // Guarded copies: worktree/CI environments may have a sparse
-        // node_modules without protocol-registry, and an unguarded
-        // copyFileSync at buildStart aborts the whole vitest run before
-        // any test executes. Mirrors the Linux branch's existsSync guard.
-        copyIfExists(
-          "node_modules/protocol-registry/src/macos/templates/script.ejs",
-          path.join(outDir, "templates/script.ejs")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/macos/templates/app.ejs",
-          path.join(outDir, "templates/app.ejs")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/macos/templates/url-app.ejs",
-          path.join(outDir, "templates/url-app.ejs")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/macos/defaultAppExist.sh",
-          path.join(outDir, "defaultAppExist.sh")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/macos/index.js",
-          path.join(outDir, "index.js")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/macos/plistMutator.js",
-          path.join(outDir, "plistMutator.js")
-        );
-      } else if (process.platform === "win32") {
-        console.log("Copying Windows templates...");
-        copyIfExists(
-          "node_modules/protocol-registry/src/windows/templates/app-script.ejs",
-          path.join(outDir, "templates/app-script.ejs")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/windows/index.js",
-          path.join(outDir, "index.js")
-        );
-        copyIfExists(
-          "node_modules/protocol-registry/src/windows/registry.js",
-          path.join(outDir, "registry.js")
-        );
-      }
+      // Note: platform-specific protocol-registry templates were previously
+      // copied into the build output here, but the package has been removed.
+      // The custom protocol scheme is registered at runtime via Electron's
+      // app.setAsDefaultProtocolClient(), which needs no extra template files.
     },
   };
 }

@@ -82,6 +82,14 @@ export interface ToolCatalogRuntimeContext {
    * ToolPromptBudgetService for the auto-mode threshold.
    */
   readonly contextWindowTokens?: number;
+  /**
+   * True when the recent conversation history contains AI-generated images.
+   * Informational context flag only: the tool-load policy no longer
+   * force-promotes export/attach tools on follow-up edit wording, because a
+   * selected generated image arrives attached to the current user turn and is
+   * edited directly (no workspace round-trip).
+   */
+  readonly hasRecentGeneratedImages?: boolean;
 }
 
 /**

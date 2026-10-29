@@ -18,6 +18,12 @@ export interface CompleteRunFields {
   memoriesUpdated: number;
   memoriesArchived: number;
   model?: string;
+  /**
+   * Source-derived cursor: the greatest updatedAt among the packets the run
+   * actually committed. Committed with the successful result so the watermark
+   * advances only through processed material (tech-design §2.6, §14.4).
+   */
+  reviewedThrough?: Date | null;
 }
 
 export class AIMemoryConsolidationRunModel extends BaseDb {
@@ -42,7 +48,8 @@ export class AIMemoryConsolidationRunModel extends BaseDb {
     e.memoriesCreated = 0;
     e.memoriesUpdated = 0;
     e.memoriesArchived = 0;
-    if (input.reviewedSince !== undefined) e.reviewedSince = input.reviewedSince;
+    if (input.reviewedSince !== undefined)
+      e.reviewedSince = input.reviewedSince;
     if (input.reviewedThrough !== undefined)
       e.reviewedThrough = input.reviewedThrough;
     return this.repository.save(e);
@@ -61,6 +68,9 @@ export class AIMemoryConsolidationRunModel extends BaseDb {
         memoriesArchived: input.memoriesArchived,
         model: input.model ?? null,
         errorMessage: null,
+        ...(input.reviewedThrough !== undefined
+          ? { reviewedThrough: input.reviewedThrough }
+          : {}),
       }
     );
   }

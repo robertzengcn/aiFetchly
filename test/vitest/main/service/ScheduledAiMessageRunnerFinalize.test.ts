@@ -55,6 +55,20 @@ vi.mock("@/config/featureFlags", async (importOriginal) => {
 
 interface MockEngine {
   submitMessage: typeof mockSubmit;
+  /**
+   * Generator-streaming owner entry point (the runner consumes the typed
+   * segment outcome). Delegates to the same mockSubmit so call assertions
+   * stay uniform, then returns a completed segment — the runner prefers the
+   * sink's captured outcome anyway, so the mapped value only matters when
+   * the sink saw no terminal.
+   */
+  runTurn: (
+    input: Parameters<typeof mockSubmit>[0]
+  ) => Promise<{
+    type: "completed";
+    conversationId: string;
+    assistantMessageId: string;
+  }>;
 }
 
 type MockConstructor<T> = new (...args: never[]) => T;
@@ -123,7 +137,26 @@ vi.mock("@/model/ScheduleTask.model", () => ({
 vi.mock("@/service/AIChatQueryEngineFactory", () => ({
   AIChatQueryEngineFactory: class {
     createScheduled(): MockEngine {
-      return { submitMessage: mockSubmit };
+      return {
+        submitMessage: mockSubmit,
+        runTurn: (input: Parameters<typeof mockSubmit>[0]) =>
+          mockSubmit(input).then(
+            (): {
+              type: "completed";
+              conversationId: string;
+              assistantMessageId: string;
+            } => ({
+              type: "completed",
+              conversationId:
+                (
+                  input as {
+                    request?: { conversationId?: string };
+                  }
+                )?.request?.conversationId ?? "",
+              assistantMessageId: "",
+            })
+          ),
+      };
     }
   },
 }));

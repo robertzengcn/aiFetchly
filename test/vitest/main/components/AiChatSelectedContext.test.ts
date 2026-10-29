@@ -2,19 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AiChatSelectedContext from "@/views/components/aiChatV2/AiChatSelectedContext.vue";
-
-/**
- * Mirrors the component's exported SelectedContextItem interface. Defined
- * locally because the *.vue shim only declares a default export, so plain
- * tsc cannot resolve named type exports from .vue files (only vue-tsc can).
- */
-interface SelectedContextItem {
-  sourceId: string;
-  preview: string;
-  estimatedTokens: number;
-  refreshed?: boolean;
-  rejected?: boolean;
-}
+import type { SelectedContextItem } from "@/views/components/aiChatV2/selectedContextTypes";
 
 /**
  * Component test for the selected-context panel (technical-design §13.3).

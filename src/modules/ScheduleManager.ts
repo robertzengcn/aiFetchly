@@ -1,6 +1,7 @@
 //import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { ScheduleTaskModule } from "@/modules/ScheduleTaskModule";
 import {ScheduleTaskModuleInterface} from "@/modules/interface/ScheduleTaskModuleInterface"
+import { log } from "@/modules/Logger";
 //import { ScheduleDependencyModel } from "@/model/ScheduleDependency.model";
 import { ScheduleTaskEntity, ScheduleStatus, TriggerType, DependencyCondition } from "@/entity/ScheduleTask.entity";
 import { ExecutionStatus, TriggerType as LogTriggerType } from "@/entity/ScheduleExecutionLog.entity";
@@ -82,7 +83,7 @@ export class ScheduleManager {
                 // Skip persistence during reset since the database connection may already be destroyed
                 await ScheduleManager.instance.stop(true);
             } catch (error) {
-                console.error('Failed to stop existing ScheduleManager during reset:', error);
+                log.error('Failed to stop existing ScheduleManager during reset:', error);
             }
         }
 
@@ -102,7 +103,7 @@ export class ScheduleManager {
             try {
                 await ScheduleManager.instance.stop(true);
             } catch (error) {
-                console.error('Failed to stop existing ScheduleManager during destroy:', error);
+                log.error('Failed to stop existing ScheduleManager during destroy:', error);
             }
         }
 
@@ -127,9 +128,9 @@ export class ScheduleManager {
             }
 
             this.isInitialized = true;
-            console.log(`ScheduleManager initialized with ${activeSchedules.length} active schedules`);
+            log.info(`ScheduleManager initialized with ${activeSchedules.length} active schedules`);
         } catch (error) {
-            console.error('Failed to initialize schedules:', error);
+            log.error('Failed to initialize schedules:', error);
             throw error;
         }
     }
@@ -152,7 +153,7 @@ export class ScheduleManager {
 
         try {
             // Create cron job
-            const cronJob = new CronJob(schedule.cron_expression, async () => {
+            const cronJob = new CronJob(schedule.cron_expression ?? "* * * * *", async () => {
                 await this.executeSchedule(schedule.id);
             }, null, false, 'UTC');
 
@@ -160,9 +161,9 @@ export class ScheduleManager {
             cronJob.start();
             this.cronJobs.set(schedule.id, cronJob);
 
-            console.log(`Added schedule ${schedule.id} (${schedule.name}) with cron: ${schedule.cron_expression}`);
+            log.info(`Added schedule ${schedule.id} (${schedule.name}) with cron: ${schedule.cron_expression}`);
         } catch (error) {
-            console.error(`Failed to add schedule ${schedule.id}:`, error);
+            log.error(`Failed to add schedule ${schedule.id}:`, error);
             throw error;
         }
     }
@@ -176,7 +177,7 @@ export class ScheduleManager {
         if (cronJob) {
             cronJob.stop();
             this.cronJobs.delete(scheduleId);
-            console.log(`Removed schedule ${scheduleId} from scheduler`);
+            log.info(`Removed schedule ${scheduleId} from scheduler`);
         }
     }
 
@@ -209,7 +210,7 @@ export class ScheduleManager {
         options?: { detach?: boolean }
     ): Promise<void> {
         if (this.runningScheduleIds.has(scheduleId)) {
-            console.log(
+            log.info(
                 `Schedule ${scheduleId} is already running, skipping overlapping execution`
             );
             return;
@@ -224,13 +225,13 @@ export class ScheduleManager {
             }
 
             if (!schedule.is_active || schedule.status !== ScheduleStatus.ACTIVE) {
-                console.log(
+                log.info(
                     `Schedule ${scheduleId} is not active (is_active=${String(schedule.is_active)}, status=${String(schedule.status)}), skipping execution`
                 );
                 return;
             }
 
-            console.log(`Executing schedule ${scheduleId} (${schedule.name})`);
+            log.info(`Executing schedule ${scheduleId} (${schedule.name})`);
 
             const executionId = await this.scheduleExecutionLogModule.logExecution(
                 scheduleId,
@@ -249,7 +250,7 @@ export class ScheduleManager {
                 setImmediate(() => {
                     void run()
                         .catch((error: unknown) => {
-                            console.error(
+                            log.error(
                                 `Detached schedule ${scheduleId} failed:`,
                                 error
                             );
@@ -263,7 +264,7 @@ export class ScheduleManager {
 
             await run();
         } catch (error) {
-            console.error(`Failed to execute schedule ${scheduleId}:`, error);
+            log.error(`Failed to execute schedule ${scheduleId}:`, error);
             throw error;
         } finally {
             if (!handedOff) {
@@ -291,9 +292,11 @@ export class ScheduleManager {
             );
             await this.scheduleTaskModule.incrementExecutionCount(scheduleId, true);
             await this.scheduleTaskModule.updateLastRunTime(scheduleId, new Date());
-            const nextRunTime = this.calculateNextRunTime(schedule.cron_expression);
+            const nextRunTime = this.calculateNextRunTime(
+                schedule.cron_expression ?? ""
+            );
             await this.scheduleTaskModule.updateNextRunTime(scheduleId, nextRunTime);
-            console.log(`Schedule ${scheduleId} executed successfully in ${duration}ms`);
+            log.info(`Schedule ${scheduleId} executed successfully in ${duration}ms`);
             await this.executeDependentJobs(executionId, ExecutionStatus.SUCCESS);
         } catch (error: unknown) {
             const duration = Date.now() - startTime;
@@ -306,7 +309,7 @@ export class ScheduleManager {
             );
             await this.scheduleTaskModule.incrementExecutionCount(scheduleId, false);
             await this.scheduleTaskModule.updateLastErrorMessage(scheduleId, errorMessage);
-            console.error(`Schedule ${scheduleId} execution failed:`, error);
+            log.error(`Schedule ${scheduleId} execution failed:`, error);
             await this.executeDependentJobs(executionId, ExecutionStatus.FAILED);
         }
     }
@@ -338,7 +341,7 @@ export class ScheduleManager {
             const nextDate = cronJob.nextDate();
             return nextDate.toJSDate();
         } catch (error) {
-            console.error('Failed to calculate next run time:', error);
+            log.error('Failed to calculate next run time:', error);
             // Return a default time (1 hour from now) if calculation fails
             const defaultTime = new Date();
             defaultTime.setHours(defaultTime.getHours() + 1);
@@ -353,7 +356,7 @@ export class ScheduleManager {
     async pauseSchedule(scheduleId: number): Promise<void> {
         await this.scheduleTaskModule.pauseSchedule(scheduleId);
         await this.removeSchedule(scheduleId);
-        console.log(`Schedule ${scheduleId} paused`);
+        log.info(`Schedule ${scheduleId} paused`);
     }
 
     /**
@@ -366,7 +369,7 @@ export class ScheduleManager {
         if (schedule && schedule.is_active) {
             await this.addSchedule(schedule);
         }
-        console.log(`Schedule ${scheduleId} resumed`);
+        log.info(`Schedule ${scheduleId} resumed`);
     }
 
     /**
@@ -390,7 +393,7 @@ export class ScheduleManager {
 
         // Create the dependency
         await this.scheduleDependencyModule.createDependency(parentId, childId, condition, delayMinutes);
-        console.log(`Added dependency: ${parentId} -> ${childId} (${condition})`);
+        log.info(`Added dependency: ${parentId} -> ${childId} (${condition})`);
     }
 
     /**
@@ -400,7 +403,7 @@ export class ScheduleManager {
      */
     async removeDependency(parentId: number, childId: number): Promise<void> {
         await this.scheduleDependencyModule.deleteDependencyByParentChild(parentId, childId);
-        console.log(`Removed dependency: ${parentId} -> ${childId}`);
+        log.info(`Removed dependency: ${parentId} -> ${childId}`);
     }
 
     async cleanupInactiveDependencies(): Promise<number> {
@@ -457,7 +460,7 @@ export class ScheduleManager {
                 }
             }
         } catch (error) {
-            console.error('Failed to execute dependent jobs:', error);
+            log.error('Failed to execute dependent jobs:', error);
         }
     }
 
@@ -471,7 +474,7 @@ export class ScheduleManager {
             const validation = await this.scheduleDependencyModule.validateDependencies(scheduleId);
             return validation.isValid;
         } catch (error) {
-            console.error('Failed to validate dependency chain:', error);
+            log.error('Failed to validate dependency chain:', error);
             return false;
         }
     }
@@ -512,7 +515,7 @@ export class ScheduleManager {
         // Persist running status to database
         await this.persistRunningStatus();
 
-        console.log('ScheduleManager started');
+        log.info('ScheduleManager started');
     }
 
     /**
@@ -539,7 +542,7 @@ export class ScheduleManager {
             await this.persistStoppedStatus();
         }
 
-        console.log('ScheduleManager stopped');
+        log.info('ScheduleManager stopped');
     }
 
     /**
@@ -570,7 +573,7 @@ export class ScheduleManager {
                 }
             }
         } catch (error) {
-            console.error('Failed to process dependency queue:', error);
+            log.error('Failed to process dependency queue:', error);
         }
     }
 
@@ -578,7 +581,7 @@ export class ScheduleManager {
      * Handle application shutdown
      */
     async handleAppShutdown(): Promise<void> {
-        console.log('Shutting down ScheduleManager...');
+        log.info('Shutting down ScheduleManager...');
         await this.stop();
     }
 
@@ -591,13 +594,13 @@ export class ScheduleManager {
             const shouldAutoStart = await this.schedulerStatusModel.shouldAutoStart();
             
             if (shouldAutoStart) {
-                console.log('Auto-starting scheduler based on database status');
+                log.info('Auto-starting scheduler based on database status');
                 await this.start();
             } else {
-                console.log('Scheduler auto-start disabled based on database status');
+                log.info('Scheduler auto-start disabled based on database status');
             }
         } catch (error) {
-            console.error('Failed to initialize with database status:', error);
+            log.error('Failed to initialize with database status:', error);
             // Continue without auto-start if database operations fail
         }
     }
@@ -618,7 +621,7 @@ export class ScheduleManager {
                 last_error_message: undefined
             });
         } catch (error) {
-            console.error('Failed to persist running status:', error);
+            log.error('Failed to persist running status:', error);
         }
     }
 
@@ -639,7 +642,7 @@ export class ScheduleManager {
             if (isDatabaseConnectionClosedError(error)) {
                 return;
             }
-            console.error('Failed to persist stopped status:', error);
+            log.error('Failed to persist stopped status:', error);
         }
     }
 
@@ -651,10 +654,10 @@ export class ScheduleManager {
             const status = await this.schedulerStatusModel.getStatus();
             if (status) {
                 this.isRunning = status.is_running;
-                console.log(`Loaded scheduler status from database: running=${this.isRunning}`);
+                log.info(`Loaded scheduler status from database: running=${this.isRunning}`);
             }
         } catch (error) {
-            console.error('Failed to load status from database:', error);
+            log.error('Failed to load status from database:', error);
         }
     }
 
@@ -672,11 +675,11 @@ export class ScheduleManager {
         try {
             await this.loadStatusFromDatabase();
             if (this.isRunning) {
-                console.log('Recovering scheduler from database status');
+                log.info('Recovering scheduler from database status');
                 await this.start();
             }
         } catch (error) {
-            console.error('Failed to recover from database:', error);
+            log.error('Failed to recover from database:', error);
         }
     }
 
@@ -693,7 +696,7 @@ export class ScheduleManager {
             // Basic validation - could be enhanced
             return typeof status.is_running === 'boolean';
         } catch (error) {
-            console.error('Failed to validate database status:', error);
+            log.error('Failed to validate database status:', error);
             return false;
         }
     }
@@ -704,9 +707,9 @@ export class ScheduleManager {
     async resetDatabaseStatus(): Promise<void> {
         try {
             await this.schedulerStatusModel.resetStatus();
-            console.log('Database status reset successfully');
+            log.info('Database status reset successfully');
         } catch (error) {
-            console.error('Failed to reset database status:', error);
+            log.error('Failed to reset database status:', error);
             throw error;
         }
     }

@@ -21,11 +21,22 @@ import type {
   AskUserQuestionPayload,
   SubmitPlanForApprovalPayload,
 } from "@/entityTypes/aiChatPlanTypes";
+import { AIChatRequiredPersistenceError } from "@/service/AIChatQueryEvents";
+import {
+  buildDeadlineExceededResult,
+  buildTurnCancelledResult,
+} from "@/service/AIChatBackgroundJobResults";
+import type { ChatProviderStreamEvent } from "@/service/aiProvider/ChatProviderClient";
+import { runToolWithProgress } from "@/service/aiChat/runToolWithProgress";
 import type {
-  AIChatQueryEventSink,
+  AIChatLoopEvent,
+  AIChatQueryGenerator,
+  AIChatQueryGeneratorInput,
   AIChatQueryLoopInput,
   AIChatQueryLoopResult,
 } from "@/service/AIChatQueryEvents";
+import type { ChatV2DirectionTransition } from "@/entityTypes/aiChatV2Types";
+import type { AIChatSteeringBatch } from "@/service/AIChatTurnControl";
 import {
   OpenAIStreamAccumulator,
   type ParsedToolCallResult,
@@ -126,8 +137,41 @@ import {
   countImageContentParts,
   countImageDataUrlChars,
   stripConsumedImageHandoffs,
+  stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
-import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { buildPromptSkillHandoffMessage } from "@/service/PromptSkillHandoff";
+import {
+  AdmissionSealedError,
+  ToolConversationConcurrencyError,
+  getDefaultToolJobRegistry,
+  type ToolJobSpawnHandle,
+} from "@/service/ToolJobRegistry";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  envelopeErrorIdentity,
+  logToolExecutionDiagnostics,
+} from "@/service/ToolExecutionDiagnostics";
+import {
+  getPluginRecoveryLedger,
+  jobFingerprintFromArgs,
+  searchIdentityFromArgs,
+  validatePublicSearchInput,
+} from "@/service/PluginRecoveryLedger";
+import {
+  getPluginFileArtifactService,
+  type RegisteredPluginArtifact,
+} from "@/service/PluginFileArtifactService";
+import { HOST_MAX_RUN_MS } from "@/entityTypes/pluginExecutionTypes";
+import { classifySkillRequestIntent } from "@/service/SkillInstallIntentGuard";
+import {
+  evaluateSkillInstallationToolPolicy,
+  installFirstToolCounterKey,
+  INSTALLER_TOOL_NAMES,
+} from "@/service/SkillInstallationToolPolicy";
+import {
+  TOOL_RESULT_CONFIG,
+  BATCH_PREVIEW_TOOL_NAMES as TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES,
+} from "@/config/toolResultConfig";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import {
@@ -139,11 +183,17 @@ import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import { AIChatModelCatalogService } from "@/service/AIChatModelCatalogService";
 import { Token } from "@/modules/token";
 import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
+import { VERIFY_CONTACT_INFO_TOOL_NAME } from "@/config/contactVerification";
 import { ToolCatalogService } from "@/service/ToolCatalogService";
 import { ToolCatalogSearchService } from "@/service/ToolCatalogSearchService";
 import { hasBatchImageEditIntent } from "@/service/ToolLoadPolicyService";
 import { logToolCatalogFilter } from "@/service/ToolCatalogMetricsService";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import {
+  HydrationReplayLedger,
+  decideDeferredToolHydration,
+} from "@/service/DeferredToolHydrationCoordinator";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { buildDeferredAnnouncement } from "@/service/ConversationToolStateService";
 import type {
   ToolCatalog,
@@ -159,6 +209,7 @@ import {
   type AggregatedHookResult,
   type HookToolDescriptor,
 } from "@/entityTypes/hookTypes";
+import { log } from "@/modules/Logger";
 import {
   TaskOperationGuard,
   stableEffectIdentity,
@@ -183,6 +234,9 @@ import { logFinalizationConflict } from "@/service/aiTaskExecution/RolloutConfli
  * now injects an in-memory continuation and starts another cycle for
  * every chat turn — no canned pause is shown in the UI. Stop still aborts.
  */
+/** FR-24 completion reserve: tokens held back from the skill-instruction
+ * budget so the model can still answer after the hidden block loads. */
+const COMPLETION_RESERVE_TOKENS = 4_000;
 export const CHAT_V2_MAX_TOOL_ROUNDS = 30;
 
 /**
@@ -235,6 +289,35 @@ export const TOOL_ROUND_CAP_CONTINUATION_PROMPT =
   "The current tool-round cycle ended, but the task is not finished. " +
   "Continue now. Call the next tool or write a short progress update with blockers. " +
   "Do not end with an empty reply, and do not ask the user whether to continue.";
+
+/**
+ * Synthetic result for every tool call skipped because user steering
+ * superseded the model's decision (FR-21/22). No tool arguments or hidden
+ * policy data are included.
+ */
+const SKIPPED_BY_STEERING_TOOL_RESULT = {
+  success: false,
+  skipped: true,
+  reason: "superseded_by_user_steering",
+} as const;
+
+/**
+ * Wrapper marking a steering instruction in model context. User-originated
+ * guidance stays BELOW system, workspace, policy, and permission
+ * instructions (PRD §13.1) — it is never sent as a system message.
+ */
+const STEERING_MODEL_PREFIX =
+  "[User steering update received while this response was running]";
+
+/** Controlled failure when no model round remains to apply steering (§11.5). */
+export class AIChatSteeringRoundLimitError extends Error {
+  constructor() {
+    super(
+      "STEERING_ROUND_LIMIT: no model round remains to apply the steering message. It stays available as a normal next message."
+    );
+    this.name = "AIChatSteeringRoundLimitError";
+  }
+}
 
 /**
  * §10.3 — bounded job polling backoff. The loop polls async tool jobs with a
@@ -299,6 +382,13 @@ const DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS = 800;
  */
 interface RoundContentTracker {
   delivered: boolean;
+  /**
+   * Set once any steering batch has been accepted/applied for this turn.
+   * A pristine-transcript retry after steering would omit or duplicate the
+   * steering instruction, so the retry wrapper must stop retrying once this
+   * is true (design §11.7).
+   */
+  steeringObserved?: boolean;
 }
 
 /**
@@ -874,7 +964,29 @@ function buildFailedToolFallbackMessage(info: LastFailedToolInfo): string {
 }
 
 /** Dependencies injected into the loop for testability. */
+
+/** Stage B §5.2/§12: the loop's tool-progress event (multiplexer payload). */
+type AIChatToolProgressLoopEvent = Extract<
+  AIChatLoopEvent,
+  { type: "tool_progress" }
+>;
+
+/** Progress sink threaded through tool execution (multiplexer producer). */
+type ToolProgressEmitter = (event: AIChatToolProgressLoopEvent) => void;
+
 export interface AIChatQueryLoopDeps {
+  /**
+   * Stage B §5.1 (FR-001): native provider iteration — preferred when
+   * present (all production wiring sites provide it after B1). Chunk,
+   * retry, and recovery notifications arrive in causal order.
+   */
+  streamEvents?(
+    request: OpenAIChatCompletionRequest,
+    options?: {
+      signal?: AbortSignal;
+      retryProfile?: import("@/service/AIChatRetryPolicy").AIChatRecoveryProfile;
+    }
+  ): AsyncIterable<ChatProviderStreamEvent>;
   /**
    * Persist a bounded tool-result receipt.
    *
@@ -1060,6 +1172,118 @@ function isToolExecutionResultLike(
   );
 }
 
+/** Narrow object guard for plugin payloads living in `result.result`. */
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Bounded in-message preview row cap for plugin tool results. */
+const PLUGIN_PREVIEW_ROW_LIMIT = 5;
+
+/** Bounded warning merge: keeps at most `max` string warnings. */
+function toReadonlyStringArray(
+  value: unknown
+): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((w): w is string => typeof w === "string")
+    .slice(0, 8);
+}
+
+/** Preview passthrough: keep the plugin's bounded preview rows verbatim. */
+function toReadonlyStringArraySafeRecords(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, PLUGIN_PREVIEW_ROW_LIMIT);
+}
+
+/**
+ * Host-attached artifact reference (design §13.4): id + descriptor only —
+ * never a path, never the plugin's own bookkeeping fields.
+ */
+/**
+ * Host-attached artifact reference (design §13.4): id + descriptor only —
+ * never a path, never the plugin's own bookkeeping fields.
+ */
+interface PluginArtifactPromotionOutcome {
+  /** Staging directory finalized for the execution. */
+  stagingExists: boolean;
+  /** Candidates listed in the staging `candidates.json` (if any). */
+  candidateCount: number;
+  /** Files actually promoted into the host-owned artifact store. */
+  registeredCount: number;
+  /** Per-candidate promotion errors (partial-failure warnings). */
+  errors: readonly string[];
+  /**
+   * B03: a success payload was degraded to a truthful failure because
+   * nothing was registered while the tool was graded on artifacts.
+   */
+  degradedToFailure: boolean;
+  /**
+   * G03: opaque host artifact references for every PROMOTED artifact — the
+   * crash path needs them (the tool result never returned). No paths.
+   */
+  artifacts?: readonly RegisteredPluginArtifact[];
+}
+
+function toArtifactRef(
+  artifact: RegisteredPluginArtifact
+): Record<string, unknown> {
+  return {
+    id: artifact.id,
+    format: artifact.format,
+    recordCount: artifact.recordCount,
+    sizeBytes: artifact.sizeBytes,
+    createdAt: artifact.createdAt,
+    expiresAt: artifact.expiresAt,
+  };
+}
+
+/**
+ * Remove every staging/candidate reference from a plugin payload (H2): the
+ * model payload and the persisted message must expose host-registered ids
+ * only — never host filesystem paths.
+ */
+function stripPluginPayloadStagingRefs(
+  payload: Record<string, unknown>
+): void {
+  for (const key of [
+    "candidates",
+    "candidatePath",
+    "candidatesPath",
+    "stagingDir",
+    "stagingDirectory",
+    "outputDirectory",
+  ]) {
+    if (key in payload) delete payload[key];
+  }
+  const partial = payload.partial;
+  if (isRecordLike(partial)) {
+    for (const key of [
+      "candidates",
+      "candidatePath",
+      "candidatesPath",
+      "stagingDir",
+      "stagingDirectory",
+      "outputDirectory",
+    ]) {
+      if (key in partial) delete partial[key];
+    }
+  }
+}
+
+/**
+ * Extract the owning plugin name from a canonical plugin MCP tool name
+ * (`mcp__<plugin>__<server>__<tool>`, PRD §9.3). Returns null for every
+ * other tool-name shape (built-ins, legacy `mcp_<serverId>_<tool>`).
+ */
+function parsePluginNameFromCanonicalTool(name: string): string | null {
+  if (!name.startsWith("mcp__")) return null;
+  const parts = name.split("__");
+  if (parts.length !== 4) return null;
+  const plugin = parts[1];
+  return plugin.length > 0 ? plugin : null;
+}
+
 export function buildAssistantToolCallMessage(
   parsedCalls: Array<{
     index: number;
@@ -1189,7 +1413,7 @@ export class AIChatQueryLoop {
    * transcript. Returns null when nothing could be reduced.
    */
   private reduceToolResultsToBudget(input: {
-    readonly input: AIChatQueryLoopInput;
+    readonly input: AIChatQueryGeneratorInput;
     readonly messages: OpenAIChatMessage[];
     readonly resolver: ModelLimitResolver;
     readonly outputReserve: number;
@@ -1269,6 +1493,104 @@ export class AIChatQueryLoop {
 
   private readonly catalogService = new ToolCatalogService();
   private readonly catalogSearchService = new ToolCatalogSearchService();
+  /** One internal replay per call fingerprint, ever (FR-28 §8.7). */
+  private readonly hydrationLedger = new HydrationReplayLedger();
+  /** FR-13 narrowing: active skills' allowed-tools intersection (null = off). */
+  private skillToolAllowlist: Set<string> | null = null;
+  private skillToolAllowlistDirty = true;
+  /** FR-30 boundary: the conversation's persisted active installer session. */
+  private activeInstallSession: {
+    sessionId: string;
+    canonicalUri: string | null;
+  } | null = null;
+  private installBoundaryDirty = true;
+  /** Ticket P2-6: which conversation the cached boundary belongs to —
+   *  one loop instance serves several conversations, and a switch must
+   *  not leak the previous conversation's session or approval. */
+  private installBoundaryConversation: string | null = null;
+  /** FR-30: cached manual-action approval for the active session (fail
+   *  closed until the audit lookup completes). Audit R8: a bound record
+   *  carries the exact approved tool/operation/cwd. */
+  private manualActionApprovedCache: {
+    approved: boolean;
+    target?: string;
+    toolName?: string;
+    operation?: string;
+    cwd?: string;
+  } = { approved: false };
+  /** FR-24 (audit R7): the turn's model context window, resolved once
+   *  from the catalog (0 = unknown — the budget field is omitted and the
+   *  invocation falls back to its documented defaults). */
+  private modelContextWindowTokens = 0;
+
+  /** FR-13: async allowlist refresh — caches the intersection for later
+   *  rounds; never blocks (and never rejects) on the critical path. */
+  private async refreshSkillToolAllowlist(conversationId: string): Promise<void> {
+    try {
+      const { PromptSkillInvocationModule } = await import(
+        "@/modules/PromptSkillInvocationModule"
+      );
+      const active = await new PromptSkillInvocationModule().listActive(
+        conversationId
+      );
+      const { intersectSkillToolAllowlists } = await import(
+        "@/service/PromptSkillToolNarrowing"
+      );
+      const { getDefaultPromptSkillCatalog } = await import(
+        "@/service/PromptSkillCatalog"
+      );
+      const catalog2 = getDefaultPromptSkillCatalog();
+      this.skillToolAllowlist = intersectSkillToolAllowlists(
+        active.map((row) => ({
+          runtimeId: row.runtimeId,
+          ...(catalog2.get(row.runtimeId)?.manifest.allowedTools
+            ? {
+                allowedTools:
+                  catalog2.get(row.runtimeId)!.manifest.allowedTools!,
+              }
+            : {}),
+        }))
+      );
+    } catch (narrowError) {
+      log.warn(
+        "[skill-narrowing] allowlist refresh failed, keeping prior set:",
+        narrowError
+      );
+    }
+  }
+
+  /** FR-30: async boundary refresh — caches the active session + its
+   *  manual-action approval; never blocks the critical path. Ticket P2-6:
+   *  records WHICH conversation the cache now speaks for (failure counts —
+   *  the fail-closed empty result is still scoped, so it is not re-probed
+   *  on every call). */
+  private async refreshInstallBoundary(conversationId: string): Promise<void> {
+    try {
+      const { SkillInstallationModule } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      const module = new SkillInstallationModule();
+      this.activeInstallSession = await module.findActiveSessionRouting(
+        conversationId
+      );
+      this.manualActionApprovedCache = this.activeInstallSession
+        ? await module.hasApprovedManualAction(this.activeInstallSession.sessionId)
+        : { approved: false };
+      this.installBoundaryConversation = conversationId;
+    } catch (boundaryError) {
+      log.warn(
+        "[install-boundary] session lookup failed:",
+        boundaryError
+      );
+      // Review R2-P1: a THROWN refresh must fail closed too — the caches
+      // still held the PREVIOUS conversation's session and manual-action
+      // approval, and tagging the new conversation without clearing them
+      // leaked that authorization across conversations.
+      this.activeInstallSession = null;
+      this.manualActionApprovedCache = { approved: false };
+      this.installBoundaryConversation = conversationId;
+    }
+  }
   private readonly modelCatalogService: AIChatModelCatalogService;
 
   /**
@@ -1283,13 +1605,13 @@ export class AIChatQueryLoop {
   }
 
   /** Push the preflight input estimate to the context badge. */
-  private emitBudgetUsage(
-    input: AIChatQueryLoopInput,
+  private budgetUsageEvent(
+    input: AIChatQueryGeneratorInput,
     model: string | undefined,
     estimatedInputTokens: number
-  ): void {
-    if (estimatedInputTokens <= 0) return;
-    input.eventSink.emit({
+  ): AIChatLoopEvent | null {
+    if (estimatedInputTokens <= 0) return null;
+    return {
       type: "usage_update",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
@@ -1297,7 +1619,7 @@ export class AIChatQueryLoop {
       promptTokens: estimatedInputTokens,
       completionTokens: 0,
       totalTokens: estimatedInputTokens,
-    });
+    };
   }
 
   /**
@@ -1453,7 +1775,7 @@ export class AIChatQueryLoop {
    * turn because of a policy consult).
    */
   private async maybeConsultPolicy(params: {
-    input: AIChatQueryLoopInput;
+    input: AIChatQueryGeneratorInput;
     boundary: "round_cap" | "response_end";
     content: string;
     finishReason: string | null;
@@ -1476,7 +1798,7 @@ export class AIChatQueryLoop {
     // consult must not resurrect its badge over the newer run (B09).
     const emitPhase = (status: "verifying" | "active"): void => {
       if (!params.input.isActiveTurn()) return;
-      params.input.eventSink.emit({
+      params.input.emitAuxiliary?.({
         type: "task_execution_state",
         conversationId: params.input.conversationId,
         executionId: binding.executionId,
@@ -1531,7 +1853,7 @@ export class AIChatQueryLoop {
    * a budget refusal).
    */
   private async reserveToolExecutionBudget(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: { id: string }
   ): Promise<void> {
     const binding = input.taskExecutionBinding;
@@ -1598,7 +1920,7 @@ export class AIChatQueryLoop {
    * top level).
    */
   private buildOperationGuardForSend(
-    input: AIChatQueryLoopInput
+    input: AIChatQueryGeneratorInput
   ): TaskOperationGuard | null {
     const binding = input.taskExecutionBinding;
     if (!binding?.policyAccepted || !binding.executionId) return null;
@@ -1660,7 +1982,7 @@ export class AIChatQueryLoop {
    */
   private static buildSendDescriptor(
     batchId: number | undefined,
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     toolArguments: Readonly<Record<string, unknown>>
   ): OperationGuardDescriptor {
     // B18 (FR-11/24, AC-10/28): the fence identity is the STABLE authorized
@@ -1780,17 +2102,187 @@ export class AIChatQueryLoop {
    *    advances.
    *  - Honors the abort signal, the turn-active flag, and a bounded count.
    */
+
+  /**
+   * Stage B §5.1: provider events for one streaming request. Prefers the
+   * native deps.streamEvents iterator (all production wiring provides it
+   * after B1); legacy callback deps (tests) are bridged through a live
+   * handoff queue so iterate() has exactly one consumption path.
+   */
+  private async *providerEvents(
+    request: OpenAIChatCompletionRequest,
+    options: {
+      signal: AbortSignal;
+      onRetry?: (info: StreamRetryInfo) => void;
+      onRecoveryStatus?: (info: StreamRecoveryInfo) => void;
+      /** Chunk acceptance evaluated AT ARRIVAL (abort/supersede guards) —
+       * parity with the old onChunk callback's synchronous early-returns. */
+      acceptChunk?: (chunk: OpenAIChatCompletionChunk) => boolean;
+    }
+  ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
+    const native = this.deps.streamEvents;
+    if (native) {
+      for await (const event of native(request, options)) {
+        if (
+          event.type === "chunk" &&
+          options.acceptChunk?.(event.chunk) === false
+        ) {
+          continue;
+        }
+        yield event;
+      }
+      return;
+    }
+    // Legacy callback bridge (deps without streamEvents): every callback
+    // notification is pushed onto ONE live queue in causal order; this
+    // generator drains it as events arrive.
+    const queue: ChatProviderStreamEvent[] = [];
+    let producerDone = false;
+    let failure: { error: unknown } | null = null;
+    const waiters: Array<() => void> = [];
+    const notifyAll = (): void => {
+      const pending = waiters.splice(0, waiters.length);
+      for (const wake of pending) wake();
+    };
+    const waitForMore = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    const producer = this.deps
+      .streamChatCompletion(
+        request,
+        (chunk) => {
+          if (options.acceptChunk?.(chunk) === false) return;
+          queue.push({ type: "chunk", chunk });
+          notifyAll();
+        },
+        {
+          signal: options.signal,
+          onRetry: (info) => {
+            queue.push({ type: "retry", info });
+            notifyAll();
+          },
+          onRecoveryStatus: (info) => {
+            queue.push({ type: "recovery", info });
+            notifyAll();
+          },
+        }
+      )
+      .then(
+        () => {
+          producerDone = true;
+          notifyAll();
+        },
+        (error: unknown) => {
+          failure = { error };
+          notifyAll();
+        }
+      );
+    for (;;) {
+      while (queue.length === 0 && !producerDone && failure === null) {
+        await waitForMore();
+      }
+      if (queue.length > 0) {
+        const event = queue.shift();
+        if (event) {
+          yield event;
+        }
+        continue;
+      }
+      const captured = failure as { error: unknown } | null;
+      if (captured !== null) {
+        throw captured.error;
+      }
+      return;
+    }
+    // producer is always settled before we exit (done or failure).
+    void producer;
+  }
+
+  /**
+   * Compat surface for the pre-generator per-attempt entry point (budget-gate
+   * specs call this directly). The generator architecture folded the per-
+   * attempt logic into `iterate()`; budget reservations, retry identities,
+   * and round reconciliation keep the same uniqueness guarantees there, so
+   * this drains one full run through the callback facade. The tracker is
+   * accepted for signature compatibility and ignored — `iterate()` owns
+   * delivery tracking internally.
+   */
+  async runOnce(
+    input: AIChatQueryLoopInput,
+    _tracker?: RoundContentTracker
+  ): Promise<AIChatQueryLoopResult> {
+    void _tracker;
+    return await this.run(input);
+  }
+
+  /**
+   * Stage B §5.2 (generator-streaming PRD FR-001): the callback entry is a
+   * thin FACADE — it drains the single `iterate()` implementation into the
+   * legacy sink, awaiting the sink's flush barrier after each tool_call
+   * yield so persist-before-execute ordering is preserved exactly.
+   */
   async run(input: AIChatQueryLoopInput): Promise<AIChatQueryLoopResult> {
+    const { eventSink, ...restInput } = input;
+    // Same auxiliary channel runLoopSegment wires for the engine: closure-
+    // scope emits inside awaited helpers (G01-313 badge) push through the
+    // caller's real sink while the generator is suspended in an await.
+    const generatorInput: import("@/service/AIChatQueryEvents").AIChatQueryGeneratorInput =
+      {
+        ...restInput,
+        emitAuxiliary: (event) => {
+          eventSink.emit(event);
+        },
+      };
+    const generator = this.iterate(generatorInput);
+    try {
+      for (;;) {
+        const step = await generator.next();
+        if (step.done === true) {
+          return step.value;
+        }
+        const event = step.value;
+        eventSink.emit(event);
+        if (event.type === "tool_call" || event.type === "tool_result") {
+          // §8 table (TODO-01): BOTH required writes gate advancement — a
+          // tool result must be durable before the next model round starts,
+          // and a rejected save must fail the segment here, not after the
+          // next request is already in flight.
+          await eventSink.flush?.();
+        }
+      }
+    } catch (error) {
+      // Mirror consumeGenerator's cleanup contract (design §6): a sink/flush
+      // failure must close the generator so its finally blocks (progress
+      // slot, provider cleanup) run — never abandon it suspended at a yield.
+      // The forced-close value carries no domain outcome; the error is the
+      // result.
+      try {
+        await generator.return(undefined as never);
+      } catch {
+        // cleanup failure never masks the primary error
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Stage B §5.2: the ONLY loop implementation — yields nonterminal events
+   * and returns the segment result. `run()` drains this into the legacy
+   * sink; the engine's generator-mode consumer drains it with awaited
+   * persistence (design §6/§8).
+   */
+  async *iterate(input: AIChatQueryGeneratorInput): AIChatQueryGenerator {
     const maxAttempts =
       input.transientRetryConfig?.maxAttempts ??
       DEFAULT_TRANSIENT_RETRY_MAX_ATTEMPTS;
     const baseDelayMs =
       input.transientRetryConfig?.baseDelayMs ??
       DEFAULT_TRANSIENT_RETRY_BASE_DELAY_MS;
-    // Snapshot the original transcript up front. runOnce mutates the messages
-    // array it receives (pushing assistant tool-call / tool-result rows as the
-    // round advances), so a retry must start from this pristine copy — not the
-    // (possibly mutated) input.messages reference.
+    // Snapshot the original transcript up front. iterateOnce mutates the
+    // messages array it receives (pushing assistant tool-call / tool-result
+    // rows as the round advances), so a retry must start from this pristine
+    // copy — not the (possibly mutated) input.messages reference.
     const initialMessages = [...input.messages];
     // Shared across attempts: once the UI has seen any content for this turn,
     // a later failure must not be retried (it would duplicate visible output).
@@ -1803,10 +2295,12 @@ export class AIChatQueryLoop {
     let quotaRetried = false;
 
     for (let attempt = 0; attempt <= maxAttempts; attempt += 1) {
-      const attemptInput: AIChatQueryLoopInput =
-        attempt === 0 ? input : { ...input, messages: [...initialMessages] };
+      const attemptInput: AIChatQueryGeneratorInput =
+        attempt === 0
+          ? input
+          : { ...input, messages: [...initialMessages] };
 
-      const result = await this.runOnce(attemptInput, tracker);
+      const result = yield* this.iterateOnce(attemptInput, tracker);
 
       if (result.type !== "failed") {
         return result;
@@ -1838,6 +2332,11 @@ export class AIChatQueryLoop {
         !input.abortController.signal.aborted &&
         input.isActiveTurn() &&
         !tracker.delivered &&
+        !tracker.steeringObserved &&
+        // Stage A §3.3 (FR-006/011): a required-persistence failure must
+        // never be retried as a transient provider error — dependent
+        // execution is blocked and the segment fails.
+        !(result.error instanceof AIChatRequiredPersistenceError) &&
         isContentLevelTransientError(result.error);
 
       if (!canRetry) {
@@ -1845,14 +2344,14 @@ export class AIChatQueryLoop {
       }
 
       const delayMs = baseDelayMs * 2 ** attempt;
-      input.eventSink.emit({
+      yield {
         type: "retry_connect",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
         retryAttempt: attempt + 1,
         retryMaxAttempts: maxAttempts,
         retryDelayMs: delayMs,
-      });
+      };
       // B13c (FR-08/23, AC-29): accumulate the ACTUAL slept backoff against
       // the wait budget (measured wall-clock, so an aborted sleep counts
       // only what was waited) and persist it. Backoff storms are the
@@ -1887,14 +2386,13 @@ export class AIChatQueryLoop {
 
     // Unreachable: the loop always returns on the final attempt. Returned
     // purely to satisfy the type checker.
-    throw new Error("AIChatQueryLoop.run exited its retry loop unexpectedly");
+    throw new Error("AIChatQueryLoop.iterate exited its retry loop unexpectedly");
   }
 
-  async runOnce(
-    input: AIChatQueryLoopInput,
+  private async *iterateOnce(
+    input: AIChatQueryGeneratorInput,
     tracker: RoundContentTracker
-  ): Promise<AIChatQueryLoopResult> {
-    const { eventSink } = input;
+  ): AIChatQueryGenerator {
     let activeAccumulator: OpenAIStreamAccumulator | null = null;
     let finalAccumulator: OpenAIStreamAccumulator | null = null;
     // Tracks the most recent server-reported usage across all rounds so the
@@ -1962,6 +2460,10 @@ export class AIChatQueryLoop {
     // run_subagent with a full taskPacket) are not truncated mid-JSON.
     // The frontend may or may not send maxTokens; default to 16384.
     let currentMaxTokens = input.request.maxTokens ?? 16384;
+    // Audit R10 (design §19): first-tool-category correlation — the FIRST
+    // tool call of a turn whose user message expresses explicit install
+    // intent is categorized once (installer/shell/file/search/other).
+    let installFirstToolRecorded = false;
 
     // Per-turn seven-layer recovery state. Tracks which layers have
     // already been attempted so the coordinator doesn't loop forever.
@@ -1980,6 +2482,21 @@ export class AIChatQueryLoop {
     let reliefAttemptsThisTurn = 0;
     let reliefThisRound = false;
 
+    // FR-24 (audit R7): resolve the model's context window for the
+    // remaining-context estimate. FIRE-AND-FORGET with a cached value —
+    // an inline await here deadlocks fake-timer environments (the same
+    // hazard the install-boundary refreshes hit); the first turn falls
+    // back to the documented defaults, later turns use the cache.
+    void (async () => {
+      try {
+        this.modelContextWindowTokens =
+          await new (await import("@/service/AIChatModelCatalogService"))
+            .AIChatModelCatalogService()
+            .getContextWindow(input.request.model);
+      } catch {
+        this.modelContextWindowTokens = 0;
+      }
+    })();
     try {
       // Load provider context/output limits before the first preflight.
       // The default resolver is sync and reads the catalog cache; without
@@ -2010,8 +2527,19 @@ export class AIChatQueryLoop {
       // FR-4: images contributed by tool results this turn (e.g. a
       // run_subagent batch worker's edited outputs). Folded into the
       // completed result.images so the engine persists + renders them like
-      // any other generated image.
-      const collectedToolImages: OpenAIChatImage[] = [];
+      // any other generated image. seededToolImages carries images from a
+      // tool the engine executed outside this run (permission-resume path).
+      const collectedToolImages: OpenAIChatImage[] = [
+        ...(input.seededToolImages ?? []),
+      ];
+
+      // Steering state (message-queue design §11): the mailbox is drained
+      // only at safe boundaries; skipped tool calls get synthetic results;
+      // direction transitions record where the visible content changed.
+      const steeringControl = input.steeringControl;
+      const directionTransitions: ChatV2DirectionTransition[] = [];
+      let visibleContent = "";
+      let steeringApplied = false;
 
       for (let round = input.startRound; ; round += 1) {
         if (round >= maxToolRounds) {
@@ -2037,7 +2565,7 @@ export class AIChatQueryLoop {
                 role: "user",
                 content: policyRoundCapOutcome.prompt,
               });
-              eventSink.emit({
+              yield {
                 type: "recovery_status",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -2046,7 +2574,7 @@ export class AIChatQueryLoop {
                 attempt: roundCapContinuations,
                 maxAttempts: maxRoundCapContinuations,
                 message: "Continuing after tool-round cap (policy-authorized)",
-              });
+              };
               round = -1;
               continue;
             }
@@ -2075,7 +2603,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: continuationPrompt,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -2084,7 +2612,7 @@ export class AIChatQueryLoop {
               attempt: roundCapContinuations,
               maxAttempts: maxRoundCapContinuations,
               message: "Continuing after tool-round cap",
-            });
+            };
             // for-loop increment runs after continue, so -1 → 0 next cycle.
             round = -1;
             continue;
@@ -2102,6 +2630,24 @@ export class AIChatQueryLoop {
         // round (or before a permission/plan resume). Idempotent.
         stripConsumedImageHandoffs(messages);
 
+        // Safe boundary 1 — before_model (design §11.1): the request for
+        // this round has not started yet, so committed steering joins the
+        // transcript without consuming an extra round.
+        if (steeringControl?.hasPending()) {
+          const batch = await steeringControl.consume("before_model");
+          if (batch) {
+            yield this.applySteeringToTranscript(
+              input,
+              messages,
+              batch,
+              visibleContent.length,
+              directionTransitions
+            );
+            steeringApplied = true;
+            tracker.steeringObserved = true;
+          }
+        }
+
         const accumulator = new OpenAIStreamAccumulator();
         activeAccumulator = accumulator;
 
@@ -2111,6 +2657,16 @@ export class AIChatQueryLoop {
         // full currentTools set (TR-5, AC-10). currentTools remains the full
         // local executable set regardless.
         let exposedTools: OpenAITool[] = currentTools;
+        // FR-13/NFR-11: invoked skills' declared allowed-tools NARROW the
+        // exposed set (core tools survive; widening is impossible). The
+        // refresh runs OFF the critical path (fire-and-forget): an inline
+        // DB await here deadlocks environments whose persistence cannot
+        // settle (fake-timer tests, DB-less hosts). The apply below uses
+        // whatever the latest completed refresh cached.
+        if (this.skillToolAllowlistDirty) {
+          this.skillToolAllowlistDirty = false;
+          void this.refreshSkillToolAllowlist(input.conversationId);
+        }
         if (catalogActive && catalog && catalogModeDecision) {
           try {
             const filterResult = this.catalogService.filterForRound({
@@ -2130,17 +2686,32 @@ export class AIChatQueryLoop {
               result: filterResult,
             });
           } catch (filterError) {
-            console.warn(
+            log.warn(
               `[tool-catalog] filter failed, falling back to full tools:`,
               filterError
             );
             toolCatalogCounters.increment("fallback_count");
-            exposedTools = currentTools;
           }
+        }
+        // Ticket P2-7: narrowing applies to the FINAL set — catalog
+        // filtering previously REPLACED the narrowed list with a filtered
+        // copy of the FULL tool set, undoing an invoked skill's
+        // allowed-tools restriction.
+        if (this.skillToolAllowlist) {
+          const { applySkillToolNarrowing } = await import(
+            "@/service/PromptSkillToolNarrowing"
+          );
+          const keep = new Set(
+            applySkillToolNarrowing(
+              exposedTools.map((t) => t.function.name),
+              this.skillToolAllowlist
+            )
+          );
+          exposedTools = exposedTools.filter((t) => keep.has(t.function.name));
         }
         const hasExposedTools = exposedTools.length > 0;
 
-        console.log(
+        log.info(
           `[ai-chat-v2] round ${round} → POST /chat/completions msgs=${
             messages.length
           } roles=[${messages.map((m) => m.role).join(",")}] tools=${
@@ -2184,11 +2755,14 @@ export class AIChatQueryLoop {
           // never reaches the provider, so report the budget estimate first
           // or the meter stays at 0% while the request is already over the
           // window.
-          this.emitBudgetUsage(
+          const budgetUsage = this.budgetUsageEvent(
             input,
             effectiveModel,
             budget.estimatedInputTokens
           );
+          if (budgetUsage) {
+            yield budgetUsage;
+          }
           const underPressure = !budget.ok || budget.needsCompaction;
           if (
             underPressure &&
@@ -2210,11 +2784,14 @@ export class AIChatQueryLoop {
                   outputReserve,
                   modelLimitResolver: resolver,
                 });
-                this.emitBudgetUsage(
+                const reliefUsage = this.budgetUsageEvent(
                   input,
                   effectiveModel,
                   budget.estimatedInputTokens
                 );
+                if (reliefUsage) {
+                  yield reliefUsage;
+                }
               }
             } catch (compactErr) {
               console.error(
@@ -2249,11 +2826,14 @@ export class AIChatQueryLoop {
                 outputReserve,
                 modelLimitResolver: resolver,
               });
-              this.emitBudgetUsage(
+              const reducedUsage = this.budgetUsageEvent(
                 input,
                 effectiveModel,
                 budget.estimatedInputTokens
               );
+              if (reducedUsage) {
+                yield reducedUsage;
+              }
             }
           }
           // TRANSPORT PREFLIGHT. A model's context size is not a transport-size
@@ -2335,8 +2915,9 @@ export class AIChatQueryLoop {
           }
         }
         // B13b: this round's reservation identity, minted once and shared by
-        // the gate, the onRetry hook, and the token reconciliation below so
-        // one actual attempt counts exactly once across all three.
+        // the gate, the retry-event handling below, and the token
+        // reconciliation below so one actual attempt counts exactly once
+        // across all three.
         let providerRequestId: string | undefined;
         if (binding?.policyAccepted && binding.reserveProviderAttempt) {
           providerRequestId = `prov:${binding.executionId}:${round}:${this.providerAttemptSeq++}`;
@@ -2369,7 +2950,10 @@ export class AIChatQueryLoop {
         // round but is not "active runtime" in the §9 sense.
         const streamStartedAt = Date.now();
 
-        await this.deps.streamChatCompletion(
+        // Stage B §5.1: consume the provider as an async iterable — chunks,
+        // retry, and recovery notifications arrive in causal order and are
+        // yielded directly (no callback-into-generator bridge on this path).
+        for await (const providerEvent of this.providerEvents(
           {
             messages,
             model: effectiveModel,
@@ -2394,98 +2978,110 @@ export class AIChatQueryLoop {
               ? { enabled: true, summary: "auto" }
               : undefined,
           },
-          (rawChunk) => {
-            if (input.abortController.signal.aborted) return;
-            if (!input.isActiveTurn()) return;
-            const { contentDelta, reasoningDelta } =
-              accumulator.ingest(rawChunk);
-            if (reasoningDelta) {
-              // Reasoning is visible UI content for this turn; from here on a
-              // later failure must not be retried (it would duplicate it).
-              tracker.delivered = true;
-              eventSink.emit({
-                type: "reasoning_delta",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                reasoningDelta,
-                model: accumulator.state.model,
-              });
-            }
-            if (contentDelta) {
-              // Mark that the UI has now seen streamed content for this turn.
-              // The retry wrapper uses this to avoid re-running a turn whose
-              // output is already visible (which would duplicate it).
-              tracker.delivered = true;
-              eventSink.emit({
-                type: "token",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                contentDelta,
-                model: accumulator.state.model,
-              });
-            }
-          },
           {
+            // Callbacks are unused on the native path (events arrive as
+            // yielded provider events); the legacy bridge builds its own.
             signal: input.abortController.signal,
-            onRetry: (info) => {
-              eventSink.emit({
-                type: "retry_connect",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                retryAttempt: info.attempt,
-                retryMaxAttempts: info.maxAttempts,
-                retryDelayMs: info.delayMs,
-              });
-              // B13b (FR-08/23): count the actual wire retry against the
-              // execution budget. Transport retries inside the stream call
-              // are invisible to the per-round gate above — without this
-              // hook a 60-attempt cap would admit 60 ROUNDS × N retries.
-              // Unique ID per retry (attempt number is per-layer and may
-              // repeat, so the instance seq disambiguates). Mirror reserve
-              // is synchronous (caps enforced now); the durable persist is
-              // fire-and-forget with warn-only failure, flushed before
-              // owner release by the B13c barrier.
-              if (binding?.policyAccepted && binding.reserveProviderAttempt) {
-                const retryRequestId = `${providerRequestId}:retry:${info.attempt}:${this.providerAttemptSeq++}`;
-                if (
-                  binding.reserveProviderAttempt(retryRequestId) ===
-                  BudgetReservationResult.Reserved
-                ) {
-                  binding.persistBudget?.({ providerAttempts: 1 }).then(
-                    (ok) => {
-                      if (!ok) {
-                        console.warn(
-                          `[ai-chat-v2] T05 retry-attempt persistence failed (lease released or superseded) for ${retryRequestId}`
-                        );
-                      }
-                    },
-                    (err) => {
-                      console.warn(
-                        `[ai-chat-v2] T05 retry-attempt persistence error for ${retryRequestId}:`,
-                        err
-                      );
-                    }
-                  );
-                }
-              }
-            },
-            onRecoveryStatus: (info) => {
-              eventSink.emit({
-                type: "recovery_status",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                layer: info.layer,
-                reason: info.reason,
-                attempt: info.attempt,
-                maxAttempts: info.maxAttempts,
-                delayMs: info.delayMs,
-                message: info.message,
-              });
+            acceptChunk: (chunk) => {
+              // Same guards the old onChunk callback applied synchronously.
+              void chunk;
+              return (
+                !input.abortController.signal.aborted && input.isActiveTurn()
+              );
             },
           }
-        );
+        )) {
+          if (providerEvent.type === "recovery") {
+            const info = providerEvent.info;
+            yield {
+              type: "recovery_status",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              layer: info.layer,
+              reason: info.reason,
+              attempt: info.attempt,
+              maxAttempts: info.maxAttempts,
+              delayMs: info.delayMs,
+              message: info.message,
+            };
+            continue;
+          }
+          if (providerEvent.type === "retry") {
+            yield {
+              type: "retry_connect",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              retryAttempt: providerEvent.info.attempt,
+              retryMaxAttempts: providerEvent.info.maxAttempts,
+              retryDelayMs: providerEvent.info.delayMs,
+            };
+            // B13b (FR-08/23): count the actual wire retry against the
+            // execution budget. Transport retries inside the stream call
+            // are invisible to the per-round gate above — without this a
+            // 60-attempt cap would admit 60 ROUNDS × N retries. Unique ID
+            // per retry (attempt number is per-layer and may repeat, so the
+            // instance seq disambiguates). Mirror reserve is synchronous
+            // (caps enforced now); the durable persist is fire-and-forget
+            // with warn-only failure, flushed before owner release by the
+            // B13c barrier.
+            if (binding?.policyAccepted && binding.reserveProviderAttempt) {
+              const retryRequestId = `${providerRequestId}:retry:${providerEvent.info.attempt}:${this.providerAttemptSeq++}`;
+              if (
+                binding.reserveProviderAttempt(retryRequestId) ===
+                BudgetReservationResult.Reserved
+              ) {
+                binding.persistBudget?.({ providerAttempts: 1 }).then(
+                  (ok) => {
+                    if (!ok) {
+                      log.warn(
+                        `[ai-chat-v2] T05 retry-attempt persistence failed (lease released or superseded) for ${retryRequestId}`
+                      );
+                    }
+                  },
+                  (err) => {
+                    log.warn(
+                      `[ai-chat-v2] T05 retry-attempt persistence error for ${retryRequestId}:`,
+                      err
+                    );
+                  }
+                );
+              }
+            }
+            continue;
+          }
+          const rawChunk = providerEvent.chunk;
+          const { contentDelta, reasoningDelta } = accumulator.ingest(rawChunk);
+          if (reasoningDelta) {
+            // Reasoning is visible UI content for this turn; from here on a
+            // later failure must not be retried (it would duplicate it).
+            tracker.delivered = true;
+            yield {
+              type: "reasoning_delta",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              reasoningDelta,
+              model: accumulator.state.model,
+            };
+          }
+          if (contentDelta) {
+            // Mark that the UI has now seen streamed content for this turn.
+            // The iterate retry wrapper uses this to avoid re-running a turn
+            // whose output is already visible (which would duplicate it).
+            tracker.delivered = true;
+            yield {
+              type: "token",
+              conversationId: input.conversationId,
+              messageId: input.assistantMessageId,
+              contentDelta,
+              model: accumulator.state.model,
+            };
+          }
+        }
 
         finalAccumulator = accumulator;
+        // Accumulate every round's delivered text once so steering offsets
+        // and the final persisted content stay in visible order (§11.6).
+        visibleContent += accumulator.state.fullContent ?? "";
 
         // Surface token usage from THIS round so (a) the UI can render a
         // live context-usage indicator and (b) the persisting event sink can
@@ -2548,20 +3144,20 @@ export class AIChatQueryLoop {
               })
               .then((ok) => {
                 if (!ok) {
-                  console.warn(
+                  log.warn(
                     `[ai-chat-v2] T05 token/runtime persistence failed (lease released or superseded) for ${providerRequestId}`
                   );
                 }
               })
               .catch((err) => {
-                console.warn(
+                log.warn(
                   `[ai-chat-v2] T05 token/runtime persistence error for ${providerRequestId}:`,
                   err
                 );
               });
           }
         }
-        eventSink.emit({
+        yield {
           type: "usage_update",
           conversationId: input.conversationId,
           messageId: input.assistantMessageId,
@@ -2569,7 +3165,7 @@ export class AIChatQueryLoop {
           promptTokens: resolvedUsage.promptTokens,
           completionTokens: resolvedUsage.completionTokens,
           totalTokens: resolvedUsage.totalTokens,
-        });
+        };
 
         const nativeParsedCalls = accumulator
           .tryParseToolCallArguments()
@@ -2605,7 +3201,7 @@ export class AIChatQueryLoop {
         // presence of valid parsed tool calls is the reliable signal that
         // the model wants tools executed — not finish_reason.
         const willContinue = parsedCalls.length > 0;
-        console.log(
+        log.info(
           `[ai-chat-v2] round ${round} ← finishReason=${accumulator.state.finishReason} sawToolCallDelta=${accumulator.state.sawToolCallDelta} parsedCalls=${parsedCalls.length} willContinue=${willContinue}`
         );
 
@@ -2629,14 +3225,14 @@ export class AIChatQueryLoop {
               recoveredContentPrefix:
                 recoveryState.recoveredContentPrefix + partialEsc,
             };
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
               layer: "output_token_recovery",
               reason: "output_limit",
               message: "Escalating output token budget",
-            });
+            };
             continue;
           }
           if (result.action.type === "continue_output") {
@@ -2657,7 +3253,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: result.action.continuationMessage,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -2665,7 +3261,7 @@ export class AIChatQueryLoop {
               reason: "output_limit",
               attempt: recoveryState.outputContinuationCount,
               message: "Continuing truncated output",
-            });
+            };
             continue;
           }
           throw new Error(
@@ -2692,14 +3288,14 @@ export class AIChatQueryLoop {
               recoveredContentPrefix:
                 recoveryState.recoveredContentPrefix + partialEsc,
             };
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
               layer: "output_token_recovery",
               reason: "output_limit",
               message: "Escalating output token budget",
-            });
+            };
             continue;
           }
           if (result.action.type === "continue_output") {
@@ -2717,7 +3313,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: result.action.continuationMessage,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -2725,28 +3321,72 @@ export class AIChatQueryLoop {
               reason: "output_limit",
               attempt: recoveryState.outputContinuationCount,
               message: "Continuing truncated output",
-            });
+            };
             continue;
           }
           // Else fall through; the round will complete with the partial.
         }
 
         // Detect explicit server-side errors: OpenAI-compatible servers can
-        // signal a failure by returning finish_reason="error" (often with
-        // empty content). This is typically a transient issue (overload,
-        // rate limit, upstream timeout). Surface it as a recognizable,
-        // retryable-tagged error so the user-facing mapper can translate it
-        // into an actionable message instead of a generic "unexpected error".
-        // We do not auto-retry inside the stream consumer because content
-        // may have already been delivered to onChunk before the error
-        // finish_reason arrives; the user can re-send the turn manually.
-        if (
-          accumulator.state.finishReason === "error" &&
-          accumulator.state.fullContent.trim().length === 0
-        ) {
-          throw new Error(
-            "AI server returned finish_reason=error (transient server-side failure, e.g. overload, rate limit, or timeout). Please try sending your message again."
-          );
+        // signal a failure by returning finish_reason="error". This is
+        // typically a transient issue (overload, rate limit, upstream
+        // timeout), but can also be a permanent error like
+        // context_window_exceeded. Surface the server's error code and
+        // message so the user-facing mapper can distinguish the two and give
+        // an actionable message instead of "service is busy, try again".
+        // This check runs even when partial content was already streamed:
+        // silently completing the turn with truncated output left the user
+        // with no error at all (the /goal silent-stop bug). The failed
+        // result carries the partial content so it is still persisted, and
+        // the retry wrapper skips retries once content has been delivered
+        // (tracker.delivered), so this never duplicates visible output.
+        if (accumulator.state.finishReason === "error") {
+          const streamError = accumulator.state.streamError;
+          const errorCode = streamError?.code ?? "";
+          const errorMsg = streamError?.message ?? "";
+          // Include the error code in the thrown message so AIChatErrorMapper
+          // can match specific codes (context_window_exceeded, payload_too_large)
+          // before falling back to the generic transient pattern.
+          const detail = errorCode
+            ? `AI server returned finish_reason=error (code=${errorCode}): ${errorMsg}`
+            : "AI server returned finish_reason=error (transient server-side failure, e.g. overload, rate limit, or timeout). Please try sending your message again.";
+          throw new Error(detail);
+        }
+
+        // Safe boundary 2 — after_model (design §11.1): the response is
+        // complete and steering is available, so NONE of its tool calls may
+        // start. Each call receives one protocol-valid synthetic result.
+        if (willContinue && steeringControl?.hasPending()) {
+          const batch = await steeringControl.consume("after_model");
+          if (batch) {
+            this.assertSteeringRoundBudget(round);
+            messages.push(
+              buildAssistantToolCallMessage(
+                parsedCalls,
+                textualParsedCalls.length > 0
+                  ? ""
+                  : accumulator.state.fullContent
+              )
+            );
+            for (const skippedEvent of this.collectSkippedToolResults(
+              input,
+              messages,
+              parsedCalls
+            )) {
+              yield skippedEvent;
+            }
+            yield this.applySteeringToTranscript(
+              input,
+              messages,
+              batch,
+              visibleContent.length,
+              directionTransitions
+            );
+            steeringApplied = true;
+            tracker.steeringObserved = true;
+            tracker.delivered = true;
+            continue;
+          }
         }
 
         if (!willContinue) {
@@ -2763,7 +3403,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: TEXT_TOOL_CALL_MARKER_RETRY_PROMPT,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -2772,7 +3412,7 @@ export class AIChatQueryLoop {
               attempt: textToolCallMarkerRetryCount,
               maxAttempts: MAX_TEXT_TOOL_CALL_MARKER_RETRIES,
               message: "Retrying malformed tool-call marker response",
-            });
+            };
             continue;
           }
 
@@ -2796,7 +3436,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: TOOL_RESULT_PLACEHOLDER_RETRY_PROMPT,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -2805,7 +3445,7 @@ export class AIChatQueryLoop {
               attempt: toolResultPlaceholderRetryCount,
               maxAttempts: MAX_TOOL_RESULT_PLACEHOLDER_RETRIES,
               message: "Retrying hallucinated tool-result placeholder response",
-            });
+            };
             continue;
           }
 
@@ -2830,6 +3470,25 @@ export class AIChatQueryLoop {
                   )
                 : undefined,
             };
+          }
+
+          // Safe boundary 5 — before_complete (design §11.1): steering
+          // preempts the terminal answer and forces one more model round.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("before_complete");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              yield this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              continue;
+            }
           }
 
           // Detect truncated/empty responses: the server closed the stream
@@ -2858,9 +3517,8 @@ export class AIChatQueryLoop {
             accumulator.state.fullContent.trim().length === 0 &&
             shouldForceSubmitPlanForApproval(input.request.message)
           ) {
-            const submitted = await this.submitImmediatePlanForApproval(
-              input,
-              eventSink
+            const submitted = yield* this.submitImmediatePlanForApproval(
+              input
             );
             if (submitted) {
               planToolsUsed = true;
@@ -2898,7 +3556,7 @@ export class AIChatQueryLoop {
                   role: "user",
                   content: policyEmptyStopOutcome.prompt,
                 });
-                eventSink.emit({
+                yield {
                   type: "recovery_status",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -2907,7 +3565,7 @@ export class AIChatQueryLoop {
                   attempt: emptyStopContinuations,
                   maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
                   message: "Continuing after empty model stop (policy-authorized)",
-                });
+                };
                 continue;
               }
               break;
@@ -2920,7 +3578,7 @@ export class AIChatQueryLoop {
                 role: "user",
                 content: EMPTY_STOP_AFTER_TOOLS_PROMPT,
               });
-              eventSink.emit({
+              yield {
                 type: "recovery_status",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -2929,7 +3587,7 @@ export class AIChatQueryLoop {
                 attempt: emptyStopContinuations,
                 maxAttempts: MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS,
                 message: "Continuing after empty model stop",
-              });
+              };
               console.log(
                 `[ai-chat-v2] empty stop after tools; continuation ${emptyStopContinuations}/${MAX_EMPTY_STOP_AFTER_TOOLS_CONTINUATIONS}`
               );
@@ -2946,7 +3604,7 @@ export class AIChatQueryLoop {
                 role: "user",
                 content: TOOL_ROUND_CAP_CONTINUATION_PROMPT,
               });
-              eventSink.emit({
+              yield {
                 type: "recovery_status",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -2955,7 +3613,7 @@ export class AIChatQueryLoop {
                 attempt: roundCapContinuations,
                 maxAttempts: maxRoundCapContinuations,
                 message: "Continuing after empty model stop",
-              });
+              };
               console.log(
                 `[ai-chat-v2] empty-stop exhausted; hidden continue ${roundCapContinuations}/${maxRoundCapContinuations}`
               );
@@ -3014,7 +3672,7 @@ export class AIChatQueryLoop {
                   role: "user",
                   content: policyGoalTextOutcome.prompt,
                 });
-                eventSink.emit({
+                yield {
                   type: "recovery_status",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -3023,7 +3681,7 @@ export class AIChatQueryLoop {
                   attempt: goalTextStopContinuations,
                   maxAttempts: MAX_GOAL_TEXT_STOP_CONTINUATIONS,
                   message: "Continuing goal after premature text-only stop (policy-authorized)",
-                });
+                };
                 continue;
               }
               break;
@@ -3053,7 +3711,7 @@ export class AIChatQueryLoop {
               role: "user",
               content: GOAL_TEXT_STOP_CONTINUATION_PROMPT,
             });
-            eventSink.emit({
+            yield {
               type: "recovery_status",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -3062,7 +3720,7 @@ export class AIChatQueryLoop {
               attempt: goalTextStopContinuations,
               maxAttempts: MAX_GOAL_TEXT_STOP_CONTINUATIONS,
               message: "Continuing goal after premature text-only stop",
-            });
+            };
             console.log(
               `[ai-chat-v2] goal text stop after tools; continuation ${goalTextStopContinuations}/${MAX_GOAL_TEXT_STOP_CONTINUATIONS}`
             );
@@ -3091,7 +3749,7 @@ export class AIChatQueryLoop {
                 role: "user",
                 content: policyLoopExitOutcome.prompt,
               });
-              eventSink.emit({
+              yield {
                 type: "recovery_status",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -3100,7 +3758,7 @@ export class AIChatQueryLoop {
                 attempt: 1,
                 maxAttempts: 1,
                 message: "Continuing after premature stop (policy-authorized)",
-              });
+              };
               continue;
             }
             break;
@@ -3119,7 +3777,7 @@ export class AIChatQueryLoop {
             );
           }
           for (const call of malformedCalls) {
-            console.error(
+            log.error(
               `[ai-chat-v2] malformed tool call args name=${call.name} id=${
                 call.id
               } rawArgsLen=${call.rawArgumentsJson?.length ?? 0} rawArgs="${(
@@ -3158,7 +3816,7 @@ export class AIChatQueryLoop {
         // can use the 3-image budget and we do not resend large data URLs.
         const stripped = stripConsumedImageHandoffs(messages);
         if (stripped > 0) {
-          console.log(
+          log.info(
             `[ai-chat-v2] stripped ${stripped} consumed image handoff part(s) after model round`
           );
         }
@@ -3194,7 +3852,7 @@ export class AIChatQueryLoop {
             success: false,
             error: errorDetail,
           });
-          eventSink.emit({
+          yield {
             type: "tool_result",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -3202,7 +3860,7 @@ export class AIChatQueryLoop {
             toolName: call.name,
             fullContent: errorContent,
             toolResult: { success: false, error: errorDetail },
-          });
+          };
           messages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -3210,26 +3868,57 @@ export class AIChatQueryLoop {
           });
         }
 
+        // Ticket P2-8: handoff messages collected per tool batch — appended
+        // after the loop so tool responses stay contiguous.
+        const postToolHandoffs: OpenAIChatMessage[] = [];
         for (const call of parsedCalls) {
           if (!call.ok || !call.id || !call.name) {
             continue;
           }
+
+          // Safe boundary 3 — before_tool (design §11.1): this call has not
+          // started. Steering skips it and every other unstarted call.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("before_tool");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              for (const skippedEvent of this.collectSkippedToolResults(
+              input,
+              messages,
+              parsedCalls
+            )) {
+              yield skippedEvent;
+            }
+              yield this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              break;
+            }
+          }
+
           const callId = call.id;
           const callName = call.name;
 
-          const emitToolCall = async (
+          // Stage B §5.2: pure event builder — the tool_call is yielded at
+          // each call site; the persistence barrier comes from the consumer
+          // (facade flush / engine awaited save) between the yield and the
+          // tool starting on the next generator advance.
+          const buildToolCallEvent = (
             toolArguments: Record<string, unknown>
-          ): Promise<void> => {
-            eventSink.emit({
-              type: "tool_call",
-              conversationId: input.conversationId,
-              messageId: input.assistantMessageId,
-              toolCallId: callId,
-              toolName: callName,
-              toolArguments,
-            });
-            await eventSink.flush?.();
-          };
+          ): AIChatLoopEvent => ({
+            type: "tool_call",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: callId,
+            toolName: callName,
+            toolArguments,
+          });
 
           // Tool-catalog discovery: intercept the discovery tool locally so it
           // never reaches the skill executor (it is a synthetic tool, not a
@@ -3280,7 +3969,7 @@ export class AIChatQueryLoop {
             const searchContent = serializeToolResultContent(
               searchPayload as unknown as Record<string, unknown>
             );
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -3288,7 +3977,7 @@ export class AIChatQueryLoop {
               toolName: call.name,
               fullContent: searchContent,
               toolResult: searchPayload as unknown as Record<string, unknown>,
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -3317,7 +4006,7 @@ export class AIChatQueryLoop {
                 "They are already rendered in chat. If the user requested persistent workspace files, " +
                 "call export_generated_artifacts with the returned artifact URLs and workspace-relative destinations.",
             });
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -3328,7 +4017,7 @@ export class AIChatQueryLoop {
                 success: false,
                 error: "use export_generated_artifacts instead",
               },
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -3356,7 +4045,7 @@ export class AIChatQueryLoop {
               error:
                 "Do not attach multiple images for independent edits. Call process_artifact_batch once with every exact workspace path and the shared edit instruction. It runs one provider request per input with bounded concurrency.",
             });
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -3367,7 +4056,7 @@ export class AIChatQueryLoop {
                 success: false,
                 error: "use process_artifact_batch instead",
               },
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -3400,7 +4089,7 @@ export class AIChatQueryLoop {
                     `Use attach_local_images with exactly one workspace image, or process_artifact_batch ` +
                     `for multiple images (discover paths with glob_files first).`,
                 });
-                eventSink.emit({
+                yield {
                   type: "tool_result",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -3411,7 +4100,7 @@ export class AIChatQueryLoop {
                     success: false,
                     error: "use attach_local_images instead",
                   },
-                });
+                };
                 messages.push({
                   role: "tool",
                   tool_call_id: call.id,
@@ -3420,26 +4109,56 @@ export class AIChatQueryLoop {
                 continue;
               }
 
-              discoveredToolNames.add(call.name);
-              const retryContent = serializeToolResultContent({
-                success: false,
-                error: `Tool "${call.name}" was deferred and has now been loaded. Retry the call with valid arguments.`,
-              });
-              eventSink.emit({
-                type: "tool_result",
-                conversationId: input.conversationId,
-                messageId: input.assistantMessageId,
-                toolCallId: call.id,
+              // FR-28 transparent one-shot hydration + replay (design §8.7):
+              // hydrate the tool and execute THIS validated call now through
+              // the generic path below — the model never receives a synthetic
+              // "deferred tool loaded; retry" failure. One replay per call
+              // fingerprint, ever (process-wide ledger, independent of the
+              // round-level transient retry counter).
+              const hydrationDecision = decideDeferredToolHydration({
+                catalogActive,
+                catalogEntry: entry,
+                discoveredToolNames,
                 toolName: call.name,
-                fullContent: retryContent,
-                toolResult: { success: false, error: "deferred tool loaded" },
+                callArguments: call.arguments ?? {},
+                conversationId: input.conversationId,
+                ledger: this.hydrationLedger,
               });
-              messages.push({
-                role: "tool",
-                tool_call_id: call.id,
-                content: retryContent,
-              });
-              continue;
+              if (hydrationDecision.action === "execute") {
+                discoveredToolNames.add(call.name);
+                toolCatalogCounters.increment("hydration_replays");
+                log.info(
+                  `[tool-catalog] hydrated deferred tool "${call.name}"; replaying the call internally (FR-28)`
+                );
+                // Fall through: the same call executes in THIS round.
+              } else if (hydrationDecision.action === "exhausted") {
+                toolCatalogCounters.increment("hydration_replay_exhausted");
+                const exhaustedContent = serializeToolResultContent({
+                  success: false,
+                  error:
+                    `Tool "${call.name}" could not be loaded automatically ` +
+                    `(retry budget exhausted). Search the tool catalog first.`,
+                  error_code: "INSTALL_TOOL_LOAD_RETRY_EXHAUSTED",
+                });
+                yield {
+                  type: "tool_result",
+                  conversationId: input.conversationId,
+                  messageId: input.assistantMessageId,
+                  toolCallId: call.id,
+                  toolName: call.name,
+                  fullContent: exhaustedContent,
+                  toolResult: {
+                    success: false,
+                    error: "deferred tool load retry exhausted",
+                  },
+                };
+                messages.push({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: exhaustedContent,
+                });
+                continue;
+              }
             }
           }
 
@@ -3449,12 +4168,11 @@ export class AIChatQueryLoop {
             !planContext &&
             input.autoPlan
           ) {
-            await emitToolCall(call.arguments ?? {});
-            const transition = await this.handleEnterPlanMode(
+            yield buildToolCallEvent(call.arguments ?? {});
+            const transition = yield* this.handleEnterPlanMode(
               input,
               messages,
-              call,
-              eventSink
+              call
             );
             if (transition.status === "transitioned") {
               planContext = {
@@ -3486,7 +4204,7 @@ export class AIChatQueryLoop {
             isEnterPlanModeToolName(call.name) &&
             (!input.autoPlan || planContext)
           ) {
-            await emitToolCall(call.arguments ?? {});
+            yield buildToolCallEvent(call.arguments ?? {});
             const reason = planContext
               ? "Already in Plan Mode; EnterPlanMode is not available."
               : "EnterPlanMode is not available. Plan Mode auto-entry is disabled.";
@@ -3494,7 +4212,7 @@ export class AIChatQueryLoop {
               success: false,
               error: reason,
             });
-            eventSink.emit({
+            yield {
               type: "tool_result",
               conversationId: input.conversationId,
               messageId: input.assistantMessageId,
@@ -3502,7 +4220,7 @@ export class AIChatQueryLoop {
               toolName: call.name,
               fullContent: errContent,
               toolResult: { success: false, error: reason },
-            });
+            };
             messages.push({
               role: "tool",
               tool_call_id: call.id,
@@ -3513,15 +4231,14 @@ export class AIChatQueryLoop {
 
           // Plan tools are intercepted locally.
           if (planContext && isPlanToolName(call.name)) {
-            await emitToolCall(call.arguments ?? {});
+            yield buildToolCallEvent(call.arguments ?? {});
             planToolsUsed = true;
             if (call.name === "AskUserQuestion") {
-              const paused = await this.handlePlanToolAskUserQuestion(
+              const paused = yield* this.handlePlanToolAskUserQuestion(
                 input,
                 messages,
                 call,
-                round,
-                eventSink
+                round
               );
               if (paused) {
                 if (
@@ -3538,11 +4255,10 @@ export class AIChatQueryLoop {
               continue;
             }
             if (call.name === "SubmitPlanForApproval") {
-              await this.handlePlanToolSubmitForApproval(
+              yield* this.handlePlanToolSubmitForApproval(
                 input,
                 messages,
-                call,
-                eventSink
+                call
               );
               continue;
             }
@@ -3560,13 +4276,13 @@ export class AIChatQueryLoop {
               },
             });
             if (!policyDecision.allowed) {
-              await emitToolCall(call.arguments ?? {});
+              yield buildToolCallEvent(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({
                 success: false,
                 planApprovalRequired: true,
                 reason: policyDecision.reason ?? "Plan approval required.",
               });
-              eventSink.emit({
+              yield {
                 type: "plan_blocked_tool",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -3575,7 +4291,7 @@ export class AIChatQueryLoop {
                 fullContent: blockedContent,
                 planBlockedToolName: call.name,
                 planBlockedReason: policyDecision.reason ?? undefined,
-              });
+              };
               messages.push({
                 role: "tool",
                 tool_call_id: call.id,
@@ -3606,7 +4322,7 @@ export class AIChatQueryLoop {
               call.arguments
             );
             if (!gateDecision.allowed) {
-              await emitToolCall(call.arguments ?? {});
+              yield buildToolCallEvent(call.arguments ?? {});
               // Actionable reason text (§19): tell the model how to unblock so
               // it stops re-drafting. draft_required → draft first;
               // review_required → the user must review; authorization_missing
@@ -3621,7 +4337,7 @@ export class AIChatQueryLoop {
                 code: gateDecision.code,
                 reason: blockedReason,
               });
-              eventSink.emit({
+              yield {
                 type: "tool_result",
                 conversationId: input.conversationId,
                 messageId: input.assistantMessageId,
@@ -3633,7 +4349,7 @@ export class AIChatQueryLoop {
                   outboundGateBlocked: true,
                   code: gateDecision.code,
                 },
-              });
+              };
               messages.push({
                 role: "tool",
                 tool_call_id: call.id,
@@ -3683,14 +4399,14 @@ export class AIChatQueryLoop {
               try {
                 const decision = await guard.prepareDispatch(descriptor);
                 if (!decision.allowed) {
-                  await emitToolCall(call.arguments ?? {});
+                  yield buildToolCallEvent(call.arguments ?? {});
                   const blockedContent = serializeToolResultContent({
                     success: false,
                     operationGuardBlocked: true,
                     code: decision.reasonCode,
                     reason: decision.reason,
                   });
-                  eventSink.emit({
+                  yield {
                     type: "tool_result",
                     conversationId: input.conversationId,
                     messageId: input.assistantMessageId,
@@ -3702,7 +4418,7 @@ export class AIChatQueryLoop {
                       operationGuardBlocked: true,
                       code: decision.reasonCode,
                     },
-                  });
+                  };
                   messages.push({
                     role: "tool",
                     tool_call_id: call.id,
@@ -3724,7 +4440,7 @@ export class AIChatQueryLoop {
                   "[ai-chat-v2] T23 operation guard prepareDispatch failed:",
                   err
                 );
-                await emitToolCall(call.arguments ?? {});
+                yield buildToolCallEvent(call.arguments ?? {});
                 const blockedContent = serializeToolResultContent({
                   success: false,
                   operationGuardBlocked: true,
@@ -3732,7 +4448,7 @@ export class AIChatQueryLoop {
                   reason:
                     "The operation guard could not be consulted. Dispatch is blocked until reconciliation.",
                 });
-                eventSink.emit({
+                yield {
                   type: "tool_result",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -3744,7 +4460,7 @@ export class AIChatQueryLoop {
                     operationGuardBlocked: true,
                     code: "OPERATION_UNKNOWN_OUTCOME",
                   },
-                });
+                };
                 messages.push({
                   role: "tool",
                   tool_call_id: call.id,
@@ -3760,6 +4476,133 @@ export class AIChatQueryLoop {
             name: call.name,
             arguments: call.arguments,
           };
+
+          // Skill-installation tool policy (design §8.6, FR-30): after an
+          // explicit install intent, generic shell/file/catalog tools cannot
+          // substitute for the typed installer on the recognized target.
+          // Unrelated workspace work stays legal; only a typed
+          // manual-action-required transition opens a generic fallback.
+          // FR-30 session-aware boundary: the message's intent OR this
+          // conversation's PERSISTED active installer session activates the
+          // boundary — so follow-up turns ("continue", "now do X on it")
+          // cannot sidestep the typed installer just by omitting the intent
+          // phrases. The session's manual-action approval (when granted)
+          // opens the bounded generic fallback.
+          const skillInstallRouting = classifySkillRequestIntent(
+            input.request.message
+          );
+          // Audit R10: record the first-tool category once per explicit
+          // install REQUEST (the user message itself carries the intent).
+          if (
+            skillInstallRouting.confidence === "explicit" &&
+            !installFirstToolRecorded
+          ) {
+            installFirstToolRecorded = true;
+            toolCatalogCounters.increment(installFirstToolCounterKey(call.name));
+          }
+          let installRouting = skillInstallRouting;
+          // Ticket P2-6: the cached install boundary belongs to ONE
+          // conversation — one loop instance serves several. A conversation
+          // switch invalidates it for THIS call (fail closed: neither the
+          // previous conversation's session nor its manual-action approval
+          // applies) while a fresh resolve runs off the critical path.
+          const boundaryStale =
+            this.installBoundaryConversation !== input.conversationId;
+          if (installRouting.confidence !== "explicit") {
+            if (this.installBoundaryDirty || boundaryStale) {
+              this.installBoundaryDirty = false;
+              // Off the critical path (see the narrowing note): the cached
+              // session binds this and subsequent calls once resolved.
+              void this.refreshInstallBoundary(input.conversationId);
+            }
+            if (this.activeInstallSession && !boundaryStale) {
+              installRouting = {
+                policyVersion: 1,
+                intent: "install-package",
+                confidence: "explicit",
+                ...(this.activeInstallSession.canonicalUri
+                  ? {
+                      source: this.activeInstallSession.canonicalUri,
+                    }
+                  : {}),
+                allowedEntryPoint: "skill_install_prepare",
+                reasonCode: "active-session-binding",
+              };
+            }
+          } else {
+            this.installBoundaryDirty = true;
+          }
+          // Cached by refreshInstallBoundary; false (fail closed) until the
+          // audit lookup completes — never awaited inline. Ticket P2-6: a
+          // boundary cached for a DIFFERENT conversation reads as
+          // not-approved here.
+          const manualActionApproved = boundaryStale
+            ? { approved: false }
+            : this.manualActionApprovedCache;
+          if (
+            installRouting.confidence === "explicit" &&
+            !INSTALLER_TOOL_NAMES.has(call.name)
+          ) {
+            const verdict = evaluateSkillInstallationToolPolicy({
+              routing: installRouting,
+              toolName: call.name,
+              toolArguments: call.arguments ?? {},
+              manualActionApproved: manualActionApproved.approved
+                ? {
+                    target:
+                      manualActionApproved.target ??
+                      installRouting.source ??
+                      "",
+                    // Audit R8: forward the exact approved operation so
+                    // the policy authorizes ONLY it (a target-only record
+                    // keeps the legacy, broader target scope).
+                    ...(manualActionApproved.toolName !== undefined
+                      ? { toolName: manualActionApproved.toolName }
+                      : {}),
+                    ...(manualActionApproved.operation !== undefined
+                      ? { operation: manualActionApproved.operation }
+                      : {}),
+                    ...(manualActionApproved.cwd !== undefined
+                      ? { cwd: manualActionApproved.cwd }
+                      : {}),
+                  }
+                : undefined,
+            });
+            // NFR-12 release metrics (PRD §14): observe the routing
+            // decision + outcome at the enforcement point.
+            toolCatalogCounters.increment("install_routing_explicit");
+            if (!verdict.allowed) {
+              toolCatalogCounters.increment("install_fallback_blocked");
+              yield {
+                type: "tool_call",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                toolArguments: call.arguments ?? {},
+              };
+              const blockedInstallContent = serializeToolResultContent({
+                success: false,
+                error: verdict.message,
+                error_code: verdict.code,
+              });
+              yield {
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedInstallContent,
+                toolResult: { success: false, error: verdict.message },
+              };
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedInstallContent,
+              });
+              continue;
+            }
+          }
           const preparedCall = await this.prepareToolCall(
             input,
             executableCall,
@@ -3767,11 +4610,40 @@ export class AIChatQueryLoop {
             outboundSendGateAllowed
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
-          await emitToolCall(effectiveArguments);
+          yield buildToolCallEvent(effectiveArguments);
 
-          const toolResult =
-            preparedCall.blockedResult ??
-            (await this.executePreparedToolWithTimeout(input, preparedCall));
+          // Stage B §12 (FR-016): progress produced by callbacks while the
+          // tool runs flows through the latest-per-tool multiplexer —
+          // coalesced, bounded, never failing the tool.
+          let toolResult: ToolExecutionResult;
+          if (preparedCall.blockedResult) {
+            toolResult = preparedCall.blockedResult;
+          } else {
+            const progressStream = runToolWithProgress<
+              ToolExecutionResult,
+              AIChatToolProgressLoopEvent
+            >(
+              (emit) =>
+                this.executePreparedToolWithTimeout(input, preparedCall, emit),
+              input.abortController.signal
+            );
+            try {
+              for (;;) {
+                const step = await progressStream.next();
+                if (step.done === true) {
+                  toolResult = step.value;
+                  break;
+                }
+                yield step.value.event;
+              }
+            } finally {
+              // TODO-07 (FR-015): abandoning this generator at a progress
+              // yield must still close the inner multiplexer (slot cleanup).
+              await progressStream.return(undefined as never).catch(
+                () => undefined
+              );
+            }
+          }
 
           // FR-4: a tool (e.g. run_subagent batch worker) may contribute
           // generated/edited image descriptors on result.outputImages. Fold
@@ -3840,6 +4712,11 @@ export class AIChatQueryLoop {
 
           let toolPayload = normalizeToolResult(toolResult);
           let toolContent = serializeToolResultContent(toolPayload);
+          // FR-13: a (fresh or repeated) skill invocation may change the
+          // active allowed-tools intersection for subsequent rounds.
+          if (call.name === "use_skill") {
+            this.skillToolAllowlistDirty = true;
+          }
 
           // Recoverable large tool results (technical design §9.1). When the
           // rollout flags are off this is a single cheap check and the legacy
@@ -3902,6 +4779,16 @@ export class AIChatQueryLoop {
                   previewKind: Array.isArray(toolResult.result)
                     ? "records"
                     : "text",
+                  // Batch aggregate receipts are parsed by the renderer's
+                  // batch progress card, so their preview needs the larger
+                  // budget — a 2KB default cut lands mid-JSON and the card
+                  // cannot render.
+                  ...(TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES.has(call.name)
+                    ? {
+                        previewMaxBytes:
+                          TOOL_RESULT_CONFIG.batchPreviewMaxBytes,
+                      }
+                    : {}),
                   // A timeout that produced partial data is the PRODUCER
                   // being incomplete, which is a separate fact from what we
                   // manage to capture.
@@ -3955,12 +4842,16 @@ export class AIChatQueryLoop {
                 // is exactly the bulk this feature exists to keep out of the
                 // renderer and the transcript. For an externalized result the
                 // payload is rebuilt from the trusted outcome plus bounded
-                // descriptors; the body lives only in the artifact.
+                // descriptors; the body lives only in the artifact. The LIVE
+                // metadata uses the SAME display envelope the durable row
+                // saves (toolResultReceiptUiMetadata) — the preparation
+                // service's own snake_case uiMetadata would otherwise give
+                // the renderer two shapes for one receipt.
                 toolPayload = {
                   success: toolResult.success,
                   executionTimeMs: toolResult.execution_time_ms,
                   toolResultReceipt: prepared.receipt,
-                  ...prepared.uiMetadata,
+                  ...toolResultReceiptUiMetadata(prepared.receipt),
                 } as Record<string, unknown>;
               }
             } catch (err: unknown) {
@@ -3991,19 +4882,30 @@ export class AIChatQueryLoop {
 
           if (toolResult.success) {
             lastFailedTool = null;
+            // PRD FR-13/FR-16: a successful extract_contact_info call must
+            // expose verify_contact_info on the next round even when the
+            // tool is normally deferred.
+            if (call.name === "extract_contact_info") {
+              discoveredToolNames.add(VERIFY_CONTACT_INFO_TOOL_NAME);
+            }
           } else {
             lastFailedTool = {
               name: call.name,
               error: extractToolError(toolPayload),
             };
           }
-          console.log(
+          const failureDetail = toolResult.success
+            ? ""
+            : ` error=${JSON.stringify(
+                extractToolError(toolPayload).slice(0, 240)
+              )}`;
+          log.info(
             `[ai-chat-v2] tool ${call.name} ok=${
               toolResult.success
-            } needsPermission=${isPermissionPromptResult(toolResult)}`
+            } needsPermission=${isPermissionPromptResult(toolResult)}${failureDetail}`
           );
 
-          eventSink.emit({
+          yield {
             type: "tool_result",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -4011,7 +4913,7 @@ export class AIChatQueryLoop {
             toolName: call.name,
             fullContent: toolContent,
             toolResult: toolPayload,
-          });
+          };
 
           if (isPermissionPromptResult(toolResult)) {
             return {
@@ -4019,7 +4921,10 @@ export class AIChatQueryLoop {
               pending: {
                 conversationId: input.conversationId,
                 assistantMessageId: input.assistantMessageId,
-                conversationMessages: messages,
+                // Review R2: carry any handoffs queued by EARLIER tools
+                // in this batch through the pause — they were dropped
+                // when the permission return bypassed the batch append.
+                conversationMessages: [...messages, ...postToolHandoffs],
                 abortController: input.abortController,
                 request: input.request,
                 openAITools: currentTools,
@@ -4040,7 +4945,6 @@ export class AIChatQueryLoop {
                 // for blocking reasonCodes (mirrors the loop input field).
                 outboundSendPreAuthorized: input.outboundSendPreAuthorized,
                 planContext,
-                eventSink: eventSink,
                 turnId: input.turnId,
                 toolCatalogState: catalogActive
                   ? snapshotToolCatalogState(
@@ -4048,6 +4952,13 @@ export class AIChatQueryLoop {
                       announcedDeferredNames
                     )
                   : undefined,
+                // Stage A §3.2/§3.6: the owner's lifecycle listener and
+                // terminal-notification ownership survive the pause so the
+                // resumed segment notifies the same owner (FR-021/023).
+                ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+                ...(input.ownerNotifiesTerminal !== undefined
+                  ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
+                  : {}),
                 // Slice 2: carry the completion-policy binding through the
                 // permission pause so the resumed loop still consults the
                 // same controller/budget (budget persists across pause).
@@ -4067,6 +4978,20 @@ export class AIChatQueryLoop {
             tool_call_id: call.id,
             content: toolContent,
           });
+          // Prompt-skill hidden context (design §10.5): after the SHORT tool
+          // acknowledgement, append the verified instruction block as a
+          // model-only message. Not persisted, not a user bubble, and marked
+          // as untrusted repository guidance inside the block itself.
+          // Ticket P2-8: handoffs are COLLECTED and appended after the whole
+          // tool batch — a role:user message between two tool responses
+          // violates the Chat Completions contract (all tool responses for
+          // an assistant's tool_calls must precede any user message) and
+          // strict providers reject the next request.
+          if (toolResult.success && toolResult.promptSkillContext) {
+            postToolHandoffs.push(
+              buildPromptSkillHandoffMessage(toolResult.promptSkillContext)
+            );
+          }
           // FR-09 / §7.2 step 7 (GAP-S2 #2): observe the committed tool
           // round for stall detection. This runs AFTER the permission-prompt
           // early return above, so only rounds that actually committed a
@@ -4094,7 +5019,7 @@ export class AIChatQueryLoop {
             toolResult.modelArtifacts &&
             toolResult.modelArtifacts.length > 0
           ) {
-            messages.push(
+            postToolHandoffs.push(
               buildImageArtifactHandoffMessage({
                 artifacts: toolResult.modelArtifacts,
                 originalUserRequest: input.request.message,
@@ -4102,10 +5027,52 @@ export class AIChatQueryLoop {
               })
             );
           }
-          console.log(
+          log.info(
             `[ai-chat-v2] tool ${call.name} result pushed → round ${round} will continue`
           );
+
+          // Safe boundary 4 — after_tool (design §11.1): this call's result
+          // is in the transcript; remaining unstarted calls are skipped.
+          if (steeringControl?.hasPending()) {
+            const batch = await steeringControl.consume("after_tool");
+            if (batch) {
+              this.assertSteeringRoundBudget(round);
+              for (const skippedEvent of this.collectSkippedToolResults(
+              input,
+              messages,
+              parsedCalls
+            )) {
+              yield skippedEvent;
+            }
+              yield this.applySteeringToTranscript(
+                input,
+                messages,
+                batch,
+                visibleContent.length,
+                directionTransitions
+              );
+              steeringApplied = true;
+              tracker.steeringObserved = true;
+              break;
+            }
+          }
         }
+      // Ticket P2-8: all tool responses are contiguous; the handoff
+      // (model-only role:user) messages follow the batch.
+      messages.push(...postToolHandoffs);
+      }
+
+      // All tool calls for this round have executed and their results are
+      // pushed. Now strip user-uploaded image data URLs from the original
+      // user message — the model has already seen the image in a prior API
+      // call, and the tool context has already counted it. Re-sending a
+      // ~500k-token image data URL on every subsequent round wastes huge
+      // context budget. This is idempotent (no-op when already stripped).
+      const strippedUserImages = stripConsumedUserImages(messages);
+      if (strippedUserImages > 0) {
+        log.info(
+          `[ai-chat-v2] stripped ${strippedUserImages} user image part(s) after tool round`
+        );
       }
 
       if (input.abortController.signal.aborted) {
@@ -4137,6 +5104,13 @@ export class AIChatQueryLoop {
       if (recoveryState.recoveredContentPrefix) {
         fullContent = recoveryState.recoveredContentPrefix + fullContent;
       }
+      // Steering turns persist the FULL visible content across rounds in
+      // delivery order (§11.6) — the final round alone would drop the
+      // pre-steering text the user already saw.
+      if (steeringApplied) {
+        fullContent =
+          (recoveryState.recoveredContentPrefix || "") + visibleContent;
+      }
       if (fullContent.trim().length === 0 && immediatePlanSubmissionContent) {
         fullContent = immediatePlanSubmissionContent;
       }
@@ -4154,11 +5128,11 @@ export class AIChatQueryLoop {
           await input.autoPlan.planModule.cancelDraft({
             planId: autoEnteredPlanId,
           });
-          console.log(
+          log.info(
             `[ai-chat-v2] auto-entered draft ${autoEnteredPlanId} cancelled (no plan tools used)`
           );
         } catch (err) {
-          console.error("[ai-chat-v2] failed to cancel orphan draft:", err);
+          log.error("[ai-chat-v2] failed to cancel orphan draft:", err);
         }
       }
 
@@ -4170,7 +5144,7 @@ export class AIChatQueryLoop {
       if (!lastReportedUsage) {
         const estimated = estimateTokenUsage(input.messages, fullContent);
         lastReportedUsage = estimated;
-        eventSink.emit({
+        yield {
           type: "usage_update",
           conversationId: input.conversationId,
           messageId: input.assistantMessageId,
@@ -4178,8 +5152,10 @@ export class AIChatQueryLoop {
           promptTokens: estimated.promptTokens,
           completionTokens: estimated.completionTokens,
           totalTokens: estimated.totalTokens,
-        });
+        };
       }
+      // NFR-12: aggregate counter emission on the turn boundary.
+      toolCatalogCounters.onTurnCompleted();
       return {
         type: "completed",
         conversationId: input.conversationId,
@@ -4203,6 +5179,7 @@ export class AIChatQueryLoop {
             )
           : undefined,
         recoveryMetadata: buildRecoveryMetadata(recoveryState),
+        ...(steeringApplied ? { directionTransitions } : {}),
       };
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -4269,7 +5246,7 @@ export class AIChatQueryLoop {
           // turn (e.g. outer run() retry) resolve limits against the fallback
           // model, not the original (§8.1 re-resolve after fallback).
           effectiveModel = result.action.fallbackModel;
-          eventSink.emit({
+          yield {
             type: "recovery_status",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -4279,7 +5256,7 @@ export class AIChatQueryLoop {
             currentModel: recoveryState.currentModel,
             fallbackModel: result.action.fallbackModel,
             message: "Switching to backup model",
-          });
+          };
         }
       }
       return {
@@ -4303,17 +5280,127 @@ export class AIChatQueryLoop {
     }
   }
 
-  private async handlePlanToolAskUserQuestion(
-    input: AIChatQueryLoopInput,
+  // -------------------------------------------------------------------------
+  // Steering boundary helpers (message-queue design §11)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Applying steering requires another model round (§11.5). When the round
+   * budget is exhausted the turn fails cleanly with STEERING_ROUND_LIMIT;
+   * the pending items stay `steering` and are paused by terminal handling,
+   * so the user can resume them as a normal next message.
+   */
+  private assertSteeringRoundBudget(round: number): void {
+    if (round + 1 >= CHAT_V2_MAX_TOOL_ROUNDS) {
+      throw new AIChatSteeringRoundLimitError();
+    }
+  }
+
+  /**
+   * Append one protocol-valid synthetic tool result for every parsed call
+   * that does not already have a `tool` message (FR-22). Ids mirror
+   * buildAssistantToolCallMessage (including its `call_${index}` fallback)
+   * so every assistant tool_call_id receives exactly one result.
+   */
+  /** Stage B §5.2: returns the synthetic skipped-tool events; call sites
+   * yield them (the transcript mutation stays here). */
+  private collectSkippedToolResults(
+    input: AIChatQueryGeneratorInput,
+    messages: OpenAIChatMessage[],
+    parsedCalls: readonly ParsedToolCallResult[]
+  ): AIChatLoopEvent[] {
+    const events: AIChatLoopEvent[] = [];
+    const resulted = new Set<string>();
+    for (const message of messages) {
+      if (message.role === "tool" && message.tool_call_id) {
+        resulted.add(message.tool_call_id);
+      }
+    }
+    const skippedContent = serializeToolResultContent({
+      ...SKIPPED_BY_STEERING_TOOL_RESULT,
+    });
+    let skippedCount = 0;
+    for (const call of parsedCalls) {
+      const id = call.id ?? `call_${parsedCalls.indexOf(call)}`;
+      if (resulted.has(id)) continue;
+      if (!call.name && !call.id) continue;
+      events.push({
+        type: "tool_result",
+        conversationId: input.conversationId,
+        messageId: input.assistantMessageId,
+        toolCallId: id,
+        toolName: call.name ?? "unknown_tool",
+        fullContent: skippedContent,
+        toolResult: { ...SKIPPED_BY_STEERING_TOOL_RESULT },
+      });
+      messages.push({
+        role: "tool",
+        tool_call_id: id,
+        content: skippedContent,
+      });
+      resulted.add(id);
+      skippedCount += 1;
+    }
+    if (skippedCount > 0) {
+      aiChatQueueCounters.increment(
+        "ai_chat_steering_skipped_tools_total",
+        skippedCount
+      );
+    }
+    return events;
+  }
+
+  /**
+   * Append the persisted steering instructions as consecutive user messages
+   * (wrapped, below system/policy authority — §10.4), emit one
+   * direction_updated event carrying ids/offset only, and record the
+   * transition for the final assistant row (§11.5).
+   */
+  /** Stage B §5.2: returns the direction_updated event for the caller to
+   * yield; the transcript/transition mutation stays here. */
+  private applySteeringToTranscript(
+    input: AIChatQueryGeneratorInput,
+    messages: OpenAIChatMessage[],
+    batch: AIChatSteeringBatch,
+    contentOffset: number,
+    transitions: ChatV2DirectionTransition[]
+  ): AIChatLoopEvent {
+    for (const instruction of batch.instructions) {
+      messages.push({
+        role: "user",
+        content: `${STEERING_MODEL_PREFIX}\n${instruction.modelContent}`,
+      });
+    }
+    const directionEvent: AIChatLoopEvent = {
+      type: "direction_updated",
+      conversationId: input.conversationId,
+      messageId: input.assistantMessageId,
+      boundary: batch.boundary,
+      pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
+      contentOffset,
+    };
+    transitions.push({
+      contentOffset,
+      boundary: batch.boundary,
+      pendingMessageIds: batch.instructions.map((i) => i.pendingMessageId),
+      occurredAt: new Date().toISOString(),
+    });
+    log.info(
+      `[ai-chat-v2] steering applied boundary=${batch.boundary} count=${batch.instructions.length} offset=${contentOffset}`
+    );
+    return directionEvent;
+  }
+
+  private async *handlePlanToolAskUserQuestion(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     call: {
       id?: string;
       name?: string;
       arguments?: Record<string, unknown>;
     },
-    round: number,
-    eventSink: AIChatQueryEventSink
-  ): Promise<AIChatQueryLoopResult | null> {
+    round: number
+  ): AsyncGenerator<AIChatLoopEvent, AIChatQueryLoopResult | null, void> {
     if (!input.planContext || !call.id || !call.name) return null;
     const payload = (call.arguments ?? {}) as unknown as AskUserQuestionPayload;
     if (!payload || !Array.isArray(payload.questions)) return null;
@@ -4326,7 +5413,7 @@ export class AIChatQueryLoop {
         payload,
       });
     } catch (err) {
-      console.error("[ai-chat-v2] saveQuestion failed:", err);
+      log.error("[ai-chat-v2] saveQuestion failed:", err);
       const errContent = serializeToolResultContent({
         success: false,
         error:
@@ -4342,15 +5429,37 @@ export class AIChatQueryLoop {
       return null;
     }
 
-    eventSink.emit({
+    // Parked-question publication (R03-family): the parked turn's only
+    // renderer surface for the question is THIS chunk. The in-memory
+    // planContext still holds the pre-question state (draft) — projecting
+    // that would classify the surface `drafting` and HIDE the card while the
+    // turn waits, so re-read the authoritative module state, which carries
+    // status awaiting_question + the pending question.
+    let publishedPlanState = input.planContext.planState;
+    try {
+      const refreshed = await input.planContext.planModule.getPlanStateByPlanId(
+        questionView.planId
+      );
+      if (refreshed) {
+        publishedPlanState = refreshed;
+        input.planContext.planState = refreshed;
+      }
+    } catch (err) {
+      log.warn(
+        "[ai-chat-v2] post-question plan state refresh failed:",
+        err
+      );
+    }
+
+    yield {
       type: "ask_user_question",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
       toolCallId: call.id,
       toolName: call.name,
       question: questionView,
-      planState: input.planContext.planState,
-    });
+      planState: publishedPlanState,
+    };
 
     const ackContent = serializeToolResultContent({
       success: true,
@@ -4376,7 +5485,15 @@ export class AIChatQueryLoop {
         toolCallId: call.id,
         questionId: questionView.questionId,
         planId: input.planContext.planState.planId,
-        eventSink: eventSink,
+        // Stage B §10: pending data carries no sink — the engine keeps the
+        // resume destination in its side map; the owner supplies one on
+        // resumeClaimed.
+        // Stage A §3.2/§3.6: owner listener + notification ownership survive
+        // the pause (FR-021/023).
+        ...(input.lifecycle ? { lifecycle: input.lifecycle } : {}),
+        ...(input.ownerNotifiesTerminal !== undefined
+          ? { ownerNotifiesTerminal: input.ownerNotifiesTerminal }
+          : {}),
         turnId: input.turnId,
         // Slice 2: carry the completion-policy binding through the plan
         // pause so the resumed loop still consults the same
@@ -4406,19 +5523,24 @@ export class AIChatQueryLoop {
    * { type: "failed" } turn result.
    */
   private async executeAsyncTool(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: {
       id: string;
       name: string;
       arguments?: Record<string, unknown>;
     },
-    outboundAuthorization?: {
+    outboundAuthorization: {
       batchId: number;
       authorizationId: number;
       batchHash: string;
-    },
-    outboundSendGateAllowed = false
-  ): Promise<{ jobId: string }> {
+    } | undefined,
+    outboundSendGateAllowed = false,
+    onProgress?: ToolProgressEmitter,
+    deadlineMs?: number
+  ): Promise<
+    | { kind: "job"; jobId: string; deadlinePerfMs: number }
+    | { kind: "rejected"; result: ToolExecutionResult }
+  > {
     // Re-check AI enable gate before starting async work. The IPC layer
     // already checks this; this is defense-in-depth per the project rule.
     // Throw on failure: the run() outer try/catch at line ~797 catches this
@@ -4428,11 +5550,266 @@ export class AIChatQueryLoop {
       throw new Error("AI features are not enabled on this plan.");
     }
 
+    // One authoritative deadline for the whole job (HOST-07): the clamped
+    // plugin tool policy ceiling (or the host default). Every inner MCP
+    // timeout derives from the remaining budget; progress can never extend
+    // it, and pollAsyncJobToCompletion enforces the same bound.
+    //
+    // H5: the EPOCH deadline is the observable contract (host context file,
+    // registry snapshots, user-facing copy); the AUTHORITATIVE expiry checks
+    // use a monotonic clock anchored here (`deadlinePerfMs`), so wall-clock
+    // changes can never extend or truncate the job.
+    const deadlineBudgetMs = deadlineMs ?? HOST_MAX_RUN_MS;
+    const deadlineEpochMs = Date.now() + deadlineBudgetMs;
+    const deadlinePerfMs = performance.now() + deadlineBudgetMs;
+
     // T05 (FR-08/10/23, AC-27): record this tool execution against the
     // execution budget before dispatching (fail-closed gate per B13a).
     await this.reserveToolExecutionBudget(input, call);
-
     const registry = getDefaultToolJobRegistry();
+
+    // ---- HOST-10 / HOST-16 admission (plugin async MCP tools only) ----
+    // Generic, policy-driven: no tool-specific branch lives here.
+    const args = call.arguments ?? {};
+    const pluginName = parsePluginNameFromCanonicalTool(call.name);
+    if (pluginName) {
+      // G01 (design §10.1, HOST-10): the host validates the public input
+      // contract BEFORE admission — bad shapes never reach the ledger,
+      // the registry or the plugin process.
+      const inputIssues = validatePublicSearchInput(args);
+      if (inputIssues.length > 0) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error: "The search input was rejected by the host schema check.",
+              code: "TOOL_INPUT_INVALID",
+              issues: inputIssues.map((issue) => ({
+                code: issue.code,
+                field: issue.field,
+                message: issue.message,
+              })),
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      const ledger = getPluginRecoveryLedger();
+      const identity = searchIdentityFromArgs(args);
+      const fingerprint = jobFingerprintFromArgs(
+        input.conversationId,
+        call.name,
+        args
+      );
+
+      // Duplicate suppression: an equivalent scrape already queued/running in
+      // this conversation returns the existing job identity, never a second
+      // live job (PRD §11.9).
+      const duplicate = registry.findActiveJobByFingerprint(
+        input.conversationId,
+        fingerprint
+      );
+      if (duplicate) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "An identical job is already running in this conversation.",
+              code: "JOB_ALREADY_RUNNING",
+              job_id: duplicate.jobId,
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      // Recovery budget: the model may propose, the ledger disposes. Retry
+      // after a failure requires the host-minted error reference plus an
+      // allowed strategy, inside the attempt budget and cooldown window.
+      const recoveryArg =
+        typeof args.recovery === "object" && args.recovery !== null
+          ? (args.recovery as {
+              previousErrorId?: unknown;
+              strategy?: unknown;
+            })
+          : undefined;
+      // B08: the ledger binds this scope to the HOST-verified request
+      // generation (sourceUserMessageId) so forged recovery fields cannot
+      // mint attempt 1 on a fresh scope and an explicit NEW user message
+      // resets the budget without a model bypass.
+      const validation = ledger.validateAndReserve({
+        conversationId: input.conversationId,
+        pluginName,
+        searchIdentity: identity,
+        previousErrorId: recoveryArg?.previousErrorId,
+        strategy: recoveryArg?.strategy,
+        userTurnId: input.sourceUserMessageId,
+      });
+      if (!validation.ok) {
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "Recovery request was rejected by the host retry policy.",
+              code: "INVALID_RECOVERY_REQUEST",
+              reason: validation.reason,
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+
+      // G03: artifact-quota preflight BEFORE a job exists — an artifact-
+      // capable plugin cannot consume a slot to write staging it could
+      // never legally promote. The reserved attempt is released because an
+      // admission rejection never counts a usable run.
+      if (
+        getPluginToolPolicyRegistry().getPluginArtifactFormats(pluginName)
+          .length > 0
+      ) {
+        const quota = getPluginFileArtifactService().preflightArtifactQuota(
+          pluginName
+        );
+        if (!quota.ok) {
+          ledger.completeAttempt(
+            input.conversationId,
+            pluginName,
+            identity,
+            "failed"
+          );
+          return {
+            kind: "rejected",
+            result: {
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: false,
+              result: {
+                error:
+                  "The local result-file storage is full. Export or delete old result files, free disk space, and retry.",
+                code: "ARTIFACT_QUOTA_EXCEEDED",
+                quota: quota.code,
+              },
+              execution_time_ms: 0,
+            },
+          };
+        }
+      }
+
+      let startOutcome: { jobId: string; queued: boolean };
+      try {
+        startOutcome = registry.start(
+          call.name,
+          args,
+          { conversationId: input.conversationId, toolCallId: call.id },
+          (handle) => this.spawnPluginAsyncTool(input, call, handle, {
+            deadlineEpochMs,
+            deadlinePerfMs,
+            outboundAuthorization,
+            onProgress,
+            pluginName,
+            identity,
+          // H1/H3: the reservation (attempt, host strategy, owed delay) is the
+          // authority for this call's recovery — the model's arguments are
+          // never authoritative. Threading it through the host context file
+          // lets the plugin verify {errorId, strategy} and the owed delay.
+          authorizedRecovery:
+            validation.context.strategy && validation.context.errorRef
+              ? {
+                  errorId: validation.context.errorRef,
+                  strategy: validation.context.strategy,
+                  ...(validation.context.retryAfterMs !== null
+                    ? { retryAfterMs: validation.context.retryAfterMs }
+                    : {}),
+                }
+              : undefined,
+        }),
+        {
+          // G01: enforce the plugin's declared maxConcurrentPerConversation
+          // for this tool. Admission happens BEFORE a job exists — no slot
+          // and no ledger lock are committed when the limit is reached.
+          fingerprint,
+          conversationConcurrencyLimit:
+            getPluginToolPolicyRegistry().resolveByToolName(call.name)?.policy
+              .maxConcurrentPerConversation,
+        }
+        );
+      if (startOutcome.queued) {
+        // B08: a QUEUED job's spawn callback has not run, so the settle hook
+        // inside spawnPluginAsyncTool does not exist yet. Attach the
+        // reservation cleanup HERE, before queue admission can be undone by
+        // a queued cancellation (which never invokes the spawn).
+        registry.onSettledById(startOutcome.jobId, () => {
+          ledger.completeAttempt(
+            input.conversationId,
+            pluginName,
+            identity,
+            "failed"
+          );
+        });
+      }
+      } catch (err) {
+        // H5 (lifecycle): admission seals (disable/uninstall/update) reject
+        // with a stable, retryable structured result — no job is created.
+        // B08: the attempt was reserved BEFORE admission; a sealed rejection
+        // must RELEASE the reservation here so the scope never keeps a
+        // dangling in-flight lock (the next call cannot be deadlocked).
+        const sealedBy =
+          err instanceof AdmissionSealedError ? err.sealedBy : null;
+        ledger.completeAttempt(
+          input.conversationId,
+          pluginName,
+          identity,
+          "failed"
+        );
+        if (err instanceof ToolConversationConcurrencyError) {
+          return {
+            kind: "rejected",
+            result: {
+              tool_call_id: call.id,
+              tool_name: call.name,
+              success: false,
+              result: {
+                error:
+                  "This tool is already running the maximum number of searches allowed for this conversation. Retry after the current search finishes.",
+                code: "TOOL_CONCURRENCY_LIMIT",
+                limit: err.limit,
+              },
+              execution_time_ms: 0,
+            },
+          };
+        }
+        if (sealedBy === null) throw err;
+        return {
+          kind: "rejected",
+          result: {
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error:
+                "This plugin is being updated or removed; retries will succeed once the operation completes.",
+              code: "TOOL_ADMISSION_SEALED",
+              sealed_by: sealedBy.slice(0, 96),
+            },
+            execution_time_ms: 0,
+          },
+        };
+      }
+      return { kind: "job", jobId: startOutcome.jobId, deadlinePerfMs };
+    }
+
     const { jobId } = registry.start(
       call.name,
       call.arguments ?? {},
@@ -4447,6 +5824,14 @@ export class AIChatQueryLoop {
               toolCallId: call.id,
               args: call.arguments,
               model: input.request.model,
+              // Registry-owned abort signal: cancelling the job (user Stop,
+              // shutdown) reaches the actual underlying tool work instead of
+              // only relabelling the registry entry (FR-36, design §17.2).
+              signal: handle.signal,
+              // Authoritative managed-async deadline (HOST-07). Epoch rides
+              // the observable contract; the monotonic anchor drives clocks (H5).
+              deadlineEpochMs,
+              deadlinePerfMs,
               // Trusted intent context (technical design §9/§14.2): binds the
               // draft to the exact user message + persisted intent decision
               // so authorization is never derived from tool arguments.
@@ -4471,7 +5856,17 @@ export class AIChatQueryLoop {
                   "denied",
               }),
               emitProgress: (event) => {
-                input.eventSink.emit({
+                // HOST-04: map each progress event to BOTH destinations —
+                // the registry record (job snapshots / poll path) and the
+                // renderer tool_progress stream.
+                registry.updateProgress(handle.jobId, {
+                  phase: event.phase,
+                  message: event.message,
+                  progress: event.progress ?? null,
+                  partialCount: event.partialCount ?? null,
+                  expectedCount: event.expectedCount ?? null,
+                });
+                onProgress?.({
                   type: "tool_progress",
                   conversationId: input.conversationId,
                   messageId: input.assistantMessageId,
@@ -4494,7 +5889,476 @@ export class AIChatQueryLoop {
       }
     );
 
-    return { jobId };
+    return { kind: "job", jobId, deadlinePerfMs };
+  }
+
+  /**
+   * Spawn callback for plugin-policy async tools: identical to the generic
+   * path, plus recovery-ledger settlement — a recoverable domain failure is
+   * recorded (minting the host error reference the model must echo back) and
+   * the reserved attempt settles when the job settles (HOST-16).
+   */
+  private async spawnPluginAsyncTool(
+    input: AIChatQueryGeneratorInput,
+    call: {
+      id: string;
+      name: string;
+      arguments?: Record<string, unknown>;
+    },
+    handle: ToolJobSpawnHandle,
+    meta: {
+      deadlineEpochMs: number;
+      /** Monotonic anchor for every deadline-aware clock (H5). */
+      deadlinePerfMs: number;
+      outboundAuthorization:
+        | {
+            batchId: number;
+            authorizationId: number;
+            batchHash: string;
+          }
+        | undefined;
+      onProgress?: ToolProgressEmitter;
+      pluginName: string;
+      identity: string;
+      /** Ledger-authorized recovery for this call (H1/H3); undefined when this is attempt 1. */
+      authorizedRecovery?: {
+        errorId: string;
+        strategy: "fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay";
+        retryAfterMs?: number;
+      };
+    }
+  ): Promise<void> {
+    const ledger = getPluginRecoveryLedger();
+    // G02: host-measured duration for the execution diagnostic record.
+    const spawnStartedPerf = performance.now();
+    handle.onSettled(() => {
+      // Outcome is derived from the settled result below; cancellation and
+      // transport failures settle as "failed" (attempt consumed, in-flight
+      // reservation released — never a dangling lock).
+      ledger.completeAttempt(
+        input.conversationId,
+        meta.pluginName,
+        meta.identity,
+        "failed"
+      );
+    });
+    // H1: the registry job id IS the execution id — one id binds the host
+    // context file, the staging directory, the journal, and promotion.
+    const executionId = handle.jobId;
+    // G03: write a crash-safe spawn journal (status "running") so an
+    // execution interrupted by a host crash/restart stays conversation-linkable
+    // and can never be mistaken for a promoted one (0 registered artifacts).
+    try {
+      if (
+        getPluginToolPolicyRegistry()
+          .getPluginArtifactFormats(meta.pluginName)
+          .length > 0
+      ) {
+        getPluginFileArtifactService().beginExecutionJournal({
+          executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+        });
+      }
+    } catch {
+      // Best-effort — journal absence only affects interrupted-state
+      // surfacing, never execution correctness.
+    }
+    try {
+      const result = await this.deps.executeTool(call.name, call.arguments ?? {}, {
+        conversationId: input.conversationId,
+        toolCallId: call.id,
+        args: call.arguments,
+        model: input.request.model,
+        signal: handle.signal,
+        deadlineEpochMs: meta.deadlineEpochMs,
+        deadlinePerfMs: meta.deadlinePerfMs,
+        executionId,
+        authorizedRecovery: meta.authorizedRecovery,
+        sourceUserMessageId: input.sourceUserMessageId,
+        intentDecisionId: input.intentDecisionId,
+        ownerAgentId: input.ownerAgentId,
+        outboundAuthorization: meta.outboundAuthorization,
+        skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
+        emitProgress: (event) => {
+          getDefaultToolJobRegistry().updateProgress(handle.jobId, {
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+          });
+          meta.onProgress?.({
+            type: "tool_progress",
+            conversationId: input.conversationId,
+            messageId: input.assistantMessageId,
+            toolCallId: call.id,
+            toolName: call.name,
+            phase: event.phase,
+            message: event.message,
+            progress: event.progress ?? null,
+            partialCount: event.partialCount ?? null,
+            expectedCount: event.expectedCount ?? null,
+            timestamp: Date.now(),
+          });
+        },
+      });
+
+      // B03: promote artifacts BEFORE final ledger settlement and verdict.
+      // A plugin result claiming success whose staged files failed to
+      // register is degraded inside `promotePluginArtifactsToPayload`; the
+      // OUTER verdict and the ledger must agree with the degraded payload
+      // instead of reporting success for nothing usable.
+      const promotion = isRecordLike(result.result)
+        ? this.promotePluginArtifactsToPayload({
+            conversationId: input.conversationId,
+            executionId,
+            pluginName: meta.pluginName,
+            payload: result.result,
+          })
+        : undefined;
+
+      // Recoverable domain failure → record + bind the host error reference
+      // BEFORE the result reaches the model (design §12.2: the plugin's
+      // diagnostic id is preserved as pluginErrorId; the authoritative id the
+      // model must echo is host-minted).
+      if (!result.success) {
+        const errorObj = (result.result as Record<string, unknown> | undefined)
+          ?.error;
+        if (
+          errorObj &&
+          typeof errorObj === "object" &&
+          typeof (errorObj as Record<string, unknown>).code === "string"
+        ) {
+          const err = errorObj as {
+            code: string;
+            category?: unknown;
+            allowedStrategies?: unknown;
+            retryAfterMs?: unknown;
+            recoverable?: unknown;
+            id?: unknown;
+          };
+          const allowed = Array.isArray(err.allowedStrategies)
+            ? (err.allowedStrategies.filter(
+                (s): s is "fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay" =>
+                  s === "fallback_adapter" ||
+                  s === "reduced_scope" ||
+                  s === "switch_platform" ||
+                  s === "retry_after_delay"
+              ) as readonly ("fallback_adapter" | "reduced_scope" | "switch_platform" | "retry_after_delay")[])
+            : [];
+          // B08: the ledger independently enforces the recoverable/fatal
+          // policy (unknown strategies drop; fatal/user-intervention and an
+          // envelope that claims recoverable:false never give strategies).
+          const errorRef = ledger.recordFailure({
+            conversationId: input.conversationId,
+            pluginName: meta.pluginName,
+            searchIdentity: meta.identity,
+            code: err.code,
+            category:
+              typeof err.category === "string" ? err.category : "plugin_bug",
+            allowedStrategies: allowed,
+            retryAfterMs:
+              typeof err.retryAfterMs === "number" ? err.retryAfterMs : undefined,
+            recoverable: err.recoverable,
+            userTurnId: input.sourceUserMessageId,
+          });
+          const bound = ledger.bindPluginErrorId(errorRef, err.id);
+          (result.result as Record<string, unknown>).error = {
+            ...err,
+            ...bound,
+          };
+        } else {
+          // H3: a failure WITHOUT a structured error envelope is an invalid
+          // result — it cannot carry a recovery contract into the ledger.
+          // Charge the attempt (transport failure) so it cannot repeat for
+          // free; no automated retry may follow.
+          ledger.recordTransportFailure({
+            conversationId: input.conversationId,
+            pluginName: meta.pluginName,
+            searchIdentity: meta.identity,
+            userTurnId: input.sourceUserMessageId,
+          });
+        }
+      }
+      if (!result.success) {
+        // Ledger already settled as "failed" through its onSettled hook.
+        const errorIdentity = envelopeErrorIdentity(result.result);
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "failed",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: errorIdentity.code,
+          errorMessage: errorIdentity.message,
+          artifactsRegistered: promotion?.registeredCount ?? 0,
+          artifactErrors: promotion?.errors.length ?? 0,
+          resultRecordCount: errorIdentity.recordCount,
+          cleanupPending: null,
+        });
+      } else if (promotion?.degradedToFailure) {
+        // B03: success-with-no-usable-artifacts is a truthful failure for
+        // the ledger too — a repeat of the same run must consume budget
+        // instead of counting a phantom success.
+        result.success = false;
+        ledger.completeAttempt(
+          input.conversationId,
+          meta.pluginName,
+          meta.identity,
+          "failed"
+        );
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "degraded-promotion",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: null,
+          errorMessage: null,
+          artifactsRegistered: promotion.registeredCount,
+          artifactErrors: promotion.errors.length,
+          resultRecordCount: envelopeErrorIdentity(result.result).recordCount,
+          cleanupPending: null,
+        });
+      } else {
+        ledger.completeAttempt(
+          input.conversationId,
+          meta.pluginName,
+          meta.identity,
+          "succeeded"
+        );
+        logToolExecutionDiagnostics({
+          toolName: call.name,
+          toolCallId: executionId,
+          conversationId: input.conversationId,
+          pluginName: meta.pluginName,
+          outcome: "succeeded",
+          attempt: meta.authorizedRecovery?.strategy ?? "initial",
+          durationMs: performance.now() - spawnStartedPerf,
+          errorCode: null,
+          errorMessage: null,
+          artifactsRegistered: promotion?.registeredCount ?? 0,
+          artifactErrors: promotion?.errors.length ?? 0,
+          resultRecordCount: envelopeErrorIdentity(result.result).recordCount,
+          cleanupPending: null,
+        });
+      }
+
+      handle.resolve(result);
+    } catch (err) {
+      // H3: crash/exit rejected the call — the FIRST arrival of this path
+      // cannot skip the budget either. The reservation created the entry, so
+      // this records a real transport failure against it; the model must
+      // report the problem to the user instead of silently re-rolling.
+      ledger.recordTransportFailure({
+        conversationId: input.conversationId,
+        pluginName: meta.pluginName,
+        searchIdentity: meta.identity,
+        userTurnId: input.sourceUserMessageId,
+      });
+      // Crash salvage: register whatever candidates were already finalized.
+      let crashArtifactsRegistered = 0;
+      let crashArtifactErrors = 0;
+      let crashSalvageResolved = false;
+      try {
+        const crashedPromotion = this.promotePluginArtifactsToPayload({
+          conversationId: input.conversationId,
+          executionId,
+          pluginName: meta.pluginName,
+          payload: undefined,
+        });
+        crashArtifactsRegistered = crashedPromotion.registeredCount;
+        crashArtifactErrors = crashedPromotion.errors.length;
+        // G03: a crash that salvaged finalized artifacts is surfaced
+        // TRUTHFULLY through the tool channel: a failed result that carries
+        // the opaque artifact references (never paths) + `interrupted`, so
+        // the model can tell the user the files exist even though the tool
+        // call itself died. Without salvage the rejection path applies.
+        if (crashedPromotion.artifacts && crashedPromotion.artifacts.length > 0) {
+          handle.resolve({
+            tool_call_id: call.id,
+            tool_name: call.name,
+            success: false,
+            result: {
+              error: {
+                code: "TRANSPORT_CRASHED",
+                category: "host_bug",
+                message:
+                  "The tool process crashed, but its finalized result files were registered by the host.",
+                recoverable: false,
+                allowedStrategies: [],
+                // H1-style host error id the model may echo.
+                id: `art_${executionId.slice(0, 12)}`,
+              },
+              artifacts: crashedPromotion.artifacts.map(toArtifactRef),
+              interrupted: true,
+              job_id: executionId,
+            },
+            execution_time_ms: Math.round(
+              performance.now() - spawnStartedPerf
+            ),
+          });
+          crashSalvageResolved = true;
+        }
+      } catch {
+        // Best-effort salvage on the crash path.
+      }
+      logToolExecutionDiagnostics({
+        toolName: call.name,
+        toolCallId: executionId,
+        conversationId: input.conversationId,
+        pluginName: meta.pluginName,
+        outcome: "crashed",
+        attempt: meta.authorizedRecovery?.strategy ?? "initial",
+        durationMs: performance.now() - spawnStartedPerf,
+        errorCode: err instanceof Error ? err.name : "UNKNOWN",
+        errorMessage: err instanceof Error ? err.message : String(err),
+        artifactsRegistered: crashArtifactsRegistered,
+        artifactErrors: crashArtifactErrors,
+        resultRecordCount: null,
+        cleanupPending: null,
+      });
+      if (!crashSalvageResolved) {
+        handle.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+  }
+
+  /**
+   * H2: production caller for `PluginFileArtifactService.promoteCandidates`.
+   *
+   * Read `candidates.json` from the execution's staging directory, promote
+   * only listed + finalized files into the host-owned artifact store, and
+   * rewrite the model payload: staging paths are stripped, `artifact` /
+   * `artifacts` carry id, format, record count, size, and timestamps.
+   * Idempotent per (executionId, candidate path) — retries never duplicate.
+   * On a failed promotion the caller must NOT return success:true.
+   */
+  private promotePluginArtifactsToPayload(input: {
+    conversationId: string;
+    executionId: string;
+    pluginName: string;
+    /** Model-facing payload when the tool produced one (undefined on crash). */
+    payload?: Record<string, unknown>;
+  }): PluginArtifactPromotionOutcome {
+    /** No-op outcome for missing execution id. */
+    const noop: PluginArtifactPromotionOutcome = {
+      stagingExists: false,
+      candidateCount: 0,
+      registeredCount: 0,
+      errors: [],
+      degradedToFailure: false,
+      artifacts: [],
+    };
+    if (!input.executionId) return noop;
+    const artifactsService = getPluginFileArtifactService();
+    const stagingOk = artifactsService.stagingExists(input.executionId);
+    const candidates = artifactsService.readCandidates(input.executionId);
+
+    let artifacts: RegisteredPluginArtifact[] = [];
+    let errors: string[] = [];
+    if (stagingOk && candidates.length > 0) {
+      // G03: identity + completion state recorded with the artifact
+      // metadata — the policy registry holds the ACTUAL manifest
+      // version/generation captured at registration (G02).
+      const registry = getPluginToolPolicyRegistry();
+      const pluginVersion = registry.getPluginVersion(input.pluginName) ?? undefined;
+      const pluginGeneration =
+        registry.getPluginGeneration(input.pluginName) ?? undefined;
+      const promotion = artifactsService.promoteCandidates({
+        executionId: input.executionId,
+        conversationId: input.conversationId,
+        pluginName: input.pluginName,
+        candidates,
+        ...(pluginVersion !== undefined ? { pluginVersion } : {}),
+        ...(pluginGeneration !== undefined ? { pluginGeneration } : {}),
+        resultStatus: input.payload
+          ? input.payload.success === false
+            ? "degraded"
+            : "complete"
+          : "interrupted",
+      });
+      artifacts = promotion.artifacts;
+      errors = promotion.errors;
+    }
+
+    const declined =
+      !stagingOk || candidates.length === 0 || errors.length > 0;
+    // B03: only a plugin that DECLARES fileArtifact capability (manifest
+    // `capabilities.fileArtifacts`) — or one that already staged candidates
+    // — is graded on registered artifacts. A generic async tool (e.g. a
+    // platform listing) legitimately returns success with no staging dir.
+    const requiresArtifacts =
+      getPluginToolPolicyRegistry().getPluginArtifactFormats(input.pluginName)
+        .length > 0;
+    let degradedToFailure = false;
+    if (input.payload) {
+      // Strip candidate/staging references — the renderer and the model see
+      // opaque artifact ids only (design §13: paths never leave the host).
+      stripPluginPayloadStagingRefs(input.payload);
+
+      if (artifacts.length > 0) {
+        input.payload.artifact = toArtifactRef(artifacts[0]);
+        input.payload.artifacts = artifacts.map(toArtifactRef);
+        if (errors.length > 0 && input.payload.success === true) {
+          // Partial promotion still yields durable artifacts for SOME files,
+          // but the user must see that not everything was promised.
+          input.payload.warnings = [
+            ...toReadonlyStringArray(input.payload.warnings),
+            `Artifact registration partially failed: ${errors.join("; ")}`,
+          ].slice(0, 8);
+        }
+      } else if (input.payload.success === true) {
+        // H2/B03: a success with NO durable, registered artifacts is NOT a
+        // success from the user's point of view when the plugin declared
+        // artifact capability or staged any candidates (nothing is
+        // previewable or exportable / the staging never finalized). Degrade
+        // to a truthful structured failure instead of advertising files
+        // that do not exist. A plugin WITHOUT declared artifact capability
+        // and WITHOUT staging keeps its legacy generic semantics.
+        if (requiresArtifacts || stagingOk || candidates.length > 0) {
+          const previewKey =
+            "preview" in input.payload ? input.payload.preview : [];
+          degradedToFailure = true;
+          input.payload = Object.assign(input.payload, {
+            status: "failed",
+            success: false,
+            summary: input.payload.summary,
+            error: {
+              id: `art_${input.executionId.slice(0, 12)}`,
+              code: "ARTIFACT_REGISTRATION_FAILED",
+              category: "host_bug",
+              stage: "artifacts",
+              message: !stagingOk
+                ? "The scrape reported success but its staging directory was not finalized."
+                : candidates.length === 0
+                  ? "The scrape reported success but registered no finalized result files."
+                  : "Result files could not be registered by the host.",
+              recoverable: false,
+              allowedStrategies: [],
+            },
+            // Preserve the in-message preview only; records stay host-side.
+            preview: toReadonlyStringArraySafeRecords(previewKey),
+          });
+          if (isRecordLike(input.payload.error)) {
+            input.payload.error.id = `art_${input.executionId.slice(0, 12)}`;
+          }
+        }
+      }
+    }
+    return {
+      stagingExists: stagingOk,
+      candidateCount: candidates.length,
+      registeredCount: artifacts.length,
+      errors,
+      degradedToFailure,
+      artifacts,
+    };
   }
 
   /**
@@ -4511,12 +6375,29 @@ export class AIChatQueryLoop {
    * its existing cancel detection.
    */
   private async pollAsyncJobToCompletion(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: { id: string; name: string },
-    jobId: string
+    jobId: string,
+    onProgress?: ToolProgressEmitter,
+    deadlineMs?: number,
+    /** H5: monotonic anchor shared with the execution path when provided. */
+    deadlinePerfMs?: number
   ): Promise<ToolExecutionResult> {
     const registry = getDefaultToolJobRegistry();
     const startedAt = Date.now();
+    const shortId = jobId.slice(0, 8);
+    // The poll cap enforces the SAME authoritative deadline the execution
+    // path uses (plugin policy maxRunMs, already clamped to the host ceiling
+    // and to the ASYNC_POLL_MAX_MS backstop).
+    //
+    // H5: expiry is decided on the MONOTONIC clock anchored when the job was
+    // admitted (`deadlinePerfMs`); a wall-clock change can never extend or
+    // truncate the job. `deadlineAt` (epoch) survives only for display.
+    const deadlinePerfAt =
+      deadlinePerfMs ??
+      performance.now() +
+        Math.min(deadlineMs ?? ASYNC_POLL_MAX_MS, ASYNC_POLL_MAX_MS);
+    const deadlineAt = startedAt + (deadlineMs ?? ASYNC_POLL_MAX_MS);
 
     const emitProgress = (
       phase: "queued" | "running" | "fetching" | "extracting" | "finalizing",
@@ -4525,7 +6406,7 @@ export class AIChatQueryLoop {
       partialCount: number | null,
       expectedCount: number | null
     ): void => {
-      input.eventSink.emit({
+      onProgress?.({
         type: "tool_progress",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
@@ -4596,7 +6477,15 @@ export class AIChatQueryLoop {
 
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
     while (true) {
-      await sleepUntilAbortOrTimeout(currentIntervalMs);
+      // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
+      // the poll interval is only a backstop; the absolute deadline governs
+      // the longest wait between wakes. The §10.3 backoff interval
+      // (currentIntervalMs) is capped by the remaining deadline so an
+      // adaptive interval can never overshoot the authoritative expiry.
+      const msUntilDeadline = deadlinePerfAt - performance.now();
+      await sleepUntilAbortOrTimeout(
+        Math.min(currentIntervalMs, Math.max(0, msUntilDeadline))
+      );
 
       if (input.abortController.signal.aborted) {
         try {
@@ -4604,29 +6493,36 @@ export class AIChatQueryLoop {
         } catch {
           // Best-effort; the turn is dead anyway.
         }
-        return {
-          tool_call_id: call.id,
-          tool_name: call.name,
-          success: false,
-          result: { error: "Turn cancelled" },
-          execution_time_ms: Date.now() - startedAt,
-        };
+        // B07: a user Stop must not return before cleanup is awaited (the
+        // deadline path already did) — the result carries the ACTUAL
+        // cleanup confirmation instead of assumed success.
+        const stopCleanedUp = await registry.waitForSettled(jobId, 5_000);
+        return buildTurnCancelledResult(
+          call,
+          jobId,
+          stopCleanedUp,
+          startedAt
+        );
       }
 
-      if (Date.now() - startedAt >= ASYNC_POLL_MAX_MS) {
-        return {
-          tool_call_id: call.id,
-          tool_name: call.name,
-          success: false,
-          result: {
-            error:
-              "Background job did not complete within 30 minutes. " +
-              "The job may still be running; ask the user whether to keep " +
-              "waiting or cancel via cancel_tool_job(job_id).",
-            job_id: jobId,
-          },
-          execution_time_ms: Date.now() - startedAt,
-        };
+      if (performance.now() >= deadlinePerfAt) {
+        // PRD §11.8: expiry must CANCEL the job and stop its browser before
+        // returning — never tell the model to retry while the original
+        // scraper may still be running. Bounded cleanup wait; the supervised
+        // transport escalates to SIGKILL independently of this wait, and the
+        // H5 process-group kill covers the plugin's browser descendants (the
+        // spawn continuation that closes the transport is exactly what the
+        // deferred H5 settlement waits for).
+        try {
+          registry.cancel(jobId);
+        } catch {
+          // Best-effort; report the deadline either way.
+        }
+        const cleanedUp = await registry.waitForSettled(jobId, 5_000);
+        // B07: the error text and payload must reflect what actually
+        // happened — an unconfirmed shutdown is reported as
+        // cleanup_pending, never as a definite stop.
+        return buildDeadlineExceededResult(call, jobId, cleanedUp, startedAt);
       }
 
       const snap = registry.getStatus(jobId);
@@ -4665,11 +6561,23 @@ export class AIChatQueryLoop {
             execution_time_ms: Date.now() - startedAt,
           };
         }
+        // Plugin domain envelopes carry their own success semantics (PRD
+        // §14.2): a recoverable application failure resolves the transport
+        // call normally but must surface as ToolExecutionResult.success =
+        // false so PostToolUseFailure hooks and the next model round see the
+        // structured error.
+        const envelope = snap.result as Record<string, unknown> | null;
+        const envelopeSuccess =
+          envelope !== null &&
+          typeof envelope === "object" &&
+          envelope.success === false
+            ? false
+            : true;
         return {
           tool_call_id: call.id,
           tool_name: call.name,
-          success: true,
-          result: (snap.result as Record<string, unknown>) ?? {},
+          success: envelopeSuccess,
+          result: envelope ?? {},
           execution_time_ms: Date.now() - startedAt,
         };
       }
@@ -4761,7 +6669,7 @@ export class AIChatQueryLoop {
    * failure yields a blocking code — a send is never authorized on error.
    */
   private async evaluateOutboundEmailGate(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     toolArguments?: Record<string, unknown>
   ): Promise<OutboundEmailToolGateResult> {
     const skipReviewArg = isModelDeclaredSkipReview(toolArguments);
@@ -4853,7 +6761,7 @@ export class AIChatQueryLoop {
   }
 
   private async prepareToolCall(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: {
       id: string;
       name: string;
@@ -4908,9 +6816,37 @@ export class AIChatQueryLoop {
     };
   }
 
+  /** ~4-chars-per-token estimate of the assembled transcript (string
+   *  contents only — multimodal parts add conservative slack via the
+   *  reserve). */
+  private estimateTranscriptTokens(
+    messages: ReadonlyArray<{ content?: unknown }>
+  ): number {
+    let chars = 0;
+    for (const m of messages) {
+      if (typeof m.content === "string") chars += m.content.length;
+      else if (Array.isArray(m.content)) {
+        for (const part of m.content) {
+          if (
+            part &&
+            typeof part === "object" &&
+            typeof (part as { text?: unknown }).text === "string"
+          ) {
+            chars += ((part as { text: string }).text ?? "").length;
+          } else {
+            // non-text part (e.g. image) — count as the reserve budget
+            chars += COMPLETION_RESERVE_TOKENS * 4;
+          }
+        }
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
   private async executePreparedToolWithTimeout(
-    input: AIChatQueryLoopInput,
-    prepared: PreparedToolCall
+    input: AIChatQueryGeneratorInput,
+    prepared: PreparedToolCall,
+    onProgress?: ToolProgressEmitter
   ): Promise<ToolExecutionResult> {
     const {
       descriptor,
@@ -4921,11 +6857,17 @@ export class AIChatQueryLoop {
       outboundSendGateAllowed,
     } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
-    // argument-driven resolver wins over static field; otherwise infer by name.
+    // argument-driven resolver wins over static field; then validated plugin
+    // MCP tool policy (HOST-02, canonical mcp__plugin__server__tool names);
+    // otherwise infer by name.
     const skill = input.skillRegistry?.getSkill(effectiveCall.name);
+    const pluginPolicy = getPluginToolPolicyRegistry().resolveByToolName(
+      effectiveCall.name
+    );
     const cls: ToolTimeoutClass =
       skill?.resolveTimeoutClass?.(effectiveCall.arguments ?? {}) ??
       skill?.timeoutClass ??
+      pluginPolicy?.policy.timeoutClass ??
       inferTimeoutClassByName(effectiveCall.name);
     const timeoutMs = resolveTimeoutMs(cls);
 
@@ -4935,17 +6877,29 @@ export class AIChatQueryLoop {
     // a terminal status. This keeps the model→tool→model loop intact: the
     // model sees the real tool result instead of an { async: true } envelope.
     if (timeoutMs === null) {
-      const { jobId } = await this.executeAsyncTool(
+      const admission = await this.executeAsyncTool(
         input,
         effectiveCall,
         outboundAuthorization,
-        outboundSendGateAllowed === true
+        outboundSendGateAllowed === true,
+        onProgress,
+        pluginPolicy?.policy.maxRunMs
       );
-      toolResult = await this.pollAsyncJobToCompletion(
-        input,
-        effectiveCall,
-        jobId
-      );
+      if (admission.kind === "rejected") {
+        // Admission failure (duplicate job / rejected recovery / sealed
+        // plugin admission): surface as the tool result directly — no job
+        // was created.
+        toolResult = admission.result;
+      } else {
+        toolResult = await this.pollAsyncJobToCompletion(
+          input,
+          effectiveCall,
+          admission.jobId,
+          onProgress,
+          pluginPolicy?.policy.maxRunMs,
+          admission.deadlinePerfMs
+        );
+      }
     } else {
       toolResult = await this.executeForegroundToolWithTimeout(
         input,
@@ -4954,7 +6908,8 @@ export class AIChatQueryLoop {
         timeoutMs,
         startedAt,
         outboundAuthorization,
-        outboundSendGateAllowed === true
+        outboundSendGateAllowed === true,
+        onProgress
       );
     }
 
@@ -4986,7 +6941,7 @@ export class AIChatQueryLoop {
   }
 
   private async executeForegroundToolWithTimeout(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: {
       id: string;
       name: string;
@@ -5000,7 +6955,8 @@ export class AIChatQueryLoop {
       authorizationId: number;
       batchHash: string;
     },
-    outboundSendGateAllowed = false
+    outboundSendGateAllowed = false,
+    onProgress?: ToolProgressEmitter
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
     token.startTimer();
@@ -5042,9 +6998,24 @@ export class AIChatQueryLoop {
         // cumulative budget against user-selected AND tool-selected images.
         currentRequestImageCount: countImageContentParts(input.messages),
         currentRequestImageDataUrlChars: countImageDataUrlChars(input.messages),
+        // FR-24 (audit R7): the REAL remaining-context estimate — the
+        // assembled transcript's token cost subtracted from the model
+        // window, minus a completion reserve. use_skill forwards this to
+        // the invocation budget so hidden instruction blocks are bounded
+        // by what the conversation can actually hold.
+        ...(this.modelContextWindowTokens > 0
+          ? {
+              remainingContextTokens: Math.max(
+                0,
+                this.modelContextWindowTokens -
+                  this.estimateTranscriptTokens(input.messages) -
+                COMPLETION_RESERVE_TOKENS
+              ),
+            }
+          : {}),
         emitProgress: (event) => {
           if (token.signal.aborted) return; // drop progress after abort
-          input.eventSink.emit({
+          onProgress?.({
             type: "tool_progress",
             conversationId: input.conversationId,
             messageId: input.assistantMessageId,
@@ -5133,7 +7104,7 @@ export class AIChatQueryLoop {
   }
 
   private resolveHookToolDescriptor(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     call: { id: string; name: string }
   ): HookToolDescriptor {
     const skill = input.skillRegistry?.getSkill(call.name);
@@ -5152,7 +7123,7 @@ export class AIChatQueryLoop {
   }
 
   private snapshotPermissionState(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     toolName: string
   ): {
     allowed: boolean;
@@ -5177,7 +7148,7 @@ export class AIChatQueryLoop {
   }
 
   private async runPreToolUseHooks(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     descriptor: HookToolDescriptor,
     toolInput: Record<string, unknown>
   ): Promise<AggregatedHookResult> {
@@ -5199,13 +7170,13 @@ export class AIChatQueryLoop {
         abortSignal: input.abortController.signal,
       });
     } catch (err) {
-      console.error("PreToolUse hook dispatch failed:", err);
+      log.error("PreToolUse hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
 
   private async runPostToolUseHooks(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     descriptor: HookToolDescriptor,
     toolInput: Record<string, unknown>,
     output: Record<string, unknown>,
@@ -5230,13 +7201,13 @@ export class AIChatQueryLoop {
         abortSignal: input.abortController.signal,
       });
     } catch (err) {
-      console.error("PostToolUse hook dispatch failed:", err);
+      log.error("PostToolUse hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
 
   private async runPostToolUseFailureHooks(
-    input: AIChatQueryLoopInput,
+    input: AIChatQueryGeneratorInput,
     descriptor: HookToolDescriptor,
     toolInput: Record<string, unknown>,
     toolResult: Record<string, unknown>,
@@ -5262,7 +7233,7 @@ export class AIChatQueryLoop {
         abortSignal: input.abortController.signal,
       });
     } catch (err) {
-      console.error("PostToolUseFailure hook dispatch failed:", err);
+      log.error("PostToolUseFailure hook dispatch failed:", err);
       return EMPTY_AGGREGATE;
     }
   }
@@ -5292,10 +7263,9 @@ export class AIChatQueryLoop {
     };
   }
 
-  private async submitImmediatePlanForApproval(
-    input: AIChatQueryLoopInput,
-    eventSink: AIChatQueryEventSink
-  ): Promise<AIChatPlanStateView | null> {
+  private async *submitImmediatePlanForApproval(
+    input: AIChatQueryGeneratorInput
+  ): AsyncGenerator<AIChatLoopEvent, AIChatPlanStateView | null, void> {
     if (!input.planContext) return null;
     const payload = this.buildImmediatePlanPayload(input);
     try {
@@ -5305,23 +7275,23 @@ export class AIChatQueryLoop {
           planId: input.planContext.planState.planId,
           payload,
         });
-      eventSink.emit({
+      yield {
         type: "plan_submitted",
         conversationId: input.conversationId,
         messageId: input.assistantMessageId,
         toolCallId: `immediate-plan-${Date.now()}`,
         toolName: "SubmitPlanForApproval",
         planState: updatedPlan,
-      });
+      };
       return updatedPlan;
     } catch (err) {
-      console.error("[ai-chat-v2] immediate plan submit failed:", err);
+      log.error("[ai-chat-v2] immediate plan submit failed:", err);
       return null;
     }
   }
 
   private buildImmediatePlanPayload(
-    input: AIChatQueryLoopInput
+    input: AIChatQueryGeneratorInput
   ): SubmitPlanForApprovalPayload {
     const objective =
       input.planContext?.planState.objective?.trim() ||
@@ -5379,16 +7349,15 @@ export class AIChatQueryLoop {
     };
   }
 
-  private async handlePlanToolSubmitForApproval(
-    input: AIChatQueryLoopInput,
+  private async *handlePlanToolSubmitForApproval(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     call: {
       id?: string;
       name?: string;
       arguments?: Record<string, unknown>;
-    },
-    eventSink: AIChatQueryEventSink
-  ): Promise<void> {
+    }
+  ): AsyncGenerator<AIChatLoopEvent, void, void> {
     if (!input.planContext || !call.id) return;
     const payload = (call.arguments ??
       {}) as unknown as SubmitPlanForApprovalPayload;
@@ -5400,7 +7369,7 @@ export class AIChatQueryLoop {
         payload,
       });
     } catch (err) {
-      console.error("[ai-chat-v2] submitPlanForApproval failed:", err);
+      log.error("[ai-chat-v2] submitPlanForApproval failed:", err);
       const errContent = serializeToolResultContent({
         success: false,
         error:
@@ -5416,14 +7385,14 @@ export class AIChatQueryLoop {
       return;
     }
 
-    eventSink.emit({
+    yield {
       type: "plan_submitted",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
       toolCallId: call.id,
       toolName: call.name ?? "SubmitPlanForApproval",
       planState: updatedPlan,
-    });
+    };
 
     const ackContent = serializeToolResultContent({
       success: true,
@@ -5444,18 +7413,18 @@ export class AIChatQueryLoop {
    * Returns "transitioned" on success or "error" (with an error tool result
    * already pushed to messages) on failure.
    */
-  private async handleEnterPlanMode(
-    input: AIChatQueryLoopInput,
+  private async *handleEnterPlanMode(
+    input: AIChatQueryGeneratorInput,
     messages: OpenAIChatMessage[],
     call: {
       id?: string;
       name?: string;
       arguments?: Record<string, unknown>;
-    },
-    eventSink: AIChatQueryEventSink
-  ): Promise<
-    | { status: "transitioned"; newPlanState: AIChatPlanStateView }
-    | { status: "error" }
+    }
+  ): AsyncGenerator<
+    AIChatLoopEvent,
+    { status: "transitioned"; newPlanState: AIChatPlanStateView } | { status: "error" },
+    void
   > {
     if (!input.autoPlan || !call.id) {
       return { status: "error" };
@@ -5472,7 +7441,7 @@ export class AIChatQueryLoop {
         objective,
       });
     } catch (err) {
-      console.error("[ai-chat-v2] EnterPlanMode ensurePlan failed:", err);
+      log.error("[ai-chat-v2] EnterPlanMode ensurePlan failed:", err);
       const errContent = serializeToolResultContent({
         success: false,
         error:
@@ -5499,14 +7468,14 @@ export class AIChatQueryLoop {
       return { status: "error" };
     }
 
-    eventSink.emit({
+    yield {
       type: "plan_state",
       conversationId: input.conversationId,
       messageId: input.assistantMessageId,
       planState,
       autoEntered: true,
       rationale: args.rationale,
-    });
+    };
 
     // System-role reminder — OpenAI Chat Completions API permits system
     // messages anywhere in the transcript.

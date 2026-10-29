@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   redactSecrets,
   ConsoleHookAuditLogger,
 } from "@/service/hooks/HookAuditService";
+import { log } from "@/modules/Logger";
 
 describe("redactSecrets", () => {
   it("redacts OpenAI-style keys", () => {
@@ -34,10 +35,20 @@ describe("redactSecrets", () => {
 });
 
 describe("ConsoleHookAuditLogger", () => {
+  // The logger routes through `log.info` (electron-log) after the ws-7
+  // console→Logger codemod (82c46078), so capture by spying on the `log`
+  // export — not `console.log`, which the transport bypasses.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("emits a JSON line tagged with [hook-audit] and does not throw on bad input", () => {
     const lines: string[] = [];
-    const original = console.log;
-    console.log = (msg: string) => lines.push(msg);
+    const infoSpy = vi
+      .spyOn(log, "info")
+      .mockImplementation((...args: unknown[]) => {
+        lines.push(args[0] as string);
+      });
     try {
       ConsoleHookAuditLogger.log({
         hookRunId: "r1",
@@ -50,7 +61,7 @@ describe("ConsoleHookAuditLogger", () => {
         timestamp: "2026-06-23T00:00:00.000Z",
       });
     } finally {
-      console.log = original;
+      infoSpy.mockRestore();
     }
     expect(lines.some((l) => l.startsWith("[hook-audit] "))).toBe(true);
     const parsed = JSON.parse(lines[0].replace("[hook-audit] ", ""));

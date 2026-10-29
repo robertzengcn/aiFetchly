@@ -30,24 +30,24 @@ import { Order } from "./order.decorator";
 ])
 export class AIToolOutputEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     /** Public, model-visible reference. Random hex; no user/tool/path names. */
     @Order(1)
     @Column("varchar", { length: 64, nullable: false })
-    outputId: string;
+    outputId!: string;
 
     @Order(2)
     @Column("varchar", { length: 100, nullable: false })
-    profileId: string;
+    profileId!: string;
 
     @Order(3)
     @Column("varchar", { length: 100, nullable: false })
-    conversationId: string;
+    conversationId!: string;
 
     @Order(4)
     @Column("varchar", { length: 64, nullable: false })
-    outputEpoch: string;
+    outputEpoch!: string;
 
     /** Child agent that owns this artifact, when produced inside an agent. */
     @Order(5)
@@ -61,40 +61,40 @@ export class AIToolOutputEntity extends AuditableEntity {
     /** One actual attempt. Distinct from a permission placeholder. */
     @Order(7)
     @Column("varchar", { length: 100, nullable: false })
-    executionId: string;
+    executionId!: string;
 
     @Order(8)
     @Column("varchar", { length: 100, nullable: false })
-    toolCallId: string;
+    toolCallId!: string;
 
     @Order(9)
     @Column("varchar", { length: 200, nullable: false })
-    toolName: string;
+    toolName!: string;
 
     /** Distinguishes stdout / stderr / main body of one execution. */
     @Order(10)
     @Column("varchar", { length: 64, nullable: false })
-    streamKey: string;
+    streamKey!: string;
 
     @Order(11)
     @Column("int", { nullable: false, default: 1 })
-    revision: number;
+    revision!: number;
 
     @Order(12)
     @Column("varchar", { length: 32, nullable: false, default: "writing" })
-    outputState: string;
+    outputState!: string;
 
     @Order(13)
     @Column("varchar", { length: 32, nullable: false, default: "file" })
-    storageBackend: string;
+    storageBackend!: string;
 
     @Order(14)
     @Column("varchar", { length: 16, nullable: false, default: "text" })
-    outputFormat: string;
+    outputFormat!: string;
 
     @Order(15)
     @Column("varchar", { length: 200, nullable: false, default: "text/plain" })
-    mediaType: string;
+    mediaType!: string;
 
     /** Path relative to the app-managed root. Never an absolute path. */
     @Order(16)
@@ -120,7 +120,7 @@ export class AIToolOutputEntity extends AuditableEntity {
 
     @Order(18)
     @Column("int", { nullable: false, default: 0 })
-    capturedBytes: number;
+    capturedBytes!: number;
 
     @Order(19)
     @Column("int", { nullable: true })
@@ -134,12 +134,12 @@ export class AIToolOutputEntity extends AuditableEntity {
     /** Producer completeness: did the UPSTREAM tool deliver everything? */
     @Order(21)
     @Column("varchar", { length: 16, nullable: false, default: "unknown" })
-    sourceCompleteness: string;
+    sourceCompleteness!: string;
 
     /** Capture preservation: did WE keep everything we received? */
     @Order(22)
     @Column("varchar", { length: 16, nullable: false, default: "complete" })
-    preservation: string;
+    preservation!: string;
 
     @Order(23)
     @Column("varchar", { length: 100, nullable: true })
@@ -147,7 +147,7 @@ export class AIToolOutputEntity extends AuditableEntity {
 
     @Order(24)
     @Column("varchar", { length: 64, nullable: false, default: "tool-result-policy-v1" })
-    policyVersion: string;
+    policyVersion!: string;
 
     /** Fence token; a stale writer is rejected at commit time. */
     @Order(25)
@@ -164,7 +164,7 @@ export class AIToolOutputEntity extends AuditableEntity {
      */
     @Order(27)
     @Column("varchar", { length: 32, nullable: false, default: "published" })
-    receiptPublication: string;
+    receiptPublication!: string;
 
     /** Bounded terminal receipt JSON, retained for recovery. */
     @Order(28)

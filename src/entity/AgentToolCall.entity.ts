@@ -9,27 +9,27 @@ import { Order } from "./order.decorator";
 @Index(["status"])
 export class AgentToolCallEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  agentTaskId: string;
+  agentTaskId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  toolCallId: string;
+  toolCallId!: string;
 
   @Order(3)
   @Column("varchar", { length: 120, nullable: false })
-  toolName: string;
+  toolName!: string;
 
   @Order(4)
   @Column("simple-json", { nullable: false })
-  argumentsSummary: Record<string, unknown>;
+  argumentsSummary!: Record<string, unknown>;
 
   @Order(5)
   @Column("varchar", { length: 32, nullable: false })
-  status: string;
+  status!: string;
 
   @Order(6)
   @Column("text", { nullable: true })

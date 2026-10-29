@@ -14,12 +14,15 @@ import {
   ExtractionProgress,
 } from "@/entityTypes/contactExtractionTypes";
 import { extractionQueue } from "./ExtractionQueue";
+import { log } from "@/modules/Logger";
 import { discoverAndExtractContactInfo } from "./ContactDiscovery";
 import {
   contactExtractionWorkerInboundSchema,
   type ContactExtractionWorkerInbound,
 } from "@/schemas/worker/contactExtraction";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 import { mapWithConcurrency } from "@/utils/concurrency";
+import { closeAllActiveBrowsers } from "./activeBrowserRegistry";
 
 /**
  * Worker message types — derived from the shared zod schema.
@@ -38,46 +41,165 @@ type ExtractContactFromUrlsMessage = Extract<
 >;
 
 /**
+ * WS-4 R4.5: gracefully close every tracked Puppeteer browser before exiting,
+ * so a SIGTERM from the main process's `cleanupContactExtractionWorker()` does
+ * not orphan in-flight browsers. Bounded by a hard timeout so a hung close can
+ * never stall shutdown. Re-entrant: a SIGTERM arriving during a fatal-error
+ * shutdown is a no-op.
+ */
+const SHUTDOWN_BROWSER_TIMEOUT_MS = 3000;
+let shuttingDown = false;
+let shutdownForceTimer: NodeJS.Timeout | null = null;
+
+/** Single watchdog builder: force-exit if graceful close exceeds `ms`. */
+function armShutdownWatchdog(ms: number, exitCode: number): void {
+  if (shutdownForceTimer !== null) {
+    clearTimeout(shutdownForceTimer);
+  }
+  shutdownForceTimer = setTimeout(() => {
+    log.warn(
+      `ContactExtractionWorker: graceful close exceeded ${ms}ms, forcing exit`
+    );
+    process.exit(exitCode);
+  }, ms);
+  shutdownForceTimer.unref();
+}
+
+/** Re-bound the graceful-close watchdog to the parent's remaining allowance. */
+function adjustShutdownTimeout(boundedMs: number): void {
+  armShutdownWatchdog(boundedMs, 0);
+}
+
+/**
+ * §7 shutdown-request handler (design §7): bound local cleanup to the parent's
+ * remaining allowance, acknowledge with the correlatable requestId, then run
+ * the graceful path (closing flag rejects new jobs; browsers close; exit).
+ * Exported for direct unit tests — the ack ordering and bounded timer are
+ * contract-critical.
+ */
+export function handleWorkerShutdown(message: {
+  requestId: string;
+  remainingMs?: number;
+}): void {
+  if (typeof message.remainingMs === "number") {
+    const bounded = Math.max(
+      250,
+      Math.min(message.remainingMs, SHUTDOWN_BROWSER_TIMEOUT_MS)
+    );
+    if (bounded < SHUTDOWN_BROWSER_TIMEOUT_MS) {
+      adjustShutdownTimeout(bounded);
+    }
+  }
+  process.send?.({ type: "shutdown-ack", requestId: message.requestId });
+  gracefulShutdown("shutdown-request", 0);
+}
+
+function gracefulShutdown(signal: string, exitCode: number): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info(
+    `ContactExtractionWorker: received ${signal}, closing browsers and exiting`
+  );
+  if (shutdownForceTimer === null) {
+    armShutdownWatchdog(SHUTDOWN_BROWSER_TIMEOUT_MS, exitCode);
+  }
+  closeAllActiveBrowsers()
+    .catch((e) =>
+      log.error("ContactExtractionWorker: closeAllActiveBrowsers failed:", e)
+    )
+    .finally(() => process.exit(exitCode));
+}
+
+/**
  * Initialize the worker process
  */
 function initializeWorker(): void {
-  console.log("ContactExtractionWorker: Worker process initialized");
+  log.info("ContactExtractionWorker: Worker process initialized");
 
   // Listen for messages from main process — validated against the shared
   // inbound schema. Malformed messages are dropped with a warning, so a
   // buggy main process can never crash the worker with a bad payload.
   process.on("message", (raw: unknown) => {
-    const parsed = contactExtractionWorkerInboundSchema().safeParse(raw);
+    const parsed = parseWorkerMessage<ContactExtractionWorkerInbound>(
+      raw,
+      contactExtractionWorkerInboundSchema()
+    );
     if (!parsed.success) {
-      console.warn(
+      log.warn(
         "ContactExtractionWorker: dropped malformed inbound message:",
-        parsed.error.message
+        parsed.error
       );
       return;
     }
 
     const message = parsed.data;
+    if (message.type === "shutdown") {
+      handleWorkerShutdown(message);
+      return;
+    }
+    if (shuttingDown) {
+      // Closing flag rejects new work (design §7 step 1).
+      log.warn(
+        "ContactExtractionWorker: dropping inbound job — shutdown in progress"
+      );
+      return;
+    }
     if (message.type === "extract-contact") {
       handleExtractionRequest(message);
     } else if (message.type === "extract-contact-from-urls") {
       handleExtractContactFromUrls(message);
     }
-    // 'shutdown' is a no-op at the schema level; the worker exits via
-    // SIGTERM/SIGINT handlers (process signals), not via IPC.
   });
 
-  // Handle worker errors
+  // Handle worker errors — WS-4 R4.3: on fatal error, notify main + exit(1)
+  // (mirrors LocalEmbeddingWorker / SkillWorker pattern).
   process.on("uncaughtException", (error) => {
-    console.error("ContactExtractionWorker: Uncaught exception:", error);
+    log.error("ContactExtractionWorker: Uncaught exception:", error);
+    try {
+      process.send?.({
+        type: "worker-log",
+        level: "error",
+        args: [
+          "[ContactExtractionWorker] Fatal: uncaughtException:",
+          String(error),
+        ],
+      });
+    } catch {
+      /* main may already be gone */
+    }
+    gracefulShutdown("uncaughtException", 1);
   });
 
   process.on("unhandledRejection", (reason, promise) => {
-    console.error(
+    log.error(
       "ContactExtractionWorker: Unhandled rejection at:",
       promise,
       "reason:",
       reason
     );
+    try {
+      process.send?.({
+        type: "worker-log",
+        level: "error",
+        args: [
+          "[ContactExtractionWorker] Fatal: unhandledRejection:",
+          String(reason),
+        ],
+      });
+    } catch {
+      /* main may already be gone */
+    }
+    gracefulShutdown("unhandledRejection", 1);
+  });
+
+  // WS-4 R4.3/R4.5: graceful shutdown on SIGTERM/SIGINT — close in-flight
+  // browsers before exiting so cleanupContactExtractionWorker().kill() does not
+  // orphan them.
+  process.on("SIGTERM", () => {
+    gracefulShutdown("SIGTERM", 0);
+  });
+  process.on("SIGINT", () => {
+    gracefulShutdown("SIGINT", 0);
   });
 
   // Notify parent that worker is ready
@@ -92,10 +214,10 @@ function initializeWorker(): void {
 function handleExtractionRequest(message: ExtractContactMessage): void {
   const { batchId, resultIds, results, priority = 0 } = message;
 
-  console.log(
+  log.info(
     `ContactExtractionWorker: Received extraction request for batch ${batchId}`
   );
-  console.log(`ContactExtractionWorker: Processing ${resultIds.length} URLs`);
+  log.info(`ContactExtractionWorker: Processing ${resultIds.length} URLs`);
 
   // Set up progress callback to send updates back to main process
   extractionQueue.setProgressCallback((progress: ExtractionProgress) => {
@@ -119,7 +241,7 @@ function handleExtractionRequest(message: ExtractContactMessage): void {
   // Add jobs to queue
   extractionQueue.addBatch(jobs, batchId);
 
-  console.log(
+  log.info(
     `ContactExtractionWorker: Jobs added to queue (queue length: ${extractionQueue.getQueueLength()})`
   );
 }

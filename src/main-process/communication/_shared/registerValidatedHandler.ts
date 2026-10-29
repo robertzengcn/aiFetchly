@@ -24,15 +24,22 @@ async function dispatchValidated<TInput, TOutput>(
 ): Promise<CommonMessage<TOutput> | CommonMessage<null>> {
   let input: unknown = raw;
   if (typeof raw === "string") {
-    try {
-      input = JSON.parse(raw);
-    } catch {
-      log.warn(`[${channel}] received malformed JSON payload`);
-      return {
-        status: false,
-        msg: "Malformed request payload",
-        data: null,
-      } satisfies CommonMessage<null>;
+    if (raw.trim().length === 0) {
+      // An empty payload is "no input", not malformed JSON — no-input
+      // channels (noInputSchema) legitimately receive "" from callers that
+      // don't stringify an empty object.
+      input = undefined;
+    } else {
+      try {
+        input = JSON.parse(raw);
+      } catch {
+        log.warn(`[${channel}] received malformed JSON payload`);
+        return {
+          status: false,
+          msg: "Malformed request payload",
+          data: null,
+        } satisfies CommonMessage<null>;
+      }
     }
   }
 

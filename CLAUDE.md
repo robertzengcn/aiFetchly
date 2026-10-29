@@ -63,14 +63,24 @@ src/
 
 ### Key Components
 
-#### Database & Storage (Three-Layer Architecture)
-- **SQLite with TypeORM** for local data persistence
-- **sqlite-vec** integration for vector operations (in progress on current branch)
-- Database configuration in `src/config/SqliteDb.ts`
-- Entities in `src/entity/` following TypeORM patterns
-- **Models** in `src/model/` for data access (extend `BaseDb`)
-- **Modules** in `src/modules/` for business logic (extend `BaseModule`)
-- **IPC Handlers** in `src/main-process/communication/` use Modules (never direct database access)
+#### Database & Storage (Four-Layer Architecture)
+
+The real layering is **four** layers, not three. IPC handlers delegate to a
+**Service** (orchestration / AI / streaming) *or* a **Module** (single-domain
+CRUD + rules), which use **Models** for data access over **Entities** → DB.
+
+- **SQLite with TypeORM** for local data persistence; **sqlite-vec** for vector operations.
+- Database config in `src/config/SqliteDb.ts`; entities in `src/entity/` (TypeORM `@Entity`).
+- **Models** (`src/model/`, extend `BaseDb`) — data access via TypeORM repositories. Legacy raw-SQL `*db.ts` files via `Scraperdb` are being consolidated into Models (WS-3).
+- **Modules** (`src/modules/`, extend `BaseModule`) — single-domain CRUD + business rules over one entity family.
+- **Services** (`src/service/`) — orchestration that spans multiple Modules and owns AI / streaming / tool-call flows (e.g. `AIChatQueryLoop`, `StreamEventProcessor`, `ToolExecutor`, `AiFeatureGate`). **This layer was previously undocumented in CLAUDE.md** despite holding ~166 files — it is the application's "AI brain."
+- **IPC Handlers** (`src/main-process/communication/`) — thin: validate input with Zod (`registerValidatedHandler` / `registerAiValidatedHandler`) → call a Service/Module → return the `CommonMessage<T>` `{status,msg,data}` envelope. **Never** touch TypeORM repositories directly.
+
+**Where does new code go?**
+- **Service** (`src/service/`) — if it orchestrates multiple Modules, owns a long-running/streaming flow, or invokes AI models / tools.
+- **Module** (`src/modules/`) — if it is single-domain CRUD + business rules over one entity family.
+- **Model** (`src/model/`) — data access only (queries, repositories).
+- **Entity** (`src/entity/`) — schema only (`@Entity`, columns, indices). Add `@Index()` to FK columns (`*_id`) and frequently-filtered columns (e.g. `status`, `ai_analysis_status`) — these are the hot query paths (WS-3 R3.5).
 
 #### IPC Communication
 - Main process handlers in `src/main-process/communication/`
@@ -98,7 +108,7 @@ src/
 - **Vite** - Build tool and dev server
 - **Pinia** - State management
 - **Vuetify** - UI component library
-- **Zod v4** (`zod/v4`) - Full-stack type validation infrastructure
+- **Zod v3** (`zod ^3.24.0`) - Full-stack type validation infrastructure
 
 ### Key Dependencies
 - **Puppeteer** - Web automation and scraping
@@ -106,7 +116,7 @@ src/
 - **better-sqlite3** - SQLite database driver
 - **node-cron** - Task scheduling
 - **openai** - AI integration
-- **zod** - Schema definition and runtime validation (imported via `zod/v4`)
+- **zod** - Schema definition and runtime validation (imported via `zod`)
 
 ## Development Patterns
 
@@ -116,13 +126,13 @@ src/
 - All functions must have explicit return types
 - Use proper error handling with `unknown` instead of `any` for catch blocks
 
-### Zod v4 Validation Infrastructure - MANDATORY RULE
-**This project uses Zod v4** (`zod/v4`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
+### Zod Validation Infrastructure - MANDATORY RULE
+**This project uses Zod** (`zod ^3.24.0`) as its full-stack type validation infrastructure. Tool definition, configuration management, cross-process communication, and setting validation all require Zod for type safety validation.
 
 #### Import Convention
-- Always import from `zod/v4` (not from bare `zod`) to opt into the v4 API:
+- Always import from `zod` (the standard import — 66 files use this convention):
   ```typescript
-  import { z } from "zod/v4";
+  import { z } from "zod";
   ```
 - Derive TypeScript types from schemas with `z.infer<typeof schema>` rather than hand-writing interfaces that mirror the schema.
 
@@ -460,6 +470,29 @@ private getRepository(): Repository<SomeEntity> {
 
 **Remember**: Worker processes are for CPU-intensive tasks only. All CRUD operations (Create, Read, Update, Delete) MUST be handled by the main process through Modules and Models.
 
+### Small-Model Routing for Background Workloads
+AiFetchly routes four bounded, text-only background AI workloads (`user_auto_dream`, `workspace_auto_dream`, `session_memory_summary`, `conversation_compact`) through the hosted AI server's virtual `small` model alias when the user is on the hosted provider and the kill switch is enabled. The central router is `src/service/AIChatLightweightCompletionService.ts` (process singleton via `AIChatLightweightCompletionFactory`); profiles, budget helpers, and the typed failure classifier live alongside it. Normal interactive chat, tools, plan execution, agents, and image inputs are **not** routed through the small model, and `small` never appears in the user model selector.
+
+- **Kill switch:** env var `AIFETCHLY_SMALL_MODEL_ROUTING_ENABLED` (absent → **disabled**; `true`/`1` enables; invalid → disabled + logged). Read at service construction; changing it requires an app restart. When disabled, every lightweight workload uses the provider-normal path and all small-specific retry/cooldown/fallback is bypassed.
+- **Hard invariants:** optional background workloads never fall back to the normal model; `conversation_compact` may fall back at most once; ambiguous timeout/network failures are never resubmitted; persistence failure never invokes a model again; the general chat recovery chain is never entered.
+- **Auto-dream cursors** are source-derived (greatest `updatedAt` among included packets), committed with the successful result in a transactional `applyPlanAndCompleteRun`, so the watermark never advances past unprocessed material.
+- **Full compact** is hierarchical (map/reduce chunking via `AIChatPromptBudget`) and capability-gated (`AIChatModelCatalogService.getSmallModelCapability()`); absent metadata means compact goes directly to the normal model (not counted as the one failure fallback).
+- Operations, rollout phases, observability fields, and rollback: `docs/small-model-routing-operations.md`. PRD: `docs/prd/small-model-background-workloads-prd.md`. Technical design: `docs/prd/small-model-background-workloads-technical-design.md`.
+
+### Skill Installer and Prompt-Skill Runtime - Architecture Note
+The natural-language skill installation feature (docs/prd/natural-language-skill-installation-prd.md) adds two subsystems:
+
+- **Typed installer** (`src/modules/SkillInstallationModule.ts`): a session state machine (acquiring -> inspecting -> planning -> awaiting_approval -> ... -> ready) with compare-and-set transitions and an append-only event log. Model-facing tools `skill_install_prepare/approve/status/cancel/update/repair` live in `src/config/skillsRegistry.ts`. Approval requires an opaque renderer-side token (generated at prepare, fetched via the renderer-only `SKILL_INSTALL_APPROVAL_TOKEN` IPC channel) - the model can plan but never self-approve. Secrets travel only through `SKILL_INSTALL_SUBMIT_SECRET`; `rejectSecretShaped` in `src/entityTypes/skillInstallationTypes.ts` blocks credential-shaped values in ordinary tool args.
+- **Prompt-skill runtime** (`src/service/PromptSkill*.ts`): portable `SKILL.md` packages install under `~/.aifetchly/skills` (managed copy default, symlink/junction dev mode) and are invoked through the universal `use_skill` tool - a short tool acknowledgement followed by a hidden instruction message (never long guidance JSON). `PromptSkillInvocationModule` persists invocation state for compaction reattachment. `/skill <name> [task]` is the explicit user entry.
+
+Where new code goes:
+- Installer orchestration/state -> `src/modules/SkillInstallationModule.ts` (Service if it spans modules)
+- Acquisition/staging -> `src/service/SkillSourceAcquisitionService.ts` + utility process `src/childprocess/skill-installation/`
+- Prompt-skill loading/invocation -> `src/service/PromptSkill*.ts`
+- Entities: `SkillInstallation*`, `PromptSkillInvocation` in `src/entity/`, registered in `src/config/dbEntities.ts`
+
+Kill switch: `AIFETCHLY_SKILL_INSTALL_ENABLED` (absent -> disabled, mirroring the small-model routing pattern). Unified filesystem scope: `ConversationFilesystemContextService` is the single resolver for shell+file tools - missing workspace fails closed (`WORKSPACE_NOT_APPROVED`), never falls back to home. Ops runbook: `docs/skill-installation-operations.md`.
+
 ### Security Best Practices
 - Context isolation enabled, Node.js integration disabled in renderer
 - All IPC communication through contextBridge
@@ -647,6 +680,14 @@ Vitest's default esbuild mode strips types without checking them, so type errors
 - **Behavior**: If `tsc` reports any error, the whole vitest run aborts before tests execute.
 - **To bypass** (only for tight inner loops when you know types are clean): `AIFETCHLY_SKIP_TSC=1 yarn testmain`. Do not commit code that needs this.
 
+##### Renderer Node-Leak Guard (Vite render build)
+`vite-plugin-renderer-node-guard.ts` is wired into `vite.render.config.mjs` and fails the render build (dev + `yarn build` + CI) **loudly** if a project-authored `src/` module that uses a Node-only / main-process-only API (`node:module`, `node:fs`, `electron`, `electron-log`, `@/modules/Logger`, …) would enter the **renderer** module graph. This prevents the recurring launch crash where such a module was silently externalized for the browser, the chunk threw at runtime (`Cannot access "node:module.createRequire"`), and the page aborted with `ERR_ABORTED (-3) loading http://localhost:5173/`.
+
+- **Behavior**: `generateBundle` walks the emitted chunk graph; for every denied module whose importer chain reaches a renderer root (`src/views/**`, `src/api/**`, `src/preload.ts`, or a `build.lib` entry), it throws with the full `import chain:` so the offending import is obvious. Third-party `node_modules/` (Vuetify, typeorm/browser, …) and `__vite-browser-external:` stubs are intentionally **not** flagged — Vite's browser-compat proxy + the `src/shims/*.empty.ts` aliases handle those.
+- **When it fires**: fix by moving the renderer-needed value into a pure, Node-free module (see `src/service/AIChatErrorSentinels.ts` for the pattern) or making the renderer import `import type`-only. Never silence by bypassing.
+- **To bypass** (tight inner loops only — committed code MUST pass clean, mirroring `AIFETCHLY_SKIP_TSC`): `AIFETCHLY_DISABLE_RENDERER_NODE_GUARD=1`.
+- **Test**: `test/vitest/main/rendererNodeLeakGuard.test.ts` (runs in `yarn testmain`). Extend the denylist in `vite-plugin-renderer-node-guard.ts` (`RENDERER_NODE_GUARD_DENYLIST`) when a new Node-only internal module is identified.
+
 #### Electron E2E (Playwright)
 The E2E suite launches the source-built Electron app via Playwright's `_electron.launch()` (NOT electron-forge) and drives the real renderer → preload → IPC → module → SQLite path. See `docs/prd/playwright_for_uitest.md` + `docs/prd/playwright-ui-testing-technical-design.md`.
 
@@ -764,6 +805,26 @@ Current branch (`sqlite-vec-merge`) is integrating sqlite-vec for vector similar
   - Worker now sends IPC messages to main process for all CRUD operations
   - Models enforce no database access from worker processes (check `process.env.WORKER_TYPE`)
 
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
+- Author a backlog-ready spec/issue → invoke /spec
+=======
+
 ## gstack (REQUIRED — global install)
 
 **Before doing ANY work, verify gstack is installed:**
@@ -789,7 +850,7 @@ If GSTACK_MISSING: STOP. Do not proceed. Tell the user:
 Do not skip skills, ignore gstack errors, or work around missing gstack.
 
 Using gstack skills: After install, skills like /qa, /ship, /review, /investigate,
-and /browse are available. Use /browse for all web browsing (Aside first, the bundled gstack browser as fallback).
+and /browse are available. Use /browse for all web browsing.
 Use the resolved install path above for gstack file paths
 (default: ~/.claude/skills/gstack).
 

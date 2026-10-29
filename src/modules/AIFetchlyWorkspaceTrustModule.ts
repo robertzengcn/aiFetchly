@@ -31,16 +31,31 @@ const ALL_TRUSTED: AIFetchlySourceTrust = Object.freeze({
 
 export class AIFetchlyWorkspaceTrustModule extends BaseModule {
   private readonly model: AIFetchlyWorkspaceTrustModel;
-  private readonly workspaceRepo: Repository<WorkspaceEntity>;
+  // Lazily resolved on first use (after ensureConnection) — BaseModule defers
+  // `sqliteDb` so the constructor must not touch it (tests construct this
+  // module before USERSDBPATH is set; eager access threw "reading 'connection'
+  // of undefined"). See baseModule.ts WS-5 R5.2.
+  private workspaceRepo: Repository<WorkspaceEntity> | null = null;
 
   constructor() {
     super(); // BaseModule resolves this.dbpath from the Token service.
     this.model = new AIFetchlyWorkspaceTrustModel(this.dbpath);
-    // The migration seed reads approved workspaces from the existing
-    // WorkspaceEntity table (one-time cross-entity read; the plan authorizes
-    // querying this repository directly rather than via WorkspaceModel).
-    this.workspaceRepo =
-      this.sqliteDb.connection.getRepository(WorkspaceEntity);
+  }
+
+  /**
+   * Resolve the WorkspaceEntity repository on first use, after the DB
+   * connection has been established. The migration seed reads approved
+   * workspaces from the existing WorkspaceEntity table (one-time cross-entity
+   * read; the plan authorizes querying this repository directly rather than
+   * via WorkspaceModel).
+   */
+  private async getWorkspaceRepo(): Promise<Repository<WorkspaceEntity>> {
+    await this.ensureConnection();
+    if (!this.workspaceRepo) {
+      this.workspaceRepo =
+        this.sqliteDb.connection.getRepository(WorkspaceEntity);
+    }
+    return this.workspaceRepo;
   }
 
   /**
@@ -90,7 +105,8 @@ export class AIFetchlyWorkspaceTrustModule extends BaseModule {
    */
   async ensureMigrationSeed(): Promise<void> {
     await this.ensureConnection();
-    const approved = await this.workspaceRepo.find({
+    const workspaceRepo = await this.getWorkspaceRepo();
+    const approved = await workspaceRepo.find({
       where: { approvalState: "approved" },
     });
     for (const ws of approved) {
@@ -98,7 +114,12 @@ export class AIFetchlyWorkspaceTrustModule extends BaseModule {
       // Idempotent: only insert when no trust row yet exists for this hash.
       const existing = await this.model.getByRootHash(hash);
       if (existing) continue;
-      await this.model.upsert(hash, ws.rootPath, ALL_TRUSTED, ws.conversationId);
+      await this.model.upsert(
+        hash,
+        ws.rootPath,
+        ALL_TRUSTED,
+        ws.conversationId
+      );
     }
   }
 }

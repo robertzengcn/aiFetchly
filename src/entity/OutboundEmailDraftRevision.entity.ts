@@ -13,71 +13,71 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index(["emailServiceId"])
 export class OutboundEmailDraftRevisionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("int")
-  draftId: number;
+  draftId!: number;
 
   @Column("int")
-  revisionNumber: number;
+  revisionNumber!: number;
 
   /** `ai` or `user`. */
   @Column("varchar", { length: 20 })
-  actor: string;
+  actor!: string;
 
   /** Frozen sender service. */
   @Column("int")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   /** Envelope schema version bound to this revision (1 = legacy, 2 = identity-bound). */
   @Column("integer", { default: 1 })
-  envelopeVersion: 1 | 2;
+  envelopeVersion!: 1 | 2;
 
   /** Effective SMTP login username frozen on this revision (§6.4). */
   @Column({ type: "varchar", length: 255, nullable: true })
-  smtpUsername: string | null;
+  smtpUsername!: string | null;
 
   /** Effective Reply-To frozen on this revision (§6.4). */
   @Column({ type: "varchar", length: 320, nullable: true })
-  replyToAddress: string | null;
+  replyToAddress!: string | null;
 
   /** Frozen envelope sender. */
   @Column("varchar", { length: 320 })
-  senderAddress: string;
+  senderAddress!: string;
 
   /** Frozen envelope recipient. */
   @Column("varchar", { length: 320 })
-  recipientAddress: string;
+  recipientAddress!: string;
 
   /** Final rendered subject. */
   @Column("varchar", { length: 500 })
-  subject: string;
+  subject!: string;
 
   /** Final rendered text body. */
   @Column("text")
-  bodyText: string;
+  bodyText!: string;
 
   /** Final sanitized HTML body. */
   @Column("text", { nullable: true })
-  bodyHtml: string | null;
+  bodyHtml!: string | null;
 
   /** Canonical envelope hash (no timestamps/IDs). */
   @Column("varchar", { length: 64 })
-  contentHash: string;
+  contentHash!: string;
 
   /** Field-level personalization evidence (JSON). */
   @Column("text", { nullable: true })
-  personalizationEvidenceJson: string | null;
+  personalizationEvidenceJson!: string | null;
 
   /** Knowledge source identifiers, not secrets (JSON). */
   @Column("text", { nullable: true })
-  knowledgeSourcesJson: string | null;
+  knowledgeSourcesJson!: string | null;
 
   /** Model/prompt/version metadata (JSON). */
   @Column("text", { nullable: true })
-  generationMetadataJson: string | null;
+  generationMetadataJson!: string | null;
 
   /** Deterministic preflight results (JSON). */
   @Column("text", { nullable: true })
-  validationFindingsJson: string | null;
+  validationFindingsJson!: string | null;
 }

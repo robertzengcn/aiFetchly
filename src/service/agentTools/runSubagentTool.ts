@@ -33,10 +33,10 @@ import type {
  *      fires first and orphans the still-running inner work.
  *
  * Routing unconditionally to "async" eliminates both:
- *   - The outer loop registers a ToolJobRegistry job and blocks on
- *     pollAsyncJobToCompletion until it reaches a terminal status, so the
- *     model sees the real subagent result in one turn (no envelope, no
- *     polling contract in the description).
+ *   - The outer loop registers a managed-async job, emits progress, waits
+ *     locally via pollAsyncJobToCompletion until it reaches a terminal
+ *     status, and returns the agent's REAL final result to the model (no
+ *     envelope, no polling contract; the model never polls).
  *   - The inner agent's own maxRuntimeMs (via abortController at
  *     AgentRuntime.ts:221) becomes the real upper bound on subagent
  *     work. The outer race is unreachable.
@@ -45,7 +45,7 @@ import type {
  *   Unlike URLs or max_results, nothing in the run_subagent args
  *   (agentId, prompt, taskPacket) reliably predicts runtime. Even
  *   trivial subagent tasks take 30-60s. Always-async makes the contract
- *   uniform — the loop always blocks internally, no conditional
+ *   uniform — the loop always blocks internally; no conditional
  *   description logic.
  */
 
@@ -133,6 +133,7 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
     "Run a built-in marketing specialist agent (e.g. lead researcher) and return its structured result. Use this to delegate a focused research/enrichment task to a specialist with its own narrowed tools. " +
     "For multiple files with one operation, use process_artifact_batch instead; it coordinates bounded concurrent per-item provider requests and preserves input/output mappings. run_subagent remains available for a single specialized file task via agent-batch-worker. " +
     "This tool ALWAYS runs as a background job: the call blocks until the specialist finishes, then returns the real result directly (a subagent typically takes 30-180 seconds). " +
+    "Progress updates stream to the user while it runs. Use cancel_tool_job(job_id) if the user wants to stop a specialist early. " +
     "You never need to poll: do NOT call check_tool_job_status unless a tool RESULT explicitly gave you a job_id. Never invent or guess a job_id — job ids only ever come from tool results, and a fabricated id always returns not_found.",
   parameters: PARAMETERS,
   tier: "main",
@@ -166,7 +167,13 @@ export const RUN_SUBAGENT_TOOL: SkillDefinition = {
         | undefined,
     };
     const runtime = AgentRuntimeRegistry.getRuntime();
-    const result = await runtime.runSync(request, getDefaultAgentRuntimeDeps());
+    // Propagate the execution-context signal so cancelling the outer job
+    // aborts the nested AgentRuntime instead of letting it burn model/tool
+    // resources invisibly (FR-37, technical design §17.3).
+    const result = await runtime.runSync(request, {
+      ...getDefaultAgentRuntimeDeps(),
+      signal: context.signal,
+    });
     return {
       success: result.status === "completed",
       result: {

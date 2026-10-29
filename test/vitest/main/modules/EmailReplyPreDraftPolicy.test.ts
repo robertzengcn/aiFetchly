@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import fs from "node:fs";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
+import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
@@ -21,12 +23,41 @@ import type {
  * row, so we prove it against a real seeded message (the same row createDraft
  * loads). Modules resolve the same Token-fallback DB, so seed + read are
  * consistent.
+ *
+ * DB isolation: an isolated temp DB (resetInstance) avoids the
+ * SQLITE_BUSY_SNAPSHOT race that occurs when sibling test files share the
+ * fallback aifetchly-test singleton under vitest's thread pool. Modules are
+ * constructed AFTER resetInstance so their eager repository capture (BaseDb
+ * constructor) binds to the isolated DataSource.
  */
 describe("P0.3 — pre-draft policy gate (FR-005)", () => {
-  const messageModule = new EmailReceivedMessageModule();
-  const orchestrator = new EmailReplyPolicyOrchestrator();
+  let dbpath: string;
+  let messageModule: EmailReceivedMessageModule;
+  let orchestrator: EmailReplyPolicyOrchestrator;
 
-  async function seedMessage(over: Partial<EmailReceivedMessageEntity>): Promise<number> {
+  beforeAll(async () => {
+    dbpath = path.join(os.tmpdir(), `aifetchly-predraft-policy-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Construct after resetInstance: EmailReplyPolicyOrchestrator eagerly
+    // builds 5 modules whose BaseDb constructors capture the singleton.
+    messageModule = new EmailReceivedMessageModule();
+    orchestrator = new EmailReplyPolicyOrchestrator();
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity>
+  ): Promise<number> {
     const msg = new EmailReceivedMessageEntity();
     msg.emailServiceId = over.emailServiceId ?? 4242;
     msg.providerUid = `p-${Math.random()}`;
@@ -80,7 +111,9 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
   });
 
   it("blocks an automated/no-reply sender at pre_draft even without classification", async () => {
-    const id = await seedMessage({ fromAddress: "no-reply@mailer.example.com" });
+    const id = await seedMessage({
+      fromAddress: "no-reply@mailer.example.com",
+    });
     const decision = await orchestrator.evaluate({
       stage: "pre_draft",
       messageId: id,
@@ -148,8 +181,12 @@ describe("P0.3 — pre-draft policy gate (FR-005)", () => {
   it("createDraft wires the gate before retrieval/LLM (structural guard)", () => {
     // Ensures the pre_draft evaluate call appears BEFORE retrieveReplyKnowledge
     // in the source, so a blocked message never reaches knowledge/LLM.
+    // fs/path are imported at the top of this file.
     const src = fs.readFileSync(
-      path.resolve(__dirname, "../../../../src/service/emailReply/EmailReplyDraftGenerationService.ts"),
+      path.resolve(
+        __dirname,
+        "../../../../src/service/emailReply/EmailReplyDraftGenerationService.ts"
+      ),
       "utf8"
     );
     const gateIdx = src.indexOf('stage: "pre_draft"');
@@ -957,5 +994,94 @@ describe("B08 — definitely-failed drafts are reusable, delivery_unknown is not
     const { pickReusableDraft } = await pickReusableDraftModule();
     const unknown = { id: 5, status: "delivery_unknown" } as EmailReplyDraftEntity;
     expect(pickReusableDraft([unknown])).toBe(null);
+  });
+});
+
+/**
+ * Reviewed flag (spec 2026-10-29-email-reply-reviewed-flag-design.md): a
+ * human-confirmed request exempts ONLY the classification-family blocks
+ * (needs_human_review / unknown) at pre_draft. Machine-safety blocks
+ * (unsubscribe, automated/no-reply senders) and the unconfirmed behavior are
+ * unchanged. Uses the shared fallback DB like the other post-P0.3 blocks
+ * (unique provider UIDs keep rows hermetic), with its own scoped helpers.
+ */
+describe("humanConfirmed pre-draft exemption (reviewed flag)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const orchestrator = new EmailReplyPolicyOrchestrator();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4245;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = null;
+    msg.classificationConfidence = null;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    if (over.classification) {
+      await messageModule.updateClassification(
+        saved.id,
+        over.classification,
+        over.classificationConfidence ?? 0.99
+      );
+    }
+    return saved.id;
+  }
+
+  it("allows a needs_human_review-classified message at pre_draft when humanConfirmed", async () => {
+    const id = await seedMessage({
+      classification: "needs_human_review",
+      classificationConfidence: 0.5,
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+      humanConfirmed: true,
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("still refuses needs_human_review at pre_draft without humanConfirmed (unchanged)", async () => {
+    const id = await seedMessage({ classification: "needs_human_review" });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("sensitive_topic");
+  });
+
+  it("still refuses unsubscribe and no-reply senders at pre_draft even when humanConfirmed", async () => {
+    const unsub = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: await seedMessage({ classification: "unsubscribe" }),
+      humanConfirmed: true,
+    });
+    expect(unsub.allowed).toBe(false);
+    const noReply = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: await seedMessage({
+        fromAddress: "no-reply@mailer.example.com",
+      }),
+      humanConfirmed: true,
+    });
+    expect(noReply.allowed).toBe(false);
   });
 });

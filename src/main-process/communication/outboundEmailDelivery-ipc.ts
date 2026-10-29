@@ -11,6 +11,10 @@ import {
   OUTBOUND_EMAIL_BATCH_PROGRESS,
 } from "@/config/channellist";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+// G01 (design §18 / PRD §20): outbound review opened, approved, claimed, and
+// terminal outcome counts — bounded labels only (batch identity only; never
+// draft bodies, recipient addresses, or tokens).
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import {
   outboundEmailBatchGetInputSchema,
   outboundEmailDraftUpdateInputSchema,
@@ -96,6 +100,12 @@ export function registerOutboundEmailDeliveryIpcHandlers(
     OUTBOUND_EMAIL_BATCH_GET,
     outboundEmailBatchGetInputSchema,
     async (input) => {
+      // G01 (design §18 / PRD §20): outbound review opened count.
+      aiChatQueueCounters.recordWorkspaceAction(
+        "outbound",
+        "review_opened",
+        "ok"
+      );
       const dbpath = dbpathForRequest();
       const draftModel = new OutboundEmailDraftModel(dbpath);
       const batch = await draftModel.readBatch(input.batchId);
@@ -305,9 +315,15 @@ export function registerOutboundEmailDeliveryIpcHandlers(
         sourceUserMessageId: batch.sourceUserMessageId,
       });
       if (!approval.success) {
+        aiChatQueueCounters.recordWorkspaceAction(
+          "outbound",
+          "approve",
+          approval.code ?? "approval_failed"
+        );
         throw new Error(approval.code ?? "approval_failed");
       }
       // The raw token is returned ONCE (§13.2); only the hash is persisted.
+      aiChatQueueCounters.recordWorkspaceAction("outbound", "approve", "ok");
       return {
         authorizationId: approval.authorizationId,
         token: approval.token,
@@ -342,6 +358,16 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       // The three new delivery gates (§17.1/§17.2/§15.5) abort before an
       // attempt is created or before the worker starts; they carry no
       // attemptId. The renderer treats a null attemptId as "no send started."
+      // G01 (design §18 / PRD §20): claimed / already-claimed counts.
+      aiChatQueueCounters.recordWorkspaceAction(
+        "outbound",
+        "send_claim",
+        result.status === "claimed"
+          ? "claimed"
+          : result.status === "already_processed"
+            ? "already_processed"
+            : "failed"
+      );
       return {
         status: result.status,
         attemptId: "attemptId" in result ? result.attemptId : null,
@@ -359,6 +385,7 @@ export function registerOutboundEmailDeliveryIpcHandlers(
       const authz = new OutboundEmailAuthorizationService(dbpath);
       await authz.invalidateOnRevisionChange(input.batchId, "batch_discarded");
       await draftModel.updateBatchStatus(input.batchId, "discarded");
+      aiChatQueueCounters.recordWorkspaceAction("outbound", "discard", "ok");
       return { discarded: true };
     }
   );

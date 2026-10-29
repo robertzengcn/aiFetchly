@@ -5,17 +5,17 @@ import * as os from "os";
 import * as path from "path";
 import Database from "better-sqlite3";
 import { SocialTaskRun } from "@/modules/socialtaskrun";
-import { Taskrundb } from "@/model/taskrundb";
 
 /**
  * SocialTaskRun.getrunlist smoke test against a real (throwaway) scraper.db.
  *
- * The test previously constructed `new SocialTaskRun()` with no dbpath —
- * `new Taskrundb("")` makes Scraperdb's constructor early-return with
- * `this.db` undefined, so getTaskrunTotal threw "Cannot read properties of
- * undefined (reading 'prepare')". getrunlist itself never touches Electron
- * paths (getApplogpath is only used by createsocialtaskrun), so a temp
- * directory + task_run table is the only fixture needed.
+ * The test previously constructed `new SocialTaskRun()` with no dbpath — the
+ * data layer then failed to open the database. getrunlist itself never
+ * touches Electron paths (getApplogpath is only used by createsocialtaskrun),
+ * so a temp directory + task_run table is the only fixture needed. Rows are
+ * seeded with raw inserts: the legacy Taskrundb raw-SQL class was migrated to
+ * TaskRunModel on dev (ec3267e6), so seeding goes straight through
+ * better-sqlite3 against the same DDL the app ships.
  */
 describe("socialtaskrun", () => {
   let tmp: string;
@@ -32,30 +32,26 @@ describe("socialtaskrun", () => {
         record_time TEXT NULL
       )`
     );
-    raw.close();
 
-    // Seed two runs for task 69 so the list has known content.
-    const taskrundb = new Taskrundb(tmp);
-    taskrundb.saveTaskrun({
-      task_id: 69,
-      taskrun_num: "r-1",
-      log_path: "logfilepath",
-    });
-    taskrundb.saveTaskrun({
-      task_id: 69,
-      taskrun_num: "r-2",
-      log_path: "logfilepath",
-    });
+    // Seed two runs for task 69 so the list has known content — BEFORE the
+    // handle closes (the old order prepared the insert on a closed handle
+    // and the whole beforeAll threw "The database connection is not open").
+    const insert = raw.prepare(
+      "INSERT INTO task_run (task_id, taskrun_num, log_path) VALUES (?, ?, ?)"
+    );
+    insert.run(69, "r-1", "logfilepath");
+    insert.run(69, "r-2", "logfilepath");
+    raw.close();
   });
 
   afterAll(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("get-task-run-list", () => {
+  it("get-task-run-list", async () => {
     const stkrunModel = new SocialTaskRun(tmp);
     let callbackRows: number | null = null;
-    const res = stkrunModel.getrunlist(69, 0, 10, (rows) => {
+    const res = await stkrunModel.getrunlist(69, 0, 10, (rows) => {
       callbackRows = rows.length;
       return rows;
     });
@@ -69,9 +65,9 @@ describe("socialtaskrun", () => {
     expect(callbackRows).toBe(2);
   });
 
-  it("get-task-run-list for a task with no runs", () => {
+  it("get-task-run-list for a task with no runs", async () => {
     const stkrunModel = new SocialTaskRun(tmp);
-    const res = stkrunModel.getrunlist(999, 0, 10);
+    const res = await stkrunModel.getrunlist(999, 0, 10);
 
     expect(res.Total).toBe(0);
     expect(res.Records).toEqual([]);

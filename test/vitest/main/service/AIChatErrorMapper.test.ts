@@ -6,11 +6,13 @@ import {
   describeErrorDetail,
   isAuthExpiredError,
   isContentLevelTransientError,
+  isContextWindowExceededError,
   isTransientRetryableError,
   userSafeError,
 } from "@/service/AIChatErrorMapper";
 import { AIChatRecoverableError } from "@/service/AIChatRecoveryTypes";
 import { AIProviderError } from "@/service/aiProvider/AIProviderError";
+import { log } from "@/modules/Logger";
 import { UnresolvedPastedTextError } from "@/service/pastedText/UnresolvedPastedTextError";
 
 describe("AIChatErrorMapper - userSafeError", () => {
@@ -181,7 +183,7 @@ describe("AIChatErrorMapper - userSafeError", () => {
   });
 
   it("logs the full error detail for unmapped errors so the source is traceable", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(vi.fn());
+    const spy = vi.spyOn(log, "error").mockImplementation(vi.fn());
     try {
       const cause = new Error("ECONNRESET");
       (cause as { code?: string }).code = "ECONNRESET";
@@ -295,5 +297,145 @@ describe("AIChatErrorMapper - isContentLevelTransientError", () => {
     expect(isContentLevelTransientError(abort)).toBe(false);
     expect(isContentLevelTransientError("finish_reason=error")).toBe(false);
     expect(isContentLevelTransientError(null)).toBe(false);
+  });
+});
+
+describe("AIChatErrorMapper - context window exceeded", () => {
+  // R8 P2-8 (FR-REC-004): the context-window failure emits the stable
+  // sentinel so both renderers (Chat V2 + workspace) map it to localized
+  // actionable copy instead of carrying untranslatable prose.
+  it("surfaces the stable sentinel for context_window_exceeded error code", () => {
+    const err = new Error(
+      "AI server returned finish_reason=error (code=context_window_exceeded): Upstream LLM error: ContextWindowExceededError: The input (566014 tokens) is longer than the model's context length (524288 tokens)."
+    );
+    const result = userSafeError(err);
+    expect(result).toBe("CONTEXT_WINDOW_EXCEEDED");
+  });
+
+  it("surfaces the stable sentinel for raw context length text", () => {
+    const err = new Error(
+      "The input (566014 tokens) is longer than the model's context length (524288 tokens)."
+    );
+    const result = userSafeError(err);
+    expect(result).toBe("CONTEXT_WINDOW_EXCEEDED");
+  });
+
+  it("does NOT classify context window exceeded as transient/retryable", () => {
+    const err = new Error(
+      "AI server returned finish_reason=error (code=context_window_exceeded): input too long"
+    );
+    expect(isTransientRetryableError(err)).toBe(false);
+  });
+
+  it("isContextWindowExceededError detects various phrasings", () => {
+    expect(
+      isContextWindowExceededError(
+        new Error("context_window_exceeded: input too long")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(
+        new Error("The input is longer than the model's context length.")
+      )
+    ).toBe(true);
+    expect(
+      isContextWindowExceededError(new Error("maximum context window exceeded"))
+    ).toBe(true);
+    expect(isContextWindowExceededError(new Error("generic error"))).toBe(
+      false
+    );
+    expect(isContextWindowExceededError(null)).toBe(false);
+    expect(isContextWindowExceededError("context window")).toBe(false);
+  });
+});
+
+describe("AIChatErrorMapper - image edit failure codes", () => {
+  it("classifies missing edit-model configuration as image_edit_unavailable", async () => {
+    const { imageEditErrorCode, userSafeError } = await import(
+      "@/service/AIChatErrorMapper"
+    );
+    expect(imageEditErrorCode(new Error("image_edit_unavailable"))).toBe(
+      "image_edit_unavailable"
+    );
+    expect(
+      imageEditErrorCode(new Error("No image-to-image model available"))
+    ).toBe("image_edit_unavailable");
+    expect(
+      imageEditErrorCode(new Error("edit model unavailable for this request"))
+    ).toBe("image_edit_unavailable");
+    expect(userSafeError(new Error("image edit model not configured"))).toBe(
+      "IMAGE_EDIT_UNAVAILABLE"
+    );
+  });
+
+  it("classifies provider edit rejections as image_edit_provider_failed", async () => {
+    const { imageEditErrorCode, userSafeError } = await import(
+      "@/service/AIChatErrorMapper"
+    );
+    expect(imageEditErrorCode(new Error("image_edit_provider_failed"))).toBe(
+      "image_edit_provider_failed"
+    );
+    expect(imageEditErrorCode(new Error("image generation failed"))).toBe(
+      "image_edit_provider_failed"
+    );
+    expect(
+      imageEditErrorCode(
+        new Error("provider error while editing the attached image")
+      )
+    ).toBe("image_edit_provider_failed");
+    expect(userSafeError(new Error("failed to edit the image"))).toBe(
+      "IMAGE_EDIT_PROVIDER_FAILED"
+    );
+  });
+
+  it("still returns the image-edit sentinels for AIProviderError-carried edit failures", async () => {
+    const { userSafeError } = await import("@/service/AIChatErrorMapper");
+    const providerErr = new AIProviderError(
+      "image edit model unavailable on the provider",
+      "not_found",
+      { status: 503 }
+    );
+    expect(userSafeError(providerErr)).toBe("IMAGE_EDIT_UNAVAILABLE");
+  });
+
+  it("never classifies quota, auth, or non-image failures as image-edit codes", async () => {
+    const { imageEditErrorCode, userSafeError } = await import(
+      "@/service/AIChatErrorMapper"
+    );
+    expect(
+      imageEditErrorCode(new Error("402 quota exceeded for image request"))
+    ).toBeNull();
+    expect(userSafeError(new Error("insufficient_quota"))).toBe(
+      QUOTA_EXHAUSTED_SENTINEL
+    );
+    expect(imageEditErrorCode(new Error("stream broke"))).toBeNull();
+    expect(imageEditErrorCode(new Error("NetworkError"))).toBeNull();
+    expect(imageEditErrorCode(null)).toBeNull();
+  });
+});
+
+describe("AIChatErrorMapper - image edit auth-phrase guard", () => {
+  it("never classifies API-key / credential failures as image-edit codes", async () => {
+    const { imageEditErrorCode } = await import("@/service/AIChatErrorMapper");
+    // These carry both "provider" and "image" — the loose co-occurrence
+    // heuristic would otherwise claim them; the credential guard must win.
+    expect(
+      imageEditErrorCode(new Error("Invalid API key for image provider"))
+    ).toBeNull();
+    expect(
+      imageEditErrorCode(
+        new Error("openai api-key rejected while editing image")
+      )
+    ).toBeNull();
+    expect(
+      imageEditErrorCode(new Error("403 Forbidden: image edit not permitted"))
+    ).toBeNull();
+    expect(
+      imageEditErrorCode(new Error("permission denied by provider for image"))
+    ).toBeNull();
+    // Real edit failures still classify.
+    expect(
+      imageEditErrorCode(new Error("image generation failed on provider"))
+    ).toBe("image_edit_provider_failed");
   });
 });

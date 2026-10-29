@@ -20,6 +20,13 @@ export const E2E_ENV = {
   TOOL_OUTPUT_ROOT: "AIFETCHLY_TOOL_OUTPUT_ROOT",
   IS_TEST: "IS_TEST",
   NODE_ENV: "NODE_ENV",
+  // Skill-installation isolation overrides (natural-language-skill-installation):
+  // redirect ~/.aifetchly + staging into the per-run temp root and enable the
+  // installer so E2E never touches real user config or installed skills.
+  SKILL_INSTALL_ENABLED: "AIFETCHLY_SKILL_INSTALL_ENABLED",
+  CONFIG_HOME: "AIFETCHLY_CONFIG_HOME",
+  SKILL_STAGING_ROOT: "AIFETCHLY_SKILL_STAGING_ROOT",
+  SKILL_CREDENTIAL_STORE: "AIFETCHLY_SKILL_CREDENTIAL_STORE",
 } as const;
 
 /** Shared run-root segment the bootstrap requires (mirror E2EEnvironment.ts). */
@@ -42,4 +49,13 @@ export interface E2ETestRoot {
 }
 
 /** Origin allowed for renderer network traffic (the Vite dev server). */
-export const RENDERER_ORIGIN = "http://127.0.0.1:5173";
+/**
+ * Renderer origin for the whole E2E harness. Honors the same
+ * AIFETCHLY_E2E_RENDERER_ORIGIN env the E2E main bundle bakes in at build
+ * time (vite.e2e.main.config.mjs), so a session can move off the default
+ * 5173 when another worktree's dev server holds it. Everything (playwright
+ * webServer, sanitized-env origins, launch URL wait, spec helpers) derives
+ * from this single constant.
+ */
+export const RENDERER_ORIGIN =
+  process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173";

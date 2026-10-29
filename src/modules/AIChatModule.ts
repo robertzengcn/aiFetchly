@@ -161,6 +161,49 @@ export class AIChatModule extends BaseModule {
   }
 
   /**
+   * Merge patch keys into an existing message's metadata WITHOUT replacing
+   * the rest of the record (AC-18/G02: queue-dispatched turns resolve
+   * history selections AFTER the user row was promoted, so provenance must
+   * attach post-hoc). No-op when the row is missing; a JSON parse failure
+   * starts from an empty record rather than dropping the row.
+   */
+  async mergeMessageMetadata(
+    messageId: string,
+    patch: Record<string, unknown>
+  ): Promise<void> {
+    await this.ensureConnection();
+    const existing = await this.chatMessageModel.getMessageByMessageId(
+      messageId
+    );
+    if (!existing) return;
+    let current: Record<string, unknown> = {};
+    try {
+      current =
+        typeof existing.metadata === "string" && existing.metadata
+          ? (JSON.parse(existing.metadata) as Record<string, unknown>)
+          : {};
+    } catch {
+      current = {};
+    }
+    existing.metadata = JSON.stringify({ ...current, ...patch });
+    await this.chatMessageModel.saveMessage(existing);
+  }
+
+  /**
+   * Get message by conversation ID and message ID
+   */
+  async getMessageByConversationAndMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    await this.ensureConnection();
+    return await this.chatMessageModel.getMessageByConversationAndMessageId(
+      conversationId,
+      messageId
+    );
+  }
+
+  /**
    * Clear conversation history.
    *
    * The preserved-tool-output scope is invalidated BEFORE the messages are

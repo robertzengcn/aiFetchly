@@ -97,6 +97,34 @@ describe("AIChatScheduledLoopModule.create", () => {
     expect(resp.conversationId.startsWith("v2-")).toBe(true);
   });
 
+  it("creates the conversation projection row for a fresh v2 conversation id", async () => {
+    // A fresh composer passes a locally-fabricated v2 id that has no
+    // ai_chat_conversations row. Without a projection row the loop's
+    // conversation is a phantom: scheduled turns persist messages, but the
+    // sidebar never lists the conversation and the transcript is unreachable
+    // after navigating away — the user sees nothing in the UI.
+    const mod = new AIChatScheduledLoopModule();
+    await SqliteDb.ensureInitialized();
+    await mod.create({
+      conversationId: "v2-conv-projection",
+      rawCommand: "/loop 5m check deployment",
+      prompt: "check deployment",
+      intervalMs: 5 * 60_000,
+      maxRuns: 24,
+      maxLifetimeMs: 24 * 60 * 60 * 1000,
+    });
+    const { AIChatConversationModule } = await import(
+      "@/modules/AIChatConversationModule"
+    );
+    const projection = await new AIChatConversationModule()
+      .getConversationProjection("v2-conv-projection");
+    expect(projection).not.toBeNull();
+    expect(projection?.title).toBe("/loop 5m check deployment");
+    // Both the command and the confirmation bumps advanced the projection
+    // (createProjection seeds count 0; each subsequent bump adds 1).
+    expect(projection?.messageCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("rejects a second active loop for the same conversation", async () => {
     const mod = new AIChatScheduledLoopModule();
     await SqliteDb.ensureInitialized();

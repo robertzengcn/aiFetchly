@@ -56,7 +56,10 @@ function imagePreview(
 
 function makeService(postJson: Mock): AIContentReportService {
   return new AIContentReportService({
-    httpClient: { postJson, get: vi.fn() },
+    httpClient: {
+      postJson: postJson as unknown as import("@/modules/lib/httpclient").HttpClient["postJson"],
+      get: vi.fn() as unknown as import("@/modules/lib/httpclient").HttpClient["get"],
+    },
     appVersion: () => "9.9.9-test",
     installId: () => "22222222-2222-2222-2222-222222222222",
   });

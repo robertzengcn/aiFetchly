@@ -23,6 +23,8 @@ const i18n = createI18n({
         unknown_summary: "Delivery status unknown.",
         failed_summary: "Batch failed.",
         discarded_summary: "Batch discarded.",
+        cancelled_summary: "Batch cancelled.",
+        summary_detail: "Sent: {sent}/{total} · Reason: {reason}",
       },
     },
   },
@@ -100,12 +102,15 @@ describe("OutboundEmailBatchCard", () => {
     expect(wrapper.text()).toContain("Batch sent.");
   });
 
-  it("shows a delivery-unknown summary (no review button) for delivery_unknown", () => {
+  // R9 T04: delivery_unknown is inconclusive (§18) — the outcome summary
+  // renders AND the dialog reopen entry stays (FR-OUT-007/009; the design
+  // table's "email dialog reopen" journey). The settled statuses hide it.
+  it("shows a delivery-unknown summary with the dialog reopen entry for delivery_unknown", () => {
     const wrapper = mountCard({ batchStatus: "delivery_unknown" });
-    expect(wrapper.find('[data-testid="outbound-batch-review"]').exists()).toBe(
-      false
-    );
     expect(wrapper.text()).toContain("Delivery status unknown.");
+    expect(wrapper.find('[data-testid="outbound-batch-review"]').exists()).toBe(
+      true
+    );
   });
 
   it("shows a discarded summary for discarded status", () => {
@@ -120,5 +125,30 @@ describe("OutboundEmailBatchCard", () => {
       sentCount: 1,
     });
     expect(wrapper.text()).toContain("Batch partially sent.");
+  });
+
+  it("hides Review for the cancelled status too (every terminal state)", () => {
+    const wrapper = mountCard({ batchStatus: "cancelled" });
+    expect(wrapper.find('[data-testid="outbound-batch-review"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.text()).toContain("Batch cancelled.");
+  });
+
+  it("renders the authoritative sent count and reason code in the summary (P1-6)", () => {
+    const wrapper = mountCard({
+      batchStatus: "partially_sent",
+      recipientCount: 5,
+      sentCount: 3,
+      reasonCode: "delivery_unknown",
+    });
+    const detail = wrapper.find(
+      '[data-testid="outbound-batch-summary-detail"]'
+    );
+    expect(detail.exists()).toBe(true);
+    expect(detail.text()).toContain("3/5");
+    // The reason code renders as a sanitized code — success copy never
+    // collapses a delivery_unknown into "sent" style wording.
+    expect(detail.text()).toContain("delivery_unknown");
   });
 });

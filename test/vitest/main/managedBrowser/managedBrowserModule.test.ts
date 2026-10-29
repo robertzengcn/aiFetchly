@@ -1,0 +1,1524 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  ManagedBrowserModule,
+  type ManagedBrowserModuleDeps,
+} from "@/modules/ManagedBrowserModule";
+import type { ManagedBrowserCacheCoordinator } from "@/modules/ManagedBrowserCacheModule";
+import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
+import {
+  ManagedBrowserLeaseService,
+  type AcquireLeaseResult,
+} from "@/service/ManagedBrowserLeaseService";
+import { ManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
+import {
+  ManagedBrowserWorkerClient,
+  type OutboundEvent,
+  type WorkerClientDeps,
+  type WorkerRequestEnvelope,
+} from "@/service/ManagedBrowserWorkerClient";
+import type { ManagedBrowserOutboundMessage } from "@/schemas/worker/managedBrowser";
+import type { NormalizedCookie } from "@/schemas/accountCookies";
+import type {
+  BrowserChatNoticeType,
+  EffectiveManagedBrowserSettings,
+  SafeBrowserChatNotice,
+  SafeManagedBrowserStatus,
+  WorkerBrowserStoragePolicy,
+} from "@/entityTypes/managedBrowserTypes";
+import type { ExecutableResolutionResult } from "@/childprocess/managed-browser/BrowserExecutableResolver";
+
+/**
+ * ManagedBrowserModule orchestration tests. All collaborators are DI fakes —
+ * no DB, no utility process. The assertions focus on the security-critical
+ * ordering (gates before secret access), the cookie bridge, lease lifecycle,
+ * and notice publication.
+ */
+
+const ACCOUNT_ID = 101;
+const DESCRIPTOR = {
+  path: "/fake/chrome",
+  source: "managed" as const,
+  product: "chrome" as const,
+  version: "120.0.6099.109",
+  majorVersion: 120,
+  architecture: "x64",
+};
+
+const SNAPSHOT_COOKIES: NormalizedCookie[] = [
+  {
+    domain: "youtube.com",
+    path: "/",
+    name: "SID",
+    value: "yt-secret",
+    secure: true,
+    httpOnly: true,
+  },
+  {
+    domain: "accounts.google.com",
+    path: "/",
+    name: "SAPISID",
+    value: "google-secret",
+    secure: true,
+    httpOnly: true,
+  },
+  {
+    domain: "evil.example",
+    path: "/",
+    name: "SID",
+    value: "attacker-cookie",
+    secure: false,
+    httpOnly: false,
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Fakes
+// ---------------------------------------------------------------------------
+
+class FakeLease {
+  public readonly acquireCalls: Array<
+    [number, { sessionId: string; ownerConversationId: string | null }]
+  > = [];
+  public readonly releaseCalls: Array<[number, string, string]> = [];
+  public next: AcquireLeaseResult = {
+    status: "granted",
+    leaseToken: "lease-1",
+  };
+
+  public acquire(
+    accountId: number,
+    opts: { sessionId: string; ownerConversationId: string | null }
+  ): AcquireLeaseResult {
+    this.acquireCalls.push([accountId, opts]);
+    return this.next;
+  }
+
+  public release(
+    accountId: number,
+    sessionId: string,
+    token: string
+  ): "released" {
+    this.releaseCalls.push([accountId, sessionId, token]);
+    return "released";
+  }
+}
+
+interface RegisteredInit {
+  sessionId: string;
+  accountId: number;
+  releaseLease: () => void;
+  onTerminal: (sessionId: string, cause: string) => void;
+}
+
+class FakeSupervisor {
+  public readonly registered: RegisteredInit[] = [];
+  public readonly terminalCalls: Array<[string, string]> = [];
+  private readonly terminated = new Set<string>();
+
+  public register(init: RegisteredInit): void {
+    this.registered.push(init);
+  }
+
+  /** Mirrors the real supervisor: releaseLease() then onTerminal(), once. */
+  public handleTerminal(sessionId: string, cause: string): void {
+    this.terminalCalls.push([sessionId, cause]);
+    if (this.terminated.has(sessionId)) {
+      return;
+    }
+    this.terminated.add(sessionId);
+    const init = this.registered.find((r) => r.sessionId === sessionId);
+    if (!init) {
+      return;
+    }
+    init.releaseLease();
+    init.onTerminal(sessionId, cause);
+  }
+}
+
+type ReplyFn = (env: WorkerRequestEnvelope) => ManagedBrowserOutboundMessage;
+
+let replySequence = 0;
+
+function replyBase(sessionId: string): Record<string, unknown> {
+  replySequence += 1;
+  return {
+    protocolVersion: 1,
+    sessionId,
+    requestId: `req-fake-${replySequence}`,
+    sequence: replySequence,
+  };
+}
+
+function sessionReadyReply(sessionId: string): ManagedBrowserOutboundMessage {
+  return {
+    ...replyBase(sessionId),
+    type: "SESSION_READY",
+    fingerprintResult: "pass",
+    fingerprintReasonCodes: [],
+    appliedCookieCount: 2,
+    rejectedCookieCount: 0,
+    assessment: { state: "authenticated", evidenceCodes: ["api_ready"] },
+    identity: {
+      sessionId,
+      sessionNonce: "nonce-fake-12345678",
+      workerPid: 111,
+      browserPid: 222,
+      executableSha256: "a".repeat(64),
+      executableVersion: DESCRIPTOR.version,
+      launchedAtEpochMs: 1_700_000_000_000,
+    },
+  } as unknown as ManagedBrowserOutboundMessage;
+}
+
+function loginRequiredReply(sessionId: string): ManagedBrowserOutboundMessage {
+  return {
+    ...replyBase(sessionId),
+    type: "LOGIN_REQUIRED",
+    reasonCode: "session_cookies_missing",
+  } as unknown as ManagedBrowserOutboundMessage;
+}
+
+function stateChangedReply(
+  sessionId: string,
+  state: string,
+  reasonCode: string | null
+): ManagedBrowserOutboundMessage {
+  return {
+    ...replyBase(sessionId),
+    type: "SESSION_STATE_CHANGED",
+    state,
+    reasonCode,
+  } as unknown as ManagedBrowserOutboundMessage;
+}
+
+class FakeWorkerClient {
+  public readonly sent: WorkerRequestEnvelope[] = [];
+  public readonly deps: WorkerClientDeps;
+  private readonly script: Map<string, ReplyFn>;
+
+  public constructor(
+    deps: WorkerClientDeps,
+    script: Record<string, ReplyFn> = {}
+  ) {
+    this.deps = deps;
+    this.script = new Map(
+      Object.entries({
+        START_SESSION: () => sessionReadyReply(deps.sessionId),
+        VERIFY_MANUAL_LOGIN: () =>
+          stateChangedReply(deps.sessionId, "ready", "manual_login_verified"),
+        OBSERVE: () =>
+          ({
+            ...replyBase(deps.sessionId),
+            type: "OBSERVATION_RESULT",
+            observation: {
+              sessionId: deps.sessionId,
+              pageRevision: 1,
+              url: "https://www.youtube.com/",
+              origin: "https://www.youtube.com",
+              title: "YouTube",
+              state: "ready",
+              elements: [],
+              visibleText: "",
+              notices: [{ code: "untrusted_content" }],
+              truncated: false,
+            },
+          } as unknown as ManagedBrowserOutboundMessage),
+        BEGIN_HANDOFF: () =>
+          stateChangedReply(deps.sessionId, "handoff", "user_requested"),
+        CANCEL_REQUEST: () =>
+          stateChangedReply(deps.sessionId, "running", "cancelled"),
+        RESUME_HANDOFF: () =>
+          stateChangedReply(deps.sessionId, "ready", "resumed"),
+        ...script,
+      })
+    );
+  }
+
+  public failStart = false;
+  public failStop = false;
+
+  public async start(): Promise<void> {
+    if (this.failStart) {
+      throw new Error("worker_start_timeout");
+    }
+  }
+
+  public async request(
+    message: WorkerRequestEnvelope
+  ): Promise<ManagedBrowserOutboundMessage> {
+    this.sent.push(message);
+    const reply = this.script.get(message.type);
+    if (!reply) {
+      throw new Error("worker_request_timeout");
+    }
+    return reply(message);
+  }
+
+  public async stop(): Promise<string> {
+    if (this.failStop) {
+      throw new Error("stop_failed");
+    }
+    return "user_stop";
+  }
+
+  public async cleanup(): Promise<string> {
+    return "cleanup";
+  }
+}
+
+interface PersistCall {
+  accountId: number;
+  cookies: unknown[];
+  source: "worker_refresh";
+  partitionPath: string;
+}
+
+/** Records every coordinator call; policy results are settable per test. */
+class FakeCacheCoordinator implements ManagedBrowserCacheCoordinator {
+  public readonly opened: Array<{
+    sessionId: string;
+    accountId: number;
+    scopeToken: string;
+    namespace: string;
+  }> = [];
+  public readonly released: string[] = [];
+  public readonly terminals: string[] = [];
+  public readonly policyCalls: Array<[number, number, boolean]> = [];
+  public nextPolicy: WorkerBrowserStoragePolicy["persistentCache"] = {
+    enabled: false,
+    reasonCode: "fake_disabled",
+  };
+  public failPolicy = false;
+
+  public async buildPersistentCachePolicy(
+    accountId: number,
+    chromeMajor: number,
+    cacheEnabled: boolean
+  ): Promise<WorkerBrowserStoragePolicy["persistentCache"]> {
+    this.policyCalls.push([accountId, chromeMajor, cacheEnabled]);
+    if (this.failPolicy) {
+      throw new Error("scope ladder exploded");
+    }
+    return this.nextPolicy;
+  }
+
+  public onCacheOpened(input: {
+    sessionId: string;
+    accountId: number;
+    scopeToken: string;
+    namespace: string;
+  }): void {
+    this.opened.push(input);
+  }
+
+  public onCacheReleased(sessionId: string): void {
+    this.released.push(sessionId);
+  }
+
+  public onSessionTerminal(sessionId: string): void {
+    this.terminals.push(sessionId);
+  }
+}
+
+interface Harness {
+  module: ManagedBrowserModule;
+  lease: FakeLease;
+  supervisor: FakeSupervisor;
+  clients: FakeWorkerClient[];
+  cache: FakeCacheCoordinator;
+  notices: SafeBrowserChatNotice[];
+  statuses: SafeManagedBrowserStatus[];
+  persistCalls: PersistCall[];
+  lookupCalls: number[];
+  accountLookup: () => Promise<{
+    platformId: number;
+    accountLabel: string;
+  } | null>;
+}
+
+function makeHarness(
+  overrides: {
+    settings?: Partial<EffectiveManagedBrowserSettings>;
+    startScript?: Record<string, ReplyFn>;
+    persistSnapshot?: (input: PersistCall) => Promise<void>;
+    nextLease?: AcquireLeaseResult;
+    executableResolution?: ExecutableResolutionResult;
+    accountLookup?: (
+      accountId: number
+    ) => Promise<{ platformId: number; accountLabel: string } | null>;
+    isAiEnabled?: () => boolean;
+    cache?: FakeCacheCoordinator;
+    resolveCachePolicy?: ManagedBrowserModuleDeps["resolveCachePolicy"];
+    useDefaultCachePolicy?: boolean;
+  } = {}
+): Harness {
+  const lease = new FakeLease();
+  lease.next = overrides.nextLease ?? {
+    status: "granted",
+    leaseToken: "lease-1",
+  };
+  const supervisor = new FakeSupervisor();
+  const cache = overrides.cache ?? new FakeCacheCoordinator();
+  const notices: SafeBrowserChatNotice[] = [];
+  const statuses: SafeManagedBrowserStatus[] = [];
+  const clients: FakeWorkerClient[] = [];
+  const persistCalls: PersistCall[] = [];
+  const lookupCalls: number[] = [];
+  const defaultAccountLookup = async (
+    accountId: number
+  ): Promise<{ platformId: number; accountLabel: string } | null> => {
+    lookupCalls.push(accountId);
+    return { platformId: 2, accountLabel: "My Channel" };
+  };
+  const settings: EffectiveManagedBrowserSettings = {
+    browserEnabled: true,
+    cacheEnabled: true,
+    cacheMaxBytes: 500 * 1024 * 1024,
+    clearCacheOnExit: true,
+    disabledReasonCode: null,
+    ...overrides.settings,
+  };
+  const module = new ManagedBrowserModule({
+    settings: {
+      getEffectiveSettings: async () => settings,
+    } as unknown as ManagedBrowserSettingsModule,
+    leaseService: lease as unknown as ManagedBrowserLeaseService,
+    supervisor: supervisor as unknown as ManagedBrowserSupervisor,
+    noticeSink: (notice) => notices.push(notice),
+    emitStatus: (status) => statuses.push(status),
+    accountLookup: overrides.accountLookup ?? defaultAccountLookup,
+    sessionService: {
+      getDecryptedSnapshot: async () => ({
+        cookies: [...SNAPSHOT_COOKIES],
+        status: "valid",
+      }),
+      getOrCreatePartition: async () => "/partitions/acc-101",
+      persistSnapshot: overrides.persistSnapshot
+        ? async (input: PersistCall) => {
+            await overrides.persistSnapshot?.(input);
+          }
+        : async (input: PersistCall) => {
+            persistCalls.push(input);
+          },
+    },
+    workerClientFactory: (deps) => {
+      const client = new FakeWorkerClient(deps, overrides.startScript);
+      clients.push(client);
+      return client as unknown as ManagedBrowserWorkerClient;
+    },
+    executableResolver: {
+      resolve: () =>
+        overrides.executableResolution ?? { descriptor: DESCRIPTOR },
+    },
+    isAiEnabled: overrides.isAiEnabled ?? (() => true),
+    mkdtemp: async () => "/tmp/mb-fake-root",
+    cacheModule: cache,
+    resolveCachePolicy: overrides.useDefaultCachePolicy
+      ? undefined
+      : overrides.resolveCachePolicy ??
+        (() => ({ enabled: false, reasonCode: "test_disabled" })),
+  });
+  const harnessAccountLookup =
+    overrides.accountLookup ?? defaultAccountLookup.bind(null);
+  return {
+    module,
+    lease,
+    supervisor,
+    clients,
+    cache,
+    notices,
+    statuses,
+    persistCalls,
+    lookupCalls,
+    accountLookup: async () => harnessAccountLookup(ACCOUNT_ID),
+  };
+}
+
+const noticeTypes = (
+  notices: SafeBrowserChatNotice[]
+): BrowserChatNoticeType[] => notices.map((n) => n.type);
+
+// ---------------------------------------------------------------------------
+// Gate ordering
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule.start gates", () => {
+  it("rejects managed_browser_disabled BEFORE account lookup (FR-SETTING-003)", async () => {
+    const h = makeHarness({
+      settings: { browserEnabled: false, disabledReasonCode: "user_disabled" },
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({
+      code: "managed_browser_disabled",
+      reasonCode: "user_disabled",
+    });
+    expect(h.lookupCalls).toHaveLength(0);
+    expect(h.clients).toHaveLength(0);
+  });
+
+  it("rejects ai_disabled on AI entry before account lookup (FR-P0-012)", async () => {
+    const h = makeHarness({ isAiEnabled: () => false });
+    await expect(
+      h.module.start(
+        { accountId: ACCOUNT_ID, purpose: "test" },
+        { aiEntryPoint: true }
+      )
+    ).rejects.toMatchObject({ code: "ai_disabled" });
+    expect(h.lookupCalls).toHaveLength(0);
+    expect(h.clients).toHaveLength(0);
+  });
+
+  it("allows the AI path when AI is enabled", async () => {
+    const h = makeHarness();
+    const status = await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    expect(status.state).toBe("ready");
+  });
+
+  it("rejects account_not_found", async () => {
+    const h = makeHarness({
+      accountLookup: async () => null,
+    });
+    await expect(
+      h.module.start({ accountId: 404, purpose: "test" })
+    ).rejects.toMatchObject({ code: "account_not_found" });
+  });
+
+  it("rejects platforms outside the pilot allowlist", async () => {
+    const h = makeHarness({
+      accountLookup: async () => ({ platformId: 5, accountLabel: "Bing" }),
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({
+      code: "managed_browser_disabled",
+      reasonCode: "platform_not_in_pilot",
+    });
+    expect(h.clients).toHaveLength(0);
+  });
+
+  it("rejects account_in_use without touching the worker", async () => {
+    const h = makeHarness({
+      nextLease: { status: "account_in_use" },
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({ code: "account_in_use" });
+    expect(h.clients).toHaveLength(0);
+    expect(h.lease.releaseCalls).toHaveLength(0);
+  });
+
+  it("rejects global_session_limit", async () => {
+    const h = makeHarness({
+      nextLease: { status: "global_limit_reached" },
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({ code: "global_session_limit" });
+  });
+
+  it("returns the existing session when the same owner re-starts", async () => {
+    const h = makeHarness();
+    const first = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "already_active", sessionId: first.sessionId };
+    const second = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(second.state).toBe("ready");
+    expect(h.clients).toHaveLength(1);
+  });
+
+  it("treats already_active without a live record as an internal error and releases", async () => {
+    const h = makeHarness({
+      nextLease: { status: "already_active", sessionId: "mb_ghost0000000001" },
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({
+      code: "internal_error",
+      reasonCode: "lease_without_record",
+    });
+    expect(h.lease.releaseCalls).toEqual([
+      [ACCOUNT_ID, "mb_ghost0000000001", ""],
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Happy path
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule.start happy path", () => {
+  it("sends START_SESSION with domain-filtered cookies and reaches ready", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "contact_scan",
+      conversationId: "conv-1",
+    });
+
+    expect(status.state).toBe("ready");
+    expect(status.authenticated).toBe(true);
+    expect(status.sessionId).toMatch(/^mb_/);
+
+    // Lease acquired with owner conversation.
+    expect(h.lease.acquireCalls).toHaveLength(1);
+    expect(h.lease.acquireCalls[0][1].ownerConversationId).toBe("conv-1");
+
+    // Supervisor registered before the worker started.
+    expect(h.supervisor.registered).toHaveLength(1);
+    expect(h.supervisor.registered[0].accountId).toBe(ACCOUNT_ID);
+
+    const startMessage = h.clients[0].sent[0];
+    expect(startMessage.type).toBe("START_SESSION");
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.executable).toEqual(DESCRIPTOR);
+    const sentDomains = startMessage.cookies.map((c) => c.domain).sort();
+    expect(sentDomains).toEqual(["accounts.google.com", "youtube.com"]);
+    expect(
+      startMessage.cookies.every((c) => c.value !== "attacker-cookie")
+    ).toBe(true);
+    // Temporary profile under a fresh temp root; cache policy honored.
+    expect(startMessage.storagePolicy.temporaryProfilePath).toContain(
+      "/tmp/mb-fake-root"
+    );
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "test_disabled",
+    });
+  });
+
+  it("translates a LOGIN_REQUIRED start reply into user_login_in_progress", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: (env) => {
+          void env;
+          return loginRequiredReply("mb_fakesession0001");
+        },
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("user_login_in_progress");
+    expect(status.authenticated).toBe(false);
+    expect(noticeTypes(h.notices)).toContain("login_required");
+  });
+
+  it("releases the lease and fails cleanly when the executable is missing", async () => {
+    const h = makeHarness({
+      executableResolution: {
+        errorCode: "browser_dependency_missing",
+        searchedPaths: ["/fake/chrome"],
+      },
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({
+      code: "browser_dependency_missing",
+    });
+    expect(h.lease.releaseCalls).toHaveLength(1);
+    expect(h.module.listActiveSessions()).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cookie bridge
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule cookie bridge", () => {
+  it("persists schema-valid, domain-filtered refreshes as worker_refresh", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    h.clients[0].deps.onRefreshedCookies([
+      {
+        domain: "youtube.com",
+        path: "/",
+        name: "SID",
+        value: "refreshed-secret",
+        secure: true,
+        httpOnly: true,
+      },
+      {
+        domain: "evil.example",
+        path: "/",
+        name: "SID",
+        value: "evil-refresh",
+        secure: false,
+        httpOnly: false,
+      },
+    ]);
+    // The refresh handler is invoked synchronously but persists async —
+    // flush microtasks.
+    await vi.waitFor(() => expect(h.persistCalls).toHaveLength(1));
+    expect(h.persistCalls[0].source).toBe("worker_refresh");
+    expect(h.persistCalls[0].accountId).toBe(ACCOUNT_ID);
+    expect(h.persistCalls[0].partitionPath).toBe("/partitions/acc-101");
+    expect(h.persistCalls[0].cookies).toHaveLength(1);
+    expect((h.persistCalls[0].cookies[0] as { name: string }).name).toBe("SID");
+  });
+
+  it("keeps the last valid snapshot on an EMPTY refresh (FR-COOKIE-019)", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    h.clients[0].deps.onRefreshedCookies([]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(h.persistCalls).toHaveLength(0);
+  });
+
+  it("keeps the last valid snapshot when refresh cookies fail the schema", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    h.clients[0].deps.onRefreshedCookies([
+      { domain: 42 } as unknown as NormalizedCookie,
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(h.persistCalls).toHaveLength(0);
+  });
+
+  it("keeps the last valid snapshot when every refresh cookie is off-domain", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    h.clients[0].deps.onRefreshedCookies([
+      {
+        domain: "evil.example",
+        path: "/",
+        name: "SID",
+        value: "evil-refresh",
+        secure: false,
+        httpOnly: false,
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(h.persistCalls).toHaveLength(0);
+  });
+
+  it("publishes session_persistence_failed when persistence throws", async () => {
+    const h = makeHarness({
+      persistSnapshot: async () => {
+        throw new Error("disk full");
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onRefreshedCookies([
+      {
+        domain: "youtube.com",
+        path: "/",
+        name: "SID",
+        value: "refreshed-secret",
+        secure: true,
+        httpOnly: true,
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(noticeTypes(h.notices)).toContain("session_persistence_failed")
+    );
+    // Session stays usable; error surfaced on the safe status.
+    expect(h.module.getStatus(status.sessionId)?.lastErrorCode).toBe(
+      "cookie_persistence_failed"
+    );
+    expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Terminal handling
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule terminal handling", () => {
+  it("on crash: releases the lease, publishes browser_crashed, removes the session", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onExited("exit:1");
+
+    expect(h.lease.releaseCalls).toHaveLength(1);
+    expect(h.lease.releaseCalls[0]).toEqual([
+      ACCOUNT_ID,
+      status.sessionId,
+      "lease-1",
+    ]);
+    expect(noticeTypes(h.notices)).toContain("browser_crashed");
+    expect(h.module.getStatus(status.sessionId)).toBeNull();
+    // The LAST emitted status for this session is the failed one.
+    const final = h.statuses[h.statuses.length - 1];
+    expect(final.state).toBe("failed");
+    expect(final.lastErrorCode).toBe("worker_exited");
+  });
+
+  it("stop() is graceful: no crash notice, lease released, session removed", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    const stopped = await h.module.stop(status.sessionId, "user_stop");
+    expect(stopped.state).toBe("stopped");
+    expect(h.lease.releaseCalls).toHaveLength(1);
+    expect(noticeTypes(h.notices)).not.toContain("browser_crashed");
+    expect(h.module.getStatus(status.sessionId)).toBeNull();
+  });
+
+  it("commands on a dead session fail with worker_exited", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onExited("exit:1");
+    await expect(h.module.observe(status.sessionId)).rejects.toMatchObject({
+      code: "worker_exited",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manual login lifecycle (§13.2)
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule.verifyManualLogin", () => {
+  async function startInLogin(h: Harness): Promise<string> {
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("user_login_in_progress");
+    return status.sessionId;
+  }
+
+  it("resumes the task after a verified manual login", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: () => loginRequiredReply("mb_fakesession0001"),
+      },
+    });
+    const sessionId = await startInLogin(h);
+    const status = await h.module.verifyManualLogin(sessionId);
+    expect(status.state).toBe("ready");
+    expect(status.authenticated).toBe(true);
+    expect(noticeTypes(h.notices)).toEqual([
+      "login_required",
+      "login_verifying",
+      "login_verified",
+      "task_resuming",
+    ]);
+  });
+
+  it("stays in user_login_in_progress and warns on a failed verification", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: () => loginRequiredReply("mb_fakesession0001"),
+        VERIFY_MANUAL_LOGIN: () =>
+          stateChangedReply(
+            "mb_fakesession0001",
+            "user_login_in_progress",
+            "not_verified"
+          ),
+      },
+    });
+    const sessionId = await startInLogin(h);
+    const status = await h.module.verifyManualLogin(sessionId);
+    expect(status.state).toBe("user_login_in_progress");
+    expect(status.authenticated).toBe(false);
+    expect(noticeTypes(h.notices)).toContain("login_verification_failed");
+    expect(noticeTypes(h.notices)).not.toContain("task_resuming");
+  });
+
+  it("is rejected outside user_login_in_progress", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("ready");
+    await expect(
+      h.module.verifyManualLogin(status.sessionId)
+    ).rejects.toMatchObject({ code: "action_not_allowed" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Misc
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule misc", () => {
+  it("observe() returns the observation and tracks pageRevision", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    const observation = await h.module.observe(status.sessionId);
+    expect(observation.origin).toBe("https://www.youtube.com");
+    expect(h.module.getStatus(status.sessionId)?.pageRevision).toBe(1);
+  });
+
+  it("getStatusByAccount finds the live session", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    expect(h.module.getStatusByAccount(ACCOUNT_ID)?.accountId).toBe(ACCOUNT_ID);
+    expect(h.module.getStatusByAccount(999)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cache coordinator wiring (§13.6)
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule cache coordinator wiring", () => {
+  it("forwards CACHE_OPENED to the cache module registry", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CACHE_OPENED",
+      scopeToken: "a".repeat(24),
+      namespace: "chrome-120-linux-x64-schema-1",
+    } as unknown as OutboundEvent);
+    expect(h.cache.opened).toEqual([
+      {
+        sessionId: status.sessionId,
+        accountId: ACCOUNT_ID,
+        scopeToken: "a".repeat(24),
+        namespace: "chrome-120-linux-x64-schema-1",
+      },
+    ]);
+  });
+
+  it("forwards CACHE_RELEASED to the cache module", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CACHE_RELEASED",
+    } as unknown as OutboundEvent);
+    expect(h.cache.released).toEqual([status.sessionId]);
+  });
+
+  it("releases the scope on session terminal (safety net)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onExited("exit:1");
+    expect(h.cache.terminals).toContain(status.sessionId);
+  });
+
+  it("awaits an async resolveCachePolicy and sends the policy to the worker", async () => {
+    const h = makeHarness({
+      resolveCachePolicy: async () => ({
+        enabled: false,
+        reasonCode: "async_disabled",
+      }),
+    });
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "async_disabled",
+    });
+  });
+
+  it("falls back to the cache module policy when no resolver is injected", async () => {
+    const h = makeHarness({ useDefaultCachePolicy: true });
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    expect(h.cache.policyCalls).toEqual([[ACCOUNT_ID, 120, true]]);
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "fake_disabled",
+    });
+  });
+
+  it("starts with the cache disabled when the coordinator throws", async () => {
+    const h = makeHarness({ useDefaultCachePolicy: true });
+    h.cache.failPolicy = true;
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("ready");
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.storagePolicy.persistentCache).toEqual({
+      enabled: false,
+      reasonCode: "cache_unavailable",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Progress / approval sinks + handoff-window expiry enforcement (§17, §13.2)
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule renderer sinks", () => {
+  it("forwards worker ACTION_PROGRESS through the progress sink", async () => {
+    const progressEvents: unknown[] = [];
+    const h = makeHarness();
+    h.module.setProgressSink((progress) => progressEvents.push(progress));
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "ACTION_PROGRESS",
+      phase: "acting",
+      completedSteps: 2,
+      totalSteps: 5,
+      messageCode: "step_click",
+    } as unknown as OutboundEvent);
+    expect(progressEvents).toEqual([
+      {
+        sessionId: status.sessionId,
+        phase: "acting",
+        completedSteps: 2,
+        totalSteps: 5,
+        messageCode: "step_click",
+      },
+    ]);
+  });
+
+  it("surfaces approval requests through the approval sink", async () => {
+    const approvals: unknown[] = [];
+    const h = makeHarness();
+    h.module.setApprovalSink((request) => approvals.push(request));
+    h.module.notifyApprovalRequired({
+      sessionId: "mb_x0000000000001",
+      requestId: "call-1",
+      riskClass: "consequential_write",
+      contentSummary: "Publish video",
+      programDigest: "a".repeat(64),
+      pageRevision: 3,
+    });
+    expect(approvals).toEqual([
+      {
+        sessionId: "mb_x0000000000001",
+        requestId: "call-1",
+        programDigest: "a".repeat(64),
+        pageRevision: 3,
+        riskClass: "consequential_write",
+        messageKey: "managedBrowser.approval.required",
+        contentSummary: "Publish video",
+      },
+    ]);
+  });
+});
+
+describe("handoff-window expiry enforcement (FR-P0-013)", () => {
+  it("stops the session as cancelled when the login window lapses", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        startScript: {
+          START_SESSION: () => loginRequiredReply("mb_expirysessn001"),
+        },
+      });
+      h.module.setClockForTests(() => Date.now());
+      const status = await h.module.start({
+        accountId: ACCOUNT_ID,
+        purpose: "test",
+      });
+      expect(status.state).toBe("user_login_in_progress");
+
+      // The window is manualLoginHandoffMs (10 min). Advancing the fake
+      // timers moves both the timers AND the mocked Date.now (the module's
+      // injected clock) — no separate setSystemTime needed.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      await vi.waitFor(() => expect(h.module.getStatus(status.sessionId)).toBeNull());
+      expect(h.lease.releaseCalls.length).toBeGreaterThan(0);
+      // No crash notice: expiry is a graceful cancellation.
+      expect(noticeTypes(h.notices)).not.toContain("browser_crashed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the session when the window was extended before the original deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        startScript: {
+          START_SESSION: () => loginRequiredReply("mb_expirysessn002"),
+        },
+      });
+      h.module.setClockForTests(() => Date.now());
+      const status = await h.module.start({
+        accountId: ACCOUNT_ID,
+        purpose: "test",
+      });
+      // Extend by 10 minutes (capped by manualLoginHandoffMaxMs).
+      await h.module.extendHandoff(status.sessionId, 10);
+
+      // Advance past the ORIGINAL deadline (not the extended one).
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      expect(h.module.getStatus(status.sessionId)?.state).toBe(
+        "user_login_in_progress"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP-05: challenge policy wiring; GAP-06: unsolicited terminal
+// ---------------------------------------------------------------------------
+
+describe("GAP-05 challenge resolution policy", () => {
+  it("CHALLENGE_DETECTED publishes the notice and applies the policy (manual handoff)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({ accountId: ACCOUNT_ID, purpose: "t" });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CHALLENGE_DETECTED",
+      challengeId: "ch_abc123def456",
+      origin: "https://www.youtube.com",
+      kind: "captcha_image",
+      flowClassification: "login",
+      evidenceCodes: ["recaptcha_frame"],
+      providerInputAvailable: false,
+    } as unknown as OutboundEvent);
+    expect(noticeTypes(h.notices)).toContain("challenge_detected");
+    expect(h.module.getStatus(status.sessionId)?.state).toBe(
+      "challenge_detected"
+    );
+  });
+});
+
+describe("GAP-06 unsolicited terminal", () => {
+  it("worker SESSION_STOPPED(failed) converges through the supervisor terminal path", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({ accountId: ACCOUNT_ID, purpose: "t" });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "SESSION_STOPPED",
+      terminalState: "failed",
+      reasonCode: "chrome_disconnected",
+    } as unknown as OutboundEvent);
+    expect(h.module.getStatus(status.sessionId)).toBeNull();
+    expect(h.lease.releaseCalls).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GAP-11: proxy resolution + requested start URL
+// ---------------------------------------------------------------------------
+
+describe("GAP-11 proxy resolution", () => {
+  it("fails the start when the account proxy exists but is unresolvable (never silent direct)", async () => {
+    const h = makeHarness({
+      accountLookup: async () => ({
+        platformId: 2,
+        accountLabel: "My Channel",
+        proxy: { mode: "unresolvable", reasonCode: "proxy_protocol_unsupported" },
+      }),
+    });
+    await expect(
+      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+    ).rejects.toMatchObject({
+      code: "proxy_unavailable",
+      reasonCode: "proxy_protocol_unsupported",
+    });
+    expect(h.clients).toHaveLength(0);
+  });
+
+  it("sends the resolved http proxy to the worker (credentials only in the private payload)", async () => {
+    const h = makeHarness({
+      accountLookup: async () => ({
+        platformId: 2,
+        accountLabel: "My Channel",
+        proxy: {
+          mode: "http",
+          host: "proxy.example",
+          port: 8080,
+          username: "u1",
+          password: "p1",
+        },
+      }),
+    });
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.proxy).toEqual({
+      mode: "http",
+      host: "proxy.example",
+      port: 8080,
+      username: "u1",
+      password: "p1",
+    });
+  });
+
+  it("defaults to direct when the lookup provides no proxy", async () => {
+    const h = makeHarness();
+    await h.module.start({ accountId: ACCOUNT_ID, purpose: "test" });
+    const startMessage = h.clients[0].sent[0];
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.proxy).toEqual({ mode: "direct" });
+  });
+});
+
+describe("GAP-11 requested start URL", () => {
+  it("navigates to the allowed URL after authentication verification", async () => {
+    const h = makeHarness();
+    await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      requestedStartUrl: "https://www.youtube.com/feed/history",
+    });
+    const navigate = h.clients[0].sent.find(
+      (m) => m.type === "RUN_ACTIONS"
+    );
+    expect(navigate).toBeDefined();
+    if (!navigate || navigate.type !== "RUN_ACTIONS") {
+      throw new Error("unreachable");
+    }
+    expect(navigate.program.actions[0]).toMatchObject({
+      type: "navigate",
+      url: "https://www.youtube.com/feed/history",
+    });
+  });
+
+  it("ignores a requested URL outside the platform allowlist", async () => {
+    const h = makeHarness();
+    await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      requestedStartUrl: "https://evil.example/path",
+    });
+    expect(
+      h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
+    ).toBeUndefined();
+  });
+
+  it("skips navigation when the session needs manual login first", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: () => loginRequiredReply("mb_fakesession0001"),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      requestedStartUrl: "https://www.youtube.com/feed/history",
+    });
+    expect(status.state).toBe("user_login_in_progress");
+    expect(
+      h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
+    ).toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// GAP-14: cancellation propagation
+// ---------------------------------------------------------------------------
+
+describe("GAP-14 cancellation propagation", () => {
+  it("cancelActiveRequest sends CANCEL_REQUEST to the live session", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    await h.module.cancelActiveRequest(status.sessionId);
+    const cancel = h.clients[0].sent.find((m) => m.type === "CANCEL_REQUEST");
+    expect(cancel).toBeDefined();
+    if (!cancel || cancel.type !== "CANCEL_REQUEST") {
+      throw new Error("unreachable");
+    }
+    expect(cancel.targetRequestId).toBeNull();
+  });
+
+  it("is a safe no-op for unknown sessions", async () => {
+    const h = makeHarness();
+    await expect(
+      h.module.cancelActiveRequest("mb_missing0000001")
+    ).resolves.toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// /review fixes: handoff re-arm, resume state, start/stop failure convergence
+// ---------------------------------------------------------------------------
+
+describe("review fixes (2026-09-08)", () => {
+  it("extending the handoff window RE-ARMS expiry — the extended deadline is enforced", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        startScript: {
+          START_SESSION: () => loginRequiredReply("mb_rearm000000001"),
+        },
+      });
+      h.module.setClockForTests(() => Date.now());
+      const status = await h.module.start({
+        accountId: ACCOUNT_ID,
+        purpose: "t",
+      });
+      await h.module.extendHandoff(status.sessionId, 30); // 10 -> 40 min
+      // Advance past BOTH the original (10m) and one full extension window.
+      await vi.advanceTimersByTimeAsync(41 * 60 * 1000);
+      await vi.waitFor(() =>
+        expect(h.module.getStatus(status.sessionId)).toBeNull()
+      );
+      expect(noticeTypes(h.notices)).not.toContain("browser_crashed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumeAfterHandoff applies the ready state so subsequent commands are allowed", async () => {
+    const h = makeHarness({
+      startScript: {
+        START_SESSION: () => sessionReadyReply("mb_resumefix0001"),
+        BEGIN_HANDOFF: () =>
+          stateChangedReply("mb_resumefix0001", "handoff", "user_requested"),
+        RESUME_HANDOFF: () =>
+          stateChangedReply("mb_resumefix0001", "ready", "handoff_resumed"),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    expect(status.state).toBe("ready");
+    await h.module.requestHandoff(status.sessionId);
+    expect(h.module.getStatus(status.sessionId)?.state).toBe("handoff");
+    const resumed = await h.module.resumeAfterHandoff(status.sessionId);
+    expect(resumed.state).toBe("ready");
+    expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
+    // observe() must now pass the state guard (previously action_not_allowed).
+    const observation = await h.module.observe(status.sessionId);
+    expect(observation.origin).toBe("https://www.youtube.com");
+  });
+
+  it("start failure AFTER supervisor registration still releases everything", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    void status;
+    // Second start on the same harness with a failing worker client.
+    h.lease.next = { status: "granted", leaseToken: "lease-2" };
+    const failing = makeHarness({
+      nextLease: { status: "granted", leaseToken: "lease-3" },
+    });
+    void failing;
+    // Direct: flip the existing client to fail on a NEW session.
+    const h2 = makeHarness();
+    const originalFactory = h2.clients;
+    void originalFactory;
+    // Simplest deterministic path: craft a module whose factory's client fails.
+    const notices2: SafeBrowserChatNotice[] = [];
+    const statuses2: SafeManagedBrowserStatus[] = [];
+    const clients2: FakeWorkerClient[] = [];
+    const module2 = new ManagedBrowserModule({
+      settings: {
+        getEffectiveSettings: async () => ({
+          browserEnabled: true,
+          cacheEnabled: true,
+          cacheMaxBytes: 1,
+          clearCacheOnExit: false,
+          disabledReasonCode: null,
+        }),
+      } as unknown as import("@/modules/ManagedBrowserSettingsModule").ManagedBrowserSettingsModule,
+      leaseService: h.lease as unknown as import("@/service/ManagedBrowserLeaseService").ManagedBrowserLeaseService,
+      supervisor: h.supervisor as unknown as import("@/service/ManagedBrowserSupervisor").ManagedBrowserSupervisor,
+      noticeSink: (n) => notices2.push(n),
+      emitStatus: (st) => statuses2.push(st),
+      accountLookup: async () => ({ platformId: 2, accountLabel: "L" }),
+      sessionService: {
+        getDecryptedSnapshot: async () => ({ cookies: [], status: "valid" }),
+        getOrCreatePartition: async () => "/p",
+        persistSnapshot: async () => undefined,
+      },
+      workerClientFactory: (deps) => {
+        const client = new FakeWorkerClient(deps);
+        client.failStart = true;
+        clients2.push(client);
+        return client as unknown as ManagedBrowserWorkerClient;
+      },
+      executableResolver: {
+        resolve: () => ({ descriptor: DESCRIPTOR }),
+      },
+      isAiEnabled: () => true,
+      mkdtemp: async () => "/tmp/mb-x",
+      cacheModule: h.cache,
+      resolveCachePolicy: () => ({ enabled: false, reasonCode: "t" }),
+    });
+    h.lease.next = { status: "granted", leaseToken: "lease-9" };
+    await expect(
+      module2.start({ accountId: ACCOUNT_ID, purpose: "t" })
+    ).rejects.toMatchObject({ code: "worker_start_timeout" });
+    expect(h.lease.releaseCalls.length).toBeGreaterThanOrEqual(1);
+    expect(module2.listActiveSessions()).toHaveLength(0);
+    expect(h.supervisor.terminalCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("stop() failure still converges through the terminal path", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    h.clients[0].failStop = true;
+    await expect(
+      h.module.stop(status.sessionId, "user_stop")
+    ).rejects.toBeTruthy();
+    expect(h.lease.releaseCalls).toHaveLength(1);
+    expect(h.module.getStatus(status.sessionId)).toBeNull();
+  });
+});
+
+
+describe("TODO-MSB-009 script revision binding", () => {
+  it("evaluateScript fails closed on a stale page revision", async () => {
+    const h = makeHarness({
+      startScript: {
+        OBSERVE: () =>
+          ({
+            ...replyBase("mb_script00000001"),
+            type: "OBSERVATION_RESULT",
+            observation: {
+              sessionId: "mb_script00000001",
+              pageRevision: 7,
+              url: "https://www.youtube.com",
+              origin: "https://www.youtube.com",
+              title: "T",
+              state: "ready",
+              elements: [],
+              visibleText: "",
+              notices: [],
+              truncated: false,
+            },
+          } as unknown as ManagedBrowserOutboundMessage),
+        EVALUATE_SCRIPT: () =>
+          ({
+            ...replyBase("mb_script00000001"),
+            type: "EVALUATE_SCRIPT_RESULT",
+            ok: true,
+            resultSummary: "1",
+            resultBytes: 1,
+            truncated: false,
+          } as unknown as ManagedBrowserOutboundMessage),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    await h.module.observe(status.sessionId); // caches revision 7
+    await expect(
+      h.module.evaluateScript(status.sessionId, {
+        source: "1",
+        timeoutMs: 1_000,
+        pageRevision: 3, // stale
+      })
+    ).rejects.toMatchObject({ code: "stale_page_reference" });
+    // Matching revision executes.
+    await expect(
+      h.module.evaluateScript(status.sessionId, {
+        source: "1",
+        timeoutMs: 1_000,
+        pageRevision: 7,
+      })
+    ).resolves.toMatchObject({ ok: true });
+  });
+});
+
+
+describe("TODO-MSB-011 controlled browser states", () => {
+  it("a blocked dialog/popup/download state publishes a sanitized notice", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "SESSION_STATE_CHANGED",
+      state: "running",
+      reasonCode: "browser_dialog_blocked",
+    } as unknown as OutboundEvent);
+    expect(
+      h.notices.some(
+        (n) =>
+          n.type === "browser_state_blocked" &&
+          n.messageKey.includes("browser_state_blocked")
+      )
+    ).toBe(true);
+  });
+});
+
+
+describe("TODO-MSB-013 provider site-key flow", () => {
+  it("CHALLENGE_DETECTED with a site key feeds the provider attempt", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "t",
+    });
+    // The provider service is default-constructed; the observable contract
+    // here is that a site-key-bearing event flows through the module
+    // without error and the challenge notice still publishes.
+    h.clients[0].deps.onEvent({
+      ...replyBase(status.sessionId),
+      type: "CHALLENGE_DETECTED",
+      challengeId: "ch_sitekey000001",
+      origin: "https://forum.example.com",
+      kind: "captcha_image",
+      flowClassification: "content_action",
+      evidenceCodes: ["recaptcha_frame"],
+      providerInputAvailable: true,
+      siteKey: "6Le-wvkSAAAAAPBMRTvw0Q",
+    } as unknown as OutboundEvent);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(noticeTypes(h.notices)).toContain("challenge_detected");
+    expect(h.module.getStatus(status.sessionId)?.state).toBe(
+      "challenge_detected"
+    );
+  });
+});

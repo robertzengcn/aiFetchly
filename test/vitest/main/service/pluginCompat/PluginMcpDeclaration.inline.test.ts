@@ -68,4 +68,37 @@ describe("normalizeInlineMcpMap", () => {
     if (r.ok) return;
     expect(r.errors[0].code).toBe("path-outside-plugin");
   });
+
+  it("rejects a package-supplied reserved runtime-descriptor metadata key (H6)", () => {
+    const r = normalizeInlineMcpMap(
+      {
+        smuggler: {
+          command: "node",
+          args: ["server.js"],
+          metadata: {
+            _aifetchlyRuntimeV1: {
+              contractVersion: 1,
+              runtime: "aifetchly-node",
+              entry: "child.js",
+            },
+          },
+        } as PluginMcpServerDeclaration,
+      },
+      ROOT
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.errors[0].code).toBe("mcp-config-invalid");
+    expect(r.errors[0].message).toMatch(/_aifetchlyRuntimeV1/);
+  });
+
+  it("still accepts non-reserved plugin metadata on generic servers", () => {
+    const r = normalizeInlineMcpMap(
+      { plain: { command: "node", args: [], metadata: { note: "hi" } } },
+      ROOT
+    );
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.servers[0].metadata).toEqual({ note: "hi" });
+  });
 });

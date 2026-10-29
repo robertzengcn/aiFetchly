@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import {
   USER_AI_ENABLED,
@@ -71,7 +72,7 @@ export class AIProviderSettingsService {
     try {
       parsed = JSON.parse(raw) as Partial<LocalAIProviderConfig>;
     } catch {
-      console.warn(
+      log.warn(
         "[ai-provider] stored local provider config is not valid JSON; ignoring"
       );
       return null;
@@ -82,7 +83,7 @@ export class AIProviderSettingsService {
       typeof parsed.baseUrl !== "string" ||
       typeof parsed.defaultModel !== "string"
     ) {
-      console.warn(
+      log.warn(
         "[ai-provider] stored local provider config is malformed; ignoring"
       );
       return null;

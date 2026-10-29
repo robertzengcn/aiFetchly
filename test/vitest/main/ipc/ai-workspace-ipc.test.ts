@@ -6,33 +6,29 @@ import {
   MockBrowserWindow,
 } from "../../../utils/electron-mocks";
 
-// The source now gates via ensureHostedAiEnabled() (AiFeatureGate) and opens
-// folders via getNativeDialogService() (NativeDialogServiceProvider) instead of
-// reading Token / electron.dialog directly. Mock those two dependencies so the
-// gate and dialog calls are observable without pulling in the real Token DB or
-// a real OS dialog.
-const mockState = vi.hoisted(() => ({ aiEnabled: true }));
+const mockState = vi.hoisted(() => ({ aiEnabled: "true" }));
 const mockShowOpenDialog = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   ipcMain: mockIpcMain,
   BrowserWindow: MockBrowserWindow,
-}));
-
-vi.mock("@/service/AiFeatureGate", () => ({
-  ensureHostedAiEnabled: vi
-    .fn()
-    .mockImplementation(() => Promise.resolve(mockState.aiEnabled)),
+  dialog: {
+    showOpenDialog: mockShowOpenDialog,
+  },
 }));
 
 vi.mock("@/service/dialogs/NativeDialogServiceProvider", () => ({
-  getNativeDialogService: vi.fn().mockImplementation(() =>
-    Promise.resolve({
-      showOpenDialog: mockShowOpenDialog,
-      showSaveDialog: vi.fn(),
-      showMessageBox: vi.fn(),
-    })
-  ),
+  getNativeDialogService: async () => ({
+    showOpenDialog: mockShowOpenDialog,
+  }),
+}));
+
+vi.mock("@/modules/token", () => ({
+  Token: vi.fn(function TokenMock() {
+      return {
+    getValue: vi.fn().mockImplementation(() => mockState.aiEnabled),
+      };
+    }),
 }));
 
 vi.mock("@/modules/WorkspaceModule", () => ({
@@ -59,7 +55,7 @@ describe("AI workspace IPC folder picker", () => {
   beforeEach(() => {
     setupElectronMocks();
     vi.clearAllMocks();
-    mockState.aiEnabled = true;
+    mockState.aiEnabled = "true";
     registerAIWorkspaceIpcHandlers(win as never);
   });
 
@@ -67,16 +63,22 @@ describe("AI workspace IPC folder picker", () => {
     resetElectronMocks();
   });
 
-  it("returns a denied response instead of silent null when AI is disabled", async () => {
-    mockState.aiEnabled = false;
+  it("opens the folder picker even when AI is disabled (workspace choosing is local-only)", async () => {
+    mockState.aiEnabled = "false";
+    mockShowOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ["/tmp/workspace"],
+    });
 
     const result = (await mockIpcMain.callHandler(
       DIALOG_PICK_FOLDER
     )) as CommonMessage<string | null>;
 
-    expect(result.status).toBe(false);
-    expect(result.msg).toContain("AI functionality");
-    expect(mockShowOpenDialog).not.toHaveBeenCalled();
+    expect(mockShowOpenDialog).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: true,
+      data: "/tmp/workspace",
+    });
   });
 
   it("returns the selected folder in a standard IPC response", async () => {
@@ -89,9 +91,6 @@ describe("AI workspace IPC folder picker", () => {
       DIALOG_PICK_FOLDER
     )) as CommonMessage<string | null>;
 
-    // The refactored handler calls the dialog service with a single options
-    // argument (no BrowserWindow); the ElectronNativeDialogService forwards
-    // properties to electron.dialog internally.
     expect(mockShowOpenDialog).toHaveBeenCalledWith({
       properties: ["openDirectory"],
     });

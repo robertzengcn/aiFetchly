@@ -4,7 +4,7 @@ import { describe, it } from "mocha";
 import { expect } from "chai";
 import sinon from "sinon";
 import { vi } from "vitest";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { Buckemailstruct } from "@/entityTypes/emailmarketingType";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";

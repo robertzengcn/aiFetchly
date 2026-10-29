@@ -45,7 +45,13 @@ export class WorkspaceModule extends BaseModule {
 
   async approveWorkspace(id: number): Promise<WorkspaceRecord | null> {
     await this.ensureConnection();
-    return this.model().setApprovalState(id, "approved");
+    const record = await this.model().setApprovalState(id, "approved");
+    if (!record) return null;
+    // FR-WSP-002 supersede: the approved binding is exclusive per
+    // conversation. Retire every other non-terminated row so a later revoke
+    // of the active binding cannot silently revive a stale binding.
+    await this.model().revokeOtherActive(record.conversationId, id);
+    return record;
   }
 
   async revokeWorkspace(id: number): Promise<WorkspaceRecord | null> {

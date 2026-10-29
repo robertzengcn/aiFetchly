@@ -13,33 +13,33 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index("idx_shell_audit_created_at", ["createdAt"])
 export class ShellAuditEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("varchar", { length: 255 })
-  conversation_id: string;
+  conversation_id!: string;
 
   @Column("varchar", { length: 255 })
-  tool_call_id: string;
+  tool_call_id!: string;
 
   /** Command text with sensitive tokens redacted. */
   @Column("text")
-  command_redacted: string;
+  command_redacted!: string;
 
   @Column("varchar", { length: 512 })
-  cwd: string;
+  cwd!: string;
 
   @Column("varchar", { length: 50 })
-  shell: string;
+  shell!: string;
 
   @Column("boolean", { default: false })
-  success: boolean;
+  success!: boolean;
 
   @Column("integer", { nullable: true })
-  exit_code: number | null;
+  exit_code!: number | null;
 
   @Column("boolean", { default: false })
-  timed_out: boolean;
+  timed_out!: boolean;
 
   @Column("integer")
-  duration_ms: number;
+  duration_ms!: number;
 }

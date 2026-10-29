@@ -1,5 +1,7 @@
 import { ipcMain } from "electron";
-import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
+import { log } from "@/modules/Logger";
+import { Token } from "@/modules/token";
+import { USER_AI_ENABLED } from "@/config/usersetting";
 import { AIWorkspaceMemoryService } from "@/service/AIWorkspaceMemoryService";
 import { getSharedWorkspaceAutoDreamService } from "@/service/AIAutoDreamFactory";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
@@ -37,6 +39,10 @@ function getWorkspaceMemoryService(): AIWorkspaceMemoryService {
   return workspaceMemoryService;
 }
 
+function isAIEnabled(): boolean {
+  return new Token().getValue(USER_AI_ENABLED) === "true";
+}
+
 /**
  * Manual workspace memory toggle (PRD FR-011). Default-on when the setting row
  * is absent; only disabled when the value is exactly "false". Read failures
@@ -51,10 +57,7 @@ async function isManualMemoryEnabled(): Promise<boolean> {
     );
     return v !== "false";
   } catch (err) {
-    console.error(
-      "[workspace-memory] failed to read manual-memory toggle:",
-      err
-    );
+    log.error("[workspace-memory] failed to read manual-memory toggle:", err);
     return true;
   }
 }
@@ -187,19 +190,28 @@ export function registerAIWorkspaceMemoryIpcHandlers(): void {
   ipcMain.handle(
     AI_WORKSPACE_MEMORY_RUN_AUTO_DREAM,
     async (_e, data: unknown) => {
-      if (!(await ensureHostedAiEnabled())) {
+      if (!isAIEnabled()) {
         return denied("AI functionality is only available to subscribers.");
       }
       try {
-        const req = (safeParse<{ force?: boolean; model?: string }>(data) ??
-          {}) as {
+        const req = (safeParse<{
           force?: boolean;
+          conversationId?: string;
+          model?: string;
+        }>(data) ?? {}) as {
+          force?: boolean;
+          conversationId?: string;
           model?: string;
         };
+        const conversationId =
+          typeof req.conversationId === "string" && req.conversationId.trim()
+            ? req.conversationId.trim()
+            : undefined;
         const model = typeof req.model === "string" ? req.model.trim() : "";
         const result = await getSharedWorkspaceAutoDreamService().runNow({
           force: req.force === true,
           reason: "manual_ipc",
+          conversationId,
           ...(model.length > 0 ? { model } : {}),
         });
         return ok(result);

@@ -170,7 +170,7 @@ const emailresulttaskdetailId=ref(0);
 const exporting = ref(false);
 const startAutoRefresh = () => {
     refreshInterval = setInterval(function(){
-        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
     }, 10000); // Refresh every 5 seconds
 }
 const stopAutoRefresh = () => {
@@ -180,7 +180,7 @@ const stopAutoRefresh = () => {
   }
 };
 
-function loadItems({ page=1, itemsPerPage=10, sortBy}) {
+function loadItems({ page=1, itemsPerPage=10, sortBy}: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     options.page = page;
     loading.value = true
     options.page = page;
@@ -226,7 +226,7 @@ function loadItems({ page=1, itemsPerPage=10, sortBy}) {
     //     path: '/graphics/oasis-engine',
     // });
 // };
-const openfolder=async (item)=>{
+const openfolder=async (item: EmailResultDisplay)=>{
     try {
         await router.push({
                 name: 'Searchtaskdetail',params: { id: item.id } 

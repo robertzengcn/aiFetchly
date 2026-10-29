@@ -1,4 +1,5 @@
 import { Page, ElementHandle } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { PlatformConfig } from '@/modules/interface/IPlatformConfig';
 
@@ -20,7 +21,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
      */
     async onPageLoad(page: Page): Promise<void> {
         try {
-            console.log('🔄 YelpComAdapter: Handling page load events');
+            log.info('🔄 YelpComAdapter: Handling page load events');
 
             // Handle alert popups that might appear
             await this.handleAlertPopups(page);
@@ -28,9 +29,9 @@ export class YelpComAdapter extends BasePlatformAdapter {
             // Wait for any dynamic content to load
             await this.waitForDynamicContent(page);
 
-            console.log('✅ YelpComAdapter: Page load handling completed');
+            log.info('✅ YelpComAdapter: Page load handling completed');
         } catch (error) {
-            console.warn('⚠️ YelpComAdapter: Error during page load handling:', error);
+            log.warn('⚠️ YelpComAdapter: Error during page load handling:', error);
         }
     }
 
@@ -41,9 +42,9 @@ export class YelpComAdapter extends BasePlatformAdapter {
         try {
             // Set up dialog handler to automatically accept alerts
             page.on('dialog', async (dialog) => {
-                console.log('🚨 Alert dialog detected:', dialog.message());
+                log.info('🚨 Alert dialog detected:', dialog.message());
                 await dialog.accept();
-                console.log('✅ Alert dialog accepted');
+                log.info('✅ Alert dialog accepted');
             });
 
             // Check for common Yelp popup selectors and close them
@@ -65,9 +66,9 @@ export class YelpComAdapter extends BasePlatformAdapter {
                 try {
                     const popupElement = await page.$(selector);
                     if (popupElement) {
-                        console.log(`🔍 Found popup with selector: ${selector}`);
+                        log.info(`🔍 Found popup with selector: ${selector}`);
                         await popupElement.click();
-                        console.log('✅ Popup closed');
+                        log.info('✅ Popup closed');
                         await this.sleep(1000); // Wait for popup to close
                         break; // Only close the first popup found
                     }
@@ -85,13 +86,13 @@ export class YelpComAdapter extends BasePlatformAdapter {
                 });
                 
                 if (alertText) {
-                    console.log('🚨 Alert text found:', alertText);
+                    log.info('🚨 Alert text found:', alertText);
                     // Try to find and click any "OK", "Confirm", or "Accept" buttons
                     const confirmButtons = await page.$$('button');
                     for (const button of confirmButtons) {
                         const text = await button.evaluate(el => el.textContent?.toLowerCase().trim());
                         if (text && (text.includes('ok') || text.includes('confirm') || text.includes('accept') || text.includes('continue'))) {
-                            console.log('🔘 Clicking confirm button:', text);
+                            log.info('🔘 Clicking confirm button:', text);
                             await button.click();
                             await this.sleep(1000);
                             break;
@@ -99,11 +100,11 @@ export class YelpComAdapter extends BasePlatformAdapter {
                     }
                 }
             } catch (error) {
-                console.log('ℹ️ No additional alerts to handle');
+                log.info('ℹ️ No additional alerts to handle');
             }
 
         } catch (error) {
-            console.warn('⚠️ Error handling alert popups:', error);
+            log.warn('⚠️ Error handling alert popups:', error);
         }
     }
 
@@ -131,10 +132,10 @@ export class YelpComAdapter extends BasePlatformAdapter {
             for (const selector of contentSelectors) {
                 try {
                     await page.waitForSelector(selector, { timeout: 5000 });
-                    console.log(`✅ Content loaded: ${selector}`);
+                    log.info(`✅ Content loaded: ${selector}`);
                     break;
                 } catch (error) {
-                    console.log(`⏳ Waiting for content: ${selector} - timeout`);
+                    log.info(`⏳ Waiting for content: ${selector} - timeout`);
                     continue;
                 }
             }
@@ -143,7 +144,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
             await this.sleep(2000);
 
         } catch (error) {
-            console.warn('⚠️ Error waiting for dynamic content:', error);
+            log.warn('⚠️ Error waiting for dynamic content:', error);
         }
     }
 
@@ -154,18 +155,18 @@ export class YelpComAdapter extends BasePlatformAdapter {
      */
     async extractPhoneNumberWithReveal(page: Page, businessElement: any): Promise<string | undefined> {
         try {
-            console.log('📞 Extracting phone number from Yelp.com business section');
+            log.info('📞 Extracting phone number from Yelp.com business section');
 
             // Look for the business information section
             const businessSection = await page.$('section.y-css-1790tv2 div.y-css-y8tdj8');
             if (!businessSection) {
-                console.log('❌ Business section not found');
+                log.info('❌ Business section not found');
                 return undefined;
             }
 
             // Get the HTML content of the business section
             const sectionHTML = await businessSection.evaluate((el: Element) => el.outerHTML);
-            console.log('🔍 Business section HTML content retrieved');
+            log.info('🔍 Business section HTML content retrieved');
 
             // Extract phone number using regex from the HTML content
             // Look for the pattern after "Phone number</p>" and before the next closing tag
@@ -173,14 +174,14 @@ export class YelpComAdapter extends BasePlatformAdapter {
             const phoneMatch = sectionHTML.match(phoneRegex);
             
             if (phoneMatch && phoneMatch[1]) {
-                console.log('✅ Found phone number element in regex: ', phoneMatch[1]);
+                log.info('✅ Found phone number element in regex: ', phoneMatch[1]);
                 const phoneText = phoneMatch[1].trim();
                 if (phoneText && this.isValidPhoneNumber(phoneText)) {
-                    console.log(`✅ Found phone number: ${phoneText}`);
+                    log.info(`✅ Found phone number: ${phoneText}`);
                     return phoneText;
                 }
             }else{
-                console.log('❌ No phone number found in regex');
+                log.info('❌ No phone number found in regex');
             }
 
             // Alternative: Look for phone number in any paragraph with semibold font-weight
@@ -188,7 +189,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
             for (const paragraph of phoneParagraphs) {
                 const text = await paragraph.evaluate((el: Element) => el.textContent?.trim() || '');
                 if (text && this.isValidPhoneNumber(text)) {
-                    console.log(`✅ Found phone number in paragraph: ${text}`);
+                    log.info(`✅ Found phone number in paragraph: ${text}`);
                     return text;
                 }
             }
@@ -201,17 +202,17 @@ export class YelpComAdapter extends BasePlatformAdapter {
             if (phoneMatches && phoneMatches.length > 0) {
                 for (const phone of phoneMatches) {
                     if (this.isValidPhoneNumber(phone)) {
-                        console.log(`✅ Found phone number in text: ${phone}`);
+                        log.info(`✅ Found phone number in text: ${phone}`);
                         return phone;
                     }
                 }
             }
 
-            console.log('❌ No phone number found in business section');
+            log.info('❌ No phone number found in business section');
             return undefined;
 
         } catch (error) {
-            console.error('❌ Error extracting phone number from Yelp business section:', error);
+            log.error('❌ Error extracting phone number from Yelp business section:', error);
             return undefined;
         }
     }
@@ -222,18 +223,18 @@ export class YelpComAdapter extends BasePlatformAdapter {
      */
     async extractWebsiteWithReveal(page: Page, businessElement: any): Promise<string | undefined> {
         try {
-            console.log('🌐 Extracting website URL from Yelp.com business section');
+            log.info('🌐 Extracting website URL from Yelp.com business section');
 
             // Look for the business information section
             const businessSection = await page.$('section.y-css-1790tv2 div.y-css-y8tdj8');
             if (!businessSection) {
-                console.log('❌ Business section not found');
+                log.info('❌ Business section not found');
                 return undefined;
             }
 
             // Get the HTML content of the business section
             const sectionHTML = await businessSection.evaluate((el: Element) => el.outerHTML);
-            console.log('🔍 Business section HTML content retrieved');
+            log.info('🔍 Business section HTML content retrieved');
 
             // Extract website URL using regex from the HTML content
             // Look for the pattern after "Business website</p>" and extract the href from the link
@@ -250,15 +251,15 @@ export class YelpComAdapter extends BasePlatformAdapter {
                     if (urlMatch) {
                         const decodedUrl = decodeURIComponent(urlMatch[1]);
                         if (this.isValidWebsite(decodedUrl)) {
-                            console.log(`✅ Found website URL: ${decodedUrl}`);
+                            log.info(`✅ Found website URL: ${decodedUrl}`);
                             return decodedUrl;
                         }
                     }
                 } else if (this.isValidWebsite(href)) {
-                    console.log(`✅ Found website URL: ${href}`);
+                    log.info(`✅ Found website URL: ${href}`);
                     return href;
                 } else if (this.isValidWebsite(`https://${displayText}`)) {
-                    console.log(`✅ Found website from display text: ${displayText}`);
+                    log.info(`✅ Found website from display text: ${displayText}`);
                     return `https://${displayText}`;
                 }
             }
@@ -274,7 +275,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
                     if (urlMatch) {
                         const decodedUrl = decodeURIComponent(urlMatch[1]);
                         if (this.isValidWebsite(decodedUrl)) {
-                            console.log(`✅ Found website URL from biz_redir: ${decodedUrl}`);
+                            log.info(`✅ Found website URL from biz_redir: ${decodedUrl}`);
                             return decodedUrl;
                         }
                     }
@@ -292,24 +293,24 @@ export class YelpComAdapter extends BasePlatformAdapter {
                     if (urlMatch) {
                         const decodedUrl = decodeURIComponent(urlMatch[1]);
                         if (this.isValidWebsite(decodedUrl)) {
-                            console.log(`✅ Found website URL in link: ${decodedUrl}`);
+                            log.info(`✅ Found website URL in link: ${decodedUrl}`);
                             return decodedUrl;
                         }
                     }
                 } else if (href && this.isValidWebsite(href)) {
-                    console.log(`✅ Found website URL in link: ${href}`);
+                    log.info(`✅ Found website URL in link: ${href}`);
                     return href;
                 } else if (text && this.isValidWebsite(`https://${text}`)) {
-                    console.log(`✅ Found website from link text: ${text}`);
+                    log.info(`✅ Found website from link text: ${text}`);
                     return `https://${text}`;
                 }
             }
 
-            console.log('❌ No website URL found in business section');
+            log.info('❌ No website URL found in business section');
             return undefined;
 
         } catch (error) {
-            console.error('❌ Error extracting website URL from Yelp business section:', error);
+            log.error('❌ Error extracting website URL from Yelp business section:', error);
             return undefined;
         }
     }
@@ -320,18 +321,18 @@ export class YelpComAdapter extends BasePlatformAdapter {
      */
     async extractAddressFromBusinessSection(page: Page): Promise<string | undefined> {
         try {
-            console.log('📍 Extracting address from Yelp.com business section');
+            log.info('📍 Extracting address from Yelp.com business section');
 
             // Look for the business information section
             const businessSection = await page.$('section.y-css-1790tv2 div.y-css-y8tdj8');
             if (!businessSection) {
-                console.log('❌ Business section not found');
+                log.info('❌ Business section not found');
                 return undefined;
             }
 
             // Get the HTML content of the business section
             const sectionHTML = await businessSection.evaluate((el: Element) => el.outerHTML);
-            console.log('🔍 Business section HTML content retrieved');
+            log.info('🔍 Business section HTML content retrieved');
 
             // Extract address using regex from the HTML content
             // Look for the pattern after "Get Directions" and before the next closing tag
@@ -342,7 +343,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
                 const addressText = addressMatch[1].trim();
                 // Check if it looks like an address (contains city, state, zip pattern)
                 if (addressText && /^[A-Za-z\s,]+,\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/.test(addressText)) {
-                    console.log(`✅ Found address: ${addressText}`);
+                    log.info(`✅ Found address: ${addressText}`);
                     return addressText;
                 }
             }
@@ -356,7 +357,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
                 for (const address of addressMatches) {
                     const trimmedAddress = address.trim();
                     if (trimmedAddress && /^[A-Za-z\s,]+,\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/.test(trimmedAddress)) {
-                        console.log(`✅ Found address in text: ${trimmedAddress}`);
+                        log.info(`✅ Found address in text: ${trimmedAddress}`);
                         return trimmedAddress;
                     }
                 }
@@ -368,7 +369,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
                 const text = await paragraph.evaluate((el: Element) => el.textContent?.trim() || '');
                 // Check if it looks like an address (contains city, state, zip pattern)
                 if (text && text !== 'Get Directions' && /^[A-Za-z\s,]+,\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/.test(text)) {
-                    console.log(`✅ Found address in paragraph: ${text}`);
+                    log.info(`✅ Found address in paragraph: ${text}`);
                     return text;
                 }
             }
@@ -385,20 +386,20 @@ export class YelpComAdapter extends BasePlatformAdapter {
                     for (const element of elements) {
                         const text = await element.evaluate((el: Element) => el.textContent?.trim() || '');
                         if (text && text !== 'Get Directions' && /^[A-Za-z\s,]+,\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/.test(text)) {
-                            console.log(`✅ Found address with selector ${selector}: ${text}`);
+                            log.info(`✅ Found address with selector ${selector}: ${text}`);
                             return text;
                         }
                     }
                 } catch (error) {
-                    console.log(`⚠️ Error checking address selector ${selector}:`, error);
+                    log.info(`⚠️ Error checking address selector ${selector}:`, error);
                 }
             }
 
-            console.log('❌ No address found in business section');
+            log.info('❌ No address found in business section');
             return undefined;
 
         } catch (error) {
-            console.error('❌ Error extracting address from Yelp business section:', error);
+            log.error('❌ Error extracting address from Yelp business section:', error);
             return undefined;
         }
     }
@@ -414,7 +415,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
         email?: string;
     }> {
         try {
-            console.log('🏢 Extracting all business information from Yelp.com business section');
+            log.info('🏢 Extracting all business information from Yelp.com business section');
 
             const businessInfo = {
                 website: undefined as string | undefined,
@@ -426,7 +427,7 @@ export class YelpComAdapter extends BasePlatformAdapter {
             // Look for the business information section
             const businessSection = await page.$('section.y-css-1790tv2 div.y-css-y8tdj8');
             if (!businessSection) {
-                console.log('❌ Business section not found');
+                log.info('❌ Business section not found');
                 return businessInfo;
             }
 
@@ -434,35 +435,35 @@ export class YelpComAdapter extends BasePlatformAdapter {
             try {
                 businessInfo.website = await this.extractWebsiteWithReveal(page, null);
             } catch (error) {
-                console.log('⚠️ Error extracting website:', error);
+                log.info('⚠️ Error extracting website:', error);
             }
 
             // Extract phone
             try {
                 businessInfo.phone = await this.extractPhoneNumberWithReveal(page, null);
             } catch (error) {
-                console.log('⚠️ Error extracting phone:', error);
+                log.info('⚠️ Error extracting phone:', error);
             }
 
             // Extract address
             try {
                 businessInfo.address = await this.extractAddressFromBusinessSection(page);
             } catch (error) {
-                console.log('⚠️ Error extracting address:', error);
+                log.info('⚠️ Error extracting address:', error);
             }
 
             // Extract email
             try {
                 businessInfo.email = await this.extractEmailFromDetailPage(page);
             } catch (error) {
-                console.log('⚠️ Error extracting email:', error);
+                log.info('⚠️ Error extracting email:', error);
             }
 
-            console.log('✅ Business information extraction completed:', businessInfo);
+            log.info('✅ Business information extraction completed:', businessInfo);
             return businessInfo;
 
         } catch (error) {
-            console.error('❌ Error extracting business information from Yelp section:', error);
+            log.error('❌ Error extracting business information from Yelp section:', error);
             return {
                 website: undefined,
                 phone: undefined,

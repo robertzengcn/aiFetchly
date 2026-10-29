@@ -118,7 +118,8 @@ describe('WebSocket IPC Handlers', () => {
 
       expect(result).toEqual({
         status: true,
-        msg: 'WebSocket connection initiated',
+        msg: 'ok',
+        data: undefined,
       });
       expect(mockWsClient.connect).toHaveBeenCalledWith(mockMainWindow);
     });
@@ -134,6 +135,7 @@ describe('WebSocket IPC Handlers', () => {
       expect(result).toEqual({
         status: false,
         msg: 'Connection failed',
+        data: null,
       });
     });
   });
@@ -147,7 +149,8 @@ describe('WebSocket IPC Handlers', () => {
 
       expect(result).toEqual({
         status: true,
-        msg: 'WebSocket disconnected',
+        msg: 'ok',
+        data: undefined,
       });
       expect(mockWsClient.disconnect).toHaveBeenCalled();
     });
@@ -163,6 +166,7 @@ describe('WebSocket IPC Handlers', () => {
       expect(result).toEqual({
         status: false,
         msg: 'Disconnect error',
+        data: null,
       });
     });
   });
@@ -176,7 +180,8 @@ describe('WebSocket IPC Handlers', () => {
 
       expect(result).toEqual({
         status: true,
-        msg: 'WebSocket reconnection initiated',
+        msg: 'ok',
+        data: undefined,
       });
       expect(mockWsClient.reconnect).toHaveBeenCalled();
     });
@@ -192,6 +197,7 @@ describe('WebSocket IPC Handlers', () => {
       expect(result).toEqual({
         status: false,
         msg: 'Reconnect error',
+        data: null,
       });
     });
   });
@@ -209,6 +215,7 @@ describe('WebSocket IPC Handlers', () => {
 
       expect(result).toEqual({
         status: true,
+        msg: 'ok',
         data: {
           connectionStatus: 'connected',
           clientId: 'client-123',
@@ -228,6 +235,7 @@ describe('WebSocket IPC Handlers', () => {
       expect(result).toEqual({
         status: false,
         msg: 'Status error',
+        data: null,
       });
     });
   });
@@ -245,7 +253,8 @@ describe('WebSocket IPC Handlers', () => {
 
       expect(result).toEqual({
         status: true,
-        msg: 'Message sent',
+        msg: 'ok',
+        data: true,
       });
       expect(mockWsClient.send).toHaveBeenCalledWith(message);
     });
@@ -257,9 +266,12 @@ describe('WebSocket IPC Handlers', () => {
       const handler = capturedHandlers[WEBSOCKET_SEND];
       const result = await handler({}, message);
 
+      // The handler returns false rather than throwing; the validated-handler
+      // envelope therefore reports success with the falsy payload preserved.
       expect(result).toEqual({
-        status: false,
-        msg: 'Failed to send message (not connected)',
+        status: true,
+        msg: 'ok',
+        data: false,
       });
     });
 
@@ -275,6 +287,7 @@ describe('WebSocket IPC Handlers', () => {
       expect(result).toEqual({
         status: false,
         msg: 'Send error',
+        data: null,
       });
     });
   });

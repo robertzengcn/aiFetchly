@@ -105,7 +105,7 @@ headers.value = [
         align: 'start',
         sortable: false,
         key: 'Disable',
-        value: value=>value.Disable == 0 ? 'enable' : 'disable'
+        value: (value: campaignEntity) => value.Disable == 0 ? 'enable' : 'disable'
     },
     {
         title: computed(() => t("campaign.campaignTypes")),
@@ -122,13 +122,13 @@ const loading = ref(false);
 const totalItems = ref(0);
 const search = ref('');
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     // console.log(page);
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0],
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -162,11 +162,11 @@ const editItem = (item: unknown) => {
     //     path: '/graphics/oasis-engine',
     // });
 };
-const openfolder=(item)=>{
+const openfolder=(item: campaignEntity & { Types?: string })=>{
     // console.log(item)
     if(item.Types=="social task"){
         router.push({
-            name: 'SocialtaskList',params: { id: item.CampaignId } 
+            name: 'SocialtaskList',params: { id: item.CampaignId }
         });
     }
 }

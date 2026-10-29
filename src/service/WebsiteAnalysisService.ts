@@ -1,4 +1,5 @@
 import { WebsiteAnalysisQueue } from "@/modules/WebsiteAnalysisQueue";
+import { log } from "@/modules/Logger";
 import { SearchResultModule } from "@/modules/SearchResultModule";
 import { AiChatApi, WebsiteAnalysisRequest } from "@/api/aiChatApi";
 import { v4 as uuidv4 } from "uuid";
@@ -129,7 +130,7 @@ export class WebsiteAnalysisService {
         "analyzing"
       );
     } catch (error) {
-      console.error("Failed to update status to analyzing:", error);
+      log.error("Failed to update status to analyzing:", error);
       // Continue even if status update fails
     }
 

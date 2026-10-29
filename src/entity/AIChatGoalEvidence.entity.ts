@@ -15,15 +15,15 @@ import type { GoalEvidenceSourceKind } from "@/entityTypes/aiChatGoalTypes";
 @Index(["createdAt"])
 export class AIChatGoalEvidenceEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  evidenceId: string;
+  evidenceId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  goalId: string;
+  goalId!: string;
 
   @Order(3)
   @Column("varchar", { length: 100, nullable: true })
@@ -39,11 +39,11 @@ export class AIChatGoalEvidenceEntity extends AuditableEntity {
 
   @Order(6)
   @Column("varchar", { length: 32, nullable: false })
-  sourceKind: GoalEvidenceSourceKind;
+  sourceKind!: GoalEvidenceSourceKind;
 
   @Order(7)
   @Column("varchar", { length: 16, nullable: false })
-  state: "pass" | "fail" | "pending";
+  state!: "pass" | "fail" | "pending";
 
   @Order(8)
   @Column("varchar", { length: 128, nullable: true })
@@ -65,5 +65,5 @@ export class AIChatGoalEvidenceEntity extends AuditableEntity {
 
   @Order(12)
   @Column("datetime", { nullable: false })
-  timestamp: Date;
+  timestamp!: Date;
 }

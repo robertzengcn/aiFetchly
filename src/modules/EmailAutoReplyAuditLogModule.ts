@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   EmailAutoReplyAuditLogModel,
   AutoReplyAuditListInput,
@@ -19,7 +20,7 @@ export class EmailAutoReplyAuditLogModule extends BaseModule {
       await this.ensureConnection();
       return await this.auditModel.create(entity);
     } catch (error) {
-      console.error("Error writing auto-reply audit log:", error);
+      log.error("Error writing auto-reply audit log:", error);
       throw error;
     }
   }
@@ -33,7 +34,7 @@ export class EmailAutoReplyAuditLogModule extends BaseModule {
       const total = await this.auditModel.count(input);
       return { records, total };
     } catch (error) {
-      console.error("Error listing auto-reply audit logs:", error);
+      log.error("Error listing auto-reply audit logs:", error);
       throw error;
     }
   }
@@ -45,7 +46,7 @@ export class EmailAutoReplyAuditLogModule extends BaseModule {
       await this.ensureConnection();
       return await this.auditModel.readWithRelations(id);
     } catch (error) {
-      console.error("Error reading auto-reply audit log:", error);
+      log.error("Error reading auto-reply audit log:", error);
       throw error;
     }
   }
@@ -58,7 +59,7 @@ export class EmailAutoReplyAuditLogModule extends BaseModule {
       await this.ensureConnection();
       return await this.auditModel.countAutoSentSince(emailServiceId, sinceISO);
     } catch (error) {
-      console.error("Error counting auto-sent replies:", error);
+      log.error("Error counting auto-sent replies:", error);
       throw error;
     }
   }
@@ -74,7 +75,7 @@ export class EmailAutoReplyAuditLogModule extends BaseModule {
         messageIds
       );
     } catch (error) {
-      console.error("Error counting thread auto-replies:", error);
+      log.error("Error counting thread auto-replies:", error);
       throw error;
     }
   }

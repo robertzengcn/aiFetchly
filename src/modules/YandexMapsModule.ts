@@ -1,3 +1,9 @@
+import {
+  spawnOwned,
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
+import { getOwnedProcessRegistry } from "@/main-process/lifecycle/OwnedProcessRegistry";
 /**
  * Yandex Maps Module -- orchestration layer shared by AI skill and UI page.
  *
@@ -8,6 +14,7 @@
  */
 
 import { app } from "electron";
+import { log } from "@/modules/Logger";
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
@@ -166,6 +173,7 @@ export class YandexMapsModule extends BaseModule {
     );
 
     return new Promise((resolve, reject) => {
+      let ownedWorkerRecordId: string | null = null;
       const requestId = options?.externalRequestId ?? uuidv4();
 
       let worker: ChildProcess;
@@ -180,16 +188,25 @@ export class YandexMapsModule extends BaseModule {
         // child_process.spawn + ipc stdio (utilityProcess.fork rejects piped stdin with ipc).
         // buildPackagedWorkerEnv sets NODE_PATH so unpacked workers can resolve deps that
         // live inside app.asar/node_modules (e.g. puppeteer).
-        worker = spawn(process.execPath, [resolvedWorkerPath], {
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-          env: buildPackagedWorkerEnv({
-            runAsNode: true,
-            extraEnv: {
-              ELECTRON_APP_NAME: app.getName(),
-              ELECTRON_USER_DATA_PATH: app.getPath("userData"),
-            },
-          }),
-        });
+        const ownedProcess = spawnOwned(
+          "yandex-maps",
+          () =>
+            spawn(process.execPath, [resolvedWorkerPath], {
+              stdio: ["pipe", "pipe", "pipe", "ipc"],
+              env: buildPackagedWorkerEnv({
+                runAsNode: true,
+                extraEnv: {
+                  ELECTRON_APP_NAME: app.getName(),
+                  ELECTRON_USER_DATA_PATH: app.getPath("userData"),
+                },
+              }),
+            })
+        );
+        worker = ownedProcess;
+        ownedWorkerRecordId =
+          getOwnedProcessRegistry()
+            .listByOwner("yandex-maps")
+            .find((r) => r.pid === ownedProcess.pid)?.id ?? null;
       } catch (err) {
         reject(
           new Error(
@@ -219,6 +236,17 @@ export class YandexMapsModule extends BaseModule {
       worker.on("message", (raw: unknown) => {
         const data = parseWorkerMessage(raw);
         if (!data) return;
+        if (data.type === "descendant-report") {
+          // T01 (design §7): store the worker-reported browser identity.
+          void getOwnedProcessRegistry()
+            .recordDescendantReport(
+              ownedWorkerRecordId ?? "",
+              Number(data.pid),
+              String(data.label ?? "browser")
+            )
+            .catch(() => undefined);
+          return;
+        }
         if (data.type === "progress" && data.requestId === requestId) {
           const progress = parseYandexMapsProgressEvent(data);
           if (search.progressCallback && progress) {
@@ -265,7 +293,7 @@ export class YandexMapsModule extends BaseModule {
             result.summary,
             result.results
           ).catch((saveErr: unknown) => {
-            console.error(
+            log.error(
               "[YandexMaps] Failed to save search result:",
               saveErr
             );
@@ -276,7 +304,7 @@ export class YandexMapsModule extends BaseModule {
       });
 
       worker.on("error", (err) => {
-        console.error("[YandexMaps] Worker process error:", err.message);
+        log.error("[YandexMaps] Worker process error:", err.message);
         clearTimeout(timeoutTimer);
         this.activeSearches.delete(requestId);
         reject(new Error(`Worker error: ${err.message}`));
@@ -284,7 +312,7 @@ export class YandexMapsModule extends BaseModule {
 
       worker.on("exit", (code) => {
         if (this.activeSearches.has(requestId)) {
-          console.error(
+          log.error(
             `[YandexMaps] Worker exited unexpectedly with code ${code}`
           );
           clearTimeout(timeoutTimer);

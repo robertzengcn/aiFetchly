@@ -1,3 +1,5 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 /**
  * Local AI Runtime — disposable voice health probe (design §19).
  *
@@ -55,6 +57,11 @@ const REQUIRED_EXPORTS_BY_RUNTIME: Record<LocalAiRuntimeId, readonly string[]> =
   {
     "voice-sherpa": ["OfflineRecognizer", "OfflineTts", "GenerationConfig"],
     "embedding-xenova": [],
+    // Model packages load no native module in this probe (§7.7: the model
+    // probe grounds a fixture through the grounding worker instead).
+    "grounding-onnxruntime": ["InferenceSession"],
+    "grounding-model-gui-actor-2b-int4": [],
+    "grounding-model-gui-actor-2b-fp16": [],
   };
 
 /** Resolve the built probe worker file across dev / packaged layouts. */
@@ -86,12 +93,16 @@ export function resolveRuntimeProbeWorkerPath(
 
 /** Default production fork: Electron utilityProcess with packaged-worker env. */
 const defaultFork: ProbeForkFn = (workerPath): ProbeUtilityProcess => {
-  const proc = utilityProcess.fork(workerPath, [], {
+  const proc = spawnOwned(
+    "runtime-probe",
+    () =>
+      utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv({
       extraEnv: { WORKER_TYPE: "runtime-probe" },
     }),
-  });
+  })
+  );
   return proc as unknown as ProbeUtilityProcess;
 };
 

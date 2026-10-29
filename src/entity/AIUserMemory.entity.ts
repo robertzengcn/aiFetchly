@@ -14,31 +14,31 @@ import { Order } from "./order.decorator";
 @Index("idx_ai_user_memories_updated", ["updatedAt"])
 export class AIUserMemoryEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  memoryId: string;
+  memoryId!: string;
 
   @Order(2)
   @Column("varchar", { length: 30, nullable: false })
-  type: string;
+  type!: string;
 
   @Order(3)
   @Column("varchar", { length: 200, nullable: false })
-  title: string;
+  title!: string;
 
   @Order(4)
   @Column("text", { nullable: false })
-  content: string;
+  content!: string;
 
   @Order(5)
   @Column("varchar", { length: 30, nullable: false, default: "active" })
-  status: string;
+  status!: string;
 
   @Order(6)
   @Column("int", { nullable: false, default: 100 })
-  confidence: number;
+  confidence!: number;
 
   @Order(7)
   @Column("varchar", { length: 30, nullable: true })

@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   EmailReceivedMessageModel,
   ReceivedMessageListInput,
@@ -29,7 +30,7 @@ export class EmailReceivedMessageModule extends BaseModule {
       await this.ensureConnection();
       return await this.messageModel.upsertByProviderUid(entity);
     } catch (error) {
-      console.error("Error upserting received message:", error);
+      log.error("Error upserting received message:", error);
       throw error;
     }
   }
@@ -39,7 +40,7 @@ export class EmailReceivedMessageModule extends BaseModule {
       await this.ensureConnection();
       return await this.messageModel.read(id);
     } catch (error) {
-      console.error("Error reading received message:", error);
+      log.error("Error reading received message:", error);
       throw error;
     }
   }
@@ -53,7 +54,7 @@ export class EmailReceivedMessageModule extends BaseModule {
       await this.ensureConnection();
       await this.messageModel.updateReplyStatus(id, status, processedAt);
     } catch (error) {
-      console.error("Error updating reply status:", error);
+      log.error("Error updating reply status:", error);
       throw error;
     }
   }
@@ -71,7 +72,7 @@ export class EmailReceivedMessageModule extends BaseModule {
         confidence
       );
     } catch (error) {
-      console.error("Error updating classification:", error);
+      log.error("Error updating classification:", error);
       throw error;
     }
   }
@@ -150,7 +151,7 @@ export class EmailReceivedMessageModule extends BaseModule {
       await this.ensureConnection();
       await this.messageModel.markRead(id, isUnread);
     } catch (error) {
-      console.error("Error marking message read:", error);
+      log.error("Error marking message read:", error);
       throw error;
     }
   }
@@ -247,7 +248,7 @@ export class EmailReceivedMessageModule extends BaseModule {
       const total = await this.messageModel.countByEmailService(input);
       return { records, total };
     } catch (error) {
-      console.error("Error listing received messages:", error);
+      log.error("Error listing received messages:", error);
       throw error;
     }
   }

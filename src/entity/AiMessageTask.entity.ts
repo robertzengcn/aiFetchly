@@ -6,69 +6,69 @@ import type { AiMessageTaskStatus } from "@/entityTypes/aiMessageTaskTypes";
 @Index(["status"])
 export class AiMessageTaskEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("varchar", { length: 255 })
-  name: string;
+  name!: string;
 
   @Column("text", { nullable: true })
-  description: string;
+  description!: string;
 
   @Column("text")
-  message: string;
+  message!: string;
 
   @Column("text", { nullable: true })
-  system_prompt: string;
+  system_prompt!: string;
 
   @Column("varchar", { length: 100, nullable: true })
-  model: string;
+  model!: string;
 
   @Column("varchar", { length: 255, nullable: true })
-  conversation_id: string;
+  conversation_id!: string;
 
   /** Absolute directory the scheduled run may use as its approved workspace. */
   @Column("varchar", { length: 1024, nullable: true })
-  workspace_path: string | null;
+  workspace_path!: string | null;
 
   @Column("text", { default: "[]" })
-  allowed_tools_json: string;
+  allowed_tools_json!: string;
 
   @Column("boolean", { default: false })
-  auto_approve_tools: boolean;
+  auto_approve_tools!: boolean;
 
   @Column("boolean", { default: false })
-  allow_skills: boolean;
+  allow_skills!: boolean;
 
   @Column("boolean", { default: false })
-  allow_mcp: boolean;
+  allow_mcp!: boolean;
 
   @Column("boolean", { default: false })
-  allow_subagents: boolean;
+  allow_subagents!: boolean;
 
   @Column("integer", { default: 10 })
-  max_tool_calls: number;
+  max_tool_calls!: number;
 
   @Column("integer", { default: 300000 })
-  max_runtime_ms: number;
+  max_runtime_ms!: number;
 
   @Column("integer", { default: 10 })
-  max_continue_calls: number;
+  max_continue_calls!: number;
 
   @Column("varchar", {
     length: 20,
     default: "active",
     comment: "Task status: active, inactive, deleted",
   })
-  status: AiMessageTaskStatus;
+  status!: AiMessageTaskStatus;
 
   @Column("datetime", { nullable: true })
-  last_run_time: Date;
+  last_run_time!: Date;
 
   @Column("text", { nullable: true })
-  last_result_summary: string;
+  last_result_summary!: string;
 
   @Column("text", { nullable: true })
-  last_error_message: string;
+  last_error_message!: string;
 
   /** Origin of this task. `chat_scheduled_loop` tasks are bound to a v2-*
    * conversation and route through AIChatQueryEngine; null means legacy
@@ -83,13 +83,13 @@ export class AiMessageTaskEntity extends AuditableEntity {
 
   /** Frozen TaskCompletionContract JSON (§5.1). Null = legacy task (no contract). */
   @Column("text", { nullable: true })
-  completion_contract_json: string | null;
+  completion_contract_json!: string | null;
 
   /** Frozen execution-policy snapshot JSON. Null = legacy task. */
   @Column("text", { nullable: true })
-  execution_policy_json: string | null;
+  execution_policy_json!: string | null;
 
   /** Schema version for the policy snapshot. 0 = legacy (no policy). */
   @Column("integer", { default: 0 })
-  execution_policy_version: number;
+  execution_policy_version!: number;
 }

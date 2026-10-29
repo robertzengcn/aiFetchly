@@ -1,0 +1,290 @@
+import { z } from "zod/v4";
+import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { aiChatHistorySelectionIdsSchema } from "@/schemas/aiChatHistorySelections";
+
+/**
+ * Strict Zod v4 schemas for the ai-chat-workspace:* IPC boundary
+ * (technical-design §11.1). Every renderer payload is parsed here before the
+ * IPC handler or coordinator touches it.
+ */
+
+/** Conversation ids are `v2-` + uuid-ish; accept a conservative charset. */
+const conversationIdSchema = z
+  .string()
+  .min(3)
+  .max(100)
+  .regex(/^[a-zA-Z0-9-_]+$/, "conversationId has invalid characters");
+
+const runIdSchema = z
+  .string()
+  .min(3)
+  .max(64)
+  .regex(/^[a-zA-Z0-9-_]+$/, "runId has invalid characters");
+
+const isoTimestampSchema = z.string().datetime({ offset: true });
+
+// ---------------------------------------------------------------------------
+// bootstrap / select / history
+// ---------------------------------------------------------------------------
+
+export const workspaceBootstrapRequestSchema = z.object({}).strict();
+
+export const selectConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema.nullable(),
+    generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+export const unsubscribeDetailRequestSchema = z.object({}).strict();
+
+export const historyCursorSchema = z
+  .object({
+    timestamp: isoTimestampSchema,
+    messageId: z.string().min(1).max(100),
+  })
+  .strict();
+
+export const historyPageRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    limit: z.number().int().min(20).max(100),
+    before: historyCursorSchema.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// run lifecycle
+// ---------------------------------------------------------------------------
+
+const clientRequestIdSchema = z
+  .string()
+  .min(8)
+  .max(64)
+  .regex(/^[a-zA-Z0-9-_]+$/, "clientRequestId has invalid characters");
+
+const messageTextSchema = z.string().min(1).max(100_000);
+
+export const startChatRunRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    clientRequestId: clientRequestIdSchema,
+    message: messageTextSchema,
+    model: z.string().max(200).optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().min(1).max(1_000_000).optional(),
+    systemPrompt: z.string().max(100_000).optional(),
+    mode: z.enum(["chat", "plan"]).optional(),
+    showReasoning: z.boolean().optional(),
+    reasoning: z
+      .object({
+        enabled: z.boolean(),
+        effort: z.enum(["low", "medium", "high"]).optional(),
+        summary: z.enum(["auto", "concise", "detailed"]).optional(),
+      })
+      .strict()
+      .optional(),
+    toolApprovalMode: z
+      .enum(["ask_for_approval", "approve_for_me", "full_access"])
+      .optional(),
+    uploadedFiles: z
+      .array(
+        z
+          .object({
+            fileName: z.string().min(1).max(255),
+            mimeType: z.string().min(3).max(100),
+            sizeBytes: z.number().int().min(1).max(25_000_000),
+            contentBase64: z.string().min(1).max(34_000_000),
+            kind: z.enum(["document", "image"]),
+          })
+          .strict()
+      )
+      .max(20)
+      .optional(),
+    /**
+     * Generated images attached as edit references (message + tile index).
+     * Capped at the PRD §12.4 composer tray limit (3 per request) so this
+     * boundary matches the legacy v2 stream edge, which enforces the same
+     * combined image budget (normalizeGeneratedImageReferences).
+     */
+    generatedImageReferences: z
+      .array(
+        z
+          .object({
+            messageId: z.string().min(1).max(100),
+            imageIndex: z.number().int().min(0).max(50),
+          })
+          .strict()
+      )
+      .max(3)
+      .optional(),
+    resourceClass: z.literal("general").optional(),
+    /**
+     * FR-SUB-004 (capability-parity PRD): send-time paste bodies — the same
+     * bounded map the Chat V2 stream edge accepts (`aiChatV2PastedContents
+     * Schema`), so both surfaces reach identical engine request behavior.
+     */
+    pastedContents: aiChatV2PastedContentsSchema.optional(),
+    /**
+     * FR-HIS-002 transport: opaque archive references (never passage
+     * bodies) + the retry-stable submission identity. The main process
+     * re-resolves each id against ownership/epoch/budget.
+     */
+    historySelectionIds: aiChatHistorySelectionIdsSchema.optional(),
+    submissionId: z.string().min(8).max(64).optional(),
+    /**
+     * FR-IMG-004 trusted channel: the user-confirmed generated-image batch
+     * reference set (above the 3-reference direct cap). Mirrors the pending
+     * queue's `aiChatPendingCreateInputSchema` contract so one staging
+     * implementation serves both surfaces.
+     */
+    confirmedGeneratedImageBatch: z
+      .strictObject({
+        references: z
+          .array(
+            z.strictObject({
+              messageId: z.string().min(1).max(100),
+              imageIndex: z.number().int().min(0).max(50),
+            })
+          )
+          .min(1)
+          .max(50),
+      })
+      .optional(),
+    /**
+     * Audit R2 G01 trusted-channel association: declares that THIS run is a
+     * plan continuation so main can measure
+     * `plan_decision_to_continuation_ms` at the durable acceptance boundary.
+     * Identity only (bounded plan id/version + decision enum) — never plan
+     * content — and it never reaches the engine request payload.
+     */
+    planContinuation: z
+      .strictObject({
+        planId: z.string().min(1).max(100),
+        version: z.number().int().positive(),
+        action: z.enum(["approve-plan", "reject-plan", "request-plan-changes"]),
+      })
+      .optional(),
+    /**
+     * Audit G01 (design §18.2 "submit click to durable acceptance"):
+     * renderer-origin click epoch stamp for the full submission journey.
+     * Timing association only (bounded integer) — main closes the sample
+     * at the queue acceptance receipt and the stamp never reaches the
+     * engine request payload.
+     */
+    journeyStart: z
+      .strictObject({
+        clickAtEpochMs: z.number().int().min(0).max(9_000_000_000_000),
+      })
+      .optional(),
+  })
+  .strict();
+
+export const cancelChatRunRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    runId: runIdSchema.optional(),
+  })
+  .strict();
+
+// ---------------------------------------------------------------------------
+// read markers / rename / activity
+// ---------------------------------------------------------------------------
+
+export const markConversationReadRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    observedThrough: isoTimestampSchema,
+  })
+  .strict();
+
+export const renameConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    title: z.string().min(1).max(200),
+  })
+  .strict();
+
+/** Confirmed destructive deletion (PRD §11.5) — renderer confirms first. */
+export const deleteConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    confirm: z.literal(true),
+  })
+  .strict();
+
+export const duplicateConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+  })
+  .strict();
+
+export const exportConversationRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+  })
+  .strict();
+
+export const workspaceActivityRequestSchema = z
+  .object({
+    conversationId: conversationIdSchema,
+    limit: z.number().int().min(1).max(50).optional(),
+  })
+  .strict();
+
+export type WorkspaceBootstrapRequest = z.infer<
+  typeof workspaceBootstrapRequestSchema
+>;
+export type SelectConversationRequestPayload = z.infer<
+  typeof selectConversationRequestSchema
+>;
+export type HistoryPageRequestPayload = z.infer<
+  typeof historyPageRequestSchema
+>;
+export type StartChatRunRequestPayload = z.infer<
+  typeof startChatRunRequestSchema
+>;
+export type CancelChatRunRequestPayload = z.infer<
+  typeof cancelChatRunRequestSchema
+>;
+export type MarkConversationReadRequestPayload = z.infer<
+  typeof markConversationReadRequestSchema
+>;
+export type RenameConversationRequestPayload = z.infer<
+  typeof renameConversationRequestSchema
+>;
+export type WorkspaceActivityRequestPayload = z.infer<
+  typeof workspaceActivityRequestSchema
+>;
+
+export const workspaceFlagGetRequestSchema = z.object({}).strict();
+
+/**
+ * Rollout control names (design §23.1). "redesign" toggles the workspace
+ * shell visibility preference; the adapter names toggle one presentation or
+ * dispatch adapter independently — flags never change authorization rules,
+ * database ownership, or persisted identity formats.
+ */
+export const WORKSPACE_ROLLOUT_FEATURES = [
+  "redesign",
+  "shared_orchestration",
+  "specialized_results",
+  "voice_memory",
+] as const;
+
+export type WorkspaceRolloutFeature = (typeof WORKSPACE_ROLLOUT_FEATURES)[number];
+
+export const workspaceRolloutFeatureSchema = z.enum(
+  WORKSPACE_ROLLOUT_FEATURES
+);
+
+export const workspaceFlagSetRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+    feature: z.optional(workspaceRolloutFeatureSchema),
+  })
+  .strict();
+
+export type WorkspaceFlagSetRequestPayload = z.infer<
+  typeof workspaceFlagSetRequestSchema
+>;
