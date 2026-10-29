@@ -2500,7 +2500,11 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "supplied one. A URL in the body is allowed and is not a safety finding, " +
       "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
       "Returns the persisted draft for human review. send_email_reply still " +
-      "checks reply state before sending.",
+      "checks reply state before sending. Set reviewed=true ONLY when the user " +
+      "has already reviewed the message and explicitly asked you to draft the " +
+      "reply in this conversation — messages then classified as needing human " +
+      "review or unknown can still get a human-assisted draft (automated " +
+      "no-reply/bounce/unsubscribe senders still refuse).",
     parameters: {
       type: "object",
       properties: {
@@ -2526,6 +2530,15 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           description:
             "Whether to ground the reply in knowledge-library context.",
           default: true,
+        },
+        reviewed: {
+          type: "boolean",
+          description:
+            "Set true ONLY when the user has already reviewed this message " +
+            "and explicitly asked you to draft the reply; messages classified " +
+            "as needing human review or unknown then allow human-assisted " +
+            "drafting. Do not use it to mass-reply or for scheduled bulk " +
+            "requests.",
         },
       },
       required: ["message_id"],

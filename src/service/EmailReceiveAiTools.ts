@@ -382,6 +382,10 @@ export async function createEmailReplyDraft(
       goal: input.goal,
       extraInstructions: input.extra_instructions,
       useKnowledgeLibrary: input.use_knowledge_library,
+      // Reviewed flag: an explicit human confirmation in conversation
+      // ("yes, please reply it") carried by the tool call. Exempts ONLY the
+      // classification-family blocks; machine-safety checks stay enforced.
+      humanReviewed: input.reviewed === true,
     });
     if (!result.success) {
       // B12: surface the typed code + next_action + existing_draft_id directly
