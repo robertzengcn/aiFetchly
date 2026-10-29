@@ -1131,6 +1131,7 @@ export default {
     chatReviewTitle: "审核邮件回复",
     chatLoading: "正在加载邮件…",
     chatApproveSend: "批准并发送",
+    chatSending: "发送中…",
     chatSent: "邮件已发送",
     chatError: "无法完成操作。请重新加载对话以检查邮件状态。",
 

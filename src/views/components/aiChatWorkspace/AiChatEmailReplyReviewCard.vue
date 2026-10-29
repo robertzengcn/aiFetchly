@@ -7,9 +7,14 @@
       <strong>{{ draft.subject }}</strong>
       <pre>{{ draft.bodyText }}</pre>
       <ReplyDraftReviewCard v-if="draft.requiresHumanReview" :draft-id="draftId" />
-      <button v-if="draft.status === 'draft' || draft.status === 'approved'" :disabled="busy" @click="approveAndSend">
-        {{ t('emailReply.chatApproveSend') || 'Approve and send' }}
-      </button>
+      <v-btn
+        v-if="draft.status === 'draft' || draft.status === 'approved'"
+        :loading="busy"
+        :disabled="busy"
+        @click="approveAndSend"
+      >
+        {{ busy ? (t('emailReply.chatSending') || 'Sending…') : (t('emailReply.chatApproveSend') || 'Approve and send') }}
+      </v-btn>
       <p v-if="draft.status === 'sent'" role="status">{{ t('emailReply.chatSent') || 'Email sent' }}</p>
     </template>
     <p v-if="error" role="alert">{{ t('emailReply.chatError') || 'Unable to complete this action. Reload the conversation to check the email status.' }}</p>

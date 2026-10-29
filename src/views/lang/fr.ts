@@ -1165,6 +1165,7 @@ export default {
     chatReviewTitle: "Vérifier la réponse",
     chatLoading: "Chargement du message…",
     chatApproveSend: "Approuver et envoyer",
+    chatSending: "Envoi en cours…",
     chatSent: "Message envoyé",
     chatError: "Impossible de terminer cette action. Rechargez la conversation pour vérifier le statut.",
 

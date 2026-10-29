@@ -1176,6 +1176,7 @@ export default {
     chatReviewTitle: "Review email reply",
     chatLoading: "Loading email…",
     chatApproveSend: "Approve and send",
+    chatSending: "Sending…",
     chatSent: "Email sent",
     chatError: "Unable to complete this action. Reload the conversation to check the email status.",
 

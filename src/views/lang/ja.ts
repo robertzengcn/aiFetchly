@@ -1156,6 +1156,7 @@ export default {
     chatReviewTitle: "メール返信を確認",
     chatLoading: "メールを読み込み中…",
     chatApproveSend: "承認して送信",
+    chatSending: "送信中…",
     chatSent: "メールを送信しました",
     chatError: "操作を完了できませんでした。会話を再読み込みしてメールの状態を確認してください。",
 
