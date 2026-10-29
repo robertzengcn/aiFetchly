@@ -232,6 +232,10 @@ describe("Email reply draft/send AI tools", () => {
     // Usage restriction is stated where the model can read it.
     expect(skill!.description).toMatch(/reviewed/i);
     expect(props.reviewed?.description).toMatch(/ONLY/i);
+    // I-1 mitigation (final review): unattended scheduled execution has no
+    // human reviewing the message, so the flag must never be claimed there.
+    expect(props.reviewed?.description).toMatch(/scheduled|unattended/i);
+    expect(skill!.description).toMatch(/scheduled|unattended/i);
   });
 
   it("IPC draft-create schema accepts humanReviewed", () => {

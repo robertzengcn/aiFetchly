@@ -2504,7 +2504,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "has already reviewed the message and explicitly asked you to draft the " +
       "reply in this conversation — messages then classified as needing human " +
       "review or unknown can still get a human-assisted draft (automated " +
-      "no-reply/bounce/unsubscribe senders still refuse).",
+      "no-reply/bounce/unsubscribe senders still refuse). NEVER set reviewed " +
+      "in scheduled or otherwise unattended execution: no human reviewed the " +
+      "message there.",
     parameters: {
       type: "object",
       properties: {
@@ -2538,7 +2540,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             "and explicitly asked you to draft the reply; messages classified " +
             "as needing human review or unknown then allow human-assisted " +
             "drafting. Do not use it to mass-reply or for scheduled bulk " +
-            "requests.",
+            "requests. NEVER set it in scheduled or otherwise unattended " +
+            "execution — no human has reviewed anything there, so the claim " +
+            "would be false.",
         },
       },
       required: ["message_id"],
