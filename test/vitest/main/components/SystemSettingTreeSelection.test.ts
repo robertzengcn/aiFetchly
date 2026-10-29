@@ -43,6 +43,14 @@ const i18n = createI18n({
     en: {
       system_settings: {
         title: "System Settings",
+        ui_font_scale_decrease: "Decrease font size",
+        ui_font_scale_increase: "Increase font size",
+        ui_font_scale_reset: "Reset",
+        ui_font_scale_smaller: "Smaller",
+        ui_font_scale_default: "Default",
+        ui_font_scale_larger: "Larger",
+        ui_font_scale_large: "Large",
+        ui_font_scale_largest: "Largest",
       },
     },
   },
@@ -290,5 +298,104 @@ describe("SystemSettingPage language select", () => {
     );
     // The legacy defect emitted the whole option object into the save path.
     expect(vi.mocked(updateSystemSetting)).not.toHaveBeenCalled();
+  });
+});
+
+describe("SystemSettingPage font scale stepper", () => {
+  function fontScaleGroup(value: string): SystemSettingGroupDisplay[] {
+    return [
+      {
+        id: 5,
+        name: "user_preferences",
+        description: "user-preferences-group-description",
+        items: [
+          {
+            id: 51,
+            key: "ui_font_scale",
+            value,
+            description: "ui-font-scale-description",
+            type: "stepper",
+          },
+        ],
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    document.documentElement.style.fontSize = "";
+    document.documentElement.style.removeProperty("--app-font-scale");
+    vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("1"));
+    vi.mocked(updateSystemSetting).mockResolvedValue(true);
+  });
+
+  async function mountFontScale(): Promise<ReturnType<typeof mountPage>> {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as SystemSettingPageVm;
+    vm.activeGroups = ["group:5"];
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("saves the next larger step and applies it to the document", async () => {
+    const wrapper = await mountFontScale();
+
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Default"
+    );
+    await wrapper.get("[aria-label='Increase font size']").trigger("click");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(51, "1.125");
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Larger"
+    );
+    expect(document.documentElement.style.getPropertyValue("--app-font-scale")).toBe(
+      "1.125"
+    );
+    expect(document.documentElement.style.fontSize).toBe("18px");
+    expect(localStorage.getItem("aifetchly.ui_font_scale")).toBe("1.125");
+  });
+
+  it("does not save when decrease is already at the smallest step", async () => {
+    vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("0.875"));
+    const wrapper = await mountFontScale();
+
+    const decrease = wrapper.get("[aria-label='Decrease font size']");
+    expect(decrease.attributes("disabled")).toBeDefined();
+    await decrease.trigger("click");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).not.toHaveBeenCalled();
+    expect(localStorage.getItem("aifetchly.ui_font_scale")).toBeNull();
+  });
+
+  it("resets a larger size back to the default step", async () => {
+    vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("1.25"));
+    const wrapper = await mountFontScale();
+
+    await wrapper.get("[aria-label='Reset']").trigger("click");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(51, "1");
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Default"
+    );
+    expect(document.documentElement.style.fontSize).toBe("16px");
+  });
+
+  it("keeps the current size when the save fails", async () => {
+    vi.mocked(updateSystemSetting).mockRejectedValueOnce(new Error("save failed"));
+    const wrapper = await mountFontScale();
+
+    await wrapper.get("[aria-label='Increase font size']").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Default"
+    );
+    expect(localStorage.getItem("aifetchly.ui_font_scale")).toBeNull();
   });
 });

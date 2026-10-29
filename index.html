@@ -16,6 +16,22 @@
     <link rel="icon" href="/favicon.ico">
     <link rel="apple-touch-icon" href="/icon/icon-192.png" sizes="192x192">
     <title>aiFetchly</title>
+    <script>
+      // Mirrors UI_FONT_SCALE_STORAGE_KEY and UI_FONT_SCALE_STEPS in
+      // src/views/utils/fontScale.ts so the preference applies before Vue.
+      (function () {
+        try {
+          var allowed = ["0.875", "1", "1.125", "1.25", "1.5"];
+          var raw = localStorage.getItem("aifetchly.ui_font_scale");
+          if (allowed.indexOf(raw) !== -1) {
+            document.documentElement.style.setProperty("--app-font-scale", raw);
+            document.documentElement.style.fontSize = (16 * Number(raw)) + "px";
+          }
+        } catch (e) {
+          /* storage unavailable before the app boots */
+        }
+      })();
+    </script>
 </head>
 
 <body style="background: rgb(var(--theme-background)) !important">

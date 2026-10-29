@@ -41,6 +41,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { initializeSavedFontScale } from "@/views/utils/initializeFontScale";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import AppWorkspaceShell from "@/views/components/appShell/AppWorkspaceShell.vue";
@@ -193,6 +194,7 @@ function onRawSystemMessage(raw: unknown): void {
 }
 
 onMounted(() => {
+  void initializeSavedFontScale();
   emitShellDiagnostic({ type: "shell.mounted", duplicateCount: trackShellMounted().duplicates });
   window.addEventListener("aifetchly:open-ai-chat", openAiChatFromDashboard);
   getIpcTransport().receive(
