@@ -221,3 +221,23 @@ describe("managed browser worker sequence counter", () => {
     expect(runtime.getState()).toBe("user_login_in_progress");
   });
 });
+
+it("starts a public worker ready without navigating to YouTube or reading account cookies", async () => {
+  const messages: ManagedBrowserOutboundMessage[] = [];
+  const navigations: string[] = [];
+  const evidence = { ...mismatchedEvidence, browserMajor: 999, userAgentMajor: 999,
+    userAgent: "Mozilla/5.0 Chrome/999.0.0.1 Safari/537.36" };
+  const page = fakePage(evidence);
+  page.goto = async (url: string): Promise<unknown> => { navigations.push(url); return undefined; };
+  const browser = {
+    pages: async () => [page], newPage: async () => page, close: async () => undefined,
+    defaultBrowserContext: () => ({ setCookie: async (): Promise<void> => { throw new Error("no cookie expected"); }, cookies: async (): Promise<never> => { throw new Error("no cookie capture expected"); } }),
+    process: () => ({ pid: 4242 }), on: () => undefined,
+  } as unknown as PuppeteerBrowserLike;
+  const session = new WorkerSession({ sessionId: "mb_public_test", sessionNonce: "nonce-public-test", send: (message) => messages.push(message), launchBrowser: async () => browser });
+  await session.startSession(buildStartPayload({ platform: { platformId: 0, platformName: "Chrome", loginUrl: "about:blank", verificationUrl: "about:blank", allowedDomainSuffixes: [] } }));
+  expect(session.state).toBe("ready");
+  expect(messages.some((message) => message.type === "SESSION_READY")).toBe(true);
+  expect(navigations.every((url) => url === "about:blank")).toBe(true);
+  await session.dispose("user_stop");
+});

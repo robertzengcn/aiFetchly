@@ -618,3 +618,16 @@ describe("TODO-MSB-003 screenshot surface", () => {
     ).toBe(false);
   });
 });
+
+
+it("renders and stops an account-free public browser session", async () => {
+  const publicStatus = status({ accountId: 0, platformId: 0, accountLabel: "Chrome", platformLabel: "Chrome", authenticated: null, currentOrigin: "https://sina.com" });
+  apiMocks.listActiveSessions.mockImplementation(async () => [publicStatus]);
+  const wrapper = mountCard();
+  await vi.waitFor(() => expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true));
+  expect(wrapper.find("[data-testid='mb-session-origin']").text()).toBe("https://sina.com");
+  expect(wrapper.find("[data-testid='mb-btn-verify-login']").exists()).toBe(false);
+  await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
+  expect(apiMocks.stopManagedBrowser).toHaveBeenCalled();
+  wrapper.unmount();
+});

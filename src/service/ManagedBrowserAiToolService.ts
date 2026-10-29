@@ -112,7 +112,7 @@ export interface ManagedBrowserAiToolServiceDeps {
 export interface BrowserModuleLike {
   start(
     input: {
-      accountId: number;
+      accountId?: number;
       purpose: string;
       requestedStartUrl?: string;
       conversationId?: string;
@@ -776,6 +776,7 @@ export class ManagedBrowserAiToolService {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
     const status = this.ensureSession(parsed.data.session_id);
+    if (status.accountId === 0) return { cleared: false, reasonCode: "ephemeral_public_browser" };
     try {
       const result = await this.cacheModule.clearCache({
         scope: "account",

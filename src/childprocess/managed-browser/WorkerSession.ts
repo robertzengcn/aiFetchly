@@ -42,6 +42,7 @@ import type {
 } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { BrowserActionExecutor } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/YouTubeBrowserAdapter";
+import { PublicBrowserAdapter } from "@/childprocess/managed-browser/adapters/PublicBrowserAdapter";
 import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
   redactSecrets,
@@ -169,7 +170,7 @@ export class WorkerSession {
   private readonly registry =
     new PageReferenceRegistry<ExecutorElementHandle>();
   private readonly executor = new BrowserActionExecutor();
-  private readonly adapter: PlatformBrowserAdapter =
+  private adapter: PlatformBrowserAdapter =
     new YouTubeBrowserAdapter();
 
   private browser: PuppeteerBrowserLike | null = null;
@@ -214,6 +215,7 @@ export class WorkerSession {
       return;
     }
     this.platformDefinition = payload.platform;
+    if (payload.platform.platformId === 0) this.adapter = new PublicBrowserAdapter();
     this.storagePolicy = payload.storagePolicy;
     this.executableVersion = payload.executable.version;
     try {
@@ -451,6 +453,7 @@ export class WorkerSession {
         page,
         registry: this.registry,
         navigation: {
+          publicBrowsing: this.platformDefinition?.platformId === 0,
           allowedOrigins: [
             ...this.adapter.allowedOrigins,
             ...this.adapter.loginOrigins,
@@ -1007,6 +1010,7 @@ export class WorkerSession {
   private async captureAndSendRefreshedCookies(
     requestId: string
   ): Promise<void> {
+    if (this.platformDefinition?.platformId === 0) return;
     const browser = this.browser;
     const allowedSuffixes = this.platformDefinition?.allowedDomainSuffixes;
     if (!browser || !allowedSuffixes) {

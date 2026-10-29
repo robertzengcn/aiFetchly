@@ -98,7 +98,7 @@ export class ManagedBrowserError extends Error {
 }
 
 export interface StartManagedBrowserInput {
-  readonly accountId: number;
+  readonly accountId?: number;
   readonly purpose: string;
   readonly requestedStartUrl?: string;
   readonly conversationId?: string;
@@ -398,17 +398,32 @@ export class ManagedBrowserModule {
       throw new ManagedBrowserError("ai_disabled");
     }
 
-    // 3. Account lookup through the Module layer.
-    const account = await this.accountLookup(input.accountId);
+    // Zero is reserved internally for the ephemeral public browser. It is
+    // never accepted as an account id at the tool/IPC boundary or sent to DB.
+    const publicBrowsing = input.accountId === undefined;
+    const accountId = input.accountId ?? 0;
+    const account = publicBrowsing
+      ? { platformId: 0, accountLabel: "Chrome" }
+      : await this.accountLookup(accountId);
     if (!account) {
       throw new ManagedBrowserError("account_not_found");
     }
 
     // 4. Platform manifest + pilot allowlist.
-    const manifest = getPlatformManifest(account.platformId);
+    const manifest: PlatformSessionDefinition | undefined = publicBrowsing
+      ? {
+          platformId: 0,
+          platformName: account.accountLabel,
+          loginUrl: "about:blank",
+          verificationUrl: "about:blank",
+          allowedDomainSuffixes: [],
+          requiredDomainSuffixes: [],
+          browserProfileImportEnabled: false,
+        }
+      : getPlatformManifest(account.platformId);
     if (
       !manifest ||
-      !MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.platformId)
+      (!publicBrowsing && !MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.platformId))
     ) {
       throw new ManagedBrowserError(
         "managed_browser_disabled",
@@ -425,12 +440,20 @@ export class ManagedBrowserModule {
       );
     }
 
+    if (input.requestedStartUrl) {
+      const decision = evaluateNavigationTarget(input.requestedStartUrl, {
+        allowedOrigins: manifest.allowedDomainSuffixes,
+        publicBrowsing,
+      });
+      if (!decision.allowed) throw new ManagedBrowserError("navigation_blocked", decision.reasonCode);
+    }
+
     // 5. Account lease (exclusive; global limit).
     const sessionId = `${MANAGED_BROWSER_SESSION_ID_PREFIX}${uuidv4()
       .replace(/-/g, "")
       .slice(0, 16)}`;
     const sessionNonce = `nonce_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
-    const lease = this.leaseService.acquire(input.accountId, {
+    const lease = this.leaseService.acquire(accountId, {
       sessionId,
       ownerConversationId: input.conversationId ?? null,
     });
@@ -439,7 +462,7 @@ export class ManagedBrowserModule {
       if (existing) {
         return this.toSafeStatus(existing);
       }
-      this.leaseService.release(input.accountId, lease.sessionId, "");
+      this.leaseService.release(accountId, lease.sessionId, "");
       throw new ManagedBrowserError("internal_error", "lease_without_record");
     }
     if (lease.status === "account_in_use") {
@@ -466,14 +489,16 @@ export class ManagedBrowserModule {
       );
       const temporaryProfilePath = path.join(profileRoot, "profile");
       await fs.promises.mkdir(temporaryProfilePath, { recursive: true });
-      const persistentCache = this.resolveCachePolicy
+      const persistentCache = publicBrowsing
+        ? { enabled: false as const, reasonCode: "ephemeral_public_browser" }
+        : this.resolveCachePolicy
         ? await this.resolveCachePolicy(
-            input.accountId,
+            accountId,
             resolution.descriptor.majorVersion,
             effective.cacheEnabled
           )
         : await this.defaultCachePolicy(
-            input.accountId,
+            accountId,
             resolution.descriptor.majorVersion,
             effective.cacheEnabled
           );
@@ -481,7 +506,7 @@ export class ManagedBrowserModule {
       // 8-9. Worker client + supervisor registration.
       const record: ActiveSessionRecord = {
         sessionId,
-        accountId: input.accountId,
+        accountId,
         platformId: account.platformId,
         conversationId: input.conversationId ?? null,
         leaseToken: lease.leaseToken,
@@ -516,7 +541,7 @@ export class ManagedBrowserModule {
       this.sessions.set(sessionId, record);
       this.supervisor.register({
         sessionId,
-        accountId: input.accountId,
+        accountId,
         client,
         releaseLease: () => {
           // Lease release ONLY. The supervisor calls this BEFORE onTerminal;
@@ -524,7 +549,7 @@ export class ManagedBrowserModule {
           // handleTerminalEvent (which owns the final status + notice +
           // deletion).
           this.leaseService.release(
-            input.accountId,
+            accountId,
             sessionId,
             record.leaseToken
           );
@@ -542,9 +567,9 @@ export class ManagedBrowserModule {
       });
 
       // 10-11. Decrypt + domain re-filter, then START_SESSION.
-      const snapshot = await this.sessionService.getDecryptedSnapshot(
-        input.accountId
-      );
+      const snapshot = publicBrowsing
+        ? { cookies: [] }
+        : await this.sessionService.getDecryptedSnapshot(accountId);
       const allowedCookies = snapshot.cookies.filter((cookie) =>
         matchesAllowedDomain(cookie.domain, manifest.allowedDomainSuffixes)
       );
@@ -593,9 +618,10 @@ export class ManagedBrowserModule {
       if (reply.type === "SESSION_READY" && input.requestedStartUrl) {
         const navDecision = evaluateNavigationTarget(input.requestedStartUrl, {
           allowedOrigins: [...manifest.allowedDomainSuffixes],
+          publicBrowsing,
         });
         if (navDecision.allowed) {
-          await this.requestWorker(
+          const navigation = await this.requestWorker(
             record,
             {
               type: "RUN_ACTIONS",
@@ -605,11 +631,12 @@ export class ManagedBrowserModule {
             },
             MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
             (m) => m.type === "ACTION_RESULT" || m.type === "HANDOFF_REQUIRED"
-          ).catch(() => undefined);
-        } else {
-          log.warn(
-            "[ManagedBrowserModule] requested start URL rejected by navigation policy"
           );
+          if (navigation.type === "ACTION_RESULT" && navigation.results.some((step) => !step.success)) {
+            throw new ManagedBrowserError("navigation_blocked", "start_navigation_failed");
+          }
+        } else {
+          throw new ManagedBrowserError("action_not_allowed", navDecision.reasonCode);
         }
       }
       return this.toSafeStatus(record);
@@ -625,7 +652,7 @@ export class ManagedBrowserModule {
         // Failures BEFORE supervisor registration (executable resolution,
         // profile creation) can never be released by the supervisor —
         // release the lease directly or it leaks until app restart.
-        this.leaseService.release(input.accountId, sessionId, lease.leaseToken);
+        this.leaseService.release(accountId, sessionId, lease.leaseToken);
       }
       this.supervisor.handleTerminal(sessionId, cause);
       if (error instanceof ManagedBrowserError) {
@@ -1033,12 +1060,12 @@ export class ManagedBrowserModule {
       message.reasonCode === "manual_login_verified";
     if (verified) {
       record.state = "ready";
-      record.authenticated = true;
+      record.authenticated = record.accountId === 0 ? null : true;
       this.publishNotice(
         record,
         "login_verified",
         "verify-done",
-        { sessionSaved: record.lastErrorCode !== "cookie_persistence_failed" },
+        { sessionSaved: record.accountId !== 0 && record.lastErrorCode !== "cookie_persistence_failed" },
         false
       );
       this.publishNotice(record, "task_resuming", "verify-resume", {}, false);
@@ -1104,6 +1131,7 @@ export class ManagedBrowserModule {
     record: ActiveSessionRecord,
     cookies: readonly NormalizedCookie[]
   ): Promise<void> {
+    if (record.accountId === 0) return;
     try {
       const parsed = normalizedCookieArraySchema.safeParse(cookies);
       if (!parsed.success || parsed.data.length === 0) {
@@ -1179,7 +1207,7 @@ export class ManagedBrowserModule {
       case "SESSION_READY":
         record.state = "ready";
         record.authenticated =
-          event.assessment.state === "authenticated" ? true : null;
+          record.accountId !== 0 && event.assessment.state === "authenticated" ? true : null;
         record.pageRevision += 1;
         this.clearHandoffWindow(record);
         break;

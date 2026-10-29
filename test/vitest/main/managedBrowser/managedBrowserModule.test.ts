@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { evaluateNavigationTarget } from "@/childprocess/managed-browser/NavigationPolicy";
+import { browserStartSessionToolSchema } from "@/schemas/aiTools/managedBrowser";
+import { managedBrowserStartInputSchema } from "@/schemas/ipc/managedBrowser";
 
 import {
   ManagedBrowserModule,
@@ -205,6 +208,10 @@ class FakeWorkerClient {
     this.script = new Map(
       Object.entries({
         START_SESSION: () => sessionReadyReply(deps.sessionId),
+        RUN_ACTIONS: () => ({
+          ...replyBase(deps.sessionId), type: "ACTION_RESULT", effect: "known",
+          pageRevision: 2, results: [], observation: null,
+        }) as unknown as ManagedBrowserOutboundMessage,
         VERIFY_MANUAL_LOGIN: () =>
           stateChangedReply(deps.sessionId, "ready", "manual_login_verified"),
         OBSERVE: () =>
@@ -1219,16 +1226,14 @@ describe("GAP-11 requested start URL", () => {
     });
   });
 
-  it("ignores a requested URL outside the platform allowlist", async () => {
+  it("rejects a requested URL outside the platform allowlist before launch", async () => {
     const h = makeHarness();
-    await h.module.start({
+    await expect(h.module.start({
       accountId: ACCOUNT_ID,
       purpose: "test",
       requestedStartUrl: "https://evil.example/path",
-    });
-    expect(
-      h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
-    ).toBeUndefined();
+    })).rejects.toMatchObject({ code: "navigation_blocked" });
+    expect(h.clients).toHaveLength(0);
   });
 
   it("skips navigation when the session needs manual login first", async () => {
@@ -1521,4 +1526,58 @@ describe("TODO-MSB-013 provider site-key flow", () => {
       "challenge_detected"
     );
   });
+});
+
+describe("account-free public browser", () => {
+  it("opens the requested hostname without account lookup, cookies, or account cache", async () => {
+    const h = makeHarness({
+      useDefaultCachePolicy: true,
+      accountLookup: async () => { throw new Error("must not look up an account"); },
+      startScript: {
+        RUN_ACTIONS: () => ({
+          ...replyBase("mb_public_test"), type: "ACTION_RESULT", effect: "known",
+          pageRevision: 2, results: [], observation: null,
+        }) as unknown as ManagedBrowserOutboundMessage,
+      },
+    });
+    const status = await h.module.start({ purpose: "open sina.com", requestedStartUrl: "https://sina.com" });
+    expect(status).toMatchObject({ state: "ready", accountId: 0, platformId: 0, authenticated: null });
+    const start = h.clients[0]!.sent.find((message) => message.type === "START_SESSION");
+    expect(start).toMatchObject({ cookies: [], platform: { platformId: 0 }, storagePolicy: { persistentCache: { enabled: false } } });
+    expect(h.clients[0]!.sent).toContainEqual({ type: "RUN_ACTIONS", program: { actions: [{ type: "navigate", url: "https://sina.com" }] } });
+    expect(h.cache.policyCalls).toEqual([]);
+    expect(h.persistCalls).toEqual([]);
+  });
+
+  it.each(["file:///etc/passwd", "https://127.0.0.1", "https://192.168.1.1"])("rejects %s before creating a worker", async (url) => {
+    const h = makeHarness();
+    await expect(h.module.start({ purpose: "open", requestedStartUrl: url })).rejects.toMatchObject({ code: "navigation_blocked" });
+    expect(h.clients).toHaveLength(0);
+  });
+
+  it("reports failed start navigation instead of a successful empty browser", async () => {
+    const h = makeHarness({ startScript: {
+      RUN_ACTIONS: () => ({ ...replyBase("mb_public_test"), type: "ACTION_RESULT", effect: "known", pageRevision: 2,
+        results: [{ success: false, errorCode: "internal_error" }], observation: null,
+      }) as unknown as ManagedBrowserOutboundMessage,
+    } });
+    await expect(h.module.start({ purpose: "open", requestedStartUrl: "https://sina.com" })).rejects.toMatchObject({ reasonCode: "start_navigation_failed" });
+    expect(h.supervisor.terminalCalls).toHaveLength(1);
+  });
+});
+
+
+it("keeps public navigation opt-in and blocks private hosts and unsafe protocols", () => {
+  expect(evaluateNavigationTarget("https://sina.com", { allowedOrigins: ["youtube.com"] }).allowed).toBe(false);
+  expect(evaluateNavigationTarget("https://sina.com.cn", { allowedOrigins: [], publicBrowsing: true }).allowed).toBe(true);
+  for (const url of ["https://127.0.0.1", "https://169.254.169.254", "file:///etc/passwd", "javascript:alert(1)", "http://sina.com"]) {
+    expect(evaluateNavigationTarget(url, { allowedOrigins: [], publicBrowsing: true }).allowed).toBe(false);
+  }
+});
+
+it("allows omitted account ids but rejects fabricated public sentinel ids at both boundaries", () => {
+  expect(browserStartSessionToolSchema().safeParse({ purpose: "open" }).success).toBe(true);
+  expect(managedBrowserStartInputSchema().safeParse({ purpose: "open" }).success).toBe(true);
+  expect(browserStartSessionToolSchema().safeParse({ purpose: "open", account_id: 0 }).success).toBe(false);
+  expect(managedBrowserStartInputSchema().safeParse({ purpose: "open", accountId: 0 }).success).toBe(false);
 });

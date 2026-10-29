@@ -95,11 +95,13 @@ const storagePolicySchema = z.strictObject({
 });
 
 const platformDefinitionSchema = z.strictObject({
-  platformId: z.number().int().positive(),
+  platformId: z.number().int().nonnegative(),
   platformName: z.string().min(1).max(64),
   loginUrl: z.string().url().max(2048),
   verificationUrl: z.string().url().max(2048),
-  allowedDomainSuffixes: z.array(z.string().min(3).max(253)).min(1).max(32),
+  allowedDomainSuffixes: z.array(z.string().min(3).max(253)).max(32),
+}).refine((platform) => platform.platformId === 0 || platform.allowedDomainSuffixes.length > 0, {
+  message: "Account platforms require allowed domains",
 });
 
 const proxyConfigSchema = z.discriminatedUnion("mode", [

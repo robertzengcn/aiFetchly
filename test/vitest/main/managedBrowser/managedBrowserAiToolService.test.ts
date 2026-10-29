@@ -652,3 +652,12 @@ describe("TODO-MSB-009 script hardening", () => {
     expect(err.code).toBe("invalid_tool_arguments");
   });
 });
+
+describe("public browser tool", () => {
+  it("accepts a public URL without an account id and forwards it unchanged", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    await service.startSession({ purpose: "open sina.com", requested_start_url: "https://sina.com" }, CTX);
+    expect(module.start).toHaveBeenCalledWith({ accountId: undefined, purpose: "open sina.com", requestedStartUrl: "https://sina.com", conversationId: CTX.conversationId }, { aiEntryPoint: true });
+  });
+});
