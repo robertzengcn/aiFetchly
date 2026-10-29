@@ -254,6 +254,12 @@ describe("Email reply draft/send AI tools", () => {
     expect(skill!.permissionCategory).toBe("automation");
     expect(skill!.requiresConfirmation).toBe(true);
     expect(skill!.parameters.required).toContain("draft_id");
+    // Assisted-inconclusive semantics (2026-10-29 design doc): the model must
+    // know an inconclusive mailbox verification does not block a
+    // human-confirmed send, while a VERIFIED existing reply still refuses.
+    expect(skill!.description).toMatch(/inconclusive/i);
+    expect(skill!.description).toMatch(/probe/i);
+    expect(skill!.description).toMatch(/verified/i);
   });
 });
 

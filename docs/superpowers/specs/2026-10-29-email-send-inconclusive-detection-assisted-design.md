@@ -1,7 +1,7 @@
 # Design: send_email_reply works when mailbox reply-detection is inconclusive
 
 Date: 2026-10-29
-Status: Approach C chosen in conversation — doc for record
+Status: Implemented (see docs/superpowers/plans/2026-10-29-email-send-inconclusive-detection-assisted.md)
 Owner: reply pipeline
 
 ## Problem (root-caused)

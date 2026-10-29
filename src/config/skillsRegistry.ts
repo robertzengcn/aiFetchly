@@ -2567,7 +2567,10 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "That confirmation is the send authorization. Do not refuse, and do not ask for a " +
       "second confirmation, because the body contains a URL. A URL is allowed. " +
       "Do not refuse because the inbound classification is \"unknown\"; that verdict is " +
-      "inconclusive and does not block a confirmed send. " +
+      "inconclusive and does not block a confirmed send. If the pre-send mailbox reply " +
+      "verification is INCONCLUSIVE (probe_failed / probe_timeout / sent_folder_unavailable), " +
+      "a human-confirmed send still proceeds — pass the refusal through as context, " +
+      "but verified evidence of an EXISTING reply (already_replied) always refuses. " +
       "Do NOT use this to send new marketing/outbound emails " +
       "to external contacts — use start_email_send_task instead. Verifies the draft and " +
       "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
