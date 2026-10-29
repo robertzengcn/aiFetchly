@@ -322,11 +322,14 @@
           </template>
           <template v-else>{{ displayContent }}</template>
         </div>
+        <!-- Collapsed by default: the summary row shows a one-line preview,
+             the full reasoning text expands on click (native <details>
+             toggle). Keeps workspace transcripts compact while the panel
+             still follows the global "show reasoning" preference. -->
         <details
           v-if="hasReasoning"
           class="v2-message__reasoning"
           data-testid="reasoning"
-          :open="hasReasoning"
         >
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
@@ -335,6 +338,14 @@
                 ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
                 : t("aiChatV2.reasoning_title") || "Reasoning"
             }}
+            <span
+              v-if="reasoningPreview"
+              class="v2-message__reasoning-preview"
+              >{{ reasoningPreview }}</span
+            >
+            <v-icon size="x-small" class="v2-message__reasoning-chevron"
+              >mdi-chevron-right</v-icon
+            >
           </summary>
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
@@ -1234,6 +1245,26 @@ const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
 
+/** Max characters of the collapsed-state one-line reasoning preview. */
+const REASONING_PREVIEW_MAX_CHARS = 120;
+
+/**
+ * Collapsed-state preview: the full reasoning text takes too much vertical
+ * space in the workspace transcript, so the summary shows only the first
+ * non-empty line, hard-truncated. Expanding reveals the complete text
+ * (not clipped by this length).
+ */
+const reasoningPreview = computed(() => {
+  const firstLine =
+    reasoningText.value
+      .split(/\r?\n/)
+      .find((line) => line.trim().length > 0)
+      ?.trim() ?? "";
+  return firstLine.length > REASONING_PREVIEW_MAX_CHARS
+    ? `${firstLine.slice(0, REASONING_PREVIEW_MAX_CHARS)}…`
+    : firstLine;
+});
+
 /**
  * Display content with pasted-text references expanded (§13.3 preview):
  * inline blocks render directly; hashed blocks expand once their cached
@@ -1943,6 +1974,28 @@ const pastedChips = computed<PastedChip[]>(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+  /* The custom chevron icon conveys the open state; hide the native marker. */
+  list-style: none;
+}
+.v2-message__reasoning summary::-webkit-details-marker {
+  display: none;
+}
+/* Collapsed-state preview: one muted, ellipsized line of reasoning. */
+.v2-message__reasoning-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+.v2-message__reasoning-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.v2-message__reasoning[open] .v2-message__reasoning-chevron {
+  transform: rotate(90deg);
 }
 .v2-message__reasoning-content {
   margin-top: 6px;

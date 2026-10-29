@@ -74,12 +74,51 @@ describe("AiChatV2Message reasoning panel", () => {
     expect(wrapper.text()).toContain("I considered X.");
   });
 
-  it("opens the reasoning panel by default for loaded history messages", async () => {
+  it("collapses the reasoning panel by default and previews the first line", async () => {
     const wrapper = mountWith(
       makeAssistantMessage({ content: "Historical reasoning." })
     );
     await flushPromises();
-    expect(wrapper.find(".v2-message__reasoning").attributes("open")).toBe("");
+    const panel = wrapper.find(".v2-message__reasoning");
+    expect(panel.exists()).toBe(true);
+    // Collapsed by default: full text takes too much space, so the panel
+    // renders without the native open attribute.
+    expect(panel.attributes("open")).toBeUndefined();
+    // A little information still shows: a one-line preview in the summary.
+    expect(wrapper.find(".v2-message__reasoning-preview").text()).toContain(
+      "Historical reasoning."
+    );
+    // The full text stays available in the (collapsed) expandable body.
+    expect(wrapper.find(".v2-message__reasoning-content").text()).toContain(
+      "Historical reasoning."
+    );
+  });
+
+  it("truncates an overly long first line in the collapsed preview", async () => {
+    const longLine = "x".repeat(300);
+    const wrapper = mountWith(
+      makeAssistantMessage({ content: `\n\n${longLine}\nsecond line` })
+    );
+    await flushPromises();
+    expect(wrapper.find(".v2-message__reasoning-preview").text()).toBe(
+      `${"x".repeat(120)}…`
+    );
+    // The complete text — including later lines — remains on expansion.
+    expect(wrapper.find(".v2-message__reasoning-content").text()).toContain(
+      "second line"
+    );
+  });
+
+  it("expands the full reasoning content when the summary is clicked", async () => {
+    const wrapper = mountWith(
+      makeAssistantMessage({ content: "Historical reasoning." })
+    );
+    await flushPromises();
+    const panel = wrapper.find(".v2-message__reasoning");
+    expect(panel.attributes("open")).toBeUndefined();
+    // Clicking the summary toggles the native <details> element open.
+    await wrapper.find(".v2-message__reasoning summary").trigger("click");
+    expect(panel.attributes("open")).toBeDefined();
   });
 
   it("labels the panel as streaming while the assistant turn is in progress", async () => {
