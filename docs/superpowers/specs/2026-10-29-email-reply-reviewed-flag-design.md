@@ -1,7 +1,7 @@
 # Design: `reviewed` flag for `create_email_reply_draft` (human-confirmed override)
 
 Date: 2026-10-29
-Status: Approved approach (A) — awaiting doc approval
+Status: Implemented (see docs/superpowers/plans/2026-10-29-email-reply-reviewed-flag.md)
 Owner: reply pipeline
 
 ## Intent and why
