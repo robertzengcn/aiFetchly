@@ -5,6 +5,7 @@ import {
   type BrowserModuleLike,
   type ManagedBrowserAiToolServiceDeps,
 } from "@/service/ManagedBrowserAiToolService";
+import { ManagedBrowserError } from "@/modules/ManagedBrowserModule";
 import { BrowserActionRiskClassifier } from "@/service/BrowserActionRiskClassifier";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
 
@@ -654,10 +655,50 @@ describe("TODO-MSB-009 script hardening", () => {
 });
 
 describe("public browser tool", () => {
-  it("accepts a public URL without an account id and forwards it unchanged", async () => {
+  it.each(["https://sina.com", "https://www.youtube.com", "https://www.facebook.com", "https://accounts.google.com/ServiceLogin"])("opens %s without a saved account", async (url) => {
     const module = makeModule();
     const service = makeService({ module });
-    await service.startSession({ purpose: "open sina.com", requested_start_url: "https://sina.com" }, CTX);
-    expect(module.start).toHaveBeenCalledWith({ accountId: undefined, purpose: "open sina.com", requestedStartUrl: "https://sina.com", conversationId: CTX.conversationId }, { aiEntryPoint: true });
+    await service.startSession({ purpose: "open website", requested_start_url: url }, CTX);
+    expect(module.start).toHaveBeenCalledWith({ accountId: undefined, purpose: "open website", requestedStartUrl: url, conversationId: CTX.conversationId }, { aiEntryPoint: true });
   });
+});
+
+
+describe("saved accounts never gate opening a website", () => {
+  it.each([
+    new ManagedBrowserError("account_not_found"),
+    new ManagedBrowserError("managed_browser_disabled", "platform_not_in_pilot"),
+  ])("opens an account-free browser when the saved profile is unavailable (%s)", async (failure) => {
+    const module = makeModule();
+    vi.mocked(module.start)
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce(status({ accountId: 0, platformId: 0, authenticated: null }));
+    const result = await makeService({ module }).startSession({
+      account_id: 1, purpose: "open social website", requested_start_url: "https://www.facebook.com",
+    }, CTX);
+    expect(module.start).toHaveBeenCalledTimes(2);
+    expect(module.start).toHaveBeenLastCalledWith({
+      purpose: "open social website", requestedStartUrl: "https://www.facebook.com", conversationId: CTX.conversationId,
+    }, { aiEntryPoint: true });
+    expect(result).toMatchObject({ state: "ready", accountId: 0, authenticated: null });
+  });
+
+  it("preserves dependency, proxy, and browser-disabled errors instead of retrying", async () => {
+    for (const failure of [new ManagedBrowserError("proxy_unavailable"), new ManagedBrowserError("browser_dependency_missing"), new ManagedBrowserError("managed_browser_disabled", "user_setting_disabled")]) {
+      const module = makeModule();
+      vi.mocked(module.start).mockRejectedValueOnce(failure);
+      await expect(makeService({ module }).startSession({ account_id: 1, purpose: "open" }, CTX)).rejects.toMatchObject({ code: failure.code });
+      expect(module.start).toHaveBeenCalledTimes(1);
+    }
+  });
+});
+
+
+it("reports a fresh-browser startup failure without retrying or hiding it", async () => {
+  const module = makeModule();
+  vi.mocked(module.start)
+    .mockRejectedValueOnce(new ManagedBrowserError("account_not_found"))
+    .mockRejectedValueOnce(new ManagedBrowserError("browser_dependency_missing"));
+  await expect(makeService({ module }).startSession({ account_id: 1, purpose: "open" }, CTX)).rejects.toMatchObject({ code: "browser_dependency_missing" });
+  expect(module.start).toHaveBeenCalledTimes(2);
 });

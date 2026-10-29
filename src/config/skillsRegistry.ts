@@ -4921,8 +4921,11 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       name: "browser_start_session",
       description:
         "Open a website in the built-in managed browser, a real visible Chrome window. " +
-        "For public websites omit account_id: no social account or saved login is needed. " +
+        "For ANY website, including social networks and sites requiring login, omit account_id by default: " +
+        "no saved AiFetchly account is required to open the browser. " +
         "Only supply a real existing account_id when the user needs its saved login (YouTube pilot). " +
+        "Never refuse browser use because accounts are missing or the site needs login. " +
+        "Open the site first and hand control to the user for sign-in when needed. " +
         "Never invent an account id. Preserve the requested hostname. " +
         "Returns a session_id used by every other browser_* tool. " +
         "Requires the managed browser to be enabled in System Settings.",
@@ -4931,7 +4934,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         properties: {
           account_id: {
             type: "number",
-            description: "Optional existing social account id for saved login. Omit for public browsing.",
+            description: "Optional existing social account id ONLY to reuse saved login. Omit for any website, including social sites, when no saved account is available.",
           },
           purpose: {
             type: "string",

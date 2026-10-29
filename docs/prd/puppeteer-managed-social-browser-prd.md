@@ -2,8 +2,11 @@
 
 ## Public browsing clarification (2026-10-29)
 
-Opening a public website in the built-in managed browser must not require a
-Tool Account. `browser_start_session` accepts `purpose` and an optional
+Opening any website in the built-in managed browser must not require a
+Tool Account, including social networks and sites requiring sign-in. Open the
+site first; if authentication is needed, hand control to the user in that
+browser. Missing or unsupported saved accounts must fall back to an ephemeral
+browser instead of refusing to open the site. `browser_start_session` accepts `purpose` and an optional
 `requested_start_url`; omit `account_id` for public browsing. Preserve the
 requested hostname (for example, `https://sina.com`) and use the browser tools,
 rather than substituting an HTTP content fetch.
