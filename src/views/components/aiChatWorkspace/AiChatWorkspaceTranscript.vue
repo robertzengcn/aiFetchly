@@ -89,6 +89,11 @@
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
         />
 
+        <ReplyDraftReviewCard
+          v-else-if="item.kind === 'email-reply'"
+          :draft-id="item.draftId"
+        />
+
         <!-- Outbound-email batch (§18): the review/approve/send card IS the
              authorization surface (AD-003) — interactive, never a collapsed
              execution receipt. -->
@@ -205,6 +210,8 @@ import type {
 } from "@/views/components/aiChatWorkspace/planPresentationProjection";
 import type { AIChatPlanQuestionView } from "@/entityTypes/aiChatPlanTypes";
 import type { MessageType } from "@/entityTypes/commonType";
+import ReplyDraftReviewCard from "@/views/pages/emailreply/widgets/ReplyDraftReviewCard.vue";
+import { emailReplyDraftId } from "./emailReplyCardModel";
 import { isOutboundBatchResultMessage } from "@/views/components/outboundEmail/outboundBatchCardModel";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
@@ -288,6 +295,7 @@ type ProjectedItem =
   | { kind: "plan-receipt"; key: string; plan: PlanPresentationView }
   | { kind: "plan-question"; key: string; question: AIChatPlanQuestionView }
   | { kind: "permission-prompt"; key: string; message: ChatV2MessageView }
+  | { kind: "email-reply"; key: string; draftId: number }
   | { kind: "outbound-batch"; key: string; message: ChatV2MessageView }
   | { kind: "skill-install"; key: string; message: ChatV2MessageView }
   | { kind: "batch-card"; key: string; message: ChatV2MessageView };
@@ -354,6 +362,10 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         });
         // The anchor tool message itself can carry an interactive surface
         // (a solo batch result owns a legacy group) — check it too.
+        const replyId = emailReplyDraftId(msg);
+        if (replyId !== null) {
+          result.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: replyId });
+        }
         if (isOutboundBatchResultMessage(msg)) {
           result.push({
             kind: "outbound-batch",
@@ -407,6 +419,10 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           // The outbound batch card is the review/approve/send authorization
           // surface (§18, AD-003) — surface it beside the group, not inside
           // the collapsed receipt.
+          const replyId = emailReplyDraftId(messages[i]);
+          if (replyId !== null) {
+            result.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
+          }
           if (isOutboundBatchResultMessage(messages[i])) {
             result.push({
               kind: "outbound-batch",
@@ -456,6 +472,9 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           key: `batch-card-${msg.id}`,
           message: msg,
         });
+        i += 1;
+      } else if (emailReplyDraftId(msg) !== null) {
+        result.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: emailReplyDraftId(msg)! });
         i += 1;
       } else if (isOutboundBatchResultMessage(msg)) {
         // Unpaired outbound batch result: same rule — the review card IS the

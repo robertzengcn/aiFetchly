@@ -1,3 +1,4 @@
+import { emailReplyDraftId } from "@/views/components/aiChatWorkspace/emailReplyCardModel";
 import { describe, expect, it, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -1224,4 +1225,26 @@ describe("AiChatWorkspaceTranscript scroll-to-bottom button", () => {
       wrapper.find('[data-testid="scroll-to-bottom"]').exists()
     ).toBe(true);
   });
+});
+
+it.each([true, false])('shows the email reply review card outside tool groups (paired=%s)', async (paired) => {
+  const metadata = { toolCallId: 'reply-card', toolName: 'create_email_reply_draft' };
+  const messages = [
+    ...(paired ? [msg(MessageType.TOOL_CALL, metadata)] : []),
+    msg(MessageType.TOOL_RESULT, { ...metadata, toolResult: { success: true, draftId: 42 } }),
+  ];
+  const wrapper = mount(AiChatWorkspaceTranscript, {
+    props: { messages, activeAssistantMessageId: null, streamStatus: 'idle' },
+    global: { plugins: [i18n], stubs: { ReplyDraftReviewCard: { props: ['draftId'], template: '<article data-testid="reply-review">{{ draftId }}</article>' } } },
+  });
+  await flushPromises();
+  expect(wrapper.findAll('[data-testid="reply-review"]')).toHaveLength(1);
+  expect(wrapper.get('[data-testid="reply-review"]').text()).toBe('42');
+});
+
+it('recognizes sent reply results and rejects failed or invalid draft results', () => {
+  expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'send_email_reply', toolResult: { success: true, draft_id: 42 } }))).toBe(42);
+  for (const toolResult of [{ success: false, draftId: 42 }, { draftId: -1 }, { draftId: '42' }, {}]) {
+    expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'create_email_reply_draft', toolResult }))).toBeNull();
+  }
 });

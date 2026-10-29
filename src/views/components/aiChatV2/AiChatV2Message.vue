@@ -130,6 +130,7 @@
             :disabled="disabled"
             @deleted="onPluginArtifactDeleted"
           />
+          <ReplyDraftReviewCard v-if="replyDraftId !== null" :draft-id="replyDraftId" />
           <OutboundEmailBatchCard
             v-if="outboundBatch"
             :batch-id="outboundBatch.batchId"
@@ -569,6 +570,8 @@ import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiArtifactCard from "@/views/components/aiArtifacts/AiArtifactCard.vue";
 import SkillInstallCard from "./SkillInstallCard.vue";
 import type { InstallSnapshot } from "@/entityTypes/skillInstallationTypes";
+import ReplyDraftReviewCard from "@/views/pages/emailreply/widgets/ReplyDraftReviewCard.vue";
+import { emailReplyDraftId } from "@/views/components/aiChatWorkspace/emailReplyCardModel";
 import OutboundEmailBatchCard from "@/views/components/outboundEmail/OutboundEmailBatchCard.vue";
 import OutboundEmailReviewDialog from "@/views/components/outboundEmail/OutboundEmailReviewDialog.vue";
 import {
@@ -1141,6 +1144,7 @@ async function onExportPreserved(): Promise<void> {
 // result so the user can review/approve/send or see the direct-send outcome.
 // The derivation is shared with the chat-first workspace transcript.
 // ---------------------------------------------------------------------------
+const replyDraftId = computed(() => emailReplyDraftId(props.message));
 const outboundBatch = computed<OutboundBatchCardModel | null>(() =>
   deriveOutboundBatchCardModel(props.message)
 );
