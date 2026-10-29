@@ -36,6 +36,7 @@
  * entries expire at {@link NEGATIVE_CACHE_TTL_MS}; positive entries are sticky.
  */
 import { createHash } from "node:crypto";
+import { log } from "@/modules/Logger";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 import type { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import type { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
@@ -964,10 +965,13 @@ export class EmailReplyDetectionService {
     if (runOne) {
       try {
         return await runOne(normalizedConfig, signal, settle);
-      } catch {
+      } catch (probeError) {
         if (signal?.aborted || deadline?.expired()) {
           return this.unknown("probe_timeout");
         }
+        log.warn(
+          `Reply detection: shared probe connection failed: ${sanitizeDetectionError(probeError)}`
+        );
         return this.unknown("probe_failed");
       }
     }
@@ -1059,10 +1063,15 @@ export class EmailReplyDetectionService {
         }
         // flags === null → source message expunged/moved/UIDVALIDITY changed.
         // Flag side is incomplete; Sent search may still settle a positive.
-      } catch {
+      } catch (flagError) {
         // Flag-refresh failure does NOT collapse to no-matches; the flag side
         // stays incomplete and the outcome must be unknown unless Sent search
         // settles a verified positive (§7.3: no cacheable negative on partial).
+        // Bounded observability (2026-10-29 design): the old bare swallow made
+        // every wire diagnosis blind.
+        log.warn(
+          `Reply detection: flag refresh failed (folder: ${folder}, uid: ${uid}): ${sanitizeDetectionError(flagError)}`
+        );
         flagSideComplete = false;
       }
     }
@@ -1266,9 +1275,14 @@ export class EmailReplyDetectionService {
     let folders: SentFolder[];
     try {
       folders = await session.discoverSentFolders(signal);
-    } catch {
+    } catch (listError) {
       // Auth/permission/connection failures during LIST must NOT collapse to
       // folder absence (§7.2) — propagate as probe_failed (unknown upstream).
+      // Bounded observability (2026-10-29 design): the old bare swallow made
+      // every wire diagnosis blind.
+      log.warn(
+        `Reply detection: sent-folder LIST failed: ${sanitizeDetectionError(listError)}`
+      );
       return { kind: "probe_failed" };
     }
     if (folders.length === 0) {
@@ -1309,13 +1323,19 @@ export class EmailReplyDetectionService {
         });
         if (result === false) {
           // A failed/incomplete search does not collapse to no-matches (§7.2).
+          log.warn(
+            `Reply detection: sent-folder search returned false (folder: ${f.folder}): the probe cannot settle a complete negative`
+          );
           allComplete = false;
           continue;
         }
         candidates = result.candidates;
         folderTruncated = result.truncated;
         failedFetchCount = result.failedFetchCount;
-      } catch {
+      } catch (searchError) {
+        log.warn(
+          `Reply detection: sent-folder search threw (folder: ${f.folder}): ${sanitizeDetectionError(searchError)}`
+        );
         allComplete = false;
         continue;
       }
@@ -1327,6 +1347,9 @@ export class EmailReplyDetectionService {
       // folder's coverage incomplete.
       fetchesRemaining -= failedFetchCount;
       if (failedFetchCount > 0) {
+        log.warn(
+          `Reply detection: sent-folder candidate fetches failed (folder: ${f.folder}, count: ${failedFetchCount})`
+        );
         allComplete = false;
       }
       // R05: the server returned more candidates than the remaining budget
@@ -1671,7 +1694,11 @@ export class EmailReplyDetectionService {
       );
     }
     // Row gone / no positive evidence — the truthful outcome is unknown; the
-    // next probe re-runs from scratch.
+    // next probe re-runs from scratch. Bounded observability (2026-10-29
+    // design): the rejected write needs a diagnosis trail.
+    log.warn(
+      "Reply detection: evidence write rejected or row vanished during readback; returning unknown(probe_failed)"
+    );
     return this.unknown("probe_failed");
   }
 
