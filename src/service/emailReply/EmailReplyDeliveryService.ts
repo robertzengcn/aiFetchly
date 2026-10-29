@@ -53,6 +53,7 @@ import type {
   EmailReplyPolicyCode,
 } from "@/entityTypes/emailReplyReliabilityTypes";
 import type { EmailReplyStatus } from "@/entityTypes/emailReceiveTypes";
+import type { ReplyDetectionUnknownCode } from "@/service/emailReceive/EmailReplyDetectionTypes";
 import type { EmailSendResult } from "@/entityTypes/emailmarketingType";
 import {
   FRESHNESS_STALE,
@@ -249,6 +250,43 @@ function isApprovalExpired(approval: { expiresAt: Date | null }): boolean {
  * Mailbox binding is enforced here in code: the outbound service is always the
  * draft's bound mailbox. There is NO `emailServiceId` override (FR-017).
  */
+/**
+ * Probe-execution unknown codes that MAY proceed as an ASSISTED send (spec
+ * 2026-10-29-email-send-inconclusive-detection-assisted-design.md): these
+ * codes mean "the mailbox evidence could not be obtained", not "a reply
+ * exists" or "evidence is ambiguous". By the time the pre-send gate runs,
+ * both local duplicate-protection layers have already asserted a clean
+ * ledger (the pre-send policy guard evaluates the canonical cluster, and
+ * detection's own local-first step re-verifies it), so alongside an explicit
+ * human send confirmation the local-ledger negative is sufficient. Positive
+ * (`replied`) and assertion-bearing unknowns (ambiguous_match,
+ * identity_conflict, reply_in_progress, delivery_unknown) and config-gate
+ * unknowns (unsupported_protocol, receive_unavailable, missing_message_id)
+ * are NEVER on this list.
+ */
+const ASSISTED_INCONCLUSIVE_CODES: ReadonlySet<ReplyDetectionUnknownCode> =
+  new Set([
+    "probe_failed",
+    "probe_timeout",
+    "probe_limit_exceeded",
+    "sent_folder_unavailable",
+  ]);
+
+/**
+ * Assisted-inconclusive marker threaded through the send machinery (claim +
+ * gate + fence). Null = the probe completed a full negative (normal path).
+ */
+export interface AssistedInconclusiveProbe {
+  readonly reasonCode: ReplyDetectionUnknownCode;
+  readonly checkedAt: string;
+}
+
+/** Assisted-inconclusive marker threaded through the send machinery (claim + gate + fence). */
+export interface AssistedInconclusiveProbe {
+  readonly reasonCode: ReplyDetectionUnknownCode;
+  readonly checkedAt: string;
+}
+
 export class EmailReplyDeliveryService {
   private readonly draftModule = new EmailReplyDraftModule();
   private readonly revisionModule = new EmailReplyDraftRevisionModule();
@@ -653,7 +691,14 @@ export class EmailReplyDeliveryService {
     //     `not_replied` proceeds to claim; the fresh observation timestamp
     //     (`replyNegativeCheckAt`) is now ≤seconds old — the 5s forced-freshness
     //     window (T05 step 11) enforces it inside the claim.
-    await this.runPreSendDetection(message, draft.id, requestCorrelationId);
+    // §9.2 forced mailbox detection. Null = complete negative. An ASSISTED
+    // inconclusive marker (probe-execution unknowns on a human-confirmed
+    // send) proceeds and threads through the claim + gate + fence below.
+    const assistedProbe = await this.runPreSendDetection(
+      message,
+      draft.id,
+      requestCorrelationId
+    );
 
     // 6. Atomic claim: draft approved -> sending, insert attempt, write pre-submit
     //    audit. SMTP is never contacted if this returns non-claimed.
@@ -693,6 +738,10 @@ export class EmailReplyDeliveryService {
       recipientAddress: revision.recipientAddress,
       policyVersion: REPLY_POLICY_VERSION,
       guardId: guardRow?.id ?? null,
+      // Assisted inconclusive send: the claim's §9.3 freshness precondition
+      // is replaced by the local-ledger negative + this marker (the
+      // transactional sibling check and positive refusals are unchanged).
+      assistedProbe,
       // R20: thread this invocation's id so the send_claimed audit joins the
       // claim to the returned result / refusal under the same correlation.
       requestCorrelationId,
@@ -711,13 +760,19 @@ export class EmailReplyDeliveryService {
       incrementReplyMetric("send_claim", {
         outcome: "freshness_stale_retry",
       });
-      // Re-run the forced pre-send detection. runPreSendDetection throws
-      // SendPolicyRejection on replied/unknown — which is the correct §9.3
-      // behavior: if the refresh finds a reply, the send is refused with the
-      // detection code and ONE reply_skipped audit (written by
-      // runPreSendDetection). No SMTP, no second claim.
-      await this.runPreSendDetection(message, draft.id, requestCorrelationId);
-      claim = await this.draftModule.claimApprovedRevisionForSend(claimInput);
+      // Re-run the forced pre-send detection. runPreSendDetection returns the
+      // assisted marker on inconclusive probe-execution outcomes and throws
+      // SendPolicyRejection on replied/ambiguous otherwise — which is the
+      // correct §9.3 behavior: if the refresh finds a reply, the send is
+      // refused with the detection code and ONE reply_skipped audit (written
+      // by runPreSendDetection). No SMTP, no second claim. Thread the marker
+      // into the re-claim so an inconclusive rerun proceeds the same way.
+      const assistedProbeRetry =
+        await this.runPreSendDetection(message, draft.id, requestCorrelationId);
+      claim = await this.draftModule.claimApprovedRevisionForSend({
+        ...claimInput,
+        assistedProbe: assistedProbeRetry,
+      });
       if (
         claim.status === "precondition_failed" &&
         claim.reason === FRESHNESS_STALE
@@ -819,6 +874,7 @@ export class EmailReplyDeliveryService {
         guardRow,
         attemptId,
         requestCorrelationId,
+        assistedProbe,
       });
     } finally {
       // EncompassingSettlement (F02): gate refusals (which finalize + throw),
@@ -850,6 +906,8 @@ export class EmailReplyDeliveryService {
     guardRow: { id: number } | null | undefined;
     attemptId: number;
     requestCorrelationId: string;
+    /** Assisted inconclusive marker: threads into the gate + fence inputs. */
+    assistedProbe: AssistedInconclusiveProbe | null;
   }): Promise<SendApprovedReplyOutcome> {
     const {
       message,
@@ -861,6 +919,7 @@ export class EmailReplyDeliveryService {
       guardRow,
       attemptId,
       requestCorrelationId,
+      assistedProbe,
     } = input;
     // 7. Mark the attempt `submitted` at the SMTP handoff boundary (P0.6) so a
     //    crash here is recoverable to delivery_unknown rather than left claimed.
@@ -904,6 +963,7 @@ export class EmailReplyDeliveryService {
       emailServiceId,
       guardId: guardRow?.id ?? null,
       requestCorrelationId,
+      assistedProbe,
     });
 
     // 8. SMTP submission. classifySubmissionResult turns the raw result into a
@@ -943,6 +1003,7 @@ export class EmailReplyDeliveryService {
       emailServiceId,
       guardId: guardRow?.id ?? null,
       requestCorrelationId,
+      assistedProbe,
     });
 
     let certainty: "accepted" | "definitely_rejected" | "unknown";
@@ -1099,7 +1160,7 @@ export class EmailReplyDeliveryService {
      * never a tool/IPC bypass parameter.
      */
     exclude?: { excludeDraftId?: number; excludeAttemptId?: number }
-  ): Promise<void> {
+  ): Promise<AssistedInconclusiveProbe | null> {
     let result: import("@/service/emailReceive/EmailReplyDetectionTypes").ReplyDetectionResult;
     try {
       result = await this.detectionServiceForNow().detect({
@@ -1153,14 +1214,50 @@ export class EmailReplyDeliveryService {
         state: "not_replied",
         code: "no_reply_observed",
       });
-      return; // proceed to the atomic claim
+      return null; // complete negative — normal path to the atomic claim
     }
 
-    // replied OR unknown → hard refusal. Map the detection outcome to the
-    // EmailReplyPolicyCode: replied → already_replied; unknown → the typed
-    // unknown code (probe_timeout / probe_failed / etc.).
     const code: EmailReplyPolicyCode =
       result.state === "replied" ? "already_replied" : result.reasonCode;
+
+    // Assisted send (spec 2026-10-29-email-send-inconclusive-detection-
+    // assisted-design.md): a probe-execution unknown on a HUMAN-CONFIRMED
+    // send proceeds on the local-ledger negative (asserted twice upstream:
+    // the pre-send policy guard's canonical-cluster evaluation and
+    // detection's own local-first step) — an explicit human confirmation
+    // covers the uncheckable manual-reply residue. Never persisted as a
+    // negative; flagged here with ONE lifecycle audit row + the metric.
+    if (result.state === "unknown" && ASSISTED_INCONCLUSIVE_CODES.has(result.reasonCode)) {
+      const assistedCode: ReplyDetectionUnknownCode = result.reasonCode;
+      incrementReplyMetric("detection_outcome", {
+        stage: "pre_send",
+        state: "unknown",
+        code,
+      });
+      try {
+        await this.writeAssistedInconclusiveAudit(
+          message,
+          draftId,
+          requestCorrelationId,
+          assistedCode
+        );
+      } catch (auditError) {
+        incrementReplyMetric("audit_failure", { stage: "pre_send" });
+        const auditErrMsg = sanitizeDetectionError(auditError);
+        // A send whose assisted-evidence write failed cannot proceed aided:
+        // refuse (never silently assisted) with the stable probe_failed code.
+        throw new SendPolicyRejection(
+          `Send rejected: assisted-detection audit persistence failed: ${auditErrMsg}`,
+          "probe_failed",
+          requestCorrelationId
+        );
+      }
+      return {
+        reasonCode: assistedCode,
+        checkedAt: result.checkedAt ?? new Date().toISOString(),
+      };
+    }
+
     incrementReplyMetric("detection_outcome", {
       stage: "pre_send",
       state: result.state,
@@ -1192,6 +1289,40 @@ export class EmailReplyDeliveryService {
       code,
       requestCorrelationId
     );
+  }
+
+  /**
+   * ONE lifecycle audit row for an ASSISTED inconclusive probe (one-audit-
+   * owner rule §9.2/§10): action detection_inconclusive_proceeded, same
+   * metadata shape as the refusal writer plus `assisted: true`. Deliberately
+   * NOT mirrored into the auto-reply decision table (the claim/send audits
+   * carry the decision-visible evidence).
+   */
+  private async writeAssistedInconclusiveAudit(
+    message: { id: number; emailServiceId: number },
+    draftId: number,
+    requestCorrelationId: string,
+    reasonCode: ReplyDetectionUnknownCode
+  ): Promise<void> {
+    await this.auditModuleForNow().ensureConnection();
+    const log = new EmailReplyAuditLogEntity();
+    log.emailServiceId = message.emailServiceId;
+    log.messageId = message.id;
+    log.draftId = draftId;
+    log.action = "detection_inconclusive_proceeded";
+    log.actor = "system";
+    log.reason =
+      `[${reasonCode}] Reply detection inconclusive; proceeding on the ` +
+      "local-ledger negative and the human-confirmed approval";
+    log.metadataJson = JSON.stringify({
+      correlationId: requestCorrelationId,
+      messageCorrelationId: correlationIdForMessage(message.id),
+      stage: "pre_send",
+      code: reasonCode,
+      source: "reply_detection",
+      assisted: true,
+    });
+    await this.auditModuleForNow().create(log);
   }
 
   /**
@@ -1256,6 +1387,9 @@ export class EmailReplyDeliveryService {
     guardId: number | null;
     requestCorrelationId: string;
     gateRefreshed: boolean;
+    /** Assisted inconclusive send (2026-10-29 design doc): fences skip the
+     * freshness dance; owned-claim + positive-evidence checks stay. */
+    assistedProbe?: AssistedInconclusiveProbe | null;
   }): Promise<void> {
     // N04: ONE coherent snapshot (attempt + seed + cluster in a single
     // Model transaction) instead of three separately awaited reads. The old
@@ -1267,7 +1401,18 @@ export class EmailReplyDeliveryService {
       messageId: input.message.id,
     });
     let verdict = this.evaluateFinalAdmission(snapshot, "fence");
-    if (verdict.kind === "admit") {
+    if (verdict.kind === "admit" ||
+        (verdict.kind === "stale" && input.assistedProbe != null)) {
+      // Owned claim, no positives — proceed. In ASSISTED mode a `stale`
+      // verdict (no fresh complete negative) is expected by design: the
+      // freshness precondition is replaced by the local-ledger negative +
+      // the human-confirmed approval; the evaluator's positive/ownership
+      // refusals already ran. Stamp the mode so the next reader knows why.
+      if (verdict.kind === "stale") {
+        incrementReplyMetric("send_claim", {
+          outcome: "handoff_assisted_stale",
+        });
+      }
       // Owned claim, no positives, complete cluster, fresh usable negative
       // as of the coherent snapshot — proceed to SMTP immediately.
       incrementReplyMetric("send_claim", {
@@ -1423,6 +1568,10 @@ export class EmailReplyDeliveryService {
     emailServiceId: number;
     guardId: number | null;
     requestCorrelationId: string;
+    /** Assisted inconclusive send (2026-10-29 design doc): the excluded-refresh
+     * dance is skipped (deterministically-inconclusive probe = guaranteed
+     * waste); owned-claim + positive checks stay, `stale` proceeds. */
+    assistedProbe?: AssistedInconclusiveProbe | null;
   }): Promise<{ refreshed: boolean }> {
     // N04: ONE coherent snapshot (attempt + seed + cluster in a single
     // Model transaction). The message read at the top of sendApprovedReply
@@ -1436,16 +1585,27 @@ export class EmailReplyDeliveryService {
       messageId: input.message.id,
     });
     let verdict = this.evaluateFinalAdmission(snapshot, "gate");
-    if (verdict.kind === "admit") {
-      // Fresh — proceed to the handoff fence (§9.4) with NO extra detect
-      // call. The positive check inside the evaluator already ran, so a
-      // fresh usable negative here means no known positive on seed or
-      // siblings at gate time. The handoff fence re-establishes all of this
-      // after its own awaits — this return is permission to continue, not
-      // to submit.
-      incrementReplyMetric("send_claim", {
-        outcome: "post_claim_fresh",
-      });
+    // ASSISTED mode: `stale` (no fresh complete negative) proceeds without
+    // the excluded-refresh dance — a second probe on a deterministically-
+    // inconclusive mailbox discovers nothing new. The evaluator's
+    // ownership/positive refusals (verdict refuse) are unchanged.
+    if (verdict.kind === "admit" ||
+        (verdict.kind === "stale" && input.assistedProbe != null)) {
+      if (verdict.kind === "stale") {
+        incrementReplyMetric("send_claim", {
+          outcome: "post_claim_assisted_stale",
+        });
+      } else {
+        // Fresh — proceed to the handoff fence (§9.4) with NO extra detect
+        // call. The positive check inside the evaluator already ran, so a
+        // fresh usable negative here means no known positive on seed or
+        // siblings at gate time. The handoff fence re-establishes all of this
+        // after its own awaits — this return is permission to continue, not
+        // to submit.
+        incrementReplyMetric("send_claim", {
+          outcome: "post_claim_fresh",
+        });
+      }
       return { refreshed: false };
     }
     if (verdict.kind === 'refuse') {

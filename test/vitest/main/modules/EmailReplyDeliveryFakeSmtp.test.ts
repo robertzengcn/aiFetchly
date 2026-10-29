@@ -703,7 +703,12 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
     expect(draft?.status).toBe("approved");
   });
 
-  it("detection `unknown` (probe_timeout) -> no claim, no SMTP, code = detection-unknown", async () => {
+  it("detection `unknown` (probe_timeout) -> ASSISTED: one lifecycle audit, SMTP fires, draft -> sent", async () => {
+    // Spec 2026-10-29-email-send-inconclusive-detection-assisted-design.md:
+    // probe-execution unknowns (probe_failed/probe_timeout/probe_limit_exceeded/
+    // sent_folder_unavailable) proceed on the local-ledger negative + the
+    // human-confirmed approval. Nothing negative is persisted; the lifecycle
+    // audit row records the assisted decision.
     const { draftId, token, messageId } = await seedValidApproval();
     const unknown: ReplyDetectionResult = {
       state: "unknown",
@@ -711,6 +716,68 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
       source: "unavailable",
       matchedMessageId: null,
       reasonCode: "probe_timeout",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(unknown, "accept");
+
+    const outcome = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+
+    // The lifecycle audit row is written (stage pre_send, assisted: true).
+    // Mirror check: the auto-table gets NO mirrored row for this action.
+    const logs = await new EmailReplyAuditLogModule().list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const inconclusive = logs.records.filter(
+      (r) => (r as { action: string }).action === "detection_inconclusive_proceeded"
+    );
+    expect(inconclusive).toHaveLength(1);
+    const meta = JSON.parse(inconclusive[0].metadataJson ?? "{}") as {
+      assisted?: boolean;
+      code?: string;
+      stage?: string;
+    };
+    expect(meta.assisted).toBe(true);
+    expect(meta.code).toBe("probe_timeout");
+    expect(meta.stage).toBe("pre_send");
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+
+  it("detection `unknown` (probe_failed — the reported deadlock code) -> assisted send succeeds", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(
+      probeFailed,
+      "accept"
+    );
+    const outcome = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+  });
+
+  it("ambiguous_match still refuses with SendPolicyRejection (no assisted bypass)", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const unknown: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "ambiguous_match",
       checkedAt: new Date().toISOString(),
       fromCache: false,
       coverage: "partial",
@@ -724,22 +791,19 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
       if (error instanceof SendPolicyRejection) rejection = error;
     }
     expect(rejection).toBeInstanceOf(SendPolicyRejection);
-    // The typed unknown code flows through SendPolicyRejection so the B12 IPC
-    // envelope surfaces it machine-readably (§9.2).
-    expect(rejection?.code).toBe("probe_timeout");
-
+    expect(rejection?.code).toBe("ambiguous_match");
     expect(smtpCalls.count).toBe(0);
-    const refusals = await refusalAuditsFor(messageId);
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0].reason).toContain("[probe_timeout]");
-    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
-      stage?: string;
-      code?: string;
-      source?: string;
-    };
-    expect(meta.stage).toBe("pre_send");
-    expect(meta.code).toBe("probe_timeout");
-    expect(meta.source).toBe("reply_detection");
+    // Ambiguous mailbox evidence stays a standard reply_skipped refusal —
+    // it is NOT an assisted-proceed case.
+    const refusalMeta = JSON.parse(
+      (
+        await new EmailReplyAuditLogModule().list({ messageId, page: 0, size: 50 })
+      ).records.find(
+        (r) => (r as { action: string }).action === "reply_skipped"
+      )?.metadataJson ?? "{}"
+    ) as { code?: string; assisted?: boolean };
+    expect(refusalMeta.code).toBe("ambiguous_match");
+    expect(refusalMeta.assisted).toBeUndefined();
     const draft = await new EmailReplyDraftModule().readAggregate(draftId);
     expect(draft?.status).toBe("approved");
   });
