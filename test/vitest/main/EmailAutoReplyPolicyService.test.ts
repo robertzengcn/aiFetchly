@@ -327,3 +327,73 @@ describe("confirmedSendRuleRefusal (D2 review fix — allowlist vs unknown)", ()
     expect(refusal).toBeNull();
   });
 });
+
+describe("humanConfirmed exemption (reviewed flag — create_email_reply_draft)", () => {
+  it("exempts a 'needs_human_review' classification when humanConfirmed, returns a draftable decision", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage(),
+      classification: "needs_human_review",
+      confidence: 0.5,
+      rule: null,
+      sendCounts: emptyCounts,
+      humanConfirmed: true,
+    });
+    expect(d.status).not.toBe("blocked");
+    expect(d.canSendAutomatically).toBe(false);
+  });
+
+  it("still hard-blocks bounce / auto_reply / unsubscribe classifications even when humanConfirmed", () => {
+    for (const classification of [
+      "bounce",
+      "auto_reply",
+      "unsubscribe",
+    ] as const) {
+      const d = evaluateAutoReplyPolicy({
+        message: fakeMessage(),
+        classification,
+        confidence: 0.95,
+        rule: null,
+        sendCounts: emptyCounts,
+        humanConfirmed: true,
+      });
+      expect(d.status).toBe("blocked");
+    }
+  });
+
+  it("keeps the automated no-reply recipient block when humanConfirmed", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage({ fromAddress: "no-reply@example.com" }),
+      classification: "needs_human_review",
+      confidence: 0.5,
+      rule: null,
+      sendCounts: emptyCounts,
+      humanConfirmed: true,
+    });
+    expect(d.status).toBe("blocked");
+  });
+
+  it("flag-adjacent: sensitive keywords with humanConfirmed yield review status (allowed, review, no auto-send)", () => {
+    const d = evaluateAutoReplyPolicy({
+      message: fakeMessage({ bodyText: "Please refund my payment." }),
+      classification: null,
+      confidence: null,
+      rule: null,
+      sendCounts: emptyCounts,
+      humanConfirmed: true,
+    });
+    expect(d.status).toBe("needs_human_review");
+    expect(d.canSendAutomatically).toBe(false);
+  });
+});
+
+describe("classificationForConfirmedSend strips needs_human_review", () => {
+  it("returns null for unknown and needs_human_review (human-confirmed paths); keeps hard classes", () => {
+    expect(classificationForConfirmedSend("unknown")).toBe(null);
+    expect(classificationForConfirmedSend("needs_human_review")).toBe(null);
+    expect(classificationForConfirmedSend("bounce")).toBe("bounce");
+    expect(classificationForConfirmedSend("auto_reply")).toBe("auto_reply");
+    expect(classificationForConfirmedSend("unsubscribe")).toBe("unsubscribe");
+    expect(classificationForConfirmedSend("interested")).toBe("interested");
+    expect(classificationForConfirmedSend(null)).toBe(null);
+  });
+});
