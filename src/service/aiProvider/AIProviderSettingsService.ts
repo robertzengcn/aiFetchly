@@ -15,6 +15,7 @@ import type {
 import { AIProviderSecretService } from "./AIProviderSecretService";
 import { validateLocalProviderConfig } from "./AIProviderConfigValidator";
 import { bumpProviderConfigVersion } from "./AIProviderConfigVersion";
+import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
 
 /**
  * Main-process service that owns provider settings persistence and the
@@ -105,6 +106,7 @@ export class AIProviderSettingsService {
       hostedAIEnabled: this.isHostedAIEnabled(),
       localAIEnabled: this.isLocalAIEnabled(),
       localProvider: this.getLocalProviderConfig(),
+      autoChatTitlesEnabled: isAutoChatTitlesEnabled(),
     };
   }
 
@@ -128,11 +130,32 @@ export class AIProviderSettingsService {
       this.secrets.setApiKey(normalized.apiKey);
     }
 
+    // Chat-titles design §8.1 binding rule: `titleModel` is bound to
+    // provider identity (normalized baseUrl + preset). An explicit value
+    // (including "" to clear) is saved as-is; an omitted value is cleared
+    // when the endpoint/preset changed and carried forward otherwise.
+    const previous = this.getLocalProviderConfig();
+    let titleModel: string | undefined;
+    if (normalized.titleModel !== undefined) {
+      titleModel = normalized.titleModel;
+    } else if (
+      previous &&
+      (previous.baseUrl !== normalized.baseUrl ||
+        previous.preset !== normalized.preset)
+    ) {
+      titleModel = "";
+    } else if (previous?.titleModel) {
+      titleModel = previous.titleModel;
+    }
+
     const stored: Omit<LocalAIProviderConfig, "apiKeyConfigured"> = {
       preset: normalized.preset,
       name: normalized.name,
       baseUrl: normalized.baseUrl,
       defaultModel: normalized.defaultModel,
+      ...(titleModel !== undefined && titleModel.length > 0
+        ? { titleModel }
+        : {}),
       ...(typeof normalized.contextSize === "number"
         ? { contextSize: normalized.contextSize }
         : {}),

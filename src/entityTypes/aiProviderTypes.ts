@@ -54,6 +54,13 @@ export interface LocalAIProviderConfig {
   readonly name: string;
   readonly baseUrl: string;
   readonly defaultModel: string;
+  /**
+   * Explicitly configured title model for automatic chat naming (titles
+   * design §8.1). Absent by default — custom-provider naming makes ZERO
+   * calls without it. Bound to provider identity: endpoint/preset changes
+   * clear it unless explicitly saved again with the new provider.
+   */
+  readonly titleModel?: string;
   readonly apiKeyConfigured: boolean;
   readonly contextSize?: number;
   readonly capabilities?: LocalAIProviderCapabilities;
@@ -72,6 +79,12 @@ export interface LocalAIProviderConfigInput {
   readonly name: string;
   readonly baseUrl: string;
   readonly defaultModel: string;
+  /**
+   * Title model selection (chat-titles FR-08). Undefined = untouched
+   * (subject to the endpoint/preset binding rule); empty string = explicit
+   * clear; non-empty = explicit selection at this endpoint.
+   */
+  readonly titleModel?: string;
   /** Plaintext key, only when the user is entering/updating it. */
   readonly apiKey?: string;
   /** When true, the stored key is deleted regardless of `apiKey`. */
@@ -89,6 +102,8 @@ export interface AIProviderSettingsView {
   readonly hostedAIEnabled: boolean;
   readonly localAIEnabled: boolean;
   readonly localProvider: LocalAIProviderConfig | null;
+  /** Master switch for automatic chat titles (default on, FR-08). */
+  readonly autoChatTitlesEnabled: boolean;
 }
 
 /** Result of validating a provider config input. */
@@ -112,6 +127,8 @@ export interface LocalAIProviderTestResult {
 export interface SaveAIProviderSettingsRequest {
   readonly mode: AIProviderMode;
   readonly localProvider?: LocalAIProviderConfigInput;
+  /** Optional: update the automatic-chat-titles toggle in the same save. */
+  readonly autoChatTitlesEnabled?: boolean;
 }
 
 /** Request body for refreshing models from an (possibly unsaved) provider. */

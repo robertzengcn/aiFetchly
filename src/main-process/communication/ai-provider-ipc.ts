@@ -22,6 +22,8 @@ import { invalidateEmailReplyModelCatalogs } from "@/service/emailReply/EmailRep
 import { AIProviderConnectionTester } from "@/service/aiProvider/AIProviderConnectionTester";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import { validateLocalProviderConfig } from "@/service/aiProvider/AIProviderConfigValidator";
+import { setAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
+import { bumpProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
@@ -74,6 +76,14 @@ export function registerAIProviderIpcHandlers(): void {
         }
         const svc = service();
         const mode: AIProviderMode = req.mode;
+
+        // Chat-titles FR-08: the auto-titles toggle rides the same save
+        // path; changes invalidate in-flight title work via the config
+        // version bump inside setAutoChatTitlesEnabled's caller below.
+        if (typeof req.autoChatTitlesEnabled === "boolean") {
+          setAutoChatTitlesEnabled(req.autoChatTitlesEnabled);
+          bumpProviderConfigVersion();
+        }
 
         if (mode === "local") {
           if (!req.localProvider) {

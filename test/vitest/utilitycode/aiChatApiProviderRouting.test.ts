@@ -362,6 +362,76 @@ describe("AiChatApi provider routing", () => {
     expect(mockPostJson).toHaveBeenCalledTimes(1);
   });
 
+  it("hosted with smallModelFallbackPolicy=forbid makes exactly one request on a small-alias 404 (chat titles)", async () => {
+    enableHosted();
+    mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "name this chat" }],
+        model: "small",
+        smallModelFallbackPolicy: "forbid",
+      })
+    ).rejects.toThrow();
+    // AC-04: one request, zero default-model fallback dispatches.
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    const wire = mockPostJson.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(wire.model).toBe("small");
+    expect(wire).not.toHaveProperty("smallModelFallbackPolicy");
+    expect(wire).not.toHaveProperty("requestPurpose");
+    expect(wire).not.toHaveProperty("fallbackModel");
+  });
+
+  it("hosted forbid policy leaves literal-model 404 behavior unchanged", async () => {
+    enableHosted();
+    mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "hi" }],
+        model: "gpt-x",
+        smallModelFallbackPolicy: "forbid",
+      })
+    ).rejects.toThrow();
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("chat_title requestPurpose suppresses content in debug request logging", async () => {
+    enableHosted();
+    const previous = process.env.AICHAT_DEBUG_REQUEST;
+    process.env.AICHAT_DEBUG_REQUEST = "1";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      mockPostJson.mockResolvedValue({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "cheap",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "ok" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      await api.openAIChatCompletion({
+        messages: [{ role: "user", content: "SECRET-EXCERPT-VALUE" }],
+        model: "small",
+        requestPurpose: "chat_title",
+      });
+      const logged = logSpy.mock.calls.map((c) => String(c.join(" "))).join("\n");
+      expect(logged).not.toContain("SECRET-EXCERPT-VALUE");
+      expect(logged).toContain("chat_title");
+    } finally {
+      logSpy.mockRestore();
+      if (previous === undefined) {
+        delete process.env.AICHAT_DEBUG_REQUEST;
+      } else {
+        process.env.AICHAT_DEBUG_REQUEST = previous;
+      }
+    }
+  });
+
   it("hosted does not retry a 404 for a literal (non-alias) model", async () => {
     enableHosted();
     mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));
