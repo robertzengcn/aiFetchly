@@ -1162,6 +1162,12 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "Vérifier la réponse",
+    chatLoading: "Chargement du message…",
+    chatApproveSend: "Approuver et envoyer",
+    chatSent: "Message envoyé",
+    chatError: "Impossible de terminer cette action. Rechargez la conversation pour vérifier le statut.",
+
     drafts_title: "Brouillons de Réponse",
     generate_draft: "Générer un Brouillon",
     regenerate: "Régénérer",

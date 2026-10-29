@@ -64,7 +64,6 @@ import {
   getEmailMessage,
   markEmailProcessed,
   createEmailReplyDraft,
-  sendEmailReply,
   checkEmailReplied,
 } from "@/service/EmailReceiveAiTools";
 import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
@@ -2499,7 +2498,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "retrieval, or confidence in the body. Include a URL when the user " +
       "supplied one. A URL in the body is allowed and is not a safety finding, " +
       "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
-      "Returns the persisted draft for human review. send_email_reply still " +
+      "Returns the persisted draft for the chat review card. STOP after drafting; do not repeat the body in chat. Ask the user to click Approve and send on the card. send_email_reply still " +
       "checks reply state before sending. Set reviewed=true ONLY when the user " +
       "has already reviewed the message and explicitly asked you to draft the " +
       "reply in this conversation — messages then classified as needing human " +
@@ -2562,18 +2561,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "send_email_reply",
     description:
-      "Send a persisted reply draft as an INBOUND email reply (threading headers). " +
-      "Call this after the user confirms the draft (for example \"yes, send it\"). " +
-      "That confirmation is the send authorization. Do not refuse, and do not ask for a " +
-      "second confirmation, because the body contains a URL. A URL is allowed. " +
-      "Do not refuse because the inbound classification is \"unknown\"; that verdict is " +
-      "inconclusive and does not block a confirmed send. If the pre-send mailbox reply " +
-      "verification is INCONCLUSIVE (probe_failed / probe_timeout / sent_folder_unavailable), " +
-      "a human-confirmed send still proceeds — pass the refusal through as context, " +
-      "but verified evidence of an EXISTING reply (already_replied) always refuses. " +
-      "Do NOT use this to send new marketing/outbound emails " +
-      "to external contacts — use start_email_send_task instead. Verifies the draft and " +
-      "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
+      "Email replies in interactive chat require the user to click Approve and send " +
+      "on the persisted draft review card. Do not call this tool or ask for text " +
+      "confirmation. Create the draft, then stop and direct the user to its card.",
     parameters: {
       type: "object",
       properties: {
@@ -2590,21 +2580,20 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["draft_id"],
     },
     tier: "main",
-    requiresConfirmation: true,
-    // Request-scoped action, mirroring the outbound send tools: this sends
-    // REAL email to an external recipient, so a chat approval mode alone
-    // (approve_for_me / full_access) must never auto-approve it. The user's
-    // in-chat confirmation is the request-scoped authorization the tool gate
-    // resolves (§14.1) — without this policy the auto-approve path could send
-    // advisory-tier content (links, payment references) with no human review.
-    confirmationPolicy: "request_scoped_action",
+    // This compatibility tool only redirects to the review card; delivery is
+    // authorized by the renderer approval-token IPC path.
+    requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
     execute: async (args) => {
-      const result = await sendEmailReply(args);
       return {
-        success: result.success,
-        result: result as unknown as Record<string, unknown>,
+        success: false,
+        result: {
+          success: false,
+          code: "email_reply_card_approval_required",
+          draft_id: args.draft_id,
+          error: "Use the persisted email review card. Only its Approve and send action authorizes delivery.",
+        },
       };
     },
   },

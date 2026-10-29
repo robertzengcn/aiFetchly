@@ -89,7 +89,7 @@
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
         />
 
-        <ReplyDraftReviewCard
+        <AiChatEmailReplyReviewCard
           v-else-if="item.kind === 'email-reply'"
           :draft-id="item.draftId"
         />
@@ -210,7 +210,7 @@ import type {
 } from "@/views/components/aiChatWorkspace/planPresentationProjection";
 import type { AIChatPlanQuestionView } from "@/entityTypes/aiChatPlanTypes";
 import type { MessageType } from "@/entityTypes/commonType";
-import ReplyDraftReviewCard from "@/views/pages/emailreply/widgets/ReplyDraftReviewCard.vue";
+import AiChatEmailReplyReviewCard from "./AiChatEmailReplyReviewCard.vue";
 import { emailReplyDraftId } from "./emailReplyCardModel";
 import { isOutboundBatchResultMessage } from "@/views/components/outboundEmail/outboundBatchCardModel";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -685,6 +685,9 @@ onMounted(onScroll);
   flex-direction: column;
   gap: 8px;
   padding: 8px 12px;
+}
+.workspace-transcript > :deep(*) {
+  flex-shrink: 0;
 }
 .workspace-transcript__scroll-down {
   position: absolute;

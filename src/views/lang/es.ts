@@ -1173,6 +1173,12 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "Revisar respuesta",
+    chatLoading: "Cargando correo…",
+    chatApproveSend: "Aprobar y enviar",
+    chatSent: "Correo enviado",
+    chatError: "No se pudo completar la acción. Recarga la conversación para consultar el estado.",
+
     drafts_title: "Borradores de Respuesta",
     generate_draft: "Generar Borrador",
     regenerate: "Regenerar",

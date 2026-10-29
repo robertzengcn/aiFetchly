@@ -101,6 +101,8 @@ const ALLOWED_CONTROL_KEYS = [
   "job_id",
   "shell_id",
   "exit_code",
+  "draftId",
+  "draft_id",
   "batchId",
   "batchStatus",
   "draftCount",

@@ -1172,6 +1172,12 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "E-Mail-Antwort prüfen",
+    chatLoading: "E-Mail wird geladen…",
+    chatApproveSend: "Genehmigen und senden",
+    chatSent: "E-Mail gesendet",
+    chatError: "Aktion konnte nicht abgeschlossen werden. Laden Sie den Chat neu, um den Status zu prüfen.",
+
     drafts_title: "Antwortentwürfe",
     generate_draft: "Entwurf erstellen",
     regenerate: "Neu generieren",

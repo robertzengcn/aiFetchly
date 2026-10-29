@@ -1173,6 +1173,12 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "Review email reply",
+    chatLoading: "Loading email…",
+    chatApproveSend: "Approve and send",
+    chatSent: "Email sent",
+    chatError: "Unable to complete this action. Reload the conversation to check the email status.",
+
     drafts_title: "Reply Drafts",
     generate_draft: "Generate Draft",
     regenerate: "Regenerate",

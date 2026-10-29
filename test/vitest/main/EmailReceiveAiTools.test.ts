@@ -247,19 +247,14 @@ describe("Email reply draft/send AI tools", () => {
     expect(parsed.humanReviewed).toBe(true);
   });
 
-  it("send_email_reply REQUIRES confirmation (it sends email)", () => {
+  it("send_email_reply directs the user to card approval without sending", async () => {
     const skill = SkillRegistry.getSkill("send_email_reply");
     expect(skill).not.toBeNull();
-    expect(skill!.source).toBe("built-in");
-    expect(skill!.permissionCategory).toBe("automation");
-    expect(skill!.requiresConfirmation).toBe(true);
-    expect(skill!.parameters.required).toContain("draft_id");
-    // Assisted-inconclusive semantics (2026-10-29 design doc): the model must
-    // know an inconclusive mailbox verification does not block a
-    // human-confirmed send, while a VERIFIED existing reply still refuses.
-    expect(skill!.description).toMatch(/inconclusive/i);
-    expect(skill!.description).toMatch(/probe/i);
-    expect(skill!.description).toMatch(/verified/i);
+    expect(skill!.requiresConfirmation).toBe(false);
+    expect(skill!.description).toContain("Approve and send");
+    const result = await skill!.execute({ draft_id: 3 }, { conversationId: "chat", toolCallId: "reply" });
+    expect(result.success).toBe(false);
+    expect(result.result.code).toBe("email_reply_card_approval_required");
   });
 });
 

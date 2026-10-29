@@ -1153,6 +1153,12 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "メール返信を確認",
+    chatLoading: "メールを読み込み中…",
+    chatApproveSend: "承認して送信",
+    chatSent: "メールを送信しました",
+    chatError: "操作を完了できませんでした。会話を再読み込みしてメールの状態を確認してください。",
+
     drafts_title: "返信下書き",
     generate_draft: "下書き生成",
     regenerate: "再生成",

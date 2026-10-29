@@ -1235,7 +1235,7 @@ it.each([true, false])('shows the email reply review card outside tool groups (p
   ];
   const wrapper = mount(AiChatWorkspaceTranscript, {
     props: { messages, activeAssistantMessageId: null, streamStatus: 'idle' },
-    global: { plugins: [i18n], stubs: { ReplyDraftReviewCard: { props: ['draftId'], template: '<article data-testid="reply-review">{{ draftId }}</article>' } } },
+    global: { plugins: [i18n], stubs: { AiChatEmailReplyReviewCard: { props: ['draftId'], template: '<article data-testid="reply-review">{{ draftId }}</article>' } } },
   });
   await flushPromises();
   expect(wrapper.findAll('[data-testid="reply-review"]')).toHaveLength(1);

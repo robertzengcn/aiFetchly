@@ -1128,6 +1128,12 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "审核邮件回复",
+    chatLoading: "正在加载邮件…",
+    chatApproveSend: "批准并发送",
+    chatSent: "邮件已发送",
+    chatError: "无法完成操作。请重新加载对话以检查邮件状态。",
+
     drafts_title: "回复草稿",
     generate_draft: "生成草稿",
     regenerate: "重新生成",
