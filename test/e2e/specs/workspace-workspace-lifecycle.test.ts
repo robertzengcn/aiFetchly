@@ -533,9 +533,12 @@ test.describe("workspace lifecycle through the default surface", () => {
           },
         ]);
 
-        const menu = page.getByTitle("Background Agents", { exact: true });
-        await expect(menu).toBeVisible({ timeout: 10_000 });
-        await menu.click();
+        // The task list opens from the conversation-header overflow menu.
+        // The old title-attribute activator button is gone.
+        await page.getByTestId("workspace-header-overflow").click();
+        const agents = page.getByTestId("workspace-overflow-agent-tasks");
+        await expect(agents).toBeVisible({ timeout: 10_000 });
+        await agents.click();
 
         // The list loads through the real agent-runtime channel: both rows are
         // rendered with their exact agent ids.
