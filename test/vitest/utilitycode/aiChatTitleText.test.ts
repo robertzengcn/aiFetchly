@@ -39,6 +39,9 @@ describe("sanitizeText", () => {
       "my [redacted] here"
     );
     expect(sanitizeText("Password: hunter2 runs")).toBe("[redacted] runs");
+    expect(sanitizeText("My password is hunter2 — check it")).toBe(
+      "My [redacted] — check it"
+    );
   });
 
   it("replaces bearer tokens and sk-style keys", () => {

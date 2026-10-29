@@ -27,7 +27,7 @@ export function normalizeText(text: string): string {
 }
 
 const CREDENTIAL_ASSIGNMENT =
-  /(?:api[-_]?key|apikey|secret|token|password|passwd|pwd|authorization|auth)\s*[:=]\s*[^\s]+/gi;
+  /(?:api[-_]?key|apikey|secret|token|password|passwd|pwd|authorization|auth|mot de passe|passwort|contrase(?:ñ|n)a|contraseña|パスワード|密码|口令|密钥)\s*(?:[:=：＝]|\b(?:is|es|est|ist)\b|是|：|は)\s*[^\s]+/gi;
 const BEARER_CREDENTIAL = /\bbearer\s+[^\s]+/gi;
 const SK_STYLE_KEY = /\bsk-[A-Za-z0-9_-]{8,}\b/g;
 const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
