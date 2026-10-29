@@ -996,3 +996,92 @@ describe("B08 — definitely-failed drafts are reusable, delivery_unknown is not
     expect(pickReusableDraft([unknown])).toBe(null);
   });
 });
+
+/**
+ * Reviewed flag (spec 2026-10-29-email-reply-reviewed-flag-design.md): a
+ * human-confirmed request exempts ONLY the classification-family blocks
+ * (needs_human_review / unknown) at pre_draft. Machine-safety blocks
+ * (unsubscribe, automated/no-reply senders) and the unconfirmed behavior are
+ * unchanged. Uses the shared fallback DB like the other post-P0.3 blocks
+ * (unique provider UIDs keep rows hermetic), with its own scoped helpers.
+ */
+describe("humanConfirmed pre-draft exemption (reviewed flag)", () => {
+  const messageModule = new EmailReceivedMessageModule();
+  const orchestrator = new EmailReplyPolicyOrchestrator();
+
+  async function seedMessage(
+    over: Partial<EmailReceivedMessageEntity> = {}
+  ): Promise<number> {
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 4245;
+    msg.providerUid = `p-${Math.random()}`;
+    msg.messageId = `<m-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.inReplyTo = null;
+    msg.referencesHeader = null;
+    msg.fromAddress = over.fromAddress ?? "person@example.com";
+    msg.fromName = "Person";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = "[]";
+    msg.ccAddressesJson = null;
+    msg.subject = "Hi";
+    msg.bodyText = "Hello";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = null;
+    msg.classificationConfidence = null;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const saved = await messageModule.upsertByProviderUid(msg);
+    if (over.classification) {
+      await messageModule.updateClassification(
+        saved.id,
+        over.classification,
+        over.classificationConfidence ?? 0.99
+      );
+    }
+    return saved.id;
+  }
+
+  it("allows a needs_human_review-classified message at pre_draft when humanConfirmed", async () => {
+    const id = await seedMessage({
+      classification: "needs_human_review",
+      classificationConfidence: 0.5,
+    });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+      humanConfirmed: true,
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("still refuses needs_human_review at pre_draft without humanConfirmed (unchanged)", async () => {
+    const id = await seedMessage({ classification: "needs_human_review" });
+    const decision = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: id,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.code).toBe("sensitive_topic");
+  });
+
+  it("still refuses unsubscribe and no-reply senders at pre_draft even when humanConfirmed", async () => {
+    const unsub = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: await seedMessage({ classification: "unsubscribe" }),
+      humanConfirmed: true,
+    });
+    expect(unsub.allowed).toBe(false);
+    const noReply = await orchestrator.evaluate({
+      stage: "pre_draft",
+      messageId: await seedMessage({
+        fromAddress: "no-reply@mailer.example.com",
+      }),
+      humanConfirmed: true,
+    });
+    expect(noReply.allowed).toBe(false);
+  });
+});
