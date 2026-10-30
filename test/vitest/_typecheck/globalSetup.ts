@@ -17,8 +17,10 @@
  * Spawning node_modules/.bin/tsc directly fails on Windows because the
  * extensionless POSIX shim cannot be executed without a shell.
  *
- * Performance: tsc on this project takes ~5-15s cold, ~1-3s warm. The
- * cost runs once per vitest invocation, not per test file.
+ * Performance: tsc on this project takes ~45s on a warm Ubuntu CI runner
+ * and has exceeded 3 minutes on macos-latest (Test Suite managed-copy-macos
+ * was SIGTERM'd at the old 180s cap with no type errors). The cap is 10
+ * minutes so a slow runner can finish, and a true hang still fails the job.
  *
  * Env opt-out:
  *   AIFETCHLY_SKIP_TSC=1 yarn testmain   # bypass typecheck (NOT recommended)
@@ -49,6 +51,10 @@ export default function setup(): void {
     )}`
   );
 
+  // macos-latest has been killed at 180s while still typechecking (no
+  // diagnostics). 10 minutes leaves headroom; the job timeout is 30.
+  const typecheckTimeoutMs = 600_000;
+
   try {
     // `--incremental false` (dev) makes the gate's verdict DETERMINISTIC —
     // a stale tsbuildinfo must never flip the answer. Spawn via
@@ -60,20 +66,32 @@ export default function setup(): void {
       {
         cwd: projectRoot,
         stdio: "pipe", // capture stdout/stderr; we'll format below
-        timeout: 180_000, // hard cap; tsc should finish well under this
+        timeout: typecheckTimeoutMs,
       }
     );
   } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer; status?: number };
+    const e = err as {
+      stdout?: Buffer;
+      stderr?: Buffer;
+      status?: number | null;
+      signal?: NodeJS.Signals | null;
+      message?: string;
+    };
     const stdout = e.stdout?.toString("utf8") ?? "";
     const stderr = e.stderr?.toString("utf8") ?? "";
     const combined = (stdout + stderr).trim();
+    const how = e.signal
+      ? `signal ${e.signal}`
+      : `exit ${e.status ?? "unknown"}`;
+    const detail = e.message ? ` (${e.message})` : "";
     // Surface the tsc output regardless of which stream vitest decides to show
     // eslint-disable-next-line no-console
-    console.error("[typecheck] TypeScript errors detected:\n" + combined);
+    console.error(
+      `[typecheck] tsc --noEmit failed (${how}${detail}).\n` + combined
+    );
     // Throwing aborts the whole vitest run. Tests don't execute.
     throw new Error(
-      `tsc --noEmit failed (exit ${e.status ?? "unknown"}). ` +
+      `tsc --noEmit failed (${how}). ` +
         `Fix type errors above, or bypass with AIFETCHLY_SKIP_TSC=1 (not recommended).`
     );
   }
