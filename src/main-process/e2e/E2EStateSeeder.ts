@@ -72,6 +72,9 @@ export function seedE2EState(environment: E2EEnvironment): void {
       name: "AiFetchly E2E Provider",
       baseUrl: manifest.fakeAiBaseUrl,
       defaultModel: E2E_MODEL_ID,
+      // Chat-titles E2E: the explicit title model enables automatic naming
+      // against the fake server (custom mode makes zero calls without it).
+      titleModel: E2E_MODEL_ID,
       clearApiKey: true,
       capabilities: {
         modelsEndpoint: "supported",
