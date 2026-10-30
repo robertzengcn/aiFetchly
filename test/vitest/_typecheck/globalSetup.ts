@@ -18,9 +18,11 @@
  * extensionless POSIX shim cannot be executed without a shell.
  *
  * Performance: tsc on this project takes ~45s on a warm Ubuntu CI runner
- * and has exceeded 3 minutes on macos-latest (Test Suite managed-copy-macos
- * was SIGTERM'd at the old 180s cap with no type errors). The cap is 10
- * minutes so a slow runner can finish, and a true hang still fails the job.
+ * and has exceeded 3 minutes on macos-latest. The cap is 10 minutes so a
+ * slow runner can finish, and a true hang still fails the job.
+ * macos-latest's default V8 heap is ~2 GB; tsc SIGABRTs there with no
+ * diagnostics (Test Suite #116, heap 2040 MB). The managed-copy job raises
+ * NODE_OPTIONS for this process, and the child inherits it.
  *
  * Env opt-out:
  *   AIFETCHLY_SKIP_TSC=1 yarn testmain   # bypass typecheck (NOT recommended)

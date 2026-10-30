@@ -155,6 +155,13 @@ jobs:
       - name: Run managed-copy activation suites (BLOCKING)
         # SkillActivationService (managed copy / link / rollback) plus the
         # SkillInstallationModule activation + rollback lifecycle suites.
+        # macos-latest's default V8 old-space is ~2 GB. tsc grows past that
+        # and SIGABRTs with an empty diagnostic list (Test Suite #116,
+        # heap 2040 MB) even though the Ubuntu `test` job typechecks this
+        # same tsconfig. 4096 lets the gate finish; the cap stays under the
+        # 7 GB runner so the Actions agent is not the OOM victim.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: yarn testmain run test/vitest/main/SkillActivationService.test.ts test/vitest/main/SkillInstallationModule.test.ts
 
   # ---------------------------------------------------------------------------
@@ -178,17 +185,18 @@ jobs:
     env:
       FORGE_DISABLE_ASAR: "1"
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      # ubuntu-latest (7 GB) evictions mid-prune: leave the kernel
-      # headroom to keep the runner agent alive — an in-process OOM
-      # surfaces a diagnosable error instead of an opaque shutdown.
-      NODE_OPTIONS: --max-old-space-size=4096
+      # Match ci.yml on Linux. Test Suite #116 set a 4096 MB heap on the
+      # job and the ubuntu-22.04 runner lost communication during packaging
+      # (no log blob). The same commit's CI package step, at 3072 for the
+      # whole job, finished in ~90s. Windows and macOS keep 4096.
+      NODE_OPTIONS: "${{ runner.os == 'Linux' && '--max-old-space-size=3072' || '--max-old-space-size=4096' }}"
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
-      PKG_SMOKE_GITHUB: "1"
       # macOS packaging occasionally exceeds the guard's 15-minute default
-      # hard timeout (one eviction observed at ~15min with the run otherwise
-      # healthy); give the slower runners headroom.
-      PACKAGE_GUARD_HARD_TIMEOUT_MS: "1800000"
+      # hard timeout. Linux stays at 15 minutes, matching ci.yml, so a hang
+      # fails inside the guard instead of freezing the runner until the
+      # 40-minute step timeout.
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: "${{ runner.os == 'Linux' && '900000' || '1800000' }}"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -218,10 +226,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsecret-1-dev xvfb
 
-      # Same disk + swap hardening the ci.yml package-smoke job needs:
-      # unpacked packaging duplicates node_modules into /tmp AND out/,
-      # which exhausts the 14 GB runner SSD and gets the job evicted
-      # ("runner has received a shutdown signal").
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Install dependencies (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: yarn install --frozen-lockfile
+
+      - name: Install dependencies (skip package scripts, Windows)
+        if: runner.os == 'Windows'
+        run: yarn install --frozen-lockfile --ignore-scripts
+
+      - name: Run required postinstall steps (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          node scripts/patch-node-abi.js
+          node scripts/patch-remote-rebuild.js
+          node scripts/rebuild-better-sqlite.js || echo "better-sqlite3 rebuild unavailable; smoke does not require it"
+
+      # Same disk + swap hardening the ci.yml package-smoke job needs.
+      # Run this AFTER yarn install, as ci.yml does: unpacked packaging
+      # duplicates node_modules into /tmp AND out/, and reclaiming the
+      # preinstalled toolchains only helps if that space is still free
+      # when the copy starts.
       - name: Free up disk space (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -256,39 +285,25 @@ jobs:
             exit 1
           fi
 
-      - name: Install dependencies (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: yarn install --frozen-lockfile
-
-      - name: Install dependencies (skip package scripts, Windows)
-        if: runner.os == 'Windows'
-        run: yarn install --frozen-lockfile --ignore-scripts
-
-      - name: Run required postinstall steps (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          node scripts/patch-node-abi.js
-          node scripts/patch-remote-rebuild.js
-          node scripts/rebuild-better-sqlite.js || echo "better-sqlite3 rebuild unavailable; smoke does not require it"
-
       - name: Build package (unpacked)
         timeout-minutes: 40
-        # Ubuntu (7 GB) evictions mid-prune: the runner context is only
-        # available here — cap the heap on Linux so the kernel keeps
-        # headroom for the runner agent through the galactus prune spike.
-        env:
-          NODE_OPTIONS: "--max-old-space-size=${{ runner.os == 'Linux' && '3072' || '4096' }}"
-        run: yarn package:ci
+        run: |
+          echo "NODE_OPTIONS=${NODE_OPTIONS}"
+          yarn package:ci
 
       - name: Verify packaged workers and renderer HTML layout
         run: yarn verify-packaged-app
 
       - name: Packaged smoke + git-free GitHub install (GF-1)
-        run: yarn packaged-smoke
         # xvfb only exists/is needed on Linux.
         if: runner.os != 'Linux'
+        env:
+          PKG_SMOKE_GITHUB: "1"
+        run: yarn packaged-smoke
 
       - name: Packaged smoke + git-free GitHub install (GF-1, Linux)
         if: runner.os == 'Linux'
+        env:
+          PKG_SMOKE_GITHUB: "1"
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn packaged-smoke
