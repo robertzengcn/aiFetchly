@@ -1620,6 +1620,21 @@ export default {
       "Seleccione el modelo de embedding utilizado para la búsqueda vectorial y la coincidencia de similitud.",
     language_preference: "Idioma",
     "language-preference-description": "Preferencia de idioma de la interfaz.",
+    ui_font_scale: "Tamaño de fuente del diseño",
+    "ui-font-scale-description":
+      "Aumenta o reduce el tamaño del texto de menús, páginas y el resto de la interfaz.",
+    ui_font_scale_decrease: "Reducir la fuente del diseño",
+    ui_font_scale_increase: "Aumentar la fuente del diseño",
+    ui_font_scale_reset: "Restablecer",
+    ui_font_scale_smaller: "Más pequeño",
+    ui_font_scale_default: "Predeterminado",
+    ui_font_scale_larger: "Más grande",
+    ui_font_scale_large: "Grande",
+    ui_font_scale_largest: "El más grande",
+    ui_chat_font_size: "Tamaño de fuente del chat",
+    "ui-chat-font-size-description":
+      "Tamaño de fuente de los mensajes y del cuadro de mensaje, en píxeles (10–32).",
+    ui_chat_font_size_invalid: "Introduce un número entero del 10 al 32.",
     ai_website_analysis_business_info: "Información de Negocio",
     "ai-website-analysis-business-info-description":
       "Información comercial utilizada durante el análisis de IA del sitio web.",
@@ -2507,6 +2522,7 @@ export default {
     cancel: "Cancelar",
     queue: {
       queued: "En cola",
+      region: "Mensajes en cola",
       steering: "Redirigiendo…",
       applied: "Aplicado",
       dispatching: "Enviando…",
@@ -4239,6 +4255,7 @@ export default {
       verify_login: "Ya he iniciado sesión",
       extend: "Ampliar tiempo (10 min)",
       cancel_task: "Cancelar tarea",
+      close: "Cerrar",
       reasons: {
         login_required: "El sitio requiere iniciar sesión para continuar.",
         login_expired: "La sesión guardada ha caducado.",

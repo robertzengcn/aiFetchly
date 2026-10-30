@@ -41,7 +41,9 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { initializeSavedFontScale } from "@/views/utils/initializeFontScale";
 import { useRouter } from "vue-router";
+import { enqueueRoutePush } from "@/views/utils/enqueueRoutePush";
 import { useI18n } from "vue-i18n";
 import AppWorkspaceShell from "@/views/components/appShell/AppWorkspaceShell.vue";
 import AppCenterRouteHost from "@/views/components/appShell/AppCenterRouteHost.vue";
@@ -129,15 +131,13 @@ async function createChat(): Promise<string> {
 }
 
 /**
- * Route to the chat center unconditionally. During a pending lazy navigation
- * (e.g. Plugins was clicked and its chunk is still loading) the reactive
- * route still names the PREVIOUS route, so an "already there?" check would
- * skip the push and strand the user on the departing page (FR-SHELL-010).
- * vue-router resolves same-location pushes as a harmless duplicated
- * navigation failure instead of throwing.
+ * Route to the chat center unconditionally. A same-route push does not
+ * cancel an in-flight lazy navigation (Plugins' chunk can still be loading
+ * while the committed route is still chat), so the push is queued behind
+ * whatever the sidebar already started (FR-SHELL-010).
  */
 async function ensureChatRoute(): Promise<void> {
-  await router.push({ name: "AI_Chat_Workspace" });
+  await enqueueRoutePush(router, { name: "AI_Chat_Workspace" });
 }
 
 provide(CHAT_WORKSPACE_SELECTION_KEY, { openConversation, createChat });
@@ -162,7 +162,10 @@ function openAiChatFromDashboard(event: Event): void {
   const detail = (event as CustomEvent<{ prompt?: string }>).detail;
   const text = detail?.prompt?.trim();
   if (!text) return;
-  void router.push({ path: "/aiworkspace", query: { prompt: text } });
+  void enqueueRoutePush(router, {
+    path: "/aiworkspace",
+    query: { prompt: text },
+  });
 }
 
 function handleOpenFromNotify(raw: unknown): void {
@@ -193,6 +196,7 @@ function onRawSystemMessage(raw: unknown): void {
 }
 
 onMounted(() => {
+  void initializeSavedFontScale();
   emitShellDiagnostic({ type: "shell.mounted", duplicateCount: trackShellMounted().duplicates });
   window.addEventListener("aifetchly:open-ai-chat", openAiChatFromDashboard);
   getIpcTransport().receive(

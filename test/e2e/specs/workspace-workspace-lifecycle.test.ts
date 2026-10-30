@@ -55,9 +55,7 @@ async function pickFolderFromCard(
 }
 
 test.describe("workspace lifecycle through the default surface", () => {
-  test("choose, change, and remove a workspace updates the badge through each canonical flow (FR-WSP-002)", async ({
-    page: _page,
-  }, testInfo) => {
+  test("choose, change, and remove a workspace updates the badge through each canonical flow (FR-WSP-002)", async ({}, testInfo) => {
     test.setTimeout(210_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -137,9 +135,7 @@ test.describe("workspace lifecycle through the default surface", () => {
     }
   });
 
-  test("untrusted workspace instructions surface the trust card and trusting instructions dismisses it (TRS-03/07)", async ({
-    page: _page,
-  }, testInfo) => {
+  test("untrusted workspace instructions surface the trust card and trusting instructions dismisses it (TRS-03/07)", async ({}, testInfo) => {
     test.setTimeout(210_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -222,9 +218,7 @@ test.describe("workspace lifecycle through the default surface", () => {
     }
   });
 
-  test("selected-live navigation opens the email service page through the open_app_page tool result (FR-INT-003)", async ({
-    page: _page,
-  }, testInfo) => {
+  test("selected-live navigation opens the email service page through the open_app_page tool result (FR-INT-003)", async ({}, testInfo) => {
     test.setTimeout(210_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -291,9 +285,7 @@ test.describe("workspace lifecycle through the default surface", () => {
     }
   });
 
-  test("workspace-scoped slash suggestions register with the approved workspace and drop after removal (FR-SUB scope, Phase-14 D-TrustUX)", async ({
-    page: _page,
-  }, testInfo) => {
+  test("workspace-scoped slash suggestions register with the approved workspace and drop after removal (FR-SUB scope, Phase-14 D-TrustUX)", async ({}, testInfo) => {
     test.setTimeout(210_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -384,9 +376,7 @@ test.describe("workspace lifecycle through the default surface", () => {
       root.remove();
     }
   });
-  test("live watcher events refresh an open slash dropdown without keystrokes (Phase-14 D-04 watcher-status)", async ({
-    page: _page,
-  }, testInfo) => {
+  test("live watcher events refresh an open slash dropdown without keystrokes (Phase-14 D-04 watcher-status)", async ({}, testInfo) => {
     test.setTimeout(210_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -497,9 +487,7 @@ test.describe("workspace lifecycle through the default surface", () => {
       root.remove();
     }
   });
-  test("background agent tasks cancel EXACTLY the targeted task from the surface menu (FR-INT-004, T5/D7)", async ({
-    page: _page,
-  }, testInfo) => {
+  test("background agent tasks cancel EXACTLY the targeted task from the surface menu (FR-INT-004, T5/D7)", async ({}, testInfo) => {
     test.setTimeout(210_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -545,9 +533,12 @@ test.describe("workspace lifecycle through the default surface", () => {
           },
         ]);
 
-        const menu = page.getByTitle("Background Agents", { exact: true });
-        await expect(menu).toBeVisible({ timeout: 10_000 });
-        await menu.click();
+        // The task list opens from the conversation-header overflow menu.
+        // The old title-attribute activator button is gone.
+        await page.getByTestId("workspace-header-overflow").click();
+        const agents = page.getByTestId("workspace-overflow-agent-tasks");
+        await expect(agents).toBeVisible({ timeout: 10_000 });
+        await agents.click();
 
         // The list loads through the real agent-runtime channel: both rows are
         // rendered with their exact agent ids.

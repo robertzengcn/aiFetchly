@@ -232,6 +232,7 @@ import type { UserPlanType } from '@/entityTypes/userType'
 import { getAppName } from '@/views/api/app'
 import { packageAppName } from '@/config/appPackage'
 import { getLanguagePreference } from '@/views/api/language'
+import { initializeSavedFontScale } from '@/views/utils/initializeFontScale'
 import { initializeLanguageDetection } from '@/views/utils/browserLanguageDetection'
 import { initializeLanguageSynchronization, syncLanguageChange } from '@/views/utils/languageSynchronization'
 import { getIpcTransport } from '@/views/utils/ipcTransport'
@@ -685,6 +686,7 @@ onMounted(async () => {
     }
 
     await initializeSavedLanguage()
+    await initializeSavedFontScale()
 
     initializeLanguageDetection(async (selectedLanguage): Promise<void> => {
         console.log('User selected language:', selectedLanguage)

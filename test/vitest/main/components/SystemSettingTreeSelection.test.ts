@@ -43,6 +43,15 @@ const i18n = createI18n({
     en: {
       system_settings: {
         title: "System Settings",
+        ui_font_scale_decrease: "Decrease layout font size",
+        ui_font_scale_increase: "Increase layout font size",
+        ui_chat_font_size_invalid: "Enter a whole number from 10 to 32.",
+        ui_font_scale_reset: "Reset",
+        ui_font_scale_smaller: "Smaller",
+        ui_font_scale_default: "Default",
+        ui_font_scale_larger: "Larger",
+        ui_font_scale_large: "Large",
+        ui_font_scale_largest: "Largest",
       },
     },
   },
@@ -118,7 +127,15 @@ function mountPage() {
         VDivider: true,
         VBtn: { template: "<button><slot /></button>" },
         VIcon: true,
-        VTextField: true,
+        VTextField: {
+          name: "VTextField",
+          props: {
+            modelValue: { type: [String, Number], default: "" },
+          },
+          emits: ["update:modelValue", "blur"],
+          template:
+            "<input :value='modelValue' @input=\"$emit('update:modelValue', $event.target.value)\" @blur=\"$emit('blur', $event)\" />",
+        },
         VSelect: {
           name: "VSelect",
           props: ["items", "value", "variant", "density", "itemTitle", "itemValue", "loading"],
@@ -290,5 +307,192 @@ describe("SystemSettingPage language select", () => {
     );
     // The legacy defect emitted the whole option object into the save path.
     expect(vi.mocked(updateSystemSetting)).not.toHaveBeenCalled();
+  });
+});
+
+describe("SystemSettingPage font scale stepper", () => {
+  function fontScaleGroup(value: string): SystemSettingGroupDisplay[] {
+    return [
+      {
+        id: 5,
+        name: "user_preferences",
+        description: "user-preferences-group-description",
+        items: [
+          {
+            id: 51,
+            key: "ui_font_scale",
+            value,
+            description: "ui-font-scale-description",
+            type: "stepper",
+          },
+        ],
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    document.documentElement.style.fontSize = "";
+    document.documentElement.style.removeProperty("--app-font-scale");
+    vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("1"));
+    vi.mocked(updateSystemSetting).mockResolvedValue(true);
+  });
+
+  async function mountFontScale(): Promise<ReturnType<typeof mountPage>> {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as SystemSettingPageVm;
+    vm.activeGroups = ["group:5"];
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("saves the next larger step and applies it to the document", async () => {
+    const wrapper = await mountFontScale();
+
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Default"
+    );
+    await wrapper.get("[aria-label='Increase layout font size']").trigger("click");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(51, "1.125");
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Larger"
+    );
+    expect(document.documentElement.style.getPropertyValue("--app-font-scale")).toBe(
+      "1.125"
+    );
+    expect(document.documentElement.style.fontSize).toBe("18px");
+    expect(localStorage.getItem("aifetchly.ui_font_scale")).toBe("1.125");
+  });
+
+  it("does not save when decrease is already at the smallest step", async () => {
+    vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("0.875"));
+    const wrapper = await mountFontScale();
+
+    const decrease = wrapper.get("[aria-label='Decrease layout font size']");
+    expect(decrease.attributes("disabled")).toBeDefined();
+    await decrease.trigger("click");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).not.toHaveBeenCalled();
+    expect(localStorage.getItem("aifetchly.ui_font_scale")).toBeNull();
+  });
+
+  it("resets a larger size back to the default step", async () => {
+    vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("1.25"));
+    const wrapper = await mountFontScale();
+
+    await wrapper.get("[aria-label='Reset']").trigger("click");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(51, "1");
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Default"
+    );
+    expect(document.documentElement.style.fontSize).toBe("16px");
+  });
+
+  it("keeps the current size when the save fails", async () => {
+    vi.mocked(updateSystemSetting).mockRejectedValueOnce(new Error("save failed"));
+    const wrapper = await mountFontScale();
+
+    await wrapper.get("[aria-label='Increase layout font size']").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get("[data-testid='ui-font-scale-label']").text()).toBe(
+      "Default"
+    );
+    expect(localStorage.getItem("aifetchly.ui_font_scale")).toBeNull();
+  });
+});
+
+describe("SystemSettingPage chat font size", () => {
+  function chatFontGroup(value: string): SystemSettingGroupDisplay[] {
+    return [
+      {
+        id: 5,
+        name: "user_preferences",
+        description: "user-preferences-group-description",
+        items: [
+          {
+            id: 52,
+            key: "ui_chat_font_size",
+            value,
+            description: "ui-chat-font-size-description",
+            type: "number",
+          },
+        ],
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    document.documentElement.style.removeProperty("--app-chat-font-size");
+    vi.mocked(getSystemSettinglist).mockResolvedValue(chatFontGroup("14"));
+    vi.mocked(updateSystemSetting).mockResolvedValue(true);
+  });
+
+  async function mountChatFont(): Promise<ReturnType<typeof mountPage>> {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as SystemSettingPageVm;
+    vm.activeGroups = ["group:5"];
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("saves a typed pixel size and applies it to chat text", async () => {
+    const wrapper = await mountChatFont();
+    const input = wrapper.get("[data-testid='ui-chat-font-size-input']");
+
+    await input.setValue("18");
+    await input.trigger("blur");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).toHaveBeenCalledWith(52, "18");
+    expect(
+      document.documentElement.style.getPropertyValue("--app-chat-font-size")
+    ).toBe("18px");
+    expect(localStorage.getItem("aifetchly.ui_chat_font_size")).toBe("18");
+    expect(wrapper.find("[data-testid='ui-chat-font-size-error']").exists()).toBe(
+      false
+    );
+  });
+
+  it("rejects a size outside 10 to 32 and keeps the saved value", async () => {
+    const wrapper = await mountChatFont();
+    const input = wrapper.get("[data-testid='ui-chat-font-size-input']");
+
+    await input.setValue("40");
+    await input.trigger("blur");
+    await flushPromises();
+
+    expect(vi.mocked(updateSystemSetting)).not.toHaveBeenCalled();
+    expect(wrapper.get("[data-testid='ui-chat-font-size-error']").text()).toBe(
+      "Enter a whole number from 10 to 32."
+    );
+    expect((input.element as HTMLInputElement).value).toBe("14");
+    expect(localStorage.getItem("aifetchly.ui_chat_font_size")).toBeNull();
+  });
+
+  it("keeps the previous size when the save fails", async () => {
+    vi.mocked(updateSystemSetting).mockRejectedValueOnce(new Error("save failed"));
+    const wrapper = await mountChatFont();
+    const input = wrapper.get("[data-testid='ui-chat-font-size-input']");
+
+    await input.setValue("18");
+    await input.trigger("blur");
+    await flushPromises();
+
+    expect((input.element as HTMLInputElement).value).toBe("14");
+    expect(localStorage.getItem("aifetchly.ui_chat_font_size")).toBeNull();
+    expect(
+      document.documentElement.style.getPropertyValue("--app-chat-font-size")
+    ).toBe("");
   });
 });

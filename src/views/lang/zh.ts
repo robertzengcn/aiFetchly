@@ -1535,6 +1535,20 @@ export default {
       "选择用于向量搜索和相似度匹配的嵌入模型。",
     language_preference: "语言",
     "language-preference-description": "界面语言偏好。",
+    ui_font_scale: "界面字体大小",
+    "ui-font-scale-description": "增大或减小菜单、页面和其他界面文字的大小。",
+    ui_font_scale_decrease: "减小界面字体",
+    ui_font_scale_increase: "增大界面字体",
+    ui_font_scale_reset: "重置",
+    ui_font_scale_smaller: "较小",
+    ui_font_scale_default: "默认",
+    ui_font_scale_larger: "较大",
+    ui_font_scale_large: "大",
+    ui_font_scale_largest: "最大",
+    ui_chat_font_size: "聊天字体大小",
+    "ui-chat-font-size-description":
+      "聊天消息和输入框的字体大小，单位为像素（10–32）。",
+    ui_chat_font_size_invalid: "请输入 10 到 32 的整数。",
     ai_website_analysis_business_info: "业务信息",
     "ai-website-analysis-business-info-description":
       "网站AI分析中使用的业务信息。",
@@ -2384,6 +2398,7 @@ export default {
     cancel: "取消",
     queue: {
       queued: "已排队",
+      region: "排队中的消息",
       steering: "转向中…",
       applied: "已应用",
       dispatching: "发送中…",
@@ -3996,6 +4011,7 @@ export default {
       verify_login: "我已完成登录",
       extend: "延长时间（10 分钟）",
       cancel_task: "取消任务",
+      close: "关闭",
       reasons: {
         login_required: "站点要求登录后才能继续。",
         login_expired: "已保存的登录会话已过期。",

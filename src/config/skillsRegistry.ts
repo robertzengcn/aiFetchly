@@ -4920,16 +4920,21 @@ function managedBrowserToolEntries(): SkillDefinition[] {
     {
       name: "browser_start_session",
       description:
-        "Start the managed social browser for a logged-in social account (YouTube pilot). " +
-        "Opens a real visible Chrome window under an isolated profile with the account's saved " +
-        "login session applied. Returns a session_id used by every other browser_* tool. " +
+        "Open a website in the built-in managed browser, a real visible Chrome window. " +
+        "For ANY website, including social networks and sites requiring login, omit account_id by default: " +
+        "no saved AiFetchly account is required to open the browser. " +
+        "Only supply a real existing account_id when the user needs its saved login (YouTube pilot). " +
+        "Never refuse browser use because accounts are missing or the site needs login. " +
+        "Open the site first and hand control to the user for sign-in when needed. " +
+        "Never invent an account id. Preserve the requested hostname. " +
+        "Returns a session_id used by every other browser_* tool. " +
         "Requires the managed browser to be enabled in System Settings.",
       parameters: {
         type: "object",
         properties: {
           account_id: {
             type: "number",
-            description: "Social account id to open the browser for.",
+            description: "Optional existing social account id ONLY to reuse saved login. Omit for any website, including social sites, when no saved account is available.",
           },
           purpose: {
             type: "string",
@@ -4940,7 +4945,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             description: "Optional http(s) start URL.",
           },
         },
-        required: ["account_id", "purpose"],
+        required: ["purpose"],
       },
       tier: "main",
       requiresConfirmation: true,

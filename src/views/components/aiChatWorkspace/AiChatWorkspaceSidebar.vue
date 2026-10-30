@@ -253,6 +253,7 @@ import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspace
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import AccountMenu from "@/views/components/appShell/AccountMenu.vue";
 import { conversationStatusVisual } from "./workspaceStatusUtil";
+import { enqueueRoutePush } from "@/views/utils/enqueueRoutePush";
 
 const emit = defineEmits<{
   (e: "select", conversationId: string): void;
@@ -317,7 +318,7 @@ function groupAttentionCount(group: {
 }
 
 function goTo(path: string): void {
-  void router.push(path);
+  void enqueueRoutePush(router, path);
 }
 
 /**

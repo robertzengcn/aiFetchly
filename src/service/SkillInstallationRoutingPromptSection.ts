@@ -41,11 +41,17 @@ skill from a repository URL or local package:
 Use use_skill only to invoke an already installed prompt skill. It does not install, update, repair, or configure skill packages.`;
 }
 
-/** Compact capability-map reminder (design §8.5 shared source). */
+/**
+ * Compact capability-map reminder (design §8.5 shared source).
+ * Also prefixed onto the skill_install_prepare tool description.
+ *
+ * Keep this as its own string literal. Do not add a second export that
+ * aliases this binding (`export const OTHER = SKILL_INSTALL_COMPACT_REMINDER`).
+ * Rolldown 1.2.15 (Vite 8.2.4) panics in CJS code-splitting with
+ * "Symbol `…` is not in any chunk" for that unused alias, which fails both
+ * `yarn build:e2e` and the Electron Forge main-process build.
+ */
 export const SKILL_INSTALL_COMPACT_REMINDER =
   `Install/setup/register/update/repair a skill package: call ` +
   `${SKILL_INSTALL_TOOL_NAME} directly. It owns acquisition and activation. ` +
   `Do not use shell/file tools, do not search for Git first, and never pass secrets.`;
-
-/** Repeated in the ${SKILL_INSTALL_TOOL_NAME} tool description. */
-export const SKILL_INSTALL_TOOL_DESCRIPTION_REMINDER = SKILL_INSTALL_COMPACT_REMINDER;

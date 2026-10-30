@@ -38,7 +38,7 @@ const httpUrlSchema = z
 
 export const browserStartSessionToolSchema = lazySchema(() =>
   z.strictObject({
-    account_id: z.number().int().positive(),
+    account_id: z.number().int().positive().optional(),
     purpose: z.string().min(1).max(300),
     requested_start_url: z.string().url().max(2048).optional(),
   })

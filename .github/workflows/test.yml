@@ -155,6 +155,13 @@ jobs:
       - name: Run managed-copy activation suites (BLOCKING)
         # SkillActivationService (managed copy / link / rollback) plus the
         # SkillInstallationModule activation + rollback lifecycle suites.
+        # macos-latest's default V8 old-space is ~2 GB. tsc grows past that
+        # and SIGABRTs with an empty diagnostic list (Test Suite #116,
+        # heap 2040 MB) even though the Ubuntu `test` job typechecks this
+        # same tsconfig. 4096 lets the gate finish; the cap stays under the
+        # 7 GB runner so the Actions agent is not the OOM victim.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: yarn testmain run test/vitest/main/SkillActivationService.test.ts test/vitest/main/SkillInstallationModule.test.ts
 
   # ---------------------------------------------------------------------------
@@ -173,22 +180,38 @@ jobs:
         # pool; the pinned image runs a different runner pool (mirrors
         # the windows-2022 pin).
         os: [ubuntu-22.04, windows-2022, macos-latest]
+        # Per-OS limits live in the matrix. The job-level env block may NOT
+        # use the `runner` context (only github/inputs/matrix/needs/secrets/
+        # strategy/vars are allowed there), so the previous
+        # `runner.os == 'Linux' && ...` expressions broke workflow parsing
+        # (Test Suite #117). The `matrix` context IS allowed in job env.
+        include:
+          - os: ubuntu-22.04
+            node_options: --max-old-space-size=3072
+            guard_timeout_ms: "900000"
+          - os: windows-2022
+            node_options: --max-old-space-size=4096
+            guard_timeout_ms: "1800000"
+          - os: macos-latest
+            node_options: --max-old-space-size=4096
+            guard_timeout_ms: "1800000"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
       FORGE_DISABLE_ASAR: "1"
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      # ubuntu-latest (7 GB) evictions mid-prune: leave the kernel
-      # headroom to keep the runner agent alive — an in-process OOM
-      # surfaces a diagnosable error instead of an opaque shutdown.
-      NODE_OPTIONS: --max-old-space-size=4096
+      # Match ci.yml on Linux. Test Suite #116 set a 4096 MB heap on the
+      # job and the ubuntu-22.04 runner lost communication during packaging
+      # (no log blob). The same commit's CI package step, at 3072 for the
+      # whole job, finished in ~90s. Windows and macOS keep 4096.
+      NODE_OPTIONS: ${{ matrix.node_options }}
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
-      PKG_SMOKE_GITHUB: "1"
       # macOS packaging occasionally exceeds the guard's 15-minute default
-      # hard timeout (one eviction observed at ~15min with the run otherwise
-      # healthy); give the slower runners headroom.
-      PACKAGE_GUARD_HARD_TIMEOUT_MS: "1800000"
+      # hard timeout. Linux stays at 15 minutes, matching ci.yml, so a hang
+      # fails inside the guard instead of freezing the runner until the
+      # 40-minute step timeout.
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: ${{ matrix.guard_timeout_ms }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -218,40 +241,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsecret-1-dev xvfb
 
-      # Same disk + swap hardening the ci.yml package-smoke job needs:
-      # unpacked packaging duplicates node_modules into /tmp AND out/,
-      # which exhausts the 14 GB runner SSD and gets the job evicted
-      # ("runner has received a shutdown signal").
-      - name: Free up disk space (Linux)
-        if: runner.os == 'Linux'
+      - name: Use HTTPS for GitHub dependencies
         run: |
-          echo "Disk before cleanup:"; df -h /
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /opt/ghc || true
-          sudo rm -rf /usr/local/.ghcup || true
-          sudo rm -rf /usr/local/share/boost || true
-          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
-          sudo docker image prune --all --force || true
-          echo "Disk after cleanup:"; df -h /
-
-      - name: Add swap to absorb finalize memory spikes (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          set -euo pipefail
-          if swapon --show 2>/dev/null | grep -q swapfile; then
-            echo "/swapfile already active — skipping creation."
-          else
-            sudo fallocate -l 4G /swapfile
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile >/dev/null
-            sudo swapon /swapfile
-          fi
-          ACTIVE_KB=$(free -k | awk '/^Swap:/ {print $2}')
-          if [ -z "${ACTIVE_KB}" ] || [ "${ACTIVE_KB}" -eq 0 ]; then
-            echo "::error::Swap is not active after setup. Aborting so packaging doesn't OOM."
-            exit 1
-          fi
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
 
       - name: Install dependencies (Linux/macOS)
         if: runner.os != 'Windows'
@@ -268,24 +261,64 @@ jobs:
           node scripts/patch-remote-rebuild.js
           node scripts/rebuild-better-sqlite.js || echo "better-sqlite3 rebuild unavailable; smoke does not require it"
 
+      # Same disk + swap hardening the ci.yml package-smoke job needs.
+      # Run this AFTER yarn install, as ci.yml does: unpacked packaging
+      # duplicates node_modules into /tmp AND out/, and reclaiming the
+      # preinstalled toolchains only helps if that space is still free
+      # when the copy starts.
+      - name: Free up disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Disk before cleanup:"; df -h /
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo docker image prune --all --force || true
+          echo "Disk after cleanup:"; df -h /
+
+      # The runner image already mounts /swapfile (~3 GB). Reusing that path
+      # no-ops ("Text file busy") and the old "skip if swapfile exists" check
+      # reported success while leaving only that 3 GB — galactus finalize then
+      # OOM-kills the runner agent ("shutdown signal", Test Suite #115).
+      # Match ci.yml: a fresh /swapfile-ci, and fail unless total swap > 6 GB.
+      - name: Add swap to absorb finalize memory spikes (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          echo "Memory/swap before:"; free -h
+          sudo fallocate -l 4G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci >/dev/null
+          sudo swapon /swapfile-ci
+          echo "Memory/swap after:"; free -h
+          AFTER_SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+          if [ "$AFTER_SWAP_KB" -lt 6000000 ]; then
+            echo "::error::Swap was not increased (Swap total=${AFTER_SWAP_KB} kB < 6 GB). The finalize OOM mitigation is not active; aborting before packaging OOM-kills the runner."
+            exit 1
+          fi
+
       - name: Build package (unpacked)
         timeout-minutes: 40
-        # Ubuntu (7 GB) evictions mid-prune: the runner context is only
-        # available here — cap the heap on Linux so the kernel keeps
-        # headroom for the runner agent through the galactus prune spike.
-        env:
-          NODE_OPTIONS: "--max-old-space-size=${{ runner.os == 'Linux' && '3072' || '4096' }}"
-        run: yarn package:ci
+        run: |
+          echo "NODE_OPTIONS=${NODE_OPTIONS}"
+          yarn package:ci
 
       - name: Verify packaged workers and renderer HTML layout
         run: yarn verify-packaged-app
 
       - name: Packaged smoke + git-free GitHub install (GF-1)
-        run: yarn packaged-smoke
         # xvfb only exists/is needed on Linux.
         if: runner.os != 'Linux'
+        env:
+          PKG_SMOKE_GITHUB: "1"
+        run: yarn packaged-smoke
 
       - name: Packaged smoke + git-free GitHub install (GF-1, Linux)
         if: runner.os == 'Linux'
+        env:
+          PKG_SMOKE_GITHUB: "1"
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn packaged-smoke

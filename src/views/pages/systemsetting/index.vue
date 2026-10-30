@@ -165,6 +165,69 @@ v-for="(opt, idx) in setting.options || []" :key="idx" :label="opt.optionLabel"
                     />
                     <v-divider></v-divider>
                   </div>
+                  <div v-else-if="setting.type === 'stepper'" class="font-scale-control mt-2">
+                    <v-btn
+                      variant="outlined"
+                      density="comfortable"
+                      icon="mdi-minus"
+                      :aria-label="t('system_settings.ui_font_scale_decrease')"
+                      :disabled="isUiFontScaleAtMin(setting.value) || loadingSettings[setting.id] === true"
+                      @click="stepFontScale(setting, -1)"
+                    />
+                    <span
+                      class="font-scale-control__label"
+                      data-testid="ui-font-scale-label"
+                      aria-live="polite"
+                    >
+                      {{ t(uiFontScaleLabelKey(setting.value)) }}
+                    </span>
+                    <v-btn
+                      variant="outlined"
+                      density="comfortable"
+                      icon="mdi-plus"
+                      :aria-label="t('system_settings.ui_font_scale_increase')"
+                      :disabled="isUiFontScaleAtMax(setting.value) || loadingSettings[setting.id] === true"
+                      @click="stepFontScale(setting, 1)"
+                    />
+                    <v-btn
+                      variant="text"
+                      :aria-label="t('system_settings.ui_font_scale_reset')"
+                      :disabled="isUiFontScaleDefault(setting.value) || loadingSettings[setting.id] === true"
+                      @click="resetFontScale(setting)"
+                    >
+                      {{ t('system_settings.ui_font_scale_reset') }}
+                    </v-btn>
+                    <v-divider></v-divider>
+                  </div>
+
+                  <div v-else-if="setting.type === 'number'" class="chat-font-size-control mt-2">
+                    <v-text-field
+                      :model-value="chatFontDraft(setting)"
+                      type="number"
+                      variant="outlined"
+                      density="compact"
+                      :min="UI_CHAT_FONT_SIZE_MIN"
+                      :max="UI_CHAT_FONT_SIZE_MAX"
+                      step="1"
+                      suffix="px"
+                      hide-details
+                      :loading="loadingSettings[setting.id]"
+                      :data-testid="setting.key === ui_chat_font_size ? 'ui-chat-font-size-input' : undefined"
+                      class="chat-font-size-control__input"
+                      @update:model-value="setChatFontDraft(setting.id, $event)"
+                      @blur="commitChatFontSize(setting)"
+                      @keydown.enter.prevent="commitChatFontSize(setting)"
+                    />
+                    <p
+                      v-if="chatFontErrors[setting.id]"
+                      class="text-error text-caption"
+                      data-testid="ui-chat-font-size-error"
+                    >
+                      {{ chatFontErrors[setting.id] }}
+                    </p>
+                    <v-divider></v-divider>
+                  </div>
+
                   <div v-else-if="setting.type === 'toggle'">
                     <v-switch
                       :model-value="setting.value === '1'"
@@ -231,8 +294,23 @@ import { useRouter } from 'vue-router';
 import { SystemSettingDisplay, SystemSettingGroupDisplay } from "@/entityTypes/systemsettingType";
 import { getSystemSettinglist, updateSystemSetting, updateSystemSettingWithValidation } from "@/views/api/systemsetting";
 import { updateLanguagePreference } from '@/views/api/language';
-import { language_preference } from '@/config/settinggroupInit';
+import { language_preference, ui_chat_font_size, ui_font_scale } from '@/config/settinggroupInit';
 import { setLanguage } from '@/views/utils/cookies';
+import {
+  isUiFontScaleAtMax,
+  isUiFontScaleAtMin,
+  isUiFontScaleDefault,
+  normalizeUiChatFontSize,
+  normalizeUiFontScale,
+  parseUiChatFontSizeInput,
+  stepUiFontScale,
+  uiFontScaleLabelKey,
+  UI_CHAT_FONT_SIZE_MAX,
+  UI_CHAT_FONT_SIZE_MIN,
+  UI_FONT_SCALE_DEFAULT,
+  writeStoredUiChatFontSize,
+  writeStoredUiFontScale,
+} from '@/views/utils/fontScale';
 // i18n setup
 const { t, locale } = useI18n();
 const router = useRouter();
@@ -389,9 +467,28 @@ async function fetchSettings() {
 }
 
 // Updates a single setting
-async function updateSetting(settingId: number, newValue: string | boolean|null) {
+async function updateSetting(settingId: number, newValue: string | boolean|null): Promise<void> {
   // Convert boolean to string if needed
-  const valueToSave = typeof newValue === 'boolean' ? newValue.toString() : newValue;
+  let valueToSave = typeof newValue === 'boolean' ? newValue.toString() : newValue;
+  const settingForScale = settinglist.value.find(s => s.id === settingId);
+  if (settingForScale?.key === ui_font_scale) {
+    const normalized = normalizeUiFontScale(
+      typeof valueToSave === 'string' ? valueToSave : null
+    );
+    if (valueToSave !== normalized) {
+      return;
+    }
+    valueToSave = normalized;
+  }
+  if (settingForScale?.key === ui_chat_font_size) {
+    const parsed = parseUiChatFontSizeInput(
+      typeof valueToSave === 'string' ? valueToSave : null
+    );
+    if (parsed === null) {
+      return;
+    }
+    valueToSave = String(parsed);
+  }
   
   console.log(`Saving setting #${settingId} to:`, valueToSave);
   
@@ -417,6 +514,12 @@ async function updateSetting(settingId: number, newValue: string | boolean|null)
       if (setting.key === language_preference && typeof valueToSave === 'string') {
         console.log('Language preference changed, applying real-time switch:', valueToSave);
         await handleLanguageChange(valueToSave);
+      }
+      if (setting.key === ui_font_scale && typeof valueToSave === 'string') {
+        writeStoredUiFontScale(valueToSave);
+      }
+      if (setting.key === ui_chat_font_size && typeof valueToSave === 'string') {
+        writeStoredUiChatFontSize(valueToSave);
       }
     }
     
@@ -465,6 +568,89 @@ async function openFileDialog(settingId: number) {
   }
 }
 
+async function stepFontScale(
+  setting: SystemSettingDisplay,
+  direction: -1 | 1
+): Promise<void> {
+  if (direction === -1 && isUiFontScaleAtMin(setting.value)) {
+    return;
+  }
+  if (direction === 1 && isUiFontScaleAtMax(setting.value)) {
+    return;
+  }
+  const next = stepUiFontScale(setting.value, direction);
+  if (next === normalizeUiFontScale(setting.value)) {
+    return;
+  }
+  await updateSetting(setting.id, next);
+}
+
+async function resetFontScale(setting: SystemSettingDisplay): Promise<void> {
+  if (isUiFontScaleDefault(setting.value)) {
+    return;
+  }
+  await updateSetting(setting.id, UI_FONT_SCALE_DEFAULT);
+}
+
+const chatFontDrafts = ref<Record<number, string>>({});
+const chatFontErrors = ref<Record<number, string>>({});
+
+function chatFontDraft(setting: SystemSettingDisplay): string {
+  const draft = chatFontDrafts.value[setting.id];
+  if (draft !== undefined) {
+    return draft;
+  }
+  return setting.value ?? String(normalizeUiChatFontSize(setting.value));
+}
+
+function setChatFontDraft(
+  settingId: number,
+  value: string | number | null
+): void {
+  chatFontDrafts.value = {
+    ...chatFontDrafts.value,
+    [settingId]: value === null ? "" : String(value),
+  };
+  if (chatFontErrors.value[settingId]) {
+    const nextErrors = { ...chatFontErrors.value };
+    delete nextErrors[settingId];
+    chatFontErrors.value = nextErrors;
+  }
+}
+
+async function commitChatFontSize(setting: SystemSettingDisplay): Promise<void> {
+  const parsed = parseUiChatFontSizeInput(chatFontDraft(setting));
+  if (parsed === null) {
+    chatFontErrors.value = {
+      ...chatFontErrors.value,
+      [setting.id]: t("system_settings.ui_chat_font_size_invalid"),
+    };
+    chatFontDrafts.value = {
+      ...chatFontDrafts.value,
+      [setting.id]: String(normalizeUiChatFontSize(setting.value)),
+    };
+    return;
+  }
+  const nextErrors = { ...chatFontErrors.value };
+  delete nextErrors[setting.id];
+  chatFontErrors.value = nextErrors;
+  if (setting.value === String(parsed)) {
+    chatFontDrafts.value = {
+      ...chatFontDrafts.value,
+      [setting.id]: String(parsed),
+    };
+    return;
+  }
+  await updateSetting(setting.id, String(parsed));
+  const saved = setting.value === String(parsed);
+  chatFontDrafts.value = {
+    ...chatFontDrafts.value,
+    [setting.id]: saved
+      ? String(parsed)
+      : setting.value ?? String(normalizeUiChatFontSize(null)),
+  };
+}
+
 function navigateToMCP() {
   router.push({ name: 'system_setting_mcp' });
 }
@@ -508,5 +694,22 @@ onMounted(() => {
   background-color: var(--app-warning-soft);
   border-left: 3px solid var(--app-warning);
   font-weight: bold;
+}
+
+.font-scale-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.font-scale-control__label {
+  min-width: 7rem;
+  text-align: center;
+  font-weight: 500;
+}
+
+.chat-font-size-control__input {
+  max-width: 220px;
 }
 </style>

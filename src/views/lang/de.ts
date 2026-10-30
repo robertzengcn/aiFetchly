@@ -1614,6 +1614,21 @@ export default {
       "Wählen Sie das Einbettungsmodell für die Vektorsuche und Ähnlichkeitsermittlung.",
     language_preference: "Sprache",
     "language-preference-description": "UI-Spracheinstellung.",
+    ui_font_scale: "Schriftgröße des Layouts",
+    "ui-font-scale-description":
+      "Schriftgröße von Menüs, Seiten und der übrigen Oberfläche vergrößern oder verkleinern.",
+    ui_font_scale_decrease: "Layout-Schrift verkleinern",
+    ui_font_scale_increase: "Layout-Schrift vergrößern",
+    ui_font_scale_reset: "Zurücksetzen",
+    ui_font_scale_smaller: "Kleiner",
+    ui_font_scale_default: "Standard",
+    ui_font_scale_larger: "Größer",
+    ui_font_scale_large: "Groß",
+    ui_font_scale_largest: "Am größten",
+    ui_chat_font_size: "Schriftgröße im Chat",
+    "ui-chat-font-size-description":
+      "Schriftgröße für Chatnachrichten und das Eingabefeld, in Pixeln (10–32).",
+    ui_chat_font_size_invalid: "Geben Sie eine ganze Zahl von 10 bis 32 ein.",
     ai_website_analysis_business_info: "Geschäftsinformationen",
     "ai-website-analysis-business-info-description":
       "Geschäftsinformationen, die bei der KI-Analyse von Websites verwendet werden.",
@@ -2496,6 +2511,7 @@ export default {
     cancel: "Abbrechen",
     queue: {
       queued: "In Warteschlange",
+      region: "Nachrichten in der Warteschlange",
       steering: "Lenkung…",
       applied: "Angewendet",
       dispatching: "Wird gesendet…",
@@ -4240,6 +4256,7 @@ export default {
       verify_login: "Ich habe mich angemeldet",
       extend: "Zeit verlängern (10 Min.)",
       cancel_task: "Aufgabe abbrechen",
+      close: "Schließen",
       reasons: {
         login_required: "Die Seite erfordert eine Anmeldung, um fortzufahren.",
         login_expired: "Die gespeicherte Anmeldung ist abgelaufen.",

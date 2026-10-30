@@ -1589,6 +1589,21 @@ export default {
       "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
+    ui_font_scale: "画面の文字サイズ",
+    "ui-font-scale-description":
+      "メニュー、ページ、その他の画面の文字サイズを大きく、または小さくします。",
+    ui_font_scale_decrease: "画面の文字を小さくする",
+    ui_font_scale_increase: "画面の文字を大きくする",
+    ui_font_scale_reset: "リセット",
+    ui_font_scale_smaller: "小さめ",
+    ui_font_scale_default: "標準",
+    ui_font_scale_larger: "大きめ",
+    ui_font_scale_large: "大",
+    ui_font_scale_largest: "最大",
+    ui_chat_font_size: "チャットの文字サイズ",
+    "ui-chat-font-size-description":
+      "チャットのメッセージと入力欄の文字サイズ（ピクセル、10～32）。",
+    ui_chat_font_size_invalid: "10から32の整数を入力してください。",
     ai_website_analysis_business_info: "ビジネス情報",
     "ai-website-analysis-business-info-description":
       "ウェブサイトのAI分析で使用されるビジネス情報。",
@@ -2460,6 +2475,7 @@ export default {
     cancel: "キャンセル",
     queue: {
       queued: "待機中",
+      region: "待機中のメッセージ",
       steering: "方向転換中…",
       applied: "適用済み",
       dispatching: "送信中…",
@@ -4142,6 +4158,7 @@ export default {
       verify_login: "ログインしました",
       extend: "時間を延長（10分）",
       cancel_task: "タスクをキャンセル",
+      close: "閉じる",
       reasons: {
         login_required: "続行にはログインが必要です。",
         login_expired: "保存されたログインセッションの有効期限が切れました。",

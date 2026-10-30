@@ -669,8 +669,9 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
   }
 
   /**
-   * Read the settled `process_artifact_batch` result from persisted history
-   * (first conversation that carries one). Returns the durable tool_result.
+   * Read the newest settled `process_artifact_batch` result across
+   * conversations. Conversation list order is not chronological, and a
+   * retry turn appends a second tool_result; the latest timestamp wins.
    */
   async function readSettledBatchRecord(
     aiApp: LaunchedApp
@@ -691,6 +692,7 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
         JSON.stringify({})
       );
       const convs = (convResp?.data ?? []) as Array<{ conversationId: string }>;
+      let newest: { timestamp: string; toolResult: unknown } | null = null;
       for (const conv of convs) {
         const histResp = await api.invoke(
           "ai-chat-v2:history",
@@ -698,21 +700,29 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
         );
         const histData = (histResp?.data ?? {}) as {
           messages?: Array<{
+            timestamp?: string;
             messageType?: string;
             metadata?: { toolName?: string; toolResult?: unknown };
           }>;
         };
-        // The LAST batch tool_result in history — a retry turn adds a
-        // second record, and the newest one is the assertion target.
-        const batches = (histData.messages ?? []).filter(
-          (m) =>
-            m.messageType === "tool_result" &&
-            m.metadata?.toolName === "process_artifact_batch"
-        );
-        const batch = batches[batches.length - 1];
-        if (batch) return batch.metadata?.toolResult ?? null;
+        for (const message of histData.messages ?? []) {
+          if (
+            message.messageType !== "tool_result" ||
+            message.metadata?.toolName !== "process_artifact_batch"
+          ) {
+            continue;
+          }
+          const timestamp =
+            typeof message.timestamp === "string" ? message.timestamp : "";
+          if (!newest || timestamp >= newest.timestamp) {
+            newest = {
+              timestamp,
+              toolResult: message.metadata?.toolResult ?? null,
+            };
+          }
+        }
       }
-      return null;
+      return newest?.toolResult ?? null;
     })) as Record<string, unknown> | null;
   }
 
@@ -921,11 +931,13 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     const pc = aiApp.mainWindow.getByTestId("ai-chat-permission-card").first();
     await expect(pc).toBeVisible({ timeout: 30_000 });
     await drainBatchApprovals(aiApp);
-    // REAL settle gate (the composer never disables while a turn runs):
-    // the run strip's "Working…" pill disappears only at the turn terminal.
-    await expect(
-      aiApp.mainWindow.getByText("Working…")
-    ).toHaveCount(0, { timeout: 120_000 });
+    // The run-strip "Working…" label is unused. The settled batch card is
+    // the signal that the first turn's tool result is durable, so the
+    // request snapshot is not taken mid-batch.
+    await expect(root.locator(".v2-message__batch-summary").first())
+      .toContainText("partial", { timeout: 120_000 });
+    await expect(root.locator(".v2-message__batch-retry").first())
+      .toContainText("(1)");
     // Worker requests (image-edit provider calls) are identifiable by their
     // image_url parts (the isolated worker's packet). A full re-run would be
     // THREE new worker requests; a failed-only retry must be exactly ONE.
@@ -947,10 +959,19 @@ test.describe("Generated-image batch — live (Electron integration)", () => {
     // The retry runs on the TRUSTED confirmed-batch channel — no permission
     // card is expected; grant one only if the flow still raises it.
     await drainBatchApprovalsIfAny(aiApp);
-    // Settle gate: the retried turn's terminal (run strip clears).
-    await expect(
-      aiApp.mainWindow.getByText("Working…")
-    ).toHaveCount(0, { timeout: 120_000 });
+    // Wait until the retry turn persists its own 1-item aggregate. Reading
+    // history immediately still sees the original 4-item record.
+    await expect
+      .poll(
+        async () => {
+          const record = unwrapBatchRecord(
+            await readSettledBatchRecord(aiApp)
+          );
+          return record.requestedCount;
+        },
+        { timeout: 120_000 }
+      )
+      .toBe(1);
 
     const imageRequestsAfter = countImageRequests(await fakeAi.getRequests());
     expect(imageRequestsAfter - beforeRetry).toBe(1);

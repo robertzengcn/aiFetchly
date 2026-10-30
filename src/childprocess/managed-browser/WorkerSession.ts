@@ -30,7 +30,10 @@ import {
   matchesDomainSuffix,
   type CapturedBrowserCookie,
 } from "@/childprocess/managed-browser/cookieTransfer";
-import { ManagedBrowserRuntime } from "@/childprocess/managed-browser/ManagedBrowserRuntime";
+import {
+  assertCommandAllowed,
+  ManagedBrowserRuntime,
+} from "@/childprocess/managed-browser/ManagedBrowserRuntime";
 import {
   buildObservation,
   type ObservationPageLike,
@@ -42,6 +45,7 @@ import type {
 } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { BrowserActionExecutor } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/YouTubeBrowserAdapter";
+import { PublicBrowserAdapter } from "@/childprocess/managed-browser/adapters/PublicBrowserAdapter";
 import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
   redactSecrets,
@@ -169,7 +173,7 @@ export class WorkerSession {
   private readonly registry =
     new PageReferenceRegistry<ExecutorElementHandle>();
   private readonly executor = new BrowserActionExecutor();
-  private readonly adapter: PlatformBrowserAdapter =
+  private adapter: PlatformBrowserAdapter =
     new YouTubeBrowserAdapter();
 
   private browser: PuppeteerBrowserLike | null = null;
@@ -214,6 +218,7 @@ export class WorkerSession {
       return;
     }
     this.platformDefinition = payload.platform;
+    if (payload.platform.platformId === 0) this.adapter = new PublicBrowserAdapter();
     this.storagePolicy = payload.storagePolicy;
     this.executableVersion = payload.executable.version;
     try {
@@ -451,6 +456,7 @@ export class WorkerSession {
         page,
         registry: this.registry,
         navigation: {
+          publicBrowsing: this.platformDefinition?.platformId === 0,
           allowedOrigins: [
             ...this.adapter.allowedOrigins,
             ...this.adapter.loginOrigins,
@@ -645,11 +651,16 @@ export class WorkerSession {
     if (!page) {
       return;
     }
-    if (this.runtime.getState() !== "user_login_in_progress") {
+    const prior = this.runtime.getState();
+    const guard = assertCommandAllowed(prior, "VERIFY_MANUAL_LOGIN");
+    if (!guard.ok) {
       this.emitError(requestId, "action_not_allowed", "not in manual login");
       return;
     }
-    this.runtime.transition("verifying_manual_login");
+    if (!this.runtime.transition("verifying_manual_login")) {
+      this.emitError(requestId, "action_not_allowed", "not in manual login");
+      return;
+    }
     const assessment = await this.assess();
     if (assessment.state === "authenticated") {
       await this.captureAndSendRefreshedCookies(requestId);
@@ -663,12 +674,15 @@ export class WorkerSession {
       });
       return;
     }
-    // not_verified / challenge / unknown → user keeps control.
-    this.runtime.transition("user_login_in_progress");
+    // not_verified / challenge / unknown → user keeps control in the
+    // state they confirmed from (manual login or handoff).
+    const restore: ManagedBrowserSessionState =
+      prior === "handoff" ? "handoff" : "user_login_in_progress";
+    this.runtime.transition(restore);
     this.send({
       ...this.base(requestId),
       type: "SESSION_STATE_CHANGED",
-      state: "user_login_in_progress",
+      state: restore,
       reasonCode:
         assessment.state === "unauthenticated"
           ? "not_verified"
@@ -1007,6 +1021,7 @@ export class WorkerSession {
   private async captureAndSendRefreshedCookies(
     requestId: string
   ): Promise<void> {
+    if (this.platformDefinition?.platformId === 0) return;
     const browser = this.browser;
     const allowedSuffixes = this.platformDefinition?.allowedDomainSuffixes;
     if (!browser || !allowedSuffixes) {

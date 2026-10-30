@@ -212,9 +212,7 @@ async function disableEnableRoundTrip(
   ).toBeVisible({ timeout: 30_000 });
 }
 
-test("surface: portable banner boots enabled, enable round trip, create via panel editor, file record lands", async ({
-  page: _page,
-}, testInfo) => {
+test("surface: portable banner boots enabled, enable round trip, create via panel editor, file record lands", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -301,9 +299,7 @@ test("surface: portable banner boots enabled, enable round trip, create via pane
   }
 });
 
-test("surface: stale editor save after external edit conflicts, banner resolver accepts use-file then use-app", async ({
-  page: _page,
-}, testInfo) => {
+test("surface: stale editor save after external edit conflicts, banner resolver accepts use-file then use-app", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -488,9 +484,7 @@ test("surface: stale editor save after external edit conflicts, banner resolver 
   }
 });
 
-test("surface: RUN AUTO SUMMARY consolidates through the fake provider and applies a portable record", async ({
-  page: _page,
-}, testInfo) => {
+test("surface: RUN AUTO SUMMARY consolidates through the fake provider and applies a portable record", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");

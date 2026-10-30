@@ -185,6 +185,7 @@ import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenter
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useComposerDraftStore } from "@/views/store/composerDrafts";
+import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import {
@@ -577,6 +578,39 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       strip.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it("pins queued messages above the composer and outside the transcript", async () => {
+    const wrapper = mountSurface();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+    usePendingMessagesStore().upsert({
+      pendingMessageId: "pm-1",
+      conversationId: "conv-1",
+      clientRequestId: "cr-1",
+      sequence: 1,
+      content: "Queued follow-up",
+      status: "queued",
+      createdAt: "2026-10-30T00:00:00.000Z",
+      updatedAt: "2026-10-30T00:00:00.000Z",
+      canSteer: true,
+    });
+    await wrapper.vm.$nextTick();
+
+    const queued = wrapper.get('[data-testid="ai-chat-queued-messages"]').element;
+    const transcript = wrapper.get('[data-testid="transcript-stub"]').element;
+    const composer = wrapper.get('[data-testid="composer-stub"]').element;
+    expect(transcript.contains(queued)).toBe(false);
+    expect(
+      transcript.compareDocumentPosition(queued) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      queued.compareDocumentPosition(composer) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(queued.textContent).toContain("Queued follow-up");
+    wrapper.unmount();
   });
 
   it("shows the empty new-chat state when no conversation is selected", async () => {
@@ -5670,10 +5704,8 @@ describe("AiChatCenterSurface queued image sends survive steer and cancel (audit
     await acceptImageSend(wrapper);
 
     // The steer click hits the module guard (no claimation happens).
-    const transcript = wrapper.findComponent({
-      name: "AiChatWorkspaceTranscript",
-    });
-    transcript.vm.$emit("steer-pending", "p1");
+    const queued = wrapper.findComponent({ name: "AiChatV2QueuedMessages" });
+    queued.vm.$emit("steer", "p1");
     await flushPromises();
     expect(steerChatV2PendingMessage).toHaveBeenCalledWith(
       "conv-1",
