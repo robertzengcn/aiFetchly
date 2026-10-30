@@ -3,6 +3,7 @@ import { h } from "vue";
 import { createMemoryHistory, createRouter, type Router } from "vue-router";
 import {
   enqueueRoutePush,
+  enqueueRouteWork,
   resetRoutePushQueueForTests,
   type RoutePushTarget,
 } from "@/views/utils/enqueueRoutePush";
@@ -105,6 +106,31 @@ describe("enqueueRoutePush", () => {
     await router.isReady();
     await enqueueRoutePush(router, { name: "AI_Chat_Workspace" });
     await enqueueRoutePush(router, "/plugins/management");
+    expect(router.currentRoute.value.name).toBe("Plugins");
+  });
+
+  it("skips a queued follow-up once an earlier push has left that route", async () => {
+    let releaseHeld: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseHeld = resolve;
+    });
+    const router = chatAndPluginsRouter();
+    await router.push("/");
+    await router.isReady();
+
+    const pending = enqueueRouteWork(() => held);
+    await nextTurn();
+    const toPlugins = enqueueRoutePush(router, "/plugins/management");
+    let replacedBackToChat = false;
+    const followUp = enqueueRouteWork(async () => {
+      if (router.currentRoute.value.name !== "AI_Chat_Workspace") return;
+      replacedBackToChat = true;
+      await router.replace("/");
+    });
+
+    releaseHeld();
+    await Promise.all([pending, toPlugins, followUp]);
+    expect(replacedBackToChat).toBe(false);
     expect(router.currentRoute.value.name).toBe("Plugins");
   });
 

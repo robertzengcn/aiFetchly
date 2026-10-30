@@ -20,14 +20,15 @@ let tail: Promise<void> = Promise.resolve();
  * Plugins navigation. The user then lands on Plugins (FR-SHELL-010).
  * Queueing every shell push makes the later click run after the earlier
  * one settles, so the latest intent is the route that sticks.
+ *
+ * Page-owned follow-up work (a Plugins tab canonicalization, for example)
+ * must use the same queue. A raw `router.replace` started from `onMounted`
+ * resolves after New chat and pulls the center back to Plugins.
  */
-export function enqueueRoutePush(
-  router: RoutePushTarget,
-  location: RouteLocationRaw
-): Promise<void> {
+export function enqueueRouteWork(work: () => Promise<void>): Promise<void> {
   const run = tail.catch(() => undefined).then(async (): Promise<void> => {
     try {
-      await router.push(location);
+      await work();
     } catch (error: unknown) {
       if (!isNavigationFailure(error)) {
         throw error;
@@ -36,6 +37,15 @@ export function enqueueRoutePush(
   });
   tail = run;
   return run;
+}
+
+export function enqueueRoutePush(
+  router: RoutePushTarget,
+  location: RouteLocationRaw
+): Promise<void> {
+  return enqueueRouteWork(async () => {
+    await router.push(location);
+  });
 }
 
 /** Drop a leftover tail so unit tests do not share queue state. */
