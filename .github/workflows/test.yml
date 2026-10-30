@@ -180,6 +180,21 @@ jobs:
         # pool; the pinned image runs a different runner pool (mirrors
         # the windows-2022 pin).
         os: [ubuntu-22.04, windows-2022, macos-latest]
+        # Per-OS limits live in the matrix. The job-level env block may NOT
+        # use the `runner` context (only github/inputs/matrix/needs/secrets/
+        # strategy/vars are allowed there), so the previous
+        # `runner.os == 'Linux' && ...` expressions broke workflow parsing
+        # (Test Suite #117). The `matrix` context IS allowed in job env.
+        include:
+          - os: ubuntu-22.04
+            node_options: --max-old-space-size=3072
+            guard_timeout_ms: "900000"
+          - os: windows-2022
+            node_options: --max-old-space-size=4096
+            guard_timeout_ms: "1800000"
+          - os: macos-latest
+            node_options: --max-old-space-size=4096
+            guard_timeout_ms: "1800000"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -189,14 +204,14 @@ jobs:
       # job and the ubuntu-22.04 runner lost communication during packaging
       # (no log blob). The same commit's CI package step, at 3072 for the
       # whole job, finished in ~90s. Windows and macOS keep 4096.
-      NODE_OPTIONS: "${{ runner.os == 'Linux' && '--max-old-space-size=3072' || '--max-old-space-size=4096' }}"
+      NODE_OPTIONS: ${{ matrix.node_options }}
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
       # macOS packaging occasionally exceeds the guard's 15-minute default
       # hard timeout. Linux stays at 15 minutes, matching ci.yml, so a hang
       # fails inside the guard instead of freezing the runner until the
       # 40-minute step timeout.
-      PACKAGE_GUARD_HARD_TIMEOUT_MS: "${{ runner.os == 'Linux' && '900000' || '1800000' }}"
+      PACKAGE_GUARD_HARD_TIMEOUT_MS: ${{ matrix.guard_timeout_ms }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
