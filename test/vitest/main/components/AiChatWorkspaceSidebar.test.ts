@@ -393,14 +393,14 @@ describe("AiChatWorkspaceSidebar row actions (chat titles)", () => {
     await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
     await flushPromises();
     expect(
-      wrapper.find('[data-testid="workspace-conversation-menu-u1"]').exists()
+      wrapper.find('[data-testid="workspace-row-menu-u1"]').exists()
     ).toBe(true);
     expect(
-      wrapper.find('[data-testid="workspace-conversation-menu-g1"]').exists()
+      wrapper.find('[data-testid="workspace-row-menu-g1"]').exists()
     ).toBe(true);
     // The actions button must NOT join the data-nav-row roving-focus chain.
     const menuButton = wrapper.find(
-      '[data-testid="workspace-conversation-menu-u1"]'
+      '[data-testid="workspace-row-menu-u1"]'
     );
     expect(menuButton.attributes("data-nav-row")).toBeUndefined();
   });
@@ -414,7 +414,7 @@ describe("AiChatWorkspaceSidebar row actions (chat titles)", () => {
     await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
     await flushPromises();
     await wrapper
-      .find('[data-testid="workspace-conversation-rename-u2"]')
+      .find('[data-testid="workspace-row-rename-u2"]')
       .trigger("click");
     const renameEvents = wrapper.emitted("rename");
     expect(renameEvents).toEqual([["u2"]]);

@@ -61,81 +61,81 @@ async function renameFromHeader(
 }
 
 test.describe("AI chat automatic titles + manual renaming", () => {
-  test.afterEach(({ app, aiApp, disabledApp }) => {
-    const a = app ?? aiApp ?? disabledApp;
+  test.afterEach(({ app, titlesApp, disabledApp }) => {
+    const a = app ?? titlesApp ?? disabledApp;
     if (a) {
       assertCleanTeardown(a);
     }
   });
 
   test("a completed substantive exchange names the chat and the chat stays usable (AC-01)", async ({
-    aiApp,
+    titlesApp,
     fakeAi,
   }) => {
     await fakeAi.setScenario("stream-text");
     // The title request is a NON-streaming completion — queue its body.
     await fakeAi.queueNonStreamingContents([GENERATED_TITLE]);
-    await openChat(aiApp);
+    await openChat(titlesApp);
     await sendMessage(
-      aiApp,
+      titlesApp,
       "Can you find dentists in Sydney and prepare an outreach email?"
     );
     // The assistant answer renders before/while naming completes.
     await expect(
-      aiApp.mainWindow.getByTestId("workspace-transcript")
+      titlesApp.mainWindow.getByTestId("workspace-transcript")
     ).toContainText("world", { timeout: 30_000 });
     // The generated title lands on the header without a reload.
-    await expect(headerTitle(aiApp)).toHaveText(GENERATED_TITLE, {
+    await expect(headerTitle(titlesApp)).toHaveText(GENERATED_TITLE, {
       timeout: 30_000,
     });
     // The chat remains usable (send button actionable again).
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
+    await expect(titlesApp.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
       timeout: 30_000,
     });
   });
 
   test("a manual rename wins and survives later model activity (AC-09, AC-03)", async ({
-    aiApp,
+    titlesApp,
     fakeAi,
   }) => {
     await fakeAi.setScenario("stream-text");
     await fakeAi.queueNonStreamingContents([GENERATED_TITLE]);
-    await openChat(aiApp);
-    await sendMessage(aiApp, "Find dentists in Sydney please");
-    await expect(headerTitle(aiApp)).toHaveText(GENERATED_TITLE, {
+    await openChat(titlesApp);
+    await sendMessage(titlesApp, "Find dentists in Sydney please");
+    await expect(headerTitle(titlesApp)).toHaveText(GENERATED_TITLE, {
       timeout: 30_000,
     });
 
     // Manual rename through the shared dialog.
-    await renameFromHeader(aiApp, "Sydney Dentists — Q4");
-    await expect(headerTitle(aiApp)).toHaveText("Sydney Dentists — Q4", {
+    await renameFromHeader(titlesApp, "Sydney Dentists — Q4");
+    await expect(headerTitle(titlesApp)).toHaveText("Sydney Dentists — Q4", {
       timeout: 10_000,
     });
 
     // A later exchange must NOT overwrite the manual name (attempt already
     // consumed for this lifecycle; no second title dispatch either).
-    await sendMessage(aiApp, "Now draft the follow-up email");
+    await sendMessage(titlesApp, "Now draft the follow-up email");
     await expect(
-      aiApp.mainWindow.getByTestId("workspace-transcript")
+      titlesApp.mainWindow.getByTestId("workspace-transcript")
     ).toContainText("world", { timeout: 30_000 });
-    await headerTitle(aiApp).waitFor({ state: "visible" });
+    await headerTitle(titlesApp).waitFor({ state: "visible" });
     // Give any (incorrect) second title request a window to land.
-    await aiApp.mainWindow.waitForTimeout(2_000);
-    await expect(headerTitle(aiApp)).toHaveText("Sydney Dentists — Q4");
+    await titlesApp.mainWindow.waitForTimeout(2_000);
+    await expect(headerTitle(titlesApp)).toHaveText("Sydney Dentists — Q4");
   });
 
   test("rename dialog validates empty input and cancels cleanly (AC-08)", async ({
-    aiApp,
+    titlesApp,
   }) => {
-    await openChat(aiApp);
-    await sendMessage(aiApp, "hello there, quick question about imports");
+    await openChat(titlesApp);
+    await sendMessage(titlesApp, "hello there, quick question about imports");
     await expect(
-      aiApp.mainWindow.getByTestId("ai-chat-send")
+      titlesApp.mainWindow.getByTestId("ai-chat-send")
     ).toBeVisible({ timeout: 30_000 });
 
-    await aiApp.mainWindow.getByTestId("workspace-header-overflow").click();
-    await aiApp.mainWindow.getByTestId("workspace-overflow-rename").click();
-    const input = aiApp.mainWindow
+    await titlesApp.mainWindow.getByTestId("workspace-header-overflow").click();
+    await titlesApp.mainWindow.getByTestId("workspace-overflow-rename").click();
+    const input = titlesApp.mainWindow
       .getByTestId("rename-dialog-input")
       .locator("input");
     await expect(input).toBeVisible({ timeout: 10_000 });
@@ -143,18 +143,18 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     // Empty name: Save is disabled and an inline error appears.
     await input.fill("   ");
     await expect(
-      aiApp.mainWindow.getByTestId("rename-dialog-error")
+      titlesApp.mainWindow.getByTestId("rename-dialog-error")
     ).toBeVisible();
     expect(
-      await aiApp.mainWindow
+      await titlesApp.mainWindow
         .getByTestId("rename-dialog-save")
         .isDisabled()
     ).toBe(true);
 
     // Cancel closes without changing the title.
-    await aiApp.mainWindow.getByTestId("rename-dialog-cancel").click();
+    await titlesApp.mainWindow.getByTestId("rename-dialog-cancel").click();
     await expect(
-      aiApp.mainWindow.getByTestId("rename-dialog")
+      titlesApp.mainWindow.getByTestId("rename-dialog")
     ).toBeHidden();
   });
 

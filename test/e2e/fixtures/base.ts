@@ -31,6 +31,8 @@ export interface E2EFixtures {
   app: LaunchedApp;
   fakeAi: FakeOpenAiController;
   aiApp: LaunchedApp;
+  /** aiApp + seeded title model (chat-titles specs only; PRD FR-03). */
+  titlesApp: LaunchedApp;
   disabledApp: LaunchedApp;
   /** Authenticated launch with AI disabled — for shell/UI-only specs. */
   shellApp: LaunchedApp;
@@ -92,6 +94,25 @@ export const e2eTest = base.extend<E2EFixtures>({
       aiState: "local-enabled",
       fakeAiBaseUrl: fakeAi.providerBaseUrl,
       workspacePath: testRoot.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    await use(app);
+    await closeApp(app);
+  },
+
+  // Chat-titles E2E: identical to aiApp but opts into the seeded title
+  // model so automatic naming dispatches (other specs stay title-silent).
+  titlesApp: async ({ testRoot, fakeAi }, use) => {
+    await fakeAi.reset();
+    writeStateManifest(testRoot, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: testRoot.workspacePath,
+      chatTitles: true,
     });
     const app = await launchAiFetchly({
       testRoot,

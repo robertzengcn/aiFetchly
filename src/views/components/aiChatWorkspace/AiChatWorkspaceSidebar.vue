@@ -172,7 +172,7 @@
                   type="button"
                   class="row-menu-button"
                   v-bind="menuProps"
-                  :data-testid="`workspace-conversation-menu-${conversation.conversationId}`"
+                  :data-testid="`workspace-row-menu-${conversation.conversationId}`"
                   :aria-label="t('workspaceChat.renameDialog.menuButtonLabel') || 'Conversation actions'"
                   @click.stop
                 >
@@ -184,7 +184,7 @@
                   role="menuitem"
                   :title="t('workspaceChat.renameDialog.renameAction') || 'Rename chat'"
                   prepend-icon="mdi-pencil-outline"
-                  :data-testid="`workspace-conversation-rename-${conversation.conversationId}`"
+                  :data-testid="`workspace-row-rename-${conversation.conversationId}`"
                   @click="emit('rename', conversation.conversationId)"
                 />
               </v-list>
@@ -269,7 +269,7 @@
                   type="button"
                   class="row-menu-button"
                   v-bind="menuProps"
-                  :data-testid="`workspace-conversation-menu-${conversation.conversationId}`"
+                  :data-testid="`workspace-row-menu-${conversation.conversationId}`"
                   :aria-label="t('workspaceChat.renameDialog.menuButtonLabel') || 'Conversation actions'"
                   @click.stop
                 >
@@ -281,7 +281,7 @@
                   role="menuitem"
                   :title="t('workspaceChat.renameDialog.renameAction') || 'Rename chat'"
                   prepend-icon="mdi-pencil-outline"
-                  :data-testid="`workspace-conversation-rename-${conversation.conversationId}`"
+                  :data-testid="`workspace-row-rename-${conversation.conversationId}`"
                   @click="emit('rename', conversation.conversationId)"
                 />
               </v-list>
