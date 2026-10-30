@@ -113,8 +113,9 @@ watch(
       touched.value = false;
       void nextTick(() => {
         prefilling.value = false;
-        input.value?.focus();
-        input.value?.select?.();
+        const el = focusTarget();
+        el?.focus?.();
+        if (el instanceof HTMLInputElement) el.select?.();
       });
     }
   },
@@ -124,6 +125,14 @@ watch(
 watch(draft, () => {
   if (!prefilling.value) touched.value = true;
 });
+
+/** Resolve the focus target across real Vuetify components and test stubs. */
+function focusTarget(): HTMLElement | null {
+  const ref = input.value as unknown as { $el?: HTMLElement } | HTMLElement | null;
+  if (!ref) return null;
+  if (ref instanceof HTMLElement) return ref;
+  return ref.$el instanceof HTMLElement ? ref.$el : null;
+}
 
 const validation = computed(() => validateManualTitle(draft.value));
 
