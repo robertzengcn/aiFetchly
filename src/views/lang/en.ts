@@ -2532,6 +2532,7 @@ export default {
     cancel: "Cancel",
     queue: {
       queued: "Queued",
+      region: "Queued messages",
       steering: "Steering…",
       applied: "Applied",
       dispatching: "Sending…",

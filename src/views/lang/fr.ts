@@ -2503,6 +2503,7 @@ export default {
     cancel: "Annuler",
     queue: {
       queued: "En file d'attente",
+      region: "Messages en file d'attente",
       steering: "Réorientation…",
       applied: "Appliqué",
       dispatching: "Envoi…",

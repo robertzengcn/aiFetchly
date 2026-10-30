@@ -2398,6 +2398,7 @@ export default {
     cancel: "取消",
     queue: {
       queued: "已排队",
+      region: "排队中的消息",
       steering: "转向中…",
       applied: "已应用",
       dispatching: "发送中…",

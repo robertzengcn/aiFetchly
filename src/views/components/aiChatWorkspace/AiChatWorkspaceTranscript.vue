@@ -18,18 +18,6 @@
       data-testid="workspace-transcript"
       @scroll="onScroll"
     >
-      <!-- Queued (pending) rows: user bubbles in creation order, visually
-           distinct; they deliver later through the queue drain. -->
-      <AiChatV2PendingMessage
-        v-for="pending in pendingMessages"
-        :key="`pending-${pending.pendingMessageId}`"
-        :view="pending"
-        :runtime-status="pendingRuntimeStatus"
-        @steer="(id: string) => emit('steer-pending', id)"
-        @cancel="(id: string) => emit('cancel-pending', id)"
-        @resume="(id: string) => emit('resume-pending', id)"
-      />
-
       <template v-for="item in projectedItems" :key="item.key">
         <!-- User messages render normally. data-message-id anchors history
              navigation (FR-HIS-001 scroll-to-source). -->
@@ -179,12 +167,10 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
-  AIChatPendingMessageView,
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "@/views/components/aiChatV2/AiChatV2Message.vue";
-import AiChatV2PendingMessage from "@/views/components/aiChatV2/AiChatV2PendingMessage.vue";
 import AiChatV2StreamStatus from "@/views/components/aiChatV2/AiChatV2StreamStatus.vue";
 import AiChatExecutionGroup from "@/views/components/aiChatWorkspace/AiChatExecutionGroup.vue";
 import AiChatOutboundBatchReviewCard from "@/views/components/aiChatWorkspace/AiChatOutboundBatchReviewCard.vue";
@@ -227,8 +213,6 @@ const props = defineProps<{
   planDecisionInFlight?: boolean;
   /** FR-PLN-005: safe retry error for a decision that did not take effect. */
   planDecisionError?: string | null;
-  /** Queued rows from the durable pending-message queue (PRD §7). */
-  pendingMessages?: readonly AIChatPendingMessageView[];
   /**
    * FR-RPT-009: session-only reported output ids (parent-owned) so reportable
    * tiles stay visibly marked for the current renderer session.
@@ -264,9 +248,6 @@ const emit = defineEmits<{
     e: "edit-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
-  (e: "steer-pending", pendingMessageId: string): void;
-  (e: "cancel-pending", pendingMessageId: string): void;
-  (e: "resume-pending", conversationId: string): void;
   /** FR-RPT-001/002: per-output report action from a reportable tile. */
   (e: "report", descriptor: ReportableOutputDescriptor): void;
   /** FR-IMG-013: save one generated image to the trusted workspace. */
@@ -580,14 +561,6 @@ const projectedItems = computed<ProjectedItem[]>(() => {
 
   return result;
 });
-
-/**
- * Map the transcript stream status onto the pending bubble's runtime-status
- * contract (running/idle only — awaiting_* states arrive via the store).
- */
-const pendingRuntimeStatus = computed<"idle" | "running" | undefined>(() =>
-  props.streamStatus === "streaming" ? "running" : "idle"
-);
 
 function streamStatusForMessage(
   message: ChatV2MessageView

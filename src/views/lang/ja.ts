@@ -2475,6 +2475,7 @@ export default {
     cancel: "キャンセル",
     queue: {
       queued: "待機中",
+      region: "待機中のメッセージ",
       steering: "方向転換中…",
       applied: "適用済み",
       dispatching: "送信中…",

@@ -231,11 +231,6 @@
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
-        :pending-messages="activePendingMessages"
-        :runtime-status="authoritativeRuntimeStatus"
-        @steer-pending="onSteerPending"
-        @cancel-pending="onCancelPending"
-        @resume-pending="onResumePending"
         :reported-message-ids="reportedMessageIds"
         :awaiting-tool-message-ids="awaitingToolMessageIds"
         @grant-permission="handleSkillPermissionGrant"
@@ -427,6 +422,14 @@
         :selections="selectedContextItems"
         @remove="removeSelectedContext"
         @clear="clearSelectedContext"
+      />
+
+      <AiChatV2QueuedMessages
+        :pending-messages="activePendingMessages"
+        :runtime-status="authoritativeRuntimeStatus"
+        @steer="onSteerPending"
+        @cancel="onCancelPending"
+        @resume="onResumePending"
       />
 
       <AiChatV2Composer
@@ -795,6 +798,7 @@ import {
   onAifetchlyConfigChanged,
 } from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
+import AiChatV2QueuedMessages from "./AiChatV2QueuedMessages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";

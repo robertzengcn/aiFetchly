@@ -12,8 +12,8 @@ import {
 /**
  * Pending (queued) message rows for the chat-first shell (message-queue PRD
  * §7 rendered surface). The legacy dock kept these inside AiChatV2.vue's
- * per-conversation runtime map; the shell needs the same bubbles in its
- * transcript, so the durable queue's rows live in this app-scoped store:
+ * per-conversation runtime map; the shell pins the same bubbles above the
+ * composer, so the durable queue's rows live in this app-scoped store:
  * seeded per conversation via the list IPC and kept fresh by the lifecycle
  * event subscription (a refresh hint — the list IPC reconstructs truth).
  */

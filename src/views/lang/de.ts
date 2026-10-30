@@ -2511,6 +2511,7 @@ export default {
     cancel: "Abbrechen",
     queue: {
       queued: "In Warteschlange",
+      region: "Nachrichten in der Warteschlange",
       steering: "Lenkung…",
       applied: "Angewendet",
       dispatching: "Wird gesendet…",

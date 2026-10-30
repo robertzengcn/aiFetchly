@@ -105,12 +105,8 @@
         @reopen-artifact="workspaceStore.requestArtifactPreview($event)"
         @grant-permission="onGrantPermission"
         @deny-permission="onDenyPermission"
-        :pending-messages="pendingRows"
         @use-generated-image="onUseGeneratedImage"
         @edit-generated-image="onEditGeneratedImage"
-        @steer-pending="onSteerPending"
-        @cancel-pending="onCancelPending"
-        @resume-pending="onResumePending"
       />
       <button
         v-if="selectedStore.hasOlder && conversationId"
@@ -243,6 +239,16 @@
       :selections="selectedContextItems"
       @remove="removeSelectedContext"
       @clear="clearSelectedContext"
+    />
+
+    <!-- Queued follow-ups stay pinned above the input, outside the transcript. -->
+    <AiChatV2QueuedMessages
+      v-if="conversationId"
+      :pending-messages="pendingRows"
+      :runtime-status="pendingRuntimeStatus"
+      @steer="onSteerPending"
+      @cancel="onCancelPending"
+      @resume="onResumePending"
     />
 
     <!-- Composer with next-message controls BELOW the textarea (design §10):
@@ -609,6 +615,7 @@ import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChat
 import AiChatConversationHeader from "@/views/components/aiChatWorkspace/AiChatConversationHeader.vue";
 
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
+import AiChatV2QueuedMessages from "@/views/components/aiChatV2/AiChatV2QueuedMessages.vue";
 import AiChatV2ModeSelector from "@/views/components/aiChatV2/AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
 import AiChatV2ToolApprovalModeSelector from "@/views/components/aiChatV2/AiChatV2ToolApprovalModeSelector.vue";
@@ -707,6 +714,7 @@ import type {
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
   ChatV2Mode,
+  ChatV2RuntimeStatus,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
 import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/generatedImageReferenceView";
@@ -1157,6 +1165,11 @@ const generatedImageNotice = ref<string | null>(null);
 
 const pendingRows = computed(() =>
   pendingMessages.rowsFor(conversationId.value)
+);
+
+/** Steer is offered only while a turn is streaming (same contract as before). */
+const pendingRuntimeStatus = computed<ChatV2RuntimeStatus>(() =>
+  streamStatusForMessages.value === "streaming" ? "running" : "idle"
 );
 
 // --- Conversation reporting (capability-gated, non-AI-gated) ----------------
