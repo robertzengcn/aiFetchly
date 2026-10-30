@@ -23,8 +23,23 @@ export class ChatTitleLifecycle0005178848000000 implements MigrationInterface {
     return Number(rows?.[0]?.n ?? 0) > 0;
   }
 
+  private async hasTable(
+    queryRunner: QueryRunner,
+    table: string
+  ): Promise<boolean> {
+    const rows = await queryRunner.query(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = '${table}'`
+    );
+    return Number(rows?.[0]?.n ?? 0) > 0;
+  }
+
   public async up(queryRunner: QueryRunner): Promise<void> {
     const table = "ai_chat_conversations";
+    // The 0000 baseline predates this table (dev's SqliteDb creates it via
+    // synchronize) — ALTERing a missing table would fail the whole chain.
+    if (!(await this.hasTable(queryRunner, table))) {
+      return;
+    }
     const columns: Array<{ name: string; ddl: string }> = [
       { name: "titleSource", ddl: `varchar(16) NOT NULL DEFAULT 'legacy'` },
       { name: "titleRevision", ddl: `int NOT NULL DEFAULT 0` },

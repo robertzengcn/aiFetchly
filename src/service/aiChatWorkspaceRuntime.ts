@@ -9,7 +9,6 @@ import {
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
-import { AiChatApi } from "@/api/aiChatApi";
 import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
 import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 
@@ -145,7 +144,7 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
         }
         return { kind: "hosted" };
       },
-      completeTitle: (provider, request, signal) => {
+      completeTitle: async (provider, request, signal) => {
         if (provider.kind === "local") {
           // Pinned snapshot: this client can never re-read the current
           // global provider (titles design §8.3).
@@ -154,6 +153,7 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
             provider.apiKey
           ).complete(request, { signal });
         }
+        const { AiChatApi } = await import("@/api/aiChatApi");
         return new AiChatApi().openAIChatCompletion(request, { signal });
       },
       broadcastTitle: (event) => {
