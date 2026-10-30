@@ -327,6 +327,8 @@ describe("AIChatTitleService", () => {
     expect(request.max_tokens).toBe(64);
     expect(request.stream).toBe(false);
     expect(request.model).toBe("small");
+    // AC-06: 10 s deadline including response body consumption (hosted B13).
+    expect(request.callBudgetMs).toBe(10_000);
   });
 
   it("local mode sends the literal configured title model", async () => {
@@ -378,6 +380,40 @@ describe("AIChatTitleService", () => {
     h.service.cancelConversation("v2-cancel");
     await waitFor(() => h.moduleFake.failures.length >= 1);
     expect(h.moduleFake.failures).toEqual(["timeout"]);
+    expect(h.broadcasts).toHaveLength(0);
+  });
+
+  it("a provider change during the in-flight request discards the late result (FR-10)", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockImplementationOnce(async () => {
+      // Settings change while the title request is in flight.
+      h.providerVersion.value += 1;
+      return completionResponse("Late AI Title");
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-late",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.completeTitle).toHaveBeenCalledTimes(1);
+    expect(h.moduleFake.applies).toHaveLength(0);
+    expect(h.moduleFake.failures).toEqual(["provider_changed"]);
+    expect(h.broadcasts).toHaveLength(0);
+  });
+
+  it("disabling the feature during the in-flight request discards the late result (FR-08)", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockImplementationOnce(async () => {
+      h.enabled.value = false;
+      return completionResponse("Late AI Title");
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-late-off",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.moduleFake.applies).toHaveLength(0);
+    expect(h.moduleFake.failures).toEqual(["feature_disabled"]);
     expect(h.broadcasts).toHaveLength(0);
   });
 

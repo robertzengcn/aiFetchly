@@ -109,6 +109,17 @@ describe("chatWorkspace store title revision reconciliation", () => {
     expect(s.conversationsById.get("v2-e")?.titleRevision).toBe(4);
   });
 
+  it("a legacy unversioned summary title is accepted only while the stored title is empty", () => {
+    const s = store();
+    // First seen via event (no existing row): legacy title applies.
+    s.upsertLocalConversation(summary("v2-legacy", { title: "" }));
+    s.upsertLocalConversation(summary("v2-legacy", { title: "First Excerpt" }));
+    expect(s.conversationsById.get("v2-legacy")?.title).toBe("First Excerpt");
+    // Once non-empty, a later unversioned legacy title cannot replace it.
+    s.upsertLocalConversation(summary("v2-legacy", { title: "Older Stale Title" }));
+    expect(s.conversationsById.get("v2-legacy")?.title).toBe("First Excerpt");
+  });
+
   it("subscribes to title events before requesting bootstrap", async () => {
     const s = store();
     const { bootstrapWorkspace, subscribeTitleEvents } = await import(

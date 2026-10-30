@@ -256,7 +256,7 @@
                 class="row-indicator"
               />
               <span class="row-main">
-                <span class="row-title">
+                <span class="row-title" :title="conversation.title">
                   {{ conversation.title || (t('workspaceChat.newChat') || 'New chat') }}
                 </span>
                 <span class="row-preview">{{ conversation.preview }}</span>

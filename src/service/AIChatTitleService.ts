@@ -91,6 +91,11 @@ export interface AIChatTitleDiagnostics {
   droppedProviderUnavailable: number;
   droppedMissingModel: number;
   failedByCode: Record<string, number>;
+  /**
+   * §12: actual provider usage from the last successful response when the
+   * provider reported it (never fabricated; absent -> unknown).
+   */
+  lastProviderUsage: { promptTokens: number; completionTokens: number } | null;
 }
 
 interface QueueEntry {
@@ -112,6 +117,7 @@ function emptyDiagnostics(): AIChatTitleDiagnostics {
     droppedProviderUnavailable: 0,
     droppedMissingModel: 0,
     failedByCode: {},
+    lastProviderUsage: null,
   };
 }
 
@@ -177,7 +183,13 @@ export class AIChatTitleService {
   }
 
   getDiagnostics(): AIChatTitleDiagnostics {
-    return { ...this.diagnostics, failedByCode: { ...this.diagnostics.failedByCode } };
+    return {
+      ...this.diagnostics,
+      failedByCode: { ...this.diagnostics.failedByCode },
+      lastProviderUsage: this.diagnostics.lastProviderUsage
+        ? { ...this.diagnostics.lastProviderUsage }
+        : null,
+    };
   }
 
   resetForTesting(): void {
@@ -368,6 +380,18 @@ export class AIChatTitleService {
         this.recordFailure("invalid_output");
         return;
       }
+      // §12: capture actual provider usage when reported (never estimated).
+      const usage = response.usage;
+      if (
+        usage &&
+        typeof usage.prompt_tokens === "number" &&
+        typeof usage.completion_tokens === "number"
+      ) {
+        this.diagnostics.lastProviderUsage = {
+          promptTokens: usage.prompt_tokens,
+          completionTokens: usage.completion_tokens,
+        };
+      }
       const validated = validateGeneratedTitle(raw);
       if (!validated.ok) {
         await module.markTitleAttemptFailed({
@@ -386,6 +410,27 @@ export class AIChatTitleService {
           failureCode: "invalid_output",
         });
         this.recordFailure("invalid_output");
+        return;
+      }
+      // FR-10 / design §5.4: recheck the captured configuration version and
+      // enabled state BEFORE applying — a settings change or feature disable
+      // during the request discards the late result (excerpt retained).
+      if (this.deps.providerConfigVersion() !== versionAtPrepare) {
+        await module.markTitleAttemptFailed({
+          conversationId,
+          requestId,
+          failureCode: "provider_changed",
+        });
+        this.recordFailure("provider_changed");
+        return;
+      }
+      if (!this.isEnabled()) {
+        await module.markTitleAttemptFailed({
+          conversationId,
+          requestId,
+          failureCode: "feature_disabled",
+        });
+        this.recordFailure("feature_disabled");
         return;
       }
       const applied = await module.applyGeneratedTitle({

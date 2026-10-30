@@ -217,7 +217,7 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     const storedRevision = existing?.titleRevision ?? 0;
     const titleIsNewer =
       event.titleRevision === undefined
-        ? existing === undefined
+        ? existing === undefined || existing.title === ""
         : event.titleRevision >= storedRevision;
     const mergedTitle = event.title !== undefined && titleIsNewer;
     const updated: WorkspaceConversationSummary = {

@@ -93,10 +93,12 @@ const shell = useAppShellStore();
 
   function onSidebarRename(conversationId: string): void {
     const conversation = chatWorkspace.conversationsById.get(conversationId);
+    // §7.5: focus returns to the invoking control (the row's menu item) on
+    // dialog close — capture it while it is still the active element.
     sidebarRename.openRename(
       conversationId,
       conversation?.title ?? "",
-      null
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
     );
   }
 const innerPageShell = useInnerPageShellFlag();

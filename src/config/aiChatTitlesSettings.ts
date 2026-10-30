@@ -20,8 +20,23 @@ function flagOn(key: string, defaultOn: boolean): boolean {
   return raw !== "false" && raw !== "0";
 }
 
+/**
+ * Internal kill switch for staged enablement/rollback (PRD §11): the env
+ * var disables ALL automatic dispatch when explicitly false/0 (mirrors the
+ * small-model routing pattern). Absent/invalid -> enabled. Disabling
+ * preserves saved names and keeps manual rename fully functional.
+ */
+export const CHAT_TITLES_KILL_SWITCH_ENV = "AIFETCHLY_CHAT_TITLES_ENABLED";
+
+function envKillSwitchDisabled(): boolean {
+  const raw = process.env[CHAT_TITLES_KILL_SWITCH_ENV];
+  if (raw === undefined || raw === "") return false;
+  return raw === "false" || raw === "0";
+}
+
 /** True when automatic title generation may dispatch (default on). */
 export function isAutoChatTitlesEnabled(): boolean {
+  if (envKillSwitchDisabled()) return false;
   return flagOn(USER_AUTO_CHAT_TITLES_ENABLED, true);
 }
 
