@@ -394,6 +394,8 @@ The full product requirements, safety model, fingerprint policy, and rollout pla
 
 Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.com).
 
+Browser decision acceleration proposal (hosted Jev/Laya, custom providers, bounded browser tasks): [product requirements](docs/prd/browser-decision-acceleration-prd.md) and [technical design](docs/prd/browser-decision-acceleration-technical-design.md).
+
 LLM-controlled managed browser (visible Chrome sessions, browser tools, approvals, handoff, fingerprint policy, cache): [product requirements](docs/prd/puppeteer-managed-social-browser-prd.md).
 
 AI email forwarding, Trash, and organization proposal: [product requirements](docs/prd/ai-email-forward-trash-organization-prd.md) and [technical design](docs/prd/ai-email-forward-trash-organization-technical-design.md).
