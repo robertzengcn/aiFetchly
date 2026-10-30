@@ -4011,6 +4011,7 @@ export default {
       verify_login: "我已完成登录",
       extend: "延长时间（10 分钟）",
       cancel_task: "取消任务",
+      close: "关闭",
       reasons: {
         login_required: "站点要求登录后才能继续。",
         login_expired: "已保存的登录会话已过期。",

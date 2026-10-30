@@ -4256,6 +4256,7 @@ export default {
       verify_login: "Ich habe mich angemeldet",
       extend: "Zeit verlängern (10 Min.)",
       cancel_task: "Aufgabe abbrechen",
+      close: "Schließen",
       reasons: {
         login_required: "Die Seite erfordert eine Anmeldung, um fortzufahren.",
         login_expired: "Die gespeicherte Anmeldung ist abgelaufen.",

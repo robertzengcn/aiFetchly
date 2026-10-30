@@ -4255,6 +4255,7 @@ export default {
       verify_login: "Ya he iniciado sesión",
       extend: "Ampliar tiempo (10 min)",
       cancel_task: "Cancelar tarea",
+      close: "Cerrar",
       reasons: {
         login_required: "El sitio requiere iniciar sesión para continuar.",
         login_expired: "La sesión guardada ha caducado.",

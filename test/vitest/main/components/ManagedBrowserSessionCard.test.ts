@@ -79,6 +79,10 @@ const i18n = createI18n({
           ready: "Ready",
           handoff: "You have control",
           user_login_in_progress: "Waiting for your login",
+          running: "Running",
+          stopping: "Stopping",
+          stopped: "Stopped",
+          failed: "Failed",
         },
         controls: {
           take_over: "Take over",
@@ -122,7 +126,10 @@ function stubs(): Record<string, Component> {
     ManagedBrowserHandoffDialog: defineComponent({
       props: ["modelValue", "status", "busy"],
       emits: ["update:modelValue", "verify", "extend", "cancel"],
-      template: "<div data-testid='mb-handoff-dialog-stub' />",
+      template:
+        "<div data-testid='mb-handoff-dialog-stub' :data-open='String(modelValue)'>" +
+        "<button data-testid='mb-handoff-close-stub' @click=\"$emit('update:modelValue', false)\" />" +
+        "</div>",
     }),
   };
 }
@@ -221,6 +228,108 @@ describe("ManagedBrowserSessionCard", () => {
     expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
       false
     );
+  });
+
+  it("FR-P0-013: the handoff dialog auto-opens in handoff states", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    expect(dialog().exists()).toBe(false);
+
+    capturedStatusCallback()(status({ state: "handoff" }));
+    await nextTick();
+    expect(dialog().exists()).toBe(true);
+    expect(dialog().attributes("data-open")).toBe("true");
+  });
+
+  it("FR-HANDOFF-CLOSE: dismissing the dialog stays dismissed across status refreshes", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    const close = () =>
+      wrapper.find("[data-testid='mb-handoff-close-stub']");
+
+    push(status({ state: "handoff" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("true");
+
+    await close().trigger("click");
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // A handoff status refresh (e.g. countdown update) must NOT reopen it.
+    push(status({ state: "handoff" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+    // The card keeps all handoff controls while the dialog is dismissed.
+    expect(
+      wrapper.find("[data-testid='mb-btn-verify-login']").exists()
+    ).toBe(true);
+    expect(
+      wrapper.find("[data-testid='mb-btn-extend']").exists()
+    ).toBe(true);
+  });
+
+  it("FR-HANDOFF-CLOSE: leaving the handoff states re-arms auto-open", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    const close = () =>
+      wrapper.find("[data-testid='mb-handoff-close-stub']");
+
+    push(status({ state: "handoff" }));
+    await nextTick();
+    await close().trigger("click");
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // Back to running (AI resumed) — the dismiss resets silently.
+    push(status({ state: "running" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // A NEW handoff pops the dialog again (e.g. a later CAPTCHA wall).
+    push(status({ state: "handoff", handoffReason: "captcha_sensitive_flow" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("true");
+  });
+
+  it("FR-HANDOFF-CLOSE: a stopped session clears the dismiss for the next session", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    const close = () =>
+      wrapper.find("[data-testid='mb-handoff-close-stub']");
+
+    push(status({ state: "handoff", sessionId: "mb_older00000001" }));
+    await nextTick();
+    await close().trigger("click");
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    push(status({ state: "user_login_in_progress", sessionId: "mb_older00000001" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // The session now ends; a later NEW session must re-open the dialog.
+    push(status({ state: "stopped", sessionId: "mb_older00000001" }));
+    await nextTick();
+    expect(dialog().exists()).toBe(false);
+
+    push(status({ state: "handoff", sessionId: "mb_test000000002" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("true");
   });
 
   it("shows takeover + stop in ready state, handoff controls in handoff", async () => {

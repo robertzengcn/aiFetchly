@@ -4238,6 +4238,7 @@ export default {
       verify_login: "Je me suis connecté",
       extend: "Prolonger (10 min)",
       cancel_task: "Annuler la tâche",
+      close: "Fermer",
       reasons: {
         login_required: "Le site exige une connexion pour continuer.",
         login_expired: "La session enregistrée a expiré.",

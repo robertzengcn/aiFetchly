@@ -4235,6 +4235,7 @@ export default {
       verify_login: "I've finished logging in",
       extend: "Extend time (10 min)",
       cancel_task: "Cancel task",
+      close: "Close",
       reasons: {
         login_required: "The site requires a login to continue.",
         login_expired: "The saved login session has expired.",

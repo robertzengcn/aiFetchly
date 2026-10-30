@@ -4158,6 +4158,7 @@ export default {
       verify_login: "ログインしました",
       extend: "時間を延長（10分）",
       cancel_task: "タスクをキャンセル",
+      close: "閉じる",
       reasons: {
         login_required: "続行にはログインが必要です。",
         login_expired: "保存されたログインセッションの有効期限が切れました。",
