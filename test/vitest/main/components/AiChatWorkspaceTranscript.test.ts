@@ -1225,6 +1225,71 @@ describe("AiChatWorkspaceTranscript scroll-to-bottom button", () => {
       wrapper.find('[data-testid="scroll-to-bottom"]').exists()
     ).toBe(true);
   });
+
+  it("auto-scrolls to the bottom when an approval card appears so the user sees it", async () => {
+    const assistant = msg(MessageType.MESSAGE, {}, "assistant", "Reading the file.");
+    const wrapper = mountTranscript([assistant]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    // The user scrolled away from the bottom while the output streamed.
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+
+    // A gated tool result parks on the approval card (design §15.5).
+    await wrapper.setProps({
+      messages: [
+        assistant,
+        msg(MessageType.TOOL_RESULT, {
+          toolResult: {
+            needsPermissionPrompt: true,
+            permissionCategory: "filesystem",
+            success: true,
+          },
+        }),
+      ],
+    });
+    await flushPromises();
+
+    // The card is blocking and actionable at the very bottom of the
+    // transcript, so the chat jumps to it even though the user had scrolled
+    // away — and the affordance hides because we are back at the bottom.
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+    expect(
+      wrapper.findAll('[data-testid="ai-chat-permission-card"]').length
+    ).toBe(1);
+  });
+
+  it("jumps to the bottom on mount when loaded history already has a parked approval card", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "Working…"),
+      msg(MessageType.TOOL_RESULT, {
+        toolResult: {
+          needsPermissionPrompt: true,
+          permissionCategory: "filesystem",
+          success: true,
+        },
+      }),
+    ]);
+    // The stub lands after mount but BEFORE the component's nextTick settles,
+    // mirroring a real viewport that exists by the time the scroll is applied.
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    await flushPromises();
+
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
 });
 
 it.each([true, false])('shows the email reply review card outside tool groups (paired=%s)', async (paired) => {
