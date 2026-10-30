@@ -235,21 +235,24 @@ jobs:
           sudo docker image prune --all --force || true
           echo "Disk after cleanup:"; df -h /
 
+      # The runner image already mounts /swapfile (~3 GB). Reusing that path
+      # no-ops ("Text file busy") and the old "skip if swapfile exists" check
+      # reported success while leaving only that 3 GB — galactus finalize then
+      # OOM-kills the runner agent ("shutdown signal", Test Suite #115).
+      # Match ci.yml: a fresh /swapfile-ci, and fail unless total swap > 6 GB.
       - name: Add swap to absorb finalize memory spikes (Linux)
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          if swapon --show 2>/dev/null | grep -q swapfile; then
-            echo "/swapfile already active — skipping creation."
-          else
-            sudo fallocate -l 4G /swapfile
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile >/dev/null
-            sudo swapon /swapfile
-          fi
-          ACTIVE_KB=$(free -k | awk '/^Swap:/ {print $2}')
-          if [ -z "${ACTIVE_KB}" ] || [ "${ACTIVE_KB}" -eq 0 ]; then
-            echo "::error::Swap is not active after setup. Aborting so packaging doesn't OOM."
+          echo "Memory/swap before:"; free -h
+          sudo fallocate -l 4G /swapfile-ci
+          sudo chmod 600 /swapfile-ci
+          sudo mkswap /swapfile-ci >/dev/null
+          sudo swapon /swapfile-ci
+          echo "Memory/swap after:"; free -h
+          AFTER_SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+          if [ "$AFTER_SWAP_KB" -lt 6000000 ]; then
+            echo "::error::Swap was not increased (Swap total=${AFTER_SWAP_KB} kB < 6 GB). The finalize OOM mitigation is not active; aborting before packaging OOM-kills the runner."
             exit 1
           fi
 
