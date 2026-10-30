@@ -861,6 +861,42 @@ describe("ManagedBrowserModule.verifyManualLogin", () => {
       h.module.verifyManualLogin(status.sessionId)
     ).rejects.toMatchObject({ code: "action_not_allowed" });
   });
+
+  it("accepts I've-finished-login from a handoff session", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    await h.module.requestHandoff(started.sessionId);
+    expect(h.module.getStatus(started.sessionId)?.state).toBe("handoff");
+    const status = await h.module.verifyManualLogin(started.sessionId);
+    expect(status.state).toBe("ready");
+    expect(status.authenticated).toBe(true);
+    expect(noticeTypes(h.notices)).toEqual([
+      "login_verifying",
+      "login_verified",
+      "task_resuming",
+    ]);
+  });
+
+  it("keeps a handoff session in handoff when verification fails", async () => {
+    const h = makeHarness({
+      startScript: {
+        VERIFY_MANUAL_LOGIN: () =>
+          stateChangedReply("mb_handoffverify0001", "handoff", "not_verified"),
+      },
+    });
+    const started = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    await h.module.requestHandoff(started.sessionId);
+    const status = await h.module.verifyManualLogin(started.sessionId);
+    expect(status.state).toBe("handoff");
+    expect(noticeTypes(h.notices)).toContain("login_verification_failed");
+    expect(noticeTypes(h.notices)).not.toContain("task_resuming");
+  });
 });
 
 // ---------------------------------------------------------------------------

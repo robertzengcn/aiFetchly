@@ -30,7 +30,10 @@ import {
   matchesDomainSuffix,
   type CapturedBrowserCookie,
 } from "@/childprocess/managed-browser/cookieTransfer";
-import { ManagedBrowserRuntime } from "@/childprocess/managed-browser/ManagedBrowserRuntime";
+import {
+  assertCommandAllowed,
+  ManagedBrowserRuntime,
+} from "@/childprocess/managed-browser/ManagedBrowserRuntime";
 import {
   buildObservation,
   type ObservationPageLike,
@@ -648,11 +651,16 @@ export class WorkerSession {
     if (!page) {
       return;
     }
-    if (this.runtime.getState() !== "user_login_in_progress") {
+    const prior = this.runtime.getState();
+    const guard = assertCommandAllowed(prior, "VERIFY_MANUAL_LOGIN");
+    if (!guard.ok) {
       this.emitError(requestId, "action_not_allowed", "not in manual login");
       return;
     }
-    this.runtime.transition("verifying_manual_login");
+    if (!this.runtime.transition("verifying_manual_login")) {
+      this.emitError(requestId, "action_not_allowed", "not in manual login");
+      return;
+    }
     const assessment = await this.assess();
     if (assessment.state === "authenticated") {
       await this.captureAndSendRefreshedCookies(requestId);
@@ -666,12 +674,15 @@ export class WorkerSession {
       });
       return;
     }
-    // not_verified / challenge / unknown → user keeps control.
-    this.runtime.transition("user_login_in_progress");
+    // not_verified / challenge / unknown → user keeps control in the
+    // state they confirmed from (manual login or handoff).
+    const restore: ManagedBrowserSessionState =
+      prior === "handoff" ? "handoff" : "user_login_in_progress";
+    this.runtime.transition(restore);
     this.send({
       ...this.base(requestId),
       type: "SESSION_STATE_CHANGED",
-      state: "user_login_in_progress",
+      state: restore,
       reasonCode:
         assessment.state === "unauthenticated"
           ? "not_verified"

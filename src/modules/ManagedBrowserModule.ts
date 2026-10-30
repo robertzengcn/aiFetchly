@@ -1046,6 +1046,7 @@ export class ManagedBrowserModule {
   ): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
     this.guard(record, "VERIFY_MANUAL_LOGIN");
+    const priorState = record.state;
     this.publishNotice(record, "login_verifying", "verify-start", {
       accountLabel: record.accountLabel,
     });
@@ -1070,7 +1071,14 @@ export class ManagedBrowserModule {
       );
       this.publishNotice(record, "task_resuming", "verify-resume", {}, false);
     } else {
-      record.state = "user_login_in_progress";
+      const returned =
+        message.type === "SESSION_STATE_CHANGED" ? message.state : priorState;
+      record.state =
+        returned === "handoff" || returned === "user_login_in_progress"
+          ? returned
+          : priorState === "handoff"
+            ? "handoff"
+            : "user_login_in_progress";
       this.publishNotice(record, "login_verification_failed", "verify-done", {
         reasonCode:
           message.type === "SESSION_STATE_CHANGED"
