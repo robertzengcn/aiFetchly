@@ -20,6 +20,11 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
 import { _electron } from "playwright";
+import {
+  DEFAULT_MAX_INSTALL_ATTEMPTS,
+  isRecoverableGitHubRateLimit,
+  retryDelayMs,
+} from "./packagedSmokeRetryPolicy.js";
 
 /** The public fixture installed by the git-free phase (GF-1). */
 const SMOKE_FIXTURE_REPO =
@@ -96,7 +101,7 @@ async function gitFreeGitHubInstall(exe) {
   // the HTTPS archive flow.
   const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "aifetchly-nopath-"));
   let app;
-  const result = { ok: false, pluginRow: false, sawGit: false, errors: [] };
+  const result = { ok: false, pluginRow: false, sawGit: false, rateLimited: false, errors: [] };
   try {
     app = await _electron.launch({
       executablePath: exe,
@@ -131,6 +136,13 @@ async function gitFreeGitHubInstall(exe) {
       const installed =
         installResult && installResult.status === true && installResult.data;
       if (!installed || installed.success !== true) {
+        // Structured info for the retry policy: the rate-limit classification
+        // must NOT rely on re-parsing the stringified log line (it is sliced
+        // to 300 chars and may be truncated).
+        const pluginErrors = Array.isArray(installed?.errors)
+          ? installed.errors
+          : [];
+        result.rateLimited = isRecoverableGitHubRateLimit(pluginErrors);
         result.errors.push(
           "install failed: " + JSON.stringify(installed)?.slice(0, 300)
         );
@@ -170,6 +182,35 @@ async function gitFreeGitHubInstall(exe) {
     }
   }
   return result;
+}
+
+/**
+ * Run the GF-1 git-free GitHub install, retrying whole attempts when the
+ * packaged app reports a recoverable `github-rate-limited` failure
+ * (per-IP public quota exhaustion on shared CI runners — PRD FR-24 treats
+ * it as recoverable and §9.3 forbids adding auth tokens). Non-retriable
+ * failures keep the FIRST wrong answer so deterministic bugs stay loud.
+ */
+async function runGitFreeGitHubInstallWithRetries(exe) {
+  let last;
+  for (let attempt = 1; attempt <= DEFAULT_MAX_INSTALL_ATTEMPTS; attempt++) {
+    const gh = await gitFreeGitHubInstall(exe);
+    if (gh.ok && gh.pluginRow && !gh.sawGit) {
+      return gh;
+    }
+    last = gh;
+    if (!gh.rateLimited || attempt === DEFAULT_MAX_INSTALL_ATTEMPTS) {
+      break;
+    }
+    const delayMs = retryDelayMs(attempt - 1);
+    console.log(
+      `[packaged-smoke] git-free GitHub install attempt ${attempt}/` +
+        `${DEFAULT_MAX_INSTALL_ATTEMPTS}: github-rate-limited ` +
+        `(recoverable) — retrying whole install in ${Math.round(delayMs / 1000)}s`
+    );
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return last;
 }
 
 const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
@@ -338,7 +379,7 @@ async function main() {
     if (process.env.PKG_SMOKE_GITHUB === "1") {
       await app.close({ timeout: 15_000 });
       app = undefined;
-      const gh = await gitFreeGitHubInstall(exe);
+      const gh = await runGitFreeGitHubInstallWithRetries(exe);
       console.log(
         `[packaged-smoke] git-free GitHub install: ok=${gh.ok} ` +
           `pluginRow=${gh.pluginRow} sawGit=${gh.sawGit}` +
