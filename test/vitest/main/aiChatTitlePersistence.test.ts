@@ -468,6 +468,112 @@ describe("AIChatTitle persistence (message pairing input)", () => {
   });
 });
 
+describe("Titles audit B06/B08 — atomic clear ownership + serialized commit", () => {
+  it("B06: a manual rename committing between clear's read and write keeps the manual name", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-race6",
+      title: "excerpt",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Force the interleave INSIDE the real clear: its read returns the
+    // NONMANUAL row, a rename commits, then the ownership-conditional
+    // update runs.
+    const realModel = new AIChatConversationModel(tmpDir);
+    const originalRead = realModel.getByConversationId.bind(realModel);
+    let interleaveDone = false;
+    realModel.getByConversationId = async (id: string) => {
+      const row = await originalRead(id);
+      if (id === "v2-race6" && !interleaveDone && row && !row.titleIsUserSet) {
+        interleaveDone = true;
+        // Rename commits AFTER the clear's read (fresh instance avoids
+        // recursive patching).
+        await new AIChatConversationModel(tmpDir).renameWithOwnership(
+          id,
+          "Manual Winner"
+        );
+      }
+      return row;
+    };
+    await realModel.clearTitleLifecycleForHistoryClear("v2-race6");
+    const row = await model.getByConversationId("v2-race6");
+    // The manual name survives; the nonmanual reset matched zero rows.
+    expect(row?.title).toBe("Manual Winner");
+    expect(row?.titleIsUserSet).toBe(true);
+    expect(row?.titleSource).toBe("user");
+  });
+
+  it("B08: the policy gate blocks the guarded apply synchronously when settings changed", async () => {
+    await SqliteDb.ensureInitialized();
+    const { currentTitlePolicyEpoch, bumpTitlePolicyEpoch } = await import(
+      "@/service/aiChatTitle/AIChatTitlePolicyGate"
+    );
+    const model = new AIChatConversationModel(tmpDir);
+    await model.createProjection({
+      conversationId: "v2-gate",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await model.claimTitleAttempt({
+      conversationId: "v2-gate",
+      epoch: 0,
+      revision: 0,
+      requestId: "req-gate",
+    });
+    const epoch = currentTitlePolicyEpoch();
+    // Settings change between the service's capture and the guarded apply.
+    bumpTitlePolicyEpoch();
+    const blocked = await model.applyGeneratedTitle({
+      conversationId: "v2-gate",
+      epoch: 0,
+      revision: 0,
+      requestId: "req-gate",
+      title: "Should Not Land",
+      policyCheck: () => currentTitlePolicyEpoch() === epoch,
+    });
+    expect(blocked).toEqual({ outcome: "stale" });
+    const row = await model.getByConversationId("v2-gate");
+    expect(row?.title).not.toBe("Should Not Land");
+    expect(row?.titleGenerationStatus).toBe("running"); // claim untouched by the gate miss
+  });
+
+  it("B08: an unchanged gate lets the guarded raw-SQL apply commit", async () => {
+    await SqliteDb.ensureInitialized();
+    const { currentTitlePolicyEpoch } = await import(
+      "@/service/aiChatTitle/AIChatTitlePolicyGate"
+    );
+    const model = new AIChatConversationModel(tmpDir);
+    await model.createProjection({
+      conversationId: "v2-gate2",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await model.claimTitleAttempt({
+      conversationId: "v2-gate2",
+      epoch: 0,
+      revision: 0,
+      requestId: "req-gate2",
+    });
+    const epoch = currentTitlePolicyEpoch();
+    const applied = await model.applyGeneratedTitle({
+      conversationId: "v2-gate2",
+      epoch: 0,
+      revision: 0,
+      requestId: "req-gate2",
+      title: "Gate Allows This",
+      policyCheck: () => currentTitlePolicyEpoch() === epoch,
+    });
+    expect(applied).toEqual({
+      outcome: "applied",
+      title: "Gate Allows This",
+      revision: 1,
+    });
+  });
+});
+
 describe("Titles audit B01/B02 — safe typed text + trusted pairing", () => {
   async function seedTyped(
     messageModel: AIChatMessageModel,

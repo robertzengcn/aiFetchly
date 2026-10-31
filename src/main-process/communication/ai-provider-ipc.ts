@@ -24,6 +24,7 @@ import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompa
 import { validateLocalProviderConfig } from "@/service/aiProvider/AIProviderConfigValidator";
 import { setAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
 import { bumpProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
+import { bumpTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
@@ -77,11 +78,23 @@ export function registerAIProviderIpcHandlers(): void {
         const svc = service();
         const mode: AIProviderMode = req.mode;
 
+        // Titles B09: any settings change invalidates queued/in-flight
+        // naming work (source provider identity may no longer match).
+        try {
+          const { getSharedAIChatTitleService } = await import(
+            "@/service/aiChatWorkspaceRuntime"
+          );
+          getSharedAIChatTitleService().cancelAll();
+        } catch {
+          // Title cancellation is best-effort; the save itself proceeds.
+        }
+
         // Chat-titles FR-08: the auto-titles toggle rides the same save
         // path; changes invalidate in-flight title work via the config
         // version bump inside setAutoChatTitlesEnabled's caller below.
         if (typeof req.autoChatTitlesEnabled === "boolean") {
           setAutoChatTitlesEnabled(req.autoChatTitlesEnabled);
+          bumpTitlePolicyEpoch();
           bumpProviderConfigVersion();
         }
 

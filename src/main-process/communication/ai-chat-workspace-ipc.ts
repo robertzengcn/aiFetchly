@@ -714,6 +714,11 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid rename request");
       }
+      // Titles B09: a manual rename invalidates any live naming work for
+      // this conversation synchronously with the ownership write.
+      getSharedAIChatTitleService().cancelConversation(
+        parsed.data.conversationId
+      );
       const conversationModule = new AIChatConversationModule();
       // Chat-titles FR-06/§10.1: authoritative versioned metadata after an
       // atomic manual write. A missing row is a stable failure — the

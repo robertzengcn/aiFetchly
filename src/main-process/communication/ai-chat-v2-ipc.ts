@@ -88,6 +88,7 @@ import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import {
   getRunOwnerResumeRouter,
   getSharedAIChatTitleService,
+  resetSharedAIChatTitleService,
 } from "@/service/aiChatWorkspaceRuntime";
 import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
@@ -338,6 +339,9 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
+  // Titles B09/B23: drop the title singleton and its queued/in-flight work
+  // so a previous scope's excerpt can never reach the new scope's provider.
+  resetSharedAIChatTitleService();
   // Clear the shared lightweight route cooldowns so one account/provider
   // cannot suppress another (tech-design §12).
   resetLightweightRuntime();

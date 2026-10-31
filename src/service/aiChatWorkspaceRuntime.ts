@@ -164,10 +164,10 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
       },
       providerConfigVersion: () => currentProviderConfigVersion(),
       isForegroundBusy: () => {
-        // Queued foreground work means naming must yield. (A single
-        // already-dispatched run is not visible here; the 10 s deadline
-        // bounds that overlap.)
-        return getSharedExecutionScheduler().queueDepth() > 0;
+        // Titles B10: foreground priority must see DISPATCHED runs too —
+        // runs move out of the queue into the active map on dispatch.
+        const scheduler = getSharedExecutionScheduler();
+        return scheduler.queueDepth() > 0 || scheduler.activeCount() > 0;
       },
       requestIdFactory: () => crypto.randomUUID(),
     });
@@ -177,6 +177,6 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
 
 /** Test/DB-switch hook: drop the singleton (mirrors other runtime resets). */
 export function resetSharedAIChatTitleService(): void {
-  sharedTitleService?.resetForTesting();
+  sharedTitleService?.dispose();
   sharedTitleService = null;
 }

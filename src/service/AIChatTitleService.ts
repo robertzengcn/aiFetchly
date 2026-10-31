@@ -13,6 +13,7 @@ import { buildTitleMessages } from "@/service/aiChatTitle/AIChatTitlePrompt";
 import { validateGeneratedTitle } from "@/service/aiChatTitle/AIChatTitleValidator";
 import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
+import { currentTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
 
 /** Provider snapshot pinned for one dispatch (titles design §8.3). */
 export type ResolvedTitleProvider =
@@ -37,6 +38,7 @@ export interface AIChatTitleModuleSurface {
     revision: number;
     requestId: string;
     title: string;
+    policyCheck?: () => boolean;
   }): Promise<
     | { outcome: "applied"; title: string; revision: number }
     | { outcome: "stale" }
@@ -146,6 +148,7 @@ function extractAssistantText(
  */
 export class AIChatTitleService {
   private readonly queue = new Map<string, QueueEntry>();
+  private disposed = false;
   private running = false;
   private pumpScheduled = false;
   private activeAbort: AbortController | null = null;
@@ -163,7 +166,7 @@ export class AIChatTitleService {
     assistantMessageId: string | null;
   }): void {
     const conversationId = input.conversationId;
-    if (conversationId.length === 0) return;
+    if (conversationId.length === 0 || this.disposed) return;
     this.diagnostics.candidates += 1;
     if (this.queue.has(conversationId)) return; // AC-03 dedupe
     if (this.queue.size >= QUEUE_CAPACITY) {
@@ -187,6 +190,15 @@ export class AIChatTitleService {
     if (this.activeConversationId === conversationId) {
       this.activeAbort?.abort();
     }
+  }
+
+  /**
+   * B09: shutdown seal — drops queued work, aborts in-flight dispatch, and
+   * rejects future notifications (scope change / app shutdown).
+   */
+  dispose(): void {
+    this.disposed = true;
+    this.cancelAll();
   }
 
   /** Drop all queued work (feature disable / provider change best effort). */
@@ -467,11 +479,15 @@ export class AIChatTitleService {
         this.recordFailure("feature_disabled");
         return;
       }
+      // B08: capture the policy gate synchronously; the model re-checks it
+      // in the same synchronous block as the conditional UPDATE.
+      const epochAtCheck = currentTitlePolicyEpoch();
       const applied = await module.applyGeneratedTitle({
         conversationId,
         epoch: candidate.epoch,
         revision: candidate.revision,
         requestId,
+        policyCheck: () => currentTitlePolicyEpoch() === epochAtCheck,
         title: validated.title,
       });
       if (applied.outcome === "applied") {

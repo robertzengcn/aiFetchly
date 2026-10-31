@@ -16,6 +16,7 @@ import { AIProviderSecretService } from "./AIProviderSecretService";
 import { validateLocalProviderConfig } from "./AIProviderConfigValidator";
 import { bumpProviderConfigVersion } from "./AIProviderConfigVersion";
 import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
+import { bumpTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
 
 /**
  * Main-process service that owns provider settings persistence and the
@@ -44,6 +45,7 @@ export class AIProviderSettingsService {
   }
 
   setMode(mode: AIProviderMode): void {
+    bumpTitlePolicyEpoch();
     this.token.setValue(USER_AI_PROVIDER_MODE, mode);
     // N05: mode switches change provider identity — version capability caches.
     bumpProviderConfigVersion();
@@ -118,6 +120,8 @@ export class AIProviderSettingsService {
    * @throws Error whose message joins all validation errors.
    */
   saveLocalProvider(input: LocalAIProviderConfigInput): LocalAIProviderConfig {
+    // Titles B08: serialize with an in-flight generated-title commit.
+    bumpTitlePolicyEpoch();
     const result = validateLocalProviderConfig(input, this.secrets.hasApiKey());
     if (!result.valid || !result.normalized) {
       throw new Error(result.errors.join("; "));
@@ -188,6 +192,7 @@ export class AIProviderSettingsService {
    * availability. Provider mode itself is left to the caller (Save handler).
    */
   clearLocalProvider(): void {
+    bumpTitlePolicyEpoch();
     this.token.deleteValue(USER_LOCAL_AI_PROVIDER_CONFIG);
     this.secrets.clearApiKey();
     this.token.setValue(USER_LOCAL_AI_ENABLED, "false");
@@ -197,6 +202,7 @@ export class AIProviderSettingsService {
 
   /** Delete only the API key (config retained). */
   clearApiKey(): void {
+    bumpTitlePolicyEpoch();
     this.secrets.clearApiKey();
     // N05: credentials changed — version caches.
     bumpProviderConfigVersion();

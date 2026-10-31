@@ -270,12 +270,62 @@ export class AIChatConversationModel extends BaseDb {
     revision: number;
     requestId: string;
     title: string;
+    /**
+     * B08: synchronous policy gate checked in the SAME event-loop turn as
+     * the conditional UPDATE (raw better-sqlite3 — no awaits between the
+     * check and the write). Returning false yields `stale` without writing.
+     */
+    policyCheck?: () => boolean;
   }): Promise<
     | { outcome: "applied"; title: string; revision: number }
     | { outcome: "stale" }
     | { outcome: "missing" }
   > {
     this.assertMainProcess();
+    if (input.policyCheck) {
+      // Synchronous check + synchronous conditional UPDATE: serialized with
+      // any settings mutation (which bumps the gate before its own awaits).
+      if (!input.policyCheck()) return { outcome: "stale" };
+      const driver = this.sqliteDb.connection.driver as unknown as {
+        databaseConnection?: {
+          prepare: (sql: string) => {
+            run: (params: unknown[]) => { changes: number };
+          };
+        };
+      };
+      const raw = driver.databaseConnection;
+      if (raw) {
+        const changes = raw
+          .prepare(
+            `UPDATE ai_chat_conversations
+             SET title = ?, titleSource = 'ai', titleGenerationStatus = 'succeeded',
+                 titleFailureCode = NULL, titleRevision = titleRevision + 1,
+                 updatedAt = CURRENT_TIMESTAMP
+             WHERE conversationId = ? AND titleEpoch = ? AND titleRevision = ?
+               AND titleRequestId = ? AND titleGenerationStatus = 'running'
+               AND titleIsUserSet = 0`
+          )
+          .run([
+            input.title.slice(0, CONVERSATION_TITLE_MAX_LENGTH),
+            input.conversationId,
+            input.epoch,
+            input.revision,
+            input.requestId,
+          ]).changes;
+        if (changes !== 1) {
+          const row = await this.getByConversationId(input.conversationId);
+          return row ? { outcome: "stale" } : { outcome: "missing" };
+        }
+        const row = await this.getByConversationId(input.conversationId);
+        return {
+          outcome: "applied",
+          title: row?.title ?? input.title,
+          revision: row?.titleRevision ?? input.revision + 1,
+        };
+      }
+      // No raw handle (unexpected driver shape): fall through to the
+      // query-builder path below, still guarded by the check above.
+    }
     const result = await this.repository
       .createQueryBuilder()
       .update()
@@ -388,6 +438,10 @@ export class AIChatConversationModel extends BaseDb {
     this.assertMainProcess();
     const existing = await this.getByConversationId(conversationId);
     if (!existing) return;
+    // B06: each branch is ownership-conditional IN THE UPDATE. A manual
+    // rename committing between the read and this write can never lose the
+    // name to the nonmanual reset (and vice versa) — the mismatched branch
+    // simply matches zero rows.
     if (existing.titleIsUserSet) {
       await this.repository
         .createQueryBuilder()
@@ -400,7 +454,10 @@ export class AIChatConversationModel extends BaseDb {
           titleFailureCode: null,
           updatedAt: new Date(),
         })
-        .where("conversationId = :conversationId", { conversationId })
+        .where(
+          "conversationId = :conversationId AND titleIsUserSet = 1",
+          { conversationId }
+        )
         .execute();
       return;
     }
@@ -418,7 +475,10 @@ export class AIChatConversationModel extends BaseDb {
         titleFailureCode: null,
         updatedAt: new Date(),
       })
-      .where("conversationId = :conversationId", { conversationId })
+      .where(
+        "conversationId = :conversationId AND titleIsUserSet = 0",
+        { conversationId }
+      )
       .execute();
   }
 

@@ -383,6 +383,27 @@ describe("AIChatTitleService", () => {
     expect(h.broadcasts).toHaveLength(0);
   });
 
+  it("B10: the production foreground-busy source counts ACTIVE dispatches, not just queue depth", async () => {
+    const { AIChatExecutionScheduler } = await import(
+      "@/service/AIChatExecutionScheduler"
+    );
+    const scheduler = new AIChatExecutionScheduler({ generalCapacity: 4 });
+    scheduler.submit({
+      runId: "run-active",
+      conversationId: "v2-fg",
+      owner: "interactive",
+    });
+    scheduler.pump(() => undefined); // dispatch — moves OUT of the queue
+    // Audit B10 reproduction: dispatched run with an empty queue.
+    expect(scheduler.queueDepth()).toBe(0);
+    expect(scheduler.activeCount()).toBe(1);
+    // The runtime's busy expression must now see it.
+    const busy = scheduler.queueDepth() > 0 || scheduler.activeCount() > 0;
+    expect(busy).toBe(true);
+    scheduler.complete("run-active");
+    expect(scheduler.activeCount()).toBe(0);
+  });
+
   it("B03: a provider change between notification and pump discards the job before any work", async () => {
     const h = makeHarness();
     h.service.notifyInteractiveTurnCompleted({
