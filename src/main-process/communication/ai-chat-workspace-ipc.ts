@@ -730,6 +730,9 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (result.outcome === "missing") {
         return denied("conversation_not_found");
       }
+      if (result.outcome === "invalid") {
+        return denied("invalid_title");
+      }
       // Persist before publishing (invariant 4): the title event carries the
       // committed revision so every renderer converges to it.
       eventRouter.broadcastTitleUpdate({

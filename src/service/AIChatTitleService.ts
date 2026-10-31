@@ -130,6 +130,21 @@ function emptyDiagnostics(): AIChatTitleDiagnostics {
   };
 }
 
+/** B13: finish reasons other than a clean stop are not eligible output. */
+function raw_envelopeInvalid(
+  finishReason: string | null | undefined,
+  hasToolCalls: boolean,
+  refusal: string | null
+): boolean {
+  if (finishReason !== undefined && finishReason !== null && finishReason !== "stop") {
+    return true;
+  }
+  if (finishReason === undefined || finishReason === null) {
+    return true; // malformed envelope: no terminal marker at all
+  }
+  return hasToolCalls || (refusal !== null && refusal.length > 0);
+}
+
 function extractAssistantText(
   response: OpenAIChatCompletionResponse
 ): string | null {
@@ -330,6 +345,16 @@ export class AIChatTitleService {
     if (preparationAbort.signal.aborted) return; // B09: cancelled during preparation
     if (candidate.kind !== "eligible") return; // pending_window/not_ready/suppressed
     this.diagnostics.eligible += 1; // B24
+    // B15: publish the committed excerpt replacement (revisioned) — windows
+    // holding the greeting excerpt converge without waiting for bootstrap.
+    if (candidate.excerptRefreshed && candidate.visibleTitle !== null) {
+      this.deps.broadcastTitle({
+        conversationId,
+        title: candidate.visibleTitle,
+        titleRevision: candidate.revision,
+        titleSource: "excerpt",
+      });
+    }
 
     const provider = this.deps.resolveTitleProvider();
     if (!provider) {
@@ -416,7 +441,26 @@ export class AIChatTitleService {
         request,
         controller.signal
       );
-      const raw = extractAssistantText(response);
+      // B13: require an eligible final-text completion envelope. Truncated
+      // (finish_reason=length), content-filtered, tool-call, refusal, or
+      // malformed responses never reach persistence.
+      const choice = response.choices?.[0];
+      const finishReason = choice?.finish_reason;
+      const hasToolCalls = (choice?.message?.tool_calls?.length ?? 0) > 0;
+      const refusal =
+        choice?.message?.refusal ?? null;
+      const envelopeInvalid =
+        raw_envelopeInvalid(finishReason, hasToolCalls, refusal);
+      const raw = envelopeInvalid ? null : extractAssistantText(response);
+      if (envelopeInvalid) {
+        await module.markTitleAttemptFailed({
+          conversationId,
+          requestId,
+          failureCode: "invalid_output",
+        });
+        this.recordFailure("invalid_output");
+        return;
+      }
       if (raw === null) {
         await module.markTitleAttemptFailed({
           conversationId,

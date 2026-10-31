@@ -60,45 +60,52 @@ export function buildTitleMessages(input: {
   const systemBytes = utf8ByteLength(CHAT_TITLE_PROMPT);
   const remaining = Math.max(0, TITLE_INPUT_BYTE_BUDGET - systemBytes);
   const assistantBudget = Math.floor(remaining * ASSISTANT_SHARE);
-  let assistant = clipToUtf8Bytes(input.assistantExcerpt, assistantBudget);
-  // Unused assistant allocation flows to the user request; the framing
-  // reserve keeps JSON keys/escaping from pushing past the byte budget.
+  // Initial generous clips: assistant to its share, user to everything left
+  // minus a framing reserve for JSON keys/roles/escaping.
+  let assistant = clipToUtf8Bytes(
+    input.assistantExcerpt,
+    assistantBudget
+  );
   let user = clipToUtf8Bytes(
     input.userText,
     remaining - utf8ByteLength(assistant) - FRAMING_RESERVE_BYTES
   );
-  let userContent =
-    EXCERPT_FRAME_PREFIX +
-    JSON.stringify({ user_request: user, assistant_answer_excerpt: assistant });
-  // Guarantee the bound even under worst-case JSON escaping by trimming on
-  // code-point boundaries (user first, then assistant).
-  for (let guard = 0; guard < 2; guard += 1) {
-    let excess = utf8ByteLength(userContent) - remaining;
-    while (excess > 0) {
-      const target = guard === 0 ? user : assistant;
-      if (!target) break;
-      const chars = Array.from(target);
-      const drop = Math.min(chars.length, Math.max(1, Math.ceil(excess)));
-      const trimmed = chars.slice(0, chars.length - drop).join("");
-      if (guard === 0) {
-        user = trimmed;
-      } else {
-        assistant = trimmed;
-      }
-      userContent =
-        EXCERPT_FRAME_PREFIX +
-        JSON.stringify({
-          user_request: user,
-          assistant_answer_excerpt: assistant,
-        });
-      excess = utf8ByteLength(userContent) - remaining;
+  let messages: readonly TitlePromptMessage[] = [];
+  let serializedBytes = 0;
+  // B12: budget the FINAL serialized representation — roles, keys, and the
+  // extra JSON-escaping layer (backslashes/quotes can double the encoded
+  // size versus raw content). Trim on Unicode boundaries until it fits.
+  for (let round = 0; round < 8; round += 1) {
+    const userContent =
+      EXCERPT_FRAME_PREFIX +
+      JSON.stringify({
+        user_request: user,
+        assistant_answer_excerpt: assistant,
+      });
+    messages = [
+      { role: "system", content: CHAT_TITLE_PROMPT },
+      { role: "user", content: userContent },
+    ];
+    serializedBytes = utf8ByteLength(JSON.stringify(messages));
+    if (serializedBytes <= TITLE_INPUT_BYTE_BUDGET) break;
+    const excess = serializedBytes - TITLE_INPUT_BYTE_BUDGET;
+    // Escape inflation means one content byte can cost two encoded bytes:
+    // drop enough code points to cover the excess even under worst-case
+    // doubling, user first (intent priority keeps the user request longest).
+    if (user.length > 0) {
+      const chars = Array.from(user);
+      const drop = Math.min(chars.length, Math.max(1, Math.ceil(excess / 2)));
+      user = chars.slice(0, chars.length - drop).join("");
+    } else if (assistant.length > 0) {
+      const chars = Array.from(assistant);
+      const drop = Math.min(chars.length, Math.max(1, Math.ceil(excess / 2)));
+      assistant = chars.slice(0, chars.length - drop).join("");
+    } else {
+      break; // nothing left to trim; framing alone exceeds the budget
     }
-    if (utf8ByteLength(userContent) <= remaining) break;
   }
-  const messages: readonly TitlePromptMessage[] = [
-    { role: "system", content: CHAT_TITLE_PROMPT },
-    { role: "user", content: userContent },
-  ];
-  const bytes = systemBytes + utf8ByteLength(userContent);
-  return { messages, budget: { bytes, estimated: true } };
+  return {
+    messages,
+    budget: { bytes: serializedBytes, estimated: true },
+  };
 }

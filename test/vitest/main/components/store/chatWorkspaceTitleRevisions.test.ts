@@ -12,7 +12,10 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
 }));
 
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
-import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspaceTypes";
+import type {
+  WorkspaceConversationSummary,
+  WorkspaceSidebarResponse,
+} from "@/entityTypes/aiChatWorkspaceTypes";
 import type { ChatTitleUpdatedEvent } from "@/service/aiChatTitle/AIChatTitleTypes";
 
 function summary(
@@ -77,9 +80,13 @@ describe("chatWorkspace store title revision reconciliation", () => {
     expect(s.unassigned.some((c) => c.conversationId === "v2-ghost")).toBe(false);
   });
 
-  it("an unversioned legacy summary title cannot replace a versioned title", () => {
+  it("an unversioned legacy summary title cannot replace a versioned title (B18)", () => {
     const s = store();
-    s.upsertLocalConversation(summary("v2-c", { title: "Versioned", titleRevision: 3 }));
+    // Establish AUTHORITATIVE versioned state (B18: local upserts are not
+    // versioned sources; a title event is).
+    s.upsertLocalConversation(summary("v2-c", { title: "", titleRevision: 2 }));
+    s.applyTitleUpdate(titleEvent("v2-c", "Versioned", 3));
+    expect(s.conversationsById.get("v2-c")?.title).toBe("Versioned");
     // Legacy summary event (no titleRevision) carrying an old title.
     s.upsertLocalConversation(summary("v2-c", { title: "Old Legacy Title" }));
     expect(s.conversationsById.get("v2-c")?.title).toBe("Versioned");
@@ -109,15 +116,75 @@ describe("chatWorkspace store title revision reconciliation", () => {
     expect(s.conversationsById.get("v2-e")?.titleRevision).toBe(4);
   });
 
-  it("a legacy unversioned summary title is accepted only while the stored title is empty", () => {
+  it("a legacy unversioned summary title initializes only never-known rows (B18)", () => {
     const s = store();
-    // First seen via event (no existing row): legacy title applies.
+    // First seen via event (no existing row, never versioned-known): the
+    // legacy title initializes the row.
     s.upsertLocalConversation(summary("v2-legacy", { title: "" }));
     s.upsertLocalConversation(summary("v2-legacy", { title: "First Excerpt" }));
     expect(s.conversationsById.get("v2-legacy")?.title).toBe("First Excerpt");
-    // Once non-empty, a later unversioned legacy title cannot replace it.
+    // Once versioned state is KNOWN, a later unversioned legacy title is
+    // rejected — even targeting an empty title.
+    s.applyTitleUpdate(titleEvent("v2-legacy", "Authoritative", 4));
     s.upsertLocalConversation(summary("v2-legacy", { title: "Older Stale Title" }));
-    expect(s.conversationsById.get("v2-legacy")?.title).toBe("First Excerpt");
+    expect(s.conversationsById.get("v2-legacy")?.title).toBe("Authoritative");
+  });
+
+  it("B16: teardown clears the title handle so remount re-subscribes", async () => {
+    const s = store();
+    const { subscribeTitleEvents } = await import(
+      "@/views/api/aiChatWorkspace"
+    );
+    await s.bootstrap();
+    expect(vi.mocked(subscribeTitleEvents).mock.calls.length).toBeGreaterThan(0);
+    const callsAfterFirstBootstrap = vi.mocked(subscribeTitleEvents).mock.calls.length;
+    s.teardown();
+    await s.bootstrap();
+    expect(
+      vi.mocked(subscribeTitleEvents).mock.calls.length
+    ).toBeGreaterThan(callsAfterFirstBootstrap);
+  });
+
+  it("B17: a newer title event during bootstrap is reconciled, not lost", async () => {
+    const s = store();
+    const { bootstrapWorkspace } = await import("@/views/api/aiChatWorkspace");
+    const release = { fn: null as null | ((v: WorkspaceSidebarResponse) => void) };
+    vi.mocked(bootstrapWorkspace).mockImplementationOnce(
+      () =>
+        new Promise<WorkspaceSidebarResponse>((resolve) => {
+          release.fn = resolve;
+        })
+    );
+    const pending = s.bootstrap();
+    // Revision-2 event lands while the (revision-1) bootstrap is in flight.
+    s.applyTitleUpdate(titleEvent("v2-buf", "Newer Title", 2));
+    release.fn?.({
+      workspaces: [],
+      unassigned: [summary("v2-buf", { title: "Old Server", titleRevision: 1 })],
+      selectedConversationId: null,
+    });
+    await pending;
+    expect(s.conversationsById.get("v2-buf")?.title).toBe("Newer Title");
+    expect(s.conversationsById.get("v2-buf")?.titleRevision).toBe(2);
+  });
+
+  it("B18: a known cleared-empty title rejects a later legacy unversioned title", () => {
+    const s = store();
+    // Cleared to empty at revision 5 (authoritative versioned state).
+    s.upsertLocalConversation(summary("v2-cleared", { title: "x", titleRevision: 5 }));
+    s.applyTitleUpdate(titleEvent("v2-cleared", null, 6));
+    expect(s.conversationsById.get("v2-cleared")?.title).toBe("");
+    // A legacy unversioned summary carrying the OLD excerpt must not restore it.
+    s.upsertLocalConversation(summary("v2-cleared", { title: "Old Excerpt" }));
+    expect(s.conversationsById.get("v2-cleared")?.title).toBe("");
+    expect(s.conversationsById.get("v2-cleared")?.titleRevision).toBe(6);
+  });
+
+  it("B18: equal-revision title events never change content", () => {
+    const s = store();
+    s.upsertLocalConversation(summary("v2-eq", { title: "First", titleRevision: 3 }));
+    s.applyTitleUpdate(titleEvent("v2-eq", "Conflicting Same Revision", 3));
+    expect(s.conversationsById.get("v2-eq")?.title).toBe("First");
   });
 
   it("subscribes to title events before requesting bootstrap", async () => {

@@ -40,6 +40,7 @@ function completionResponse(content: string): OpenAIChatCompletionResponse {
   };
 }
 
+
 interface ModuleFake {
   module: AIChatTitleModuleSurface;
   candidates: number;
@@ -61,6 +62,9 @@ function makeModuleFake(
     assistantExcerpt: "Sure — here is a plan.",
     epoch: 0,
     revision: 0,
+    visibleTitle: "Find dentists in Sydney",
+    titleSource: "excerpt",
+    excerptRefreshed: false,
   }
 ): ModuleFake {
   const fake: ModuleFake = {
@@ -402,6 +406,88 @@ describe("AIChatTitleService", () => {
     expect(busy).toBe(true);
     scheduler.complete("run-active");
     expect(scheduler.activeCount()).toBe(0);
+  });
+
+  it.each([
+    ["length", "Sydney Dentist Outreach"],
+    ["content_filter", "Partial text"],
+  ])("B13: finish_reason=%s with valid text is rejected before persistence", async (reason, content) => {
+    const h = makeHarness();
+    const base = completionResponse(content);
+    h.completeTitle.mockResolvedValueOnce({
+      ...base,
+      choices: [
+        {
+          ...base.choices[0],
+          finish_reason: reason,
+        },
+      ],
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-envelope",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.moduleFake.applies).toHaveLength(0);
+    expect(h.moduleFake.failures).toEqual(["invalid_output"]);
+    expect(h.broadcasts).toHaveLength(0);
+  });
+
+  it("B13: a tool_calls envelope is rejected even with clean finish_reason", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockResolvedValueOnce({
+      id: "x",
+      object: "chat.completion",
+      created: 0,
+      model: "cheap",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "Looks fine",
+            tool_calls: [{ id: "t1", type: "function", function: { name: "f", arguments: "{}" } }],
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-tools",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.moduleFake.applies).toHaveLength(0);
+    expect(h.moduleFake.failures).toEqual(["invalid_output"]);
+  });
+
+  it("B15: a refreshed excerpt publishes a revisioned excerpt event before dispatch", async () => {
+    const h = makeHarness();
+    h.moduleFake.candidateSequence = [
+      {
+        kind: "eligible",
+        userText: "Find dentists in Sydney",
+        assistantExcerpt: "Sure.",
+        epoch: 0,
+        revision: 2,
+        visibleTitle: "Find dentists in Sydney",
+        titleSource: "excerpt",
+        excerptRefreshed: true,
+      },
+    ];
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-exc-ev",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.broadcasts.length >= 2);
+    expect(h.broadcasts[0]).toEqual({
+      conversationId: "v2-exc-ev",
+      title: "Find dentists in Sydney",
+      titleRevision: 2,
+      titleSource: "excerpt",
+    });
+    expect(h.broadcasts[1]).toMatchObject({ titleSource: "ai" });
   });
 
   it("B03: a provider change between notification and pump discards the job before any work", async () => {

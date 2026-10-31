@@ -72,11 +72,18 @@ export function registerAIProviderIpcHandlers(): void {
     async (_e, data: unknown): Promise<CommonMessage<AIProviderSettingsView>> => {
       try {
         const req = parseArg<SaveAIProviderSettingsRequest>(data);
-        if (!req || (req.mode !== "hosted" && req.mode !== "local")) {
+        if (
+          !req ||
+          (req.mode !== undefined &&
+            req.mode !== "hosted" &&
+            req.mode !== "local")
+        ) {
           return denied("mode must be 'hosted' or 'local'");
         }
         const svc = service();
-        const mode: AIProviderMode = req.mode;
+        // Titles B19: an absent mode is a metadata-only save — never switch
+        // the active provider from a possibly-stale cached mode.
+        const mode: AIProviderMode | undefined = req.mode;
 
         // Titles B09: any settings change invalidates queued/in-flight
         // naming work (source provider identity may no longer match).
@@ -98,22 +105,25 @@ export function registerAIProviderIpcHandlers(): void {
           bumpProviderConfigVersion();
         }
 
-        if (mode === "local") {
-          if (!req.localProvider) {
-            // Chat-titles FR-08: toggle-only saves are valid — the provider
-            // form itself is untouched, so its stored config must be too.
-            if (typeof req.autoChatTitlesEnabled !== "boolean") {
-              return denied("localProvider is required when mode is 'local'");
-            }
-          } else {
-            svc.saveLocalProvider(req.localProvider);
+        if (mode === undefined) {
+          if (typeof req.autoChatTitlesEnabled !== "boolean") {
+            return denied(
+              "mode is required unless autoChatTitlesEnabled is provided"
+            );
           }
+        } else if (mode === "local") {
+          if (!req.localProvider) {
+            return denied("localProvider is required when mode is 'local'");
+          }
+          svc.saveLocalProvider(req.localProvider);
         } else {
           // Switching to hosted: leave any saved local config intact but clear
           // local availability so the resolver does not treat local as usable.
           // (Provider config is retained for when the user switches back.)
         }
-        svc.setMode(mode);
+        if (mode !== undefined) {
+          svc.setMode(mode);
+        }
         // R04: provider identity may have changed (mode switch and/or new
         // local config) — drop the reply path's cached model caps so a
         // previous provider can never supply the current limits.

@@ -75,7 +75,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
-import { ref } from "vue";
+import { ref, onUnmounted } from "vue";
 import AIProviderSettingsPanel from "@/views/components/settings/AIProviderSettingsPanel.vue";
 import {
   getAIProviderSettings,
@@ -94,19 +94,29 @@ const router = useRouter();
 const autoChatTitles = ref(true);
 const providerMode = ref<"hosted" | "local">("hosted");
 
-// Hydrate once on setup so the switch reflects stored settings.
-void getAIProviderSettings()
-  .then((view) => {
-    autoChatTitles.value = view.autoChatTitlesEnabled;
-    providerMode.value = view.mode;
-  })
-  .catch(() => undefined);
+// Hydrate once on setup so the switch reflects stored settings, and
+// RE-hydrate whenever the provider panel saves (B19: the panel's save
+// dispatches a window event) so the toggle hint always matches the live mode.
+function hydrateTitlesSettings(): void {
+  void getAIProviderSettings()
+    .then((view) => {
+      autoChatTitles.value = view.autoChatTitlesEnabled;
+      providerMode.value = view.mode;
+    })
+    .catch(() => undefined);
+}
+hydrateTitlesSettings();
+window.addEventListener(
+  "aifetchly:ai-provider-settings-changed",
+  hydrateTitlesSettings
+);
 
 async function onAutoTitlesToggle(value: boolean | null): Promise<void> {
   if (typeof value !== "boolean") return;
   try {
+    // B19: a toggle-only save sends NO mode — the server keeps the
+    // authoritative provider; a stale local mode can never switch it.
     const view = await saveAIProviderSettings({
-      mode: providerMode.value,
       autoChatTitlesEnabled: value,
     });
     autoChatTitles.value = view.autoChatTitlesEnabled;
@@ -132,3 +142,10 @@ function onReasoningVisibilityChange(value: boolean | null): void {
 </script>
 
 <style scoped></style>
+
+onUnmounted(() => {
+  window.removeEventListener(
+    "aifetchly:ai-provider-settings-changed",
+    hydrateTitlesSettings
+  );
+});

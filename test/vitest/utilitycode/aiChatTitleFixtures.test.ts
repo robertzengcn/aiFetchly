@@ -96,6 +96,14 @@ describe("chat-titles evaluation fixtures (PRD §10 harness)", () => {
     expect(withClaims.length).toBeGreaterThanOrEqual(4);
     for (const fixture of withClaims) {
       for (const claim of fixture.expectedProperties.disallowedClaims ?? []) {
+        // B14: a title CONTAINING a disallowed-claim phrase must be rejected
+        // by the deterministic validator, never stored.
+        const variant = validateGeneratedTitle(
+          `Outreach ${claim}`
+        );
+        expect(variant.ok, `${fixture.id}: claim accepted → ${claim}`).toBe(
+          false
+        );
         // Long-prompt budget machinery must still keep the fixture usable.
         const { budget } = buildTitleMessages({
           userText: fixture.userText,

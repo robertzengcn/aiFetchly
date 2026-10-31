@@ -468,6 +468,77 @@ describe("AIChatTitle persistence (message pairing input)", () => {
   });
 });
 
+describe("Titles audit B15/B21 — revisioned seeds + module validation", () => {
+  it("B15: seeding an excerpt on a null title atomically increments the revision", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    await model.createProjection({
+      conversationId: "v2-seedrev",
+      titleSource: "placeholder",
+      titleGenerationStatus: "pending",
+    });
+    await model.recordMessagePersisted({
+      conversationId: "v2-seedrev",
+      isResult: false,
+      previewText: "hello",
+      generatedTitle: "hello world",
+      timestamp: new Date(),
+    });
+    const row = await model.getByConversationId("v2-seedrev");
+    expect(row?.title).toBe("hello world");
+    expect(row?.titleRevision).toBe(1); // B15: visible change = revision bump
+  });
+
+  it("B15: clearTitleLifecycle returns the post-clear state for event publishing", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-clearstate",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    const state = await module.clearTitleLifecycle("v2-clearstate");
+    expect(state).toEqual({
+      title: null,
+      titleRevision: 1,
+      titleSource: "placeholder",
+    });
+  });
+
+  it("B21: applyManualRename validates — empty/oversize/control names are invalid", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-valid21",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    expect(await module.applyManualRename("v2-valid21", "   ")).toEqual({
+      outcome: "invalid",
+    });
+    expect(await module.applyManualRename("v2-valid21", "a".repeat(201))).toEqual({
+      outcome: "invalid",
+    });
+    expect(await module.applyManualRename("v2-valid21", "bad\u0007name")).toEqual({
+      outcome: "invalid",
+    });
+    // Valid names still rename (and normalize).
+    const ok = await module.applyManualRename("v2-valid21", "  Valid  Name  ");
+    expect(ok).toMatchObject({ outcome: "renamed", title: "Valid Name" });
+  });
+
+  it("B21: the model itself rejects oversize names instead of clipping", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    await model.createProjection({ conversationId: "v2-model21" });
+    await expect(
+      model.renameWithOwnership("v2-model21", "a".repeat(201))
+    ).rejects.toThrow(/storage limit/);
+  });
+});
+
 describe("Titles audit B06/B08 — atomic clear ownership + serialized commit", () => {
   it("B06: a manual rename committing between clear's read and write keeps the manual name", async () => {
     await SqliteDb.ensureInitialized();

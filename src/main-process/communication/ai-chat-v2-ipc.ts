@@ -1741,8 +1741,19 @@ async function handleClearConversation(
     // names survive; nonmanual titles restart a pending lifecycle) and
     // cancels any outstanding naming work for the old epoch.
     try {
-      await new AIChatConversationModule().clearTitleLifecycle(conversationId);
+      const cleared =
+        await new AIChatConversationModule().clearTitleLifecycle(conversationId);
       getSharedAIChatTitleService().cancelConversation(conversationId);
+      // B15: publish the post-clear title state (null for nonmanual) so
+      // every window drops the old name without waiting for bootstrap.
+      if (cleared) {
+        sharedWorkspaceEventRouter.broadcastTitleUpdate({
+          conversationId,
+          title: cleared.title,
+          titleRevision: cleared.titleRevision,
+          titleSource: cleared.titleSource as "placeholder" | "user",
+        });
+      }
     } catch (err) {
       console.warn("[ai-chat-v2] title clear lifecycle failed:", err);
     }

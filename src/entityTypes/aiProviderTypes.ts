@@ -125,7 +125,12 @@ export interface LocalAIProviderTestResult {
 
 /** Request body for saving provider settings (mode + optional local config). */
 export interface SaveAIProviderSettingsRequest {
-  readonly mode: AIProviderMode;
+  /**
+   * Provider mode. OPTIONAL (titles B19): an absent mode is a metadata-only
+   * save (e.g. the auto-titles toggle) that must never switch the active
+   * provider — the caller's possibly-stale cached mode is not authoritative.
+   */
+  readonly mode?: AIProviderMode;
   readonly localProvider?: LocalAIProviderConfigInput;
   /** Optional: update the automatic-chat-titles toggle in the same save. */
   readonly autoChatTitlesEnabled?: boolean;

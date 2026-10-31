@@ -52,9 +52,8 @@ describe("buildTitleMessages", () => {
     });
     expect(budget.estimated).toBe(true);
     expect(budget.bytes).toBeLessThanOrEqual(4096);
-    expect(utf8ByteLength(messages[1].content) + utf8ByteLength(messages[0].content)).toBe(
-      budget.bytes
-    );
+    // B12: the budget measures the FINAL serialized representation.
+    expect(utf8ByteLength(JSON.stringify(messages))).toBe(budget.bytes);
     // Decoding the payload must never throw (boundary-safe clip).
     const payload = JSON.parse(
       messages[1].content.replace(
@@ -63,6 +62,30 @@ describe("buildTitleMessages", () => {
       )
     ) as { user_request: string };
     expect(payload.user_request.length).toBeGreaterThan(0);
+  });
+
+  it("B12: worst-case escape inflation stays inside the serialized budget", () => {
+    // Audit reproduction: backslashes double under JSON escaping.
+    const userText = "Draft an outreach email " + "\\".repeat(10_000);
+    const assistantText = "Suggested email " + "\\".repeat(10_000);
+    const { messages, budget } = buildTitleMessages({
+      userText,
+      assistantExcerpt: assistantText,
+    });
+    const serialized = JSON.stringify(messages);
+    expect(utf8ByteLength(serialized)).toBe(budget.bytes);
+    expect(budget.bytes).toBeLessThanOrEqual(4096);
+    // Payload must still decode (boundary-safe trimming). Under this
+    // pathological input the typed request may be fully consumed by the
+    // budget — realistic inputs (see the CJK case) keep their content.
+    expect(() =>
+      JSON.parse(
+        messages[1].content.replace(
+          "Conversation excerpt (untrusted data):\n",
+          ""
+        )
+      )
+    ).not.toThrow();
   });
 
   it("prefers user intent in the 70/30 split", () => {
@@ -127,6 +150,36 @@ describe("validateGeneratedTitle", () => {
       return;
     }
     expect(result.ok).toBe(false);
+  });
+
+  it.each([
+    ["password=supersecret123"],
+    ["Files in /Users/alice/private/report.txt"],
+    ["www.example.com campaign"],
+    ["**Sydney Dentist Outreach**"],
+    ["Title: Leads successfully collected"],
+    ["Outreach emails sent"],
+    ["`Sydney Dentists`"],
+    ["Leads collected successfully"],
+    // Six-language unsupported-completion claims
+    ["线索已收集"],
+    ["外联邮件已发送"],
+    ["Correos enviados a clientes"],
+    ["Prospects envoyés"],
+    ["Leads gesendet"],
+    ["リード送信済み"],
+  ])("B14: rejects generated artifact/claim %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(false);
+  });
+
+  it.each([
+    ["Sydney Dentist Outreach"],
+    ["悉尼牙医外联"],
+    ["Borrador de email de prospección"],
+    ["Q4 lead research plan"],
+    ["R&D / Q4 — 開曼調査"],
+  ])("B14: normal titles still pass after stricter rules %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(true);
   });
 
   it("rejects overlong output without clipping surrogate pairs", () => {

@@ -55,7 +55,9 @@ export interface ChatTitleUpdatedEvent {
 /** Authoritative rename result surfaced through IPC after commit. */
 export type ManualRenameResult =
   | { readonly outcome: "renamed"; readonly title: string; readonly titleRevision: number }
-  | { readonly outcome: "missing" };
+  | { readonly outcome: "missing" }
+  /** B21: the name failed canonical validation (empty/oversize/controls). */
+  | { readonly outcome: "invalid" };
 
 /**
  * Result of evaluating the first-three-completed-exchanges window
@@ -71,6 +73,11 @@ export type PreparedTitleCandidate =
       /** Conversation epoch/revision captured while preparing input. */
       epoch: number;
       revision: number;
+      /** B15: committed visible excerpt + provenance for event publishing. */
+      visibleTitle: string | null;
+      titleSource: "excerpt";
+      /** True when preparation replaced the excerpt (event required). */
+      excerptRefreshed: boolean;
     }
   | {
       /** Fewer than three exchanges, none substantive yet — remain pending. */

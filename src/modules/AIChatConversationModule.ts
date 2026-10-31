@@ -9,6 +9,7 @@ import { WorkspaceEntity } from "@/entity/Workspace.entity";
 import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
 import { MessageType } from "@/entityTypes/commonType";
 import { isSubstantiveRequest } from "@/service/aiChatTitle/AIChatTitleEligibility";
+import { validateManualTitle } from "@/service/aiChatTitle/AIChatTitleValidator";
 import {
   GENERATED_TITLE_MAX_CODEPOINTS,
   normalizeText,
@@ -294,9 +295,13 @@ export class AIChatConversationModule extends BaseModule {
     title: string
   ): Promise<ManualRenameResult> {
     await this.ensureConnection();
+    // B21: the Module boundary validates non-IPC callers too — canonical
+    // normalization and explicit rejection, never silent clipping.
+    const validated = validateManualTitle(title);
+    if (!validated.ok) return { outcome: "invalid" };
     const updated = await this
       .convModel()
-      .renameWithOwnership(conversationId, title);
+      .renameWithOwnership(conversationId, validated.title);
     if (!updated) return { outcome: "missing" };
     return {
       outcome: "renamed",
@@ -460,6 +465,11 @@ export class AIChatConversationModule extends BaseModule {
         assistantExcerpt,
         epoch: sourceEpoch,
         revision: current.titleRevision,
+        // B15: the refreshed visible excerpt (same value when unchanged) so
+        // the service can publish a revisioned excerpt event after commit.
+        visibleTitle: current.title,
+        titleSource: "excerpt" as const,
+        excerptRefreshed: (row.title ?? "") !== nextExcerpt,
       };
     }
 
@@ -472,10 +482,25 @@ export class AIChatConversationModule extends BaseModule {
     return { kind: "pending_window" };
   }
 
-  /** History-clear title lifecycle (FR-09): fresh epoch, conditional reset. */
-  async clearTitleLifecycle(conversationId: string): Promise<void> {
+  /**
+   * History-clear title lifecycle (FR-09): fresh epoch, conditional reset.
+   * B15: returns the post-clear visible title state so the caller can
+   * publish an authoritative revisioned event.
+   */
+  async clearTitleLifecycle(conversationId: string): Promise<{
+    title: string | null;
+    titleRevision: number;
+    titleSource: string;
+  } | null> {
     await this.ensureConnection();
     await this.convModel().clearTitleLifecycleForHistoryClear(conversationId);
+    const row = await this.convModel().getByConversationId(conversationId);
+    if (!row) return null;
+    return {
+      title: row.title,
+      titleRevision: row.titleRevision,
+      titleSource: row.titleSource,
+    };
   }
 
   /** Title-service surface: conditional single-attempt claim (design §5.1). */

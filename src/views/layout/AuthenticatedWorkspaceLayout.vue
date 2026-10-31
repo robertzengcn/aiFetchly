@@ -263,7 +263,7 @@ onUnmounted(() => {
   );
   windowRemoveListener(SYSTEM_MESSAGE, onRawSystemMessage);
   if (systemNoticeTimer !== null) clearTimeout(systemNoticeTimer);
-  chatWorkspace.teardown();
+  chatWorkspace.resetForScopeChange(); // B23: full scope reset incl. teardown
   // Authentication ended (expiry / account switch in the same renderer):
   // clear the selected conversation's buffers and detail subscription so the
   // next account never sees this transcript (review: auth-lifecycle fix).

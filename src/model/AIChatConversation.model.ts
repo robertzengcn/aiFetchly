@@ -162,7 +162,10 @@ export class AIChatConversationModel extends BaseDb {
     }
     if (input.generatedTitle) {
       // Seed the provisional excerpt only while unclaimed, nonmanual, and
-      // still placeholder-owned (post-clear re-seeding included).
+      // still placeholder-owned (post-clear re-seeding included). B15: the
+      // excerpt IS the visible title — seed atomically increments the
+      // revision so a stale bootstrap can never replace it at the same
+      // revision.
       await this.repository
         .createQueryBuilder()
         .update()
@@ -172,6 +175,7 @@ export class AIChatConversationModel extends BaseDb {
             GENERATED_TITLE_MAX_CODEPOINTS
           ),
           titleSource: "excerpt" as ChatTitleSource,
+          titleRevision: () => "titleRevision + 1",
           updatedAt: now,
         })
         .where(
@@ -206,11 +210,17 @@ export class AIChatConversationModel extends BaseDb {
     title: string
   ): Promise<AIChatConversationEntity | null> {
     this.assertMainProcess();
+    // B21: reject oversize names — never silently clip a manual title.
+    if (title.length > CONVERSATION_TITLE_MAX_LENGTH) {
+      throw new Error(
+        `Title exceeds the ${CONVERSATION_TITLE_MAX_LENGTH}-unit storage limit`
+      );
+    }
     const result = await this.repository
       .createQueryBuilder()
       .update()
       .set({
-        title: title.slice(0, CONVERSATION_TITLE_MAX_LENGTH),
+        title,
         titleIsUserSet: true,
         titleSource: "user" as ChatTitleSource,
         titleGenerationStatus: "suppressed" as ChatTitleGenerationStatus,
