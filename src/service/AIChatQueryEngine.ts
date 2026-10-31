@@ -2028,7 +2028,11 @@ export class AIChatQueryEngine {
         pastedTextResolution.pastedBlocks.length > 0 ||
         !!scheduledContext ||
         !!generatedImageRefMetadata ||
-        selectionResolution.metadata.length > 0;
+        selectionResolution.metadata.length > 0 ||
+        // Titles F04/B01: the safe typed-text projection must persist on the
+        // plain direct-save path too — without metadata the titles Module
+        // refuses raw content and a plain typed request can never be named.
+        (request.message ?? "").trim().length > 0;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).

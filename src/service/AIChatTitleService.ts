@@ -188,6 +188,11 @@ export class AIChatTitleService {
   notifyInteractiveTurnCompleted(input: {
     conversationId: string;
     assistantMessageId: string | null;
+    /**
+     * F01: provider config version captured at SOURCE TURN EXECUTION. When
+     * absent (legacy callers/tests), the notification-time version is used.
+     */
+    sourceProviderVersion?: number;
   }): void {
     const conversationId = input.conversationId;
     if (conversationId.length === 0 || this.disposed) return;
@@ -200,9 +205,11 @@ export class AIChatTitleService {
     this.queue.set(conversationId, {
       conversationId,
       enqueuedAt: Date.now(),
-      // B03: bind the candidate to the provider that executed the source
-      // exchange — a settings change before the pump discards the job.
-      sourceVersion: this.deps.providerConfigVersion(),
+      // F01/B03: bind the candidate to the provider that EXECUTED the source
+      // exchange — a settings change after the turn started discards the
+      // job even before the pump.
+      sourceVersion:
+        input.sourceProviderVersion ?? this.deps.providerConfigVersion(),
       assistantMessageId: input.assistantMessageId,
     });
     this.schedulePump();
@@ -388,6 +395,13 @@ export class AIChatTitleService {
       model = SMALL_MODEL_ALIAS;
     }
 
+    // F05: a cancel/dispose during the awaited claim must still seal this
+    // attempt — check immediately after the claim returns.
+    if (preparationAbort.signal.aborted || this.disposed) {
+      // The claim (if won) is invalidated without any dispatch.
+      this.diagnostics.claimsLost += 1;
+      return;
+    }
     const requestId = this.deps.requestIdFactory();
     const claimed = await module.claimTitleAttempt({
       conversationId,
@@ -442,7 +456,25 @@ export class AIChatTitleService {
         : {}),
     };
 
+    // F05: cancel/dispose that landed during the claim resolves here —
+    // the attempt is consumed but nothing is dispatched.
+    if (preparationAbort.signal.aborted || this.disposed) {
+      await module.markTitleAttemptFailed({
+        conversationId,
+        requestId,
+        failureCode: "interrupted",
+      });
+      this.recordFailure("interrupted");
+      return;
+    }
+    // F05: ONE linked token spans preparation/claim/transport/application —
+    // the preparation controller's abort tears down the transport too.
     const controller = new AbortController();
+    const abortWithTransport = (): void => controller.abort();
+    if (preparationAbort.signal.aborted) controller.abort();
+    else preparationAbort.signal.addEventListener("abort", abortWithTransport, {
+      once: true,
+    });
     this.activeAbort = controller;
     this.activeConversationId = conversationId;
     const deadline = setTimeout(() => {
@@ -527,6 +559,16 @@ export class AIChatTitleService {
         this.recordFailure("invalid_output");
         return;
       }
+      // F05: a dispose during the network call seals the result.
+      if (this.disposed || preparationAbort.signal.aborted) {
+        await module.markTitleAttemptFailed({
+          conversationId,
+          requestId,
+          failureCode: "interrupted",
+        });
+        this.recordFailure("interrupted");
+        return;
+      }
       // FR-10 / design §5.4: recheck the captured configuration version and
       // enabled state BEFORE applying — a settings change or feature disable
       // during the request discards the late result (excerpt retained).
@@ -585,6 +627,7 @@ export class AIChatTitleService {
       }
       clearTimeout(deadline);
       clearInterval(foregroundWatch);
+      preparationAbort.signal.removeEventListener("abort", abortWithTransport);
       this.activeAbortReason = null;
     }
   }

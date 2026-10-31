@@ -1,4 +1,5 @@
 import { AIChatEventRouter } from "@/service/AIChatEventRouter";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
@@ -113,6 +114,12 @@ export interface AIChatCoordinatorDeps {
   readonly onInteractiveTurnCompleted?: (input: {
     conversationId: string;
     assistantMessageId: string | null;
+    /**
+     * F01 (titles design §6/§8.3): provider config version captured at TURN
+     * EXECUTION — the identity that produced the exchange, not the version
+     * at completion time.
+     */
+    sourceProviderVersion: number;
   }) => void;
   /**
    * Busy-conversation send delegation (message-queue PRD §9.2): when the
@@ -716,6 +723,8 @@ export class AIChatCoordinator {
     }
 
     // Same-conversation turn coordination at dispatch time (design §10.3).
+    // Titles F01: bind this execution to the current provider identity.
+    const sourceProviderVersion = currentProviderConfigVersion();
     const lease = this.deps.turnCoordinator.tryAcquire({
       conversationId,
       owner: "interactive",
@@ -963,6 +972,7 @@ export class AIChatCoordinator {
         this.deps.onInteractiveTurnCompleted?.({
           conversationId,
           assistantMessageId: terminal.messageId ?? null,
+          sourceProviderVersion,
         });
       }
       if (terminal) {

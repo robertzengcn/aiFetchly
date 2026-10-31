@@ -149,7 +149,7 @@ describe("AIChatTitle persistence (model)", () => {
     ).toBe(false);
 
     await seedConversation(model, "v2-consumed");
-    await model.suppressTitleGeneration("v2-consumed");
+await model.suppressTitleGeneration("v2-consumed", 0);
     expect(
       await model.claimTitleAttempt({
         conversationId: "v2-consumed",
@@ -468,6 +468,79 @@ describe("AIChatTitle persistence (message pairing input)", () => {
   });
 });
 
+describe("Titles audit r2 F06/F07 — bulk lifecycle + epoch-conditional suppression", () => {
+  async function seedTypedSimple(
+    messageModel: AIChatMessageModel,
+    conversationId: string,
+    seq: number,
+    role: "user" | "assistant",
+    typed: string
+  ): Promise<void> {
+    const entity = new AIChatMessageEntity();
+    entity.messageId = `${conversationId}-msg-${seq}`;
+    entity.conversationId = conversationId;
+    entity.role = role;
+    entity.content = role === "user" ? typed : `answer ${seq}`;
+    entity.timestamp = new Date(2026, 0, 1, 0, 0, seq);
+    entity.messageType = MessageType.MESSAGE;
+    entity.metadata = JSON.stringify({
+      source: "chat-v2",
+      safeTypedText: role === "user" ? typed : undefined,
+      turnId: `t${Math.ceil(seq / 2)}`,
+    });
+    await messageModel.saveMessage(entity);
+  }
+
+  it("F06: bulk title lifecycle resets nonmanual and preserves manual rows", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-bulk1",
+      titleSource: "excerpt",
+      titleGenerationStatus: "succeeded",
+    });
+    await model.createProjection({
+      conversationId: "v2-bulk2",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await model.renameWithOwnership("v2-bulk2", "Manual Kept");
+    const ids = await module.listAllConversations();
+    expect(ids).toContain("v2-bulk1");
+    expect(ids).toContain("v2-bulk2");
+    for (const id of ids) {
+      if (!id.startsWith("v2-bulk")) continue;
+      await module.clearTitleLifecycle(id);
+    }
+    const r1 = await model.getByConversationId("v2-bulk1");
+    expect(r1?.title).toBeNull();
+    expect(r1?.titleGenerationStatus).toBe("pending");
+    expect(r1?.titleEpoch).toBe(1);
+    const r2 = await model.getByConversationId("v2-bulk2");
+    expect(r2?.title).toBe("Manual Kept");
+    expect(r2?.titleGenerationStatus).toBe("suppressed");
+    expect(r2?.titleEpoch).toBe(1);
+  });
+
+  it("F07: suppression with a stale epoch leaves the fresh lifecycle pending", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    await model.createProjection({
+      conversationId: "v2-f07",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Stale suppression arrives targeting epoch 0 AFTER a clear advanced it.
+    await model.clearTitleLifecycleForHistoryClear("v2-f07");
+    const suppressed = await model.suppressTitleGeneration("v2-f07", 0);
+    expect(suppressed).toBe(false);
+    const row = await model.getByConversationId("v2-f07");
+    expect(row?.titleGenerationStatus).toBe("pending"); // fresh lifecycle intact
+    expect(row?.titleEpoch).toBe(1);
+  });
+});
+
 describe("Titles audit B15/B21 — revisioned seeds + module validation", () => {
   it("B15: seeding an excerpt on a null title atomically increments the revision", async () => {
     await SqliteDb.ensureInitialized();
@@ -536,6 +609,153 @@ describe("Titles audit B15/B21 — revisioned seeds + module validation", () => 
     await expect(
       model.renameWithOwnership("v2-model21", "a".repeat(201))
     ).rejects.toThrow(/storage limit/);
+  });
+});
+
+describe("Titles audit r2 F02/F03 — durable turn association + window query", () => {
+  async function seedTurn(
+    messageModel: AIChatMessageModel,
+    conversationId: string,
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    meta: Record<string, unknown>
+  ): Promise<void> {
+    const entity = new AIChatMessageEntity();
+    entity.messageId = `${conversationId}-msg-${seq}`;
+    entity.conversationId = conversationId;
+    entity.role = role;
+    entity.content = content;
+    entity.timestamp = new Date(2026, 0, 1, 0, 0, seq);
+    entity.messageType = MessageType.MESSAGE;
+    entity.metadata = JSON.stringify({ source: "chat-v2", ...meta });
+    await messageModel.saveMessage(entity);
+  }
+
+  it("F02: a zero-row cancelled turn never pairs with a later user's assistant", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-f02a",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Perth turn: cancelled BEFORE any assistant text — no assistant row.
+    await seedTurn(messageModel, "v2-f02a", 1, "user", "Find dentists in Perth", {
+      safeTypedText: "Find dentists in Perth",
+      turnId: "t1",
+    });
+    // Berlin turn completes later.
+    await seedTurn(messageModel, "v2-f02a", 2, "user", "Draft a Berlin outreach email", {
+      safeTypedText: "Draft a Berlin outreach email",
+      turnId: "t2",
+    });
+    await seedTurn(messageModel, "v2-f02a", 3, "assistant", "Here is the draft.", {
+      turnId: "t2",
+    });
+    const candidate = await module.prepareTitleCandidate("v2-f02a", "v2-f02a-msg-3");
+    expect(candidate.kind).toBe("eligible");
+    if (candidate.kind !== "eligible") return;
+    expect(candidate.userText).toContain("Berlin");
+    expect(candidate.userText).not.toContain("Perth");
+  });
+
+  it("F02: an assistant answers only its own turn; scheduled-loop rows are excluded", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-f02b",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // A scheduled report turn (excluded owner).
+    await seedTurn(messageModel, "v2-f02b", 1, "user", "Run the weekly report", {
+      safeTypedText: "Run the weekly report",
+      turnId: "ts",
+      source: "scheduled-loop",
+    });
+    await seedTurn(messageModel, "v2-f02b", 2, "assistant", "Report done.", {
+      turnId: "ts",
+      source: "scheduled-loop",
+    });
+    // An interactive greeting completes.
+    await seedTurn(messageModel, "v2-f02b", 3, "user", "hi", {
+      safeTypedText: "hi",
+      turnId: "ti",
+    });
+    await seedTurn(messageModel, "v2-f02b", 4, "assistant", "Hello!", {
+      turnId: "ti",
+    });
+    // The scheduled exchange must not count toward the window nor be chosen.
+    const candidate = await module.prepareTitleCandidate("v2-f02b", "v2-f02b-msg-4");
+    expect(candidate).toEqual({ kind: "pending_window" }); // 1 interactive exchange, greeting-only
+  });
+
+  it("F03: a tool-heavy first answer (40 tool rows) does not starve the trigger", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-f03a",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedTurn(messageModel, "v2-f03a", 1, "user", "Analyze the Q3 revenue file", {
+      safeTypedText: "Analyze the Q3 revenue file",
+      turnId: "t1",
+    });
+    // 40 TOOL_RESULT rows push the real assistant past the first page.
+    for (let i = 0; i < 40; i += 1) {
+      const entity = new AIChatMessageEntity();
+      entity.messageId = `v2-f03a-tool-${i}`;
+      entity.conversationId = "v2-f03a";
+      entity.role = "assistant";
+      entity.content = `tool payload ${i}`;
+      entity.timestamp = new Date(2026, 0, 1, 0, 1, i);
+      entity.messageType = MessageType.TOOL_RESULT;
+      entity.metadata = JSON.stringify({ source: "chat-v2", turnId: "t1" });
+      await messageModel.saveMessage(entity);
+    }
+    await seedTurn(messageModel, "v2-f03a", 90, "assistant", "Revenue rose 12%.", {
+      turnId: "t1",
+    });
+    const candidate = await module.prepareTitleCandidate("v2-f03a", "v2-f03a-msg-90");
+    expect(candidate.kind).toBe("eligible");
+  });
+
+  it("F03: three attachment-only completed exchanges suppress the fourth typed task's window", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-f03b",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Three attachment-only openings (empty typed text) that COMPLETE.
+    for (let i = 0; i < 3; i += 1) {
+      await seedTurn(messageModel, "v2-f03b", i * 2 + 1, "user", `enriched block ${i}`, {
+        safeTypedText: "",
+        turnId: `att-${i}`,
+      });
+      await seedTurn(messageModel, "v2-f03b", i * 2 + 2, "assistant", `Summarized ${i}.`, {
+        turnId: `att-${i}`,
+      });
+    }
+    // Fourth exchange is a real typed task — the window is already consumed.
+    await seedTurn(messageModel, "v2-f03b", 7, "user", "Find Sydney dentists", {
+      safeTypedText: "Find Sydney dentists",
+      turnId: "t4",
+    });
+    await seedTurn(messageModel, "v2-f03b", 8, "assistant", "Done.", { turnId: "t4" });
+    const candidate = await module.prepareTitleCandidate("v2-f03b", "v2-f03b-msg-8");
+    expect(candidate).toEqual({ kind: "suppressed" });
   });
 });
 

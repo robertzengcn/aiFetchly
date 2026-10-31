@@ -350,9 +350,29 @@ export class AIChatConversationModule extends BaseModule {
     // B07: hold the source epoch fixed for the whole preparation.
     const sourceEpoch = row.titleEpoch;
 
-    const messages = await this
-      .messageModel()
-      .getMessagesByConversation(conversationId, 40);
+    // F03: page through rows until the trusted assistant is located (or a
+    // 200-row bound) — a tool-heavy first answer must not push the trigger
+    // outside the considered window.
+    const messages: AIChatMessageEntity[] = [];
+    const PAGE = 40;
+    const ROW_BOUND = 200;
+    for (
+      let offset = 0;
+      offset < ROW_BOUND;
+      offset += PAGE
+    ) {
+      const page = await this
+        .messageModel()
+        .getMessagesByConversation(conversationId, PAGE, offset);
+      messages.push(...page);
+      if (
+        page.length < PAGE ||
+        (trustedAssistantMessageId !== null &&
+          page.some((m) => m.messageId === trustedAssistantMessageId))
+      ) {
+        break;
+      }
+    }
 
     // B01: safe typed text + turn metadata per row.
     const safeText = new Map<string, string>();
@@ -362,6 +382,7 @@ export class AIChatConversationModule extends BaseModule {
         cancelled?: boolean;
         error?: string;
         source?: string;
+        turnId?: string;
       }
     >();
     for (const message of messages) {
@@ -370,6 +391,7 @@ export class AIChatConversationModule extends BaseModule {
         cancelled?: boolean;
         error?: string;
         source?: string;
+        turnId?: string;
       }
       let meta: RowTurnMeta | null = null;
       if (message.metadata) {
@@ -383,44 +405,57 @@ export class AIChatConversationModule extends BaseModule {
       safeText.set(message.messageId, meta?.safeTypedText ?? "");
     }
 
-    // B02: pair completed interactive exchanges from trusted rows. A user
-    // row counts only with typed text; an assistant row counts only as a
-    // successful (non-cancelled, non-error) completion.
-    const exchanges: Array<{ userText: string; assistantText: string; assistantId: string }> = [];
-    let pendingUserText: string | null = null;
+    // F02: pair exchanges by DURABLE TURN ASSOCIATION (metadata.turnId),
+    // not generic role order. A user row starts its turn's pending exchange;
+    // a later user row REPLACES it (the earlier turn completed without a
+    // saved assistant — cancelled/failed with zero rows). A successful
+    // assistant completes only ITS OWN turn's exchange (or a pre-turn-id
+    // legacy row pair). Scheduled-loop rows never participate.
+    const exchanges: Array<{
+      userText: string;
+      assistantText: string;
+      assistantId: string;
+    }> = [];
+    let pending: { turnId: string | null; typedText: string } | null = null;
     let trustedSeen = false;
     for (const message of messages) {
       if (message.messageType !== MessageType.MESSAGE) continue;
       const meta = rowMeta.get(message.messageId) ?? {};
+      if (meta.source === "scheduled-loop") continue; // F02: excluded owner
       if (message.role === "user") {
         const typed = safeText.get(message.messageId) ?? "";
-        if (typed.trim().length > 0 && pendingUserText === null) {
-          pendingUserText = typed;
+        if (typed.trim().length === 0 && pending !== null) {
+          continue; // attachment-only follow-up mid-turn: keep the turn's typed text
         }
+        // A new user row ends any unanswered pending turn (F02: zero-row
+        // cancellations must not pair with a later user's assistant).
+        pending = { turnId: meta.turnId ?? null, typedText: typed };
       } else if (message.role === "assistant") {
         const content = message.content?.trim() ?? "";
-        // An empty assistant row is not a completed exchange — keep waiting
-        // for this user's real answer.
+        // An empty assistant row is not a completed exchange — the turn may
+        // still produce its real answer.
         if (content.length === 0) continue;
-        // B02: a cancelled/failed turn ENDS its exchange. The user row may
-        // never be paired with a later user's assistant.
+        // B02/F02: a cancelled or failed assistant ENDS its exchange; its
+        // user row may never pair with anyone else.
         if (meta.cancelled || meta.error) {
-          pendingUserText = null;
+          pending = null;
           continue;
         }
         if (message.messageId === trustedAssistantMessageId) {
-          // Trusted-completion detection is independent of pairing: an
-          // attachment-only exchange is still a completed trigger whose
-          // exchange simply carries no typed text.
           trustedSeen = true;
         }
-        if (pendingUserText === null) continue;
+        if (pending === null) continue;
+        const turnCompatible =
+          pending.turnId === null || meta.turnId === undefined ||
+          meta.turnId === null ||
+          meta.turnId === pending.turnId;
+        if (!turnCompatible) continue; // a foreign turn's answer
         exchanges.push({
-          userText: pendingUserText,
+          userText: pending.typedText,
           assistantText: content,
           assistantId: message.messageId,
         });
-        pendingUserText = null;
+        pending = null;
       }
     }
 
@@ -431,9 +466,16 @@ export class AIChatConversationModule extends BaseModule {
       return { kind: "not_ready" };
     }
 
+    // F03: the window counts completed exchanges regardless of typed text
+    // (attachment-only openings consume window slots); substantiveness is
+    // evaluated only on typed text.
     const substantive = exchanges
-      .slice(0, 3) // B02: first-three-completed-exchanges window only
-      .find((exchange) => isSubstantiveRequest(exchange.userText));
+      .slice(0, 3) // first-three-completed-exchanges window
+      .find(
+        (exchange) =>
+          exchange.userText.trim().length > 0 &&
+          isSubstantiveRequest(exchange.userText)
+      );
     if (substantive) {
       const userText = sanitizeText(normalizeText(substantive.userText));
       const assistantExcerpt = sanitizeText(
@@ -475,11 +517,26 @@ export class AIChatConversationModule extends BaseModule {
 
     if (exchanges.length >= 3) {
       // Three completed exchanges with no substantive typed request: stop
-      // automatic evaluation for this lifecycle (FR-02).
-      await convModel.suppressTitleGeneration(conversationId);
+      // automatic evaluation for this lifecycle (FR-02). F07: the predicate
+      // carries the CAPTURED epoch — a mid-preparation clear leaves the new
+      // lifecycle pending and this preparation stale.
+      const suppressed = await convModel.suppressTitleGeneration(
+        conversationId,
+        sourceEpoch
+      );
+      if (!suppressed) return { kind: "not_ready" };
       return { kind: "suppressed" };
     }
     return { kind: "pending_window" };
+  }
+
+  /** All non-archived conversation ids (titles F06 bulk lifecycle clear). */
+  async listAllConversations(): Promise<string[]> {
+    await this.ensureConnection();
+    const rows = await this.convModel().listAll();
+    return rows
+      .filter((row) => row.conversationId.startsWith(V2_CONVERSATION_PREFIX))
+      .map((row) => row.conversationId);
   }
 
   /**

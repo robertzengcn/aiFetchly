@@ -1790,6 +1790,32 @@ async function handleClearAll(): Promise<
     }
     const module = new AIChatV2Module();
     const deleted = await module.clearAllV2History();
+    // Titles F06 (FR-09/design §11): bulk clear applies the same title
+    // lifecycle as single-conversation clear — cancel naming work, advance
+    // epochs (manual names survive, nonmanual titles restart pending), and
+    // publish authoritative title events. Failures surface in the response.
+    try {
+      const conversationModule = new AIChatConversationModule();
+      const projections = await conversationModule.listAllConversations();
+      const titleService = getSharedAIChatTitleService();
+      for (const conversationId of projections) {
+        titleService.cancelConversation(conversationId);
+        const cleared = await conversationModule.clearTitleLifecycle(conversationId);
+        if (cleared) {
+          sharedWorkspaceEventRouter.broadcastTitleUpdate({
+            conversationId,
+            title: cleared.title,
+            titleRevision: cleared.titleRevision,
+            titleSource: cleared.titleSource as "placeholder" | "user",
+          });
+        }
+      }
+    } catch (err) {
+      log.error("[ai-chat-v2] bulk title lifecycle clear failed:", err);
+      return denied(
+        "Messages were cleared, but the chat-title reset failed. Restart the app and try again if titles look wrong."
+      );
+    }
     return ok({ deleted });
   } catch (err) {
     return denied(userSafeError(err));

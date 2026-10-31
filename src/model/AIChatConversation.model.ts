@@ -421,10 +421,18 @@ export class AIChatConversationModel extends BaseDb {
     return (result.affected ?? 0) === 1;
   }
 
-  /** Transition pending → suppressed (three non-substantive exchanges). */
-  async suppressTitleGeneration(conversationId: string): Promise<void> {
+  /**
+   * Transition pending → suppressed (three non-substantive exchanges).
+   * F07: conditional on the CAPTURED epoch — a history clear that landed
+   * mid-preparation leaves the fresh lifecycle pending instead of
+   * inheriting the stale suppression.
+   */
+  async suppressTitleGeneration(
+    conversationId: string,
+    epoch?: number
+  ): Promise<boolean> {
     this.assertMainProcess();
-    await this.repository
+    const result = await this.repository
       .createQueryBuilder()
       .update()
       .set({
@@ -432,10 +440,12 @@ export class AIChatConversationModel extends BaseDb {
         updatedAt: new Date(),
       })
       .where(
-        "conversationId = :conversationId AND titleGenerationStatus = 'pending'",
-        { conversationId }
+        "conversationId = :conversationId AND titleGenerationStatus = 'pending'" +
+          (epoch !== undefined ? " AND titleEpoch = :epoch" : ""),
+        epoch !== undefined ? { conversationId, epoch } : { conversationId }
       )
       .execute();
+    return (result.affected ?? 0) === 1;
   }
 
   /**

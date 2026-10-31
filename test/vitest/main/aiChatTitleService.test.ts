@@ -491,6 +491,60 @@ describe("AIChatTitleService", () => {
     expect(h.broadcasts[1]).toMatchObject({ titleSource: "ai" });
   });
 
+  it("F05: a cancel landing during the awaited claim dispatches nothing", async () => {
+    const h = makeHarness();
+    const originalClaim = h.moduleFake.module.claimTitleAttempt.bind(
+      h.moduleFake.module
+    );
+    h.moduleFake.module.claimTitleAttempt = async (input) => {
+      const won = await originalClaim(input);
+      if (won) h.service.cancelConversation("v2-claimcancel"); // cancel DURING claim
+      return won;
+    };
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-claimcancel",
+      assistantMessageId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(h.completeTitle).not.toHaveBeenCalled();
+    expect(h.broadcasts).toHaveLength(0);
+  });
+
+  it("F05: dispose during the claim seals the attempt with zero dispatch", async () => {
+    const h = makeHarness();
+    const originalClaim = h.moduleFake.module.claimTitleAttempt.bind(
+      h.moduleFake.module
+    );
+    h.moduleFake.module.claimTitleAttempt = async (input) => {
+      const won = await originalClaim(input);
+      if (won) h.service.dispose();
+      return won;
+    };
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-claimdispose",
+      assistantMessageId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(h.completeTitle).not.toHaveBeenCalled();
+    expect(h.broadcasts).toHaveLength(0);
+    expect(h.moduleFake.failures).toEqual(["interrupted"]);
+  });
+
+  it("F05: dispose during the network call discards the late result", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockImplementationOnce(async () => {
+      h.service.dispose();
+      return completionResponse("Late After Dispose");
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-netdispose",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.moduleFake.applies).toHaveLength(0);
+    expect(h.broadcasts).toHaveLength(0);
+  });
+
   it("B03: a provider change between notification and pump discards the job before any work", async () => {
     const h = makeHarness();
     h.service.notifyInteractiveTurnCompleted({

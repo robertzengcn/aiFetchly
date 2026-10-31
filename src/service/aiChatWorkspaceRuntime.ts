@@ -171,6 +171,10 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
       },
       requestIdFactory: () => crypto.randomUUID(),
     });
+    if (titleRuntimeSealed) {
+      // A post-shutdown replacement singleton is born sealed (F05).
+      sharedTitleService.dispose();
+    }
   }
   return sharedTitleService;
 }
@@ -179,4 +183,17 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
 export function resetSharedAIChatTitleService(): void {
   sharedTitleService?.dispose();
   sharedTitleService = null;
+}
+
+/**
+ * F05: process-shutdown seal. Disposes the service ONLY if it exists (never
+ * instantiates it) and permanently seals the runtime — any replacement
+ * singleton is created already-disposed, preserving process-wide
+ * no-new-dispatch semantics after exit begins.
+ */
+let titleRuntimeSealed = false;
+
+export function sealSharedAIChatTitleServiceForShutdown(): void {
+  titleRuntimeSealed = true;
+  sharedTitleService?.dispose();
 }
