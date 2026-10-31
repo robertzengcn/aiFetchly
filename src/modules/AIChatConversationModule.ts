@@ -312,8 +312,25 @@ export class AIChatConversationModule extends BaseModule {
    * earlier exchange could not dispatch, the earliest qualifying exchange is
    * returned again (eligibility retry; no model attempt consumed).
    */
+  /**
+   * Evaluate the first-three-completed-exchanges window (titles design §7.1,
+   * audit B01/B02/B07) from durable rows only.
+   *
+   * B01: user text comes exclusively from the persisted `safeTypedText`
+   * metadata projection — attachment/mention/pasted enrichment and any other
+   * injected context never reach a title request. Exchanges without typed
+   * text (attachment-only) never count as substantive.
+   * B02: `trustedAssistantMessageId` binds the candidate to the exchange the
+   * completion notification identified; cancelled/failed assistant rows are
+   * never paired, and only the FIRST THREE completed exchanges are
+   * considered (a delayed evaluation after a fourth exchange cannot make a
+   * suppressed conversation eligible again).
+   * B07: the epoch is captured once and held fixed; if history was cleared
+   * mid-preparation, preparation aborts instead of adopting the new epoch.
+   */
   async prepareTitleCandidate(
-    conversationId: string
+    conversationId: string,
+    trustedAssistantMessageId: string | null = null
   ): Promise<PreparedTitleCandidate> {
     await this.ensureConnection();
     const convModel = this.convModel();
@@ -325,59 +342,129 @@ export class AIChatConversationModule extends BaseModule {
     if (row.titleGenerationStatus !== "pending") {
       return { kind: "suppressed" };
     }
+    // B07: hold the source epoch fixed for the whole preparation.
+    const sourceEpoch = row.titleEpoch;
 
     const messages = await this
       .messageModel()
       .getMessagesByConversation(conversationId, 40);
-    const exchanges: Array<{ userText: string; assistantText: string }> = [];
-    let pendingUser: string | null = null;
+
+    // B01: safe typed text + turn metadata per row.
+    const safeText = new Map<string, string>();
+    const rowMeta = new Map<
+      string,
+      {
+        cancelled?: boolean;
+        error?: string;
+        source?: string;
+      }
+    >();
+    for (const message of messages) {
+      interface RowTurnMeta {
+        safeTypedText?: string;
+        cancelled?: boolean;
+        error?: string;
+        source?: string;
+      }
+      let meta: RowTurnMeta | null = null;
+      if (message.metadata) {
+        try {
+          meta = JSON.parse(message.metadata) as RowTurnMeta;
+        } catch {
+          meta = null;
+        }
+      }
+      rowMeta.set(message.messageId, meta ?? {});
+      safeText.set(message.messageId, meta?.safeTypedText ?? "");
+    }
+
+    // B02: pair completed interactive exchanges from trusted rows. A user
+    // row counts only with typed text; an assistant row counts only as a
+    // successful (non-cancelled, non-error) completion.
+    const exchanges: Array<{ userText: string; assistantText: string; assistantId: string }> = [];
+    let pendingUserText: string | null = null;
+    let trustedSeen = false;
     for (const message of messages) {
       if (message.messageType !== MessageType.MESSAGE) continue;
-      const content = message.content?.trim() ?? "";
-      if (!content) continue;
+      const meta = rowMeta.get(message.messageId) ?? {};
       if (message.role === "user") {
-        if (pendingUser === null) pendingUser = content;
-      } else if (message.role === "assistant" && pendingUser !== null) {
-        exchanges.push({ userText: pendingUser, assistantText: content });
-        pendingUser = null;
+        const typed = safeText.get(message.messageId) ?? "";
+        if (typed.trim().length > 0 && pendingUserText === null) {
+          pendingUserText = typed;
+        }
+      } else if (message.role === "assistant") {
+        const content = message.content?.trim() ?? "";
+        // An empty assistant row is not a completed exchange — keep waiting
+        // for this user's real answer.
+        if (content.length === 0) continue;
+        // B02: a cancelled/failed turn ENDS its exchange. The user row may
+        // never be paired with a later user's assistant.
+        if (meta.cancelled || meta.error) {
+          pendingUserText = null;
+          continue;
+        }
+        if (message.messageId === trustedAssistantMessageId) {
+          // Trusted-completion detection is independent of pairing: an
+          // attachment-only exchange is still a completed trigger whose
+          // exchange simply carries no typed text.
+          trustedSeen = true;
+        }
+        if (pendingUserText === null) continue;
+        exchanges.push({
+          userText: pendingUserText,
+          assistantText: content,
+          assistantId: message.messageId,
+        });
+        pendingUserText = null;
       }
     }
 
-    const substantive = exchanges.find((exchange) =>
-      isSubstantiveRequest(exchange.userText)
-    );
+    // B02: when the notification carries a trusted assistant id that is not
+    // present among completed exchanges (deleted/cancelled/unknown), the
+    // trigger is not trustworthy — do nothing.
+    if (trustedAssistantMessageId !== null && !trustedSeen) {
+      return { kind: "not_ready" };
+    }
+
+    const substantive = exchanges
+      .slice(0, 3) // B02: first-three-completed-exchanges window only
+      .find((exchange) => isSubstantiveRequest(exchange.userText));
     if (substantive) {
       const userText = sanitizeText(normalizeText(substantive.userText));
       const assistantExcerpt = sanitizeText(
         normalizeText(substantive.assistantText)
       );
-      // Improve the visible excerpt to the substantive request (greeting
-      // replacement, FR-01) while still pending — bumping the revision only
-      // when the visible title actually changes.
+      // Improve the visible excerpt to the substantive typed request (FR-01)
+      // while still pending — bumping the revision only when the visible
+      // title actually changes.
       const nextExcerpt = sanitizeExcerpt(
         substantive.userText,
         GENERATED_TITLE_MAX_CODEPOINTS
       );
       let current = row;
       if ((row.title ?? "") !== nextExcerpt) {
-        await convModel.updateExcerptIfPending({
+        const changed = await convModel.updateExcerptIfPending({
           conversationId,
-          epoch: row.titleEpoch,
+          epoch: sourceEpoch,
           excerpt: nextExcerpt,
         });
+        if (!changed) return { kind: "not_ready" }; // B07: epoch moved or state changed
         current = (await convModel.getByConversationId(conversationId)) ?? row;
+        if (current.titleEpoch !== sourceEpoch) {
+          return { kind: "not_ready" }; // B07: cleared mid-preparation
+        }
       }
       return {
         kind: "eligible",
         userText,
         assistantExcerpt,
-        epoch: current.titleEpoch,
+        epoch: sourceEpoch,
         revision: current.titleRevision,
       };
     }
 
     if (exchanges.length >= 3) {
-      // Three completed exchanges with no substantive request: stop
+      // Three completed exchanges with no substantive typed request: stop
       // automatic evaluation for this lifecycle (FR-02).
       await convModel.suppressTitleGeneration(conversationId);
       return { kind: "suppressed" };

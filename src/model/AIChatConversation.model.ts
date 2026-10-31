@@ -338,9 +338,9 @@ export class AIChatConversationModel extends BaseDb {
     conversationId: string;
     epoch: number;
     excerpt: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     this.assertMainProcess();
-    await this.repository
+    const result = await this.repository
       .createQueryBuilder()
       .update()
       .set({
@@ -358,6 +358,7 @@ export class AIChatConversationModel extends BaseDb {
         input
       )
       .execute();
+    return (result.affected ?? 0) === 1;
   }
 
   /** Transition pending → suppressed (three non-substantive exchanges). */

@@ -62,7 +62,7 @@ async function seedUserMessage(
   entity.content = content;
   entity.timestamp = new Date(2026, 0, 1, 0, 0, seq);
   entity.messageType = MessageType.MESSAGE;
-  entity.metadata = JSON.stringify({ source: "chat-v2" });
+  entity.metadata = JSON.stringify({ source: "chat-v2", safeTypedText: content });
   await messageModel.saveMessage(entity);
 }
 
@@ -465,6 +465,203 @@ describe("AIChatTitle persistence (message pairing input)", () => {
     await seedAssistantMessage(messageModel, "v2-pair", "Sure — here is a plan.", 2);
     const page = await messageModel.getMessagesByConversation("v2-pair", 10);
     expect(page.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+});
+
+describe("Titles audit B01/B02 — safe typed text + trusted pairing", () => {
+  async function seedTyped(
+    messageModel: AIChatMessageModel,
+    conversationId: string,
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    safeTypedText?: string,
+    extraMeta?: Record<string, unknown>
+  ): Promise<void> {
+    const entity = new AIChatMessageEntity();
+    entity.messageId = `${conversationId}-msg-${seq}`;
+    entity.conversationId = conversationId;
+    entity.role = role;
+    entity.content = content;
+    entity.timestamp = new Date(2026, 0, 1, 0, 0, seq);
+    entity.messageType = MessageType.MESSAGE;
+    entity.metadata = JSON.stringify({
+      source: "chat-v2",
+      ...(safeTypedText !== undefined ? { safeTypedText } : {}),
+      ...(extraMeta ?? {}),
+    });
+    await messageModel.saveMessage(entity);
+  }
+
+  it("B01: uses only the safe typed-text projection, never enriched content", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-safe1",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Persisted content carries attachment enrichment with a private path;
+    // the safe projection is the raw typed request.
+    await seedTyped(
+      messageModel,
+      "v2-safe1",
+      1,
+      "user",
+      'Find leads in Sydney\n\nAttached 1 file(s) are staged locally.\n1. file_name="secret-campaign.csv" attachment_ref="ref123" file_path="/home/user/tmp/file"',
+      "Find leads in Sydney"
+    );
+    await seedTyped(messageModel, "v2-safe1", 2, "assistant", "On it.");
+    const candidate = await module.prepareTitleCandidate("v2-safe1", "v2-safe1-msg-2");
+    expect(candidate.kind).toBe("eligible");
+    if (candidate.kind !== "eligible") return;
+    expect(candidate.userText).toBe("Find leads in Sydney");
+    expect(candidate.userText).not.toContain("attachment_ref");
+    expect(candidate.userText).not.toContain("/home/user");
+    // The visible excerpt is also the safe text.
+    const row = await model.getByConversationId("v2-safe1");
+    expect(row?.title).toBe("Find leads in Sydney");
+  });
+
+  it("B01: an attachment-only opening is never substantive (zero dispatch input)", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-safe2",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Enriched content nonempty; the typed projection is EMPTY.
+    await seedTyped(
+      messageModel,
+      "v2-safe2",
+      1,
+      "user",
+      'Attached 1 file(s) are staged locally. file_name="a.csv" file_path="/tmp/a"',
+      ""
+    );
+    await seedTyped(messageModel, "v2-safe2", 2, "assistant", "Summarized.");
+    const candidate = await module.prepareTitleCandidate("v2-safe2", "v2-safe2-msg-2");
+    expect(candidate).toEqual({ kind: "pending_window" });
+  });
+
+  it("B02: a cancelled assistant ends its exchange and cannot supply a title", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-pair1",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedTyped(messageModel, "v2-pair1", 1, "user", "Find dentists in Perth", "Find dentists in Perth");
+    // Cancelled partial answer: this exchange is excluded entirely.
+    await seedTyped(
+      messageModel,
+      "v2-pair1",
+      2,
+      "assistant",
+      "I found several dentists...",
+      undefined,
+      { cancelled: true }
+    );
+    await seedTyped(messageModel, "v2-pair1", 3, "user", "thanks", "thanks");
+    await seedTyped(messageModel, "v2-pair1", 4, "assistant", "Sure.");
+    // Trusted trigger is a LATER completed exchange; the cancelled turn's
+    // user text must not be paired with the later assistant.
+    const candidate = await module.prepareTitleCandidate("v2-pair1", "v2-pair1-msg-4");
+    expect(candidate.kind).toBe("pending_window"); // only [thanks+Sure] is an exchange (non-substantive)
+  });
+
+  it("B02: a trusted assistant id missing from completed exchanges aborts preparation", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-pair2",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedTyped(messageModel, "v2-pair2", 1, "user", "Find dentists", "Find dentists");
+    await seedTyped(
+      messageModel,
+      "v2-pair2",
+      2,
+      "assistant",
+      "partial",
+      undefined,
+      { cancelled: true }
+    );
+    const candidate = await module.prepareTitleCandidate("v2-pair2", "v2-pair2-msg-2");
+    expect(candidate).toEqual({ kind: "not_ready" });
+  });
+
+  it("B02: three greeting exchanges then a fourth substantive one stays suppressed (delayed evaluation)", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-pair3",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    for (let i = 0; i < 3; i += 1) {
+      await seedTyped(messageModel, "v2-pair3", i * 2 + 1, "user", "hi", "hi");
+      await seedTyped(messageModel, "v2-pair3", i * 2 + 2, "assistant", "Hello!");
+    }
+    await seedTyped(messageModel, "v2-pair3", 7, "user", "Find Sydney dentists", "Find Sydney dentists");
+    await seedTyped(messageModel, "v2-pair3", 8, "assistant", "Done.");
+    const candidate = await module.prepareTitleCandidate("v2-pair3", "v2-pair3-msg-8");
+    expect(candidate).toEqual({ kind: "suppressed" });
+    const row = await model.getByConversationId("v2-pair3");
+    expect(row?.titleGenerationStatus).toBe("suppressed");
+  });
+
+  it("B07: a history clear during preparation aborts instead of adopting the new epoch", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-epochfix",
+      title: "old excerpt",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedTyped(messageModel, "v2-epochfix", 1, "user", "Find old leads", "Find old leads");
+    await seedTyped(messageModel, "v2-epochfix", 2, "assistant", "Old answer.");
+
+    // Simulate the clear landing BETWEEN selection and the excerpt update:
+    // wrap updateExcerptIfPending to clear first.
+    const realModel = new AIChatConversationModel(tmpDir);
+    (module as unknown as { convModel: () => AIChatConversationModel }).convModel =
+      () =>
+        ({
+          getByConversationId: realModel.getByConversationId.bind(realModel),
+          updateExcerptIfPending: async (input: {
+            conversationId: string;
+            epoch: number;
+            excerpt: string;
+          }) => {
+            await realModel.clearTitleLifecycleForHistoryClear("v2-epochfix"); // clear lands now
+            return realModel.updateExcerptIfPending(input); // stale-epoch conditional → no row
+          },
+          suppressTitleGeneration:
+            realModel.suppressTitleGeneration.bind(realModel),
+        } as unknown as AIChatConversationModel);
+    const candidate = await module.prepareTitleCandidate("v2-epochfix", "v2-epochfix-msg-2");
+    expect(candidate).toEqual({ kind: "not_ready" });
+    // The new epoch is untouched: no title, no excerpt rewrite from old text.
+    const row = await model.getByConversationId("v2-epochfix");
+    expect(row?.title).toBeNull();
+    expect(row?.titleEpoch).toBe(1);
   });
 });
 

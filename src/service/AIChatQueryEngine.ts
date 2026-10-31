@@ -1993,6 +1993,9 @@ export class AIChatQueryEngine {
 
       // Build user-message metadata (source + attachments + @-mentions).
       const userMetadata: ChatV2MessageMetadata = {
+      // Titles B01: raw visible typed text (bounded) — persisted BEFORE any
+      // attachment/mention/pasted enrichment so naming never sees it.
+      safeTypedText: (request.message ?? "").slice(0, 2000),
         source: scheduledContext ? "scheduled-loop" : "chat-v2",
         ...(generatedImageRefMetadata
           ? { generatedImageReferences: generatedImageRefMetadata }

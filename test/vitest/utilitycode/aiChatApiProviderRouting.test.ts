@@ -362,6 +362,37 @@ describe("AiChatApi provider routing", () => {
     expect(mockPostJson).toHaveBeenCalledTimes(1);
   });
 
+  it("B04: the hosted-pinned entry never re-resolves the global provider (local mode cannot reroute it)", async () => {
+    // Local provider configured AND hosted entitlement on: the pinned entry
+    // must still go to the HOSTED transport, not the local fetch path.
+    enableLocalProvider();
+    tokenStore.set(USER_AI_ENABLED, "true");
+    mockPostJson.mockResolvedValue({
+      id: "x",
+      object: "chat.completion",
+      created: 0,
+      model: "cheap",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "ok" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const api = new AiChatApi();
+    const res = await api.openAIChatCompletionHostedPinned({
+      messages: [{ role: "user", content: "name this chat" }],
+      model: "small",
+      requestPurpose: "chat_title",
+      smallModelFallbackPolicy: "forbid",
+    });
+    expect(res.choices[0].message.content).toBe("ok");
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    expect(mockPostJson.mock.calls[0]?.[0]).toBe("/api/ai/v1/chat/completions");
+  });
+
   it("hosted with smallModelFallbackPolicy=forbid makes exactly one request on a small-alias 404 (chat titles)", async () => {
     enableHosted();
     mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));

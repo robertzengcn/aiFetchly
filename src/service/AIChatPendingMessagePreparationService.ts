@@ -363,6 +363,8 @@ export class AIChatPendingMessagePreparationService {
     // 5. Assemble the persisted user-row metadata.
     const messageMetadata: ChatV2MessageMetadata = {
       source: "chat-v2",
+      // Titles B01: raw visible typed text (bounded) — before enrichment.
+      safeTypedText: (request.message ?? "").slice(0, 2000),
       ...(attachmentMetadata.length > 0
         ? { attachments: attachmentMetadata }
         : {}),

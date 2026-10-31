@@ -21,7 +21,10 @@ export type ResolvedTitleProvider =
 
 /** Narrow module surface the service depends on (test-injectable). */
 export interface AIChatTitleModuleSurface {
-  prepareTitleCandidate(conversationId: string): Promise<PreparedTitleCandidate>;
+  prepareTitleCandidate(
+    conversationId: string,
+    trustedAssistantMessageId: string | null
+  ): Promise<PreparedTitleCandidate>;
   claimTitleAttempt(input: {
     conversationId: string;
     epoch: number;
@@ -101,6 +104,10 @@ export interface AIChatTitleDiagnostics {
 interface QueueEntry {
   readonly conversationId: string;
   readonly enqueuedAt: number;
+  /** B03: provider config version captured at the source exchange. */
+  readonly sourceVersion: number;
+  /** B02: the completed assistant message this notification is bound to. */
+  readonly assistantMessageId: string | null;
 }
 
 function emptyDiagnostics(): AIChatTitleDiagnostics {
@@ -155,7 +162,6 @@ export class AIChatTitleService {
     conversationId: string;
     assistantMessageId: string | null;
   }): void {
-    void input.assistantMessageId; // module pairs exchanges from durable rows
     const conversationId = input.conversationId;
     if (conversationId.length === 0) return;
     this.diagnostics.candidates += 1;
@@ -164,7 +170,14 @@ export class AIChatTitleService {
       this.diagnostics.queueFull += 1; // drop the newest candidate; row stays pending
       return;
     }
-    this.queue.set(conversationId, { conversationId, enqueuedAt: Date.now() });
+    this.queue.set(conversationId, {
+      conversationId,
+      enqueuedAt: Date.now(),
+      // B03: bind the candidate to the provider that executed the source
+      // exchange — a settings change before the pump discards the job.
+      sourceVersion: this.deps.providerConfigVersion(),
+      assistantMessageId: input.assistantMessageId,
+    });
     this.schedulePump();
   }
 
@@ -229,8 +242,16 @@ export class AIChatTitleService {
       return;
     }
     this.running = true;
+    this.activeConversationId = entry.conversationId; // B09: track from pop
+    const preparationAbort = new AbortController();
+    this.activeAbort = preparationAbort; // cancellable during preparation too
     try {
-      await this.process(entry);
+      await this.process(entry, preparationAbort);
+    } catch (err) {
+      // B11: a background metadata failure never escapes its feature
+      // boundary — record bounded metadata and keep draining the queue.
+      this.recordFailure("error");
+      void err; // no content logging (PRD §8)
     } finally {
       this.running = false;
       this.activeAbort = null;
@@ -261,12 +282,19 @@ export class AIChatTitleService {
     }, FOREGROUND_POLL_MS);
   }
 
-  private async process(entry: QueueEntry): Promise<void> {
+  private async process(entry: QueueEntry, preparationAbort: AbortController): Promise<void> {
     const conversationId = entry.conversationId;
     const module = this.deps.createModule();
-    // Capture the provider configuration version while preparing input;
-    // a change before dispatch invalidates the job (titles design §5.4).
-    const versionAtPrepare = this.deps.providerConfigVersion();
+    // B03: the provider identity of the SOURCE exchange; any later change
+    // (before claim or dispatch) invalidates the job. versionAtPrepare is
+    // captured from the entry, not from "now".
+    const versionAtPrepare = entry.sourceVersion;
+    if (this.deps.providerConfigVersion() !== versionAtPrepare) {
+      // Settings changed between the source exchange and the pump: the
+      // excerpt must not travel to the newly selected provider.
+      this.recordFailure("provider_changed");
+      return;
+    }
 
     // Foreground chat takes priority: wait for idle capacity, bounded by the
     // entry TTL (expiry drops it without consuming an attempt).
@@ -275,6 +303,7 @@ export class AIChatTitleService {
         this.diagnostics.expired += 1;
         return;
       }
+      if (preparationAbort.signal.aborted) return; // B09: cancelled while waiting
       await sleep(FOREGROUND_POLL_MS);
       if (!this.isEnabled()) {
         this.diagnostics.droppedFeatureDisabled += 1;
@@ -282,8 +311,13 @@ export class AIChatTitleService {
       }
     }
 
-    const candidate = await module.prepareTitleCandidate(conversationId);
+    const candidate = await module.prepareTitleCandidate(
+      conversationId,
+      entry.assistantMessageId
+    );
+    if (preparationAbort.signal.aborted) return; // B09: cancelled during preparation
     if (candidate.kind !== "eligible") return; // pending_window/not_ready/suppressed
+    this.diagnostics.eligible += 1; // B24
 
     const provider = this.deps.resolveTitleProvider();
     if (!provider) {

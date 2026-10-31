@@ -154,7 +154,10 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
           ).complete(request, { signal });
         }
         const { AiChatApi } = await import("@/api/aiChatApi");
-        return new AiChatApi().openAIChatCompletion(request, { signal });
+        // B04: hosted-pinned entry — no global provider re-resolution.
+        return new AiChatApi().openAIChatCompletionHostedPinned(request, {
+          signal,
+        });
       },
       broadcastTitle: (event) => {
         sharedWorkspaceEventRouter.broadcastTitleUpdate(event);

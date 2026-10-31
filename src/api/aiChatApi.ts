@@ -1,5 +1,5 @@
 "use strict";
-import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpClient, type NoReplayRequestInit } from "@/modules/lib/httpclient";
 import { HttpResponseError } from "@/modules/lib/httpResponseError";
 import {
   CommonApiresp,
@@ -2264,6 +2264,21 @@ export class AiChatApi {
   }
 
   /**
+   * Titles B04 (design §8.3): hosted-PINNED completion. Entitlement is
+   * verified here and the request goes directly to the hosted transport —
+   * the global provider is never re-resolved, so a concurrent mode switch
+   * cannot reroute an in-flight title request to a custom endpoint (where
+   * the "small" alias would silently become that provider's default model).
+   */
+  async openAIChatCompletionHostedPinned(
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
+  ): Promise<OpenAIChatCompletionResponse> {
+    (await this.getProviderResolver()).ensureHostedAIEnabled();
+    return this.openAIChatCompletionHosted(request, options);
+  }
+
+  /**
    * Non-streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: false or omitted)
    *
@@ -2426,7 +2441,13 @@ export class AiChatApi {
     data: OpenAIChatCompletionRequest,
     signal: AbortSignal | undefined
   ): Promise<OpenAIChatCompletionResponse> {
-    const options = signal ? { signal } : undefined;
+    // Titles B05: single-dispatch requests never replay after auth refresh.
+    const noReplay = request.requestPurpose === "chat_title";
+    const options: NoReplayRequestInit | undefined = signal
+      ? { signal, ...(noReplay ? { noAuthReplay: true } : {}) }
+      : noReplay
+      ? { noAuthReplay: true }
+      : undefined;
     try {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",

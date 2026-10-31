@@ -383,6 +383,46 @@ describe("AIChatTitleService", () => {
     expect(h.broadcasts).toHaveLength(0);
   });
 
+  it("B03: a provider change between notification and pump discards the job before any work", async () => {
+    const h = makeHarness();
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-srcswitch",
+      assistantMessageId: "a1",
+    });
+    // Settings change BEFORE the deferred pump starts.
+    h.providerVersion.value += 1;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(h.completeTitle).not.toHaveBeenCalled();
+    expect(h.moduleFake.candidates).toBe(0); // dropped before preparation
+    expect(h.service.getDiagnostics().failedByCode["provider_changed"]).toBe(1);
+  });
+
+  it("B11: a preparation rejection is contained — no unhandled rejection, queue continues", async () => {
+    const h = makeHarness();
+    const originalPrepare = h.moduleFake.module.prepareTitleCandidate.bind(
+      h.moduleFake.module
+    );
+    h.moduleFake.module.prepareTitleCandidate = async (...args) => {
+      h.moduleFake.candidates += 1;
+      if (h.moduleFake.candidates === 1) {
+        throw new Error("database unavailable");
+      }
+      return originalPrepare(...args);
+    };
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-prepfail",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.service.getDiagnostics().failedByCode["error"] === 1);
+    // The queue must still serve a later job.
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-prepfail2",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.completeTitle.mock.calls.length >= 1);
+    expect(h.broadcasts).toHaveLength(1);
+  });
+
   it("a provider change during the in-flight request discards the late result (FR-10)", async () => {
     const h = makeHarness();
     h.completeTitle.mockImplementationOnce(async () => {
