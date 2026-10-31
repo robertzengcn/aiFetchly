@@ -6,6 +6,7 @@ import { builtinModules } from 'node:module';
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
+import { ZOD_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
@@ -62,6 +63,12 @@ export default ({ mode }) => {
         },
         optimizeDeps: {
             include: ['winston-transport', 'bufferutil', 'utf-8-validate']
+        },
+        // SSR builds externalize node_modules by default, but the packaged
+        // worker lives under app.asar.unpacked where modules that only live
+        // inside app.asar cannot be resolved; bundle zod (pure JS) instead.
+        ssr: {
+            noExternal: ZOD_SSR_NO_EXTERNAL,
         },
         build: {
             rollupOptions: {

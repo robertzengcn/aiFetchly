@@ -6,7 +6,7 @@ import { builtinModules } from 'node:module';
 import ClosePlugin from './vite-plugin-close.js'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
-import { TURNDOWN_SSR_NO_EXTERNAL, SANITIZE_HTML_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
+import { TURNDOWN_SSR_NO_EXTERNAL, SANITIZE_HTML_SSR_NO_EXTERNAL, ZOD_SSR_NO_EXTERNAL } from './vite.workerSsrNoExternal.mjs';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
@@ -66,9 +66,14 @@ export default ({ mode }) => {
         },
         ssr: {
             // HtmlConversionService imports both turndown and sanitize-html;
-            // bundle both pure-JS graphs so the unpacked worker doesn't emit
-            // bare runtime requires for packages that only live in app.asar.
-            noExternal: [...TURNDOWN_SSR_NO_EXTERNAL, ...SANITIZE_HTML_SSR_NO_EXTERNAL],
+            // bundle both pure-JS graphs (plus zod) so the unpacked worker
+            // doesn't emit bare runtime requires for packages that only
+            // live in app.asar.
+            noExternal: [
+                ...TURNDOWN_SSR_NO_EXTERNAL,
+                ...SANITIZE_HTML_SSR_NO_EXTERNAL,
+                ...ZOD_SSR_NO_EXTERNAL,
+            ],
         },
         build: {
             rollupOptions: {
