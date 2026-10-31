@@ -141,6 +141,11 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
    */
   let bootstrapInFlight = false;
   const pendingTitleEvents = new Map<string, ChatTitleUpdatedEvent>();
+  /**
+   * B23: monotonic scope/bootstrap generation. A response from a previous
+   * generation (scope reset raced an in-flight request) installs nothing.
+   */
+  let bootstrapGeneration = 0;
 
   function rebuildConversationIndex(): void {
     const index = new Map<string, WorkspaceConversationSummary>();
@@ -164,8 +169,12 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     bootstrapError.value = null;
     startEventSubscriptions();
     bootstrapInFlight = true;
+    const generation = bootstrapGeneration;
     try {
       const response = await bootstrapWorkspace();
+      if (generation !== bootstrapGeneration) {
+        return; // B23: a scope reset landed — this response is stale
+      }
       workspaces.value = mergeGroupTitles(response.workspaces);
       unassigned.value = mergeUnassignedTitles(response.unassigned);
       rebuildConversationIndex();
@@ -523,6 +532,7 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
    * can populate the new scope. Safe to call repeatedly.
    */
   function resetForScopeChange(): void {
+    bootstrapGeneration += 1; // B23: invalidate in-flight bootstrap responses
     teardown();
     workspaces.value = [];
     unassigned.value = [];

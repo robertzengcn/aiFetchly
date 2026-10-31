@@ -126,12 +126,22 @@ watch(draft, () => {
   if (!prefilling.value) touched.value = true;
 });
 
-/** Resolve the focus target across real Vuetify components and test stubs. */
-function focusTarget(): HTMLElement | null {
-  const ref = input.value as unknown as { $el?: HTMLElement } | HTMLElement | null;
+/**
+ * B22: resolve the ACTUAL focusable input. A real VTextField's ref is the
+ * component whose $el is a wrapper DIV — query the native input inside it so
+ * focus AND text selection land on the real field.
+ */
+function focusTarget(): HTMLInputElement | null {
+  const ref = input.value as unknown as
+    | { $el?: HTMLElement }
+    | HTMLElement
+    | null;
   if (!ref) return null;
-  if (ref instanceof HTMLElement) return ref;
-  return ref.$el instanceof HTMLElement ? ref.$el : null;
+  const el =
+    ref instanceof HTMLElement ? ref : ref.$el instanceof HTMLElement ? ref.$el : null;
+  if (!el) return null;
+  if (el instanceof HTMLInputElement) return el;
+  return el.querySelector("input");
 }
 
 const validation = computed(() => validateManualTitle(draft.value));

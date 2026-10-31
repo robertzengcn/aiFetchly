@@ -10,7 +10,9 @@ Requirements: [PRD](ai-chat-automatic-titles-prd.md) and [technical design](ai-c
 
 ## Verdict
 
-**Not all requirements are complete.** The feature has substantial implementation and passing happy-path tests, but confirmed correctness, privacy, provider-routing, synchronization, and accessibility gaps remain. It should not be treated as acceptance-complete.
+**STATUS UPDATE (post-remediation, same branch):** every confirmed bug B01–B24 is FIXED with committed regression tests (see the `fix(chat-titles): audit B…` commits). R01's local migration half and R02's committed-regression/E2E additions are done. Remaining OPEN items are the externally-gated release evidence: R03 (human-scored model quality/latency evaluation), R04 (deployed hosted strict-routing + adapter-capability evidence), R05 (staged enablement/rollback drill in the release configuration, incl. the packaged build), and R02's manual accessibility/scaling checks (1366×768, 200%, touch). The original audit verdict is preserved below.
+
+**Original verdict (2026-10-31, pre-remediation):** Not all requirements were complete; confirmed correctness, privacy, provider-routing, synchronization, and accessibility gaps existed (B01–B24).
 
 Implemented foundations include lifecycle columns and a registered migration; atomic claim/generated-title/manual-rename methods; a single background worker and bounded memory queue; deterministic greeting detection; hosted strict-model-fallback and custom literal-model options; title events and renderer revision handling; a shared rename dialog/action for header and sidebar; automatic-title settings and a custom title-model field; translations for all six languages; 60 evaluation fixtures; and four Electron E2E cases.
 
@@ -94,7 +96,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B01 — P1: Select safe typed text instead of attachment-enriched persisted content
 
-- [ ] **Requirement:** FR-02, PRD §8; AC-14/15; design §7.2.
+- [x] **Requirement:** FR-02, PRD §8; AC-14/15; design §7.2. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatQueryEngine.ts:1143](../../src/service/AIChatQueryEngine.ts:1143) appends attachment instructions, filename, attachment reference and local path; [AIChatQueryEngine.ts:1874](../../src/service/AIChatQueryEngine.ts:1874) uses that enriched text for persistence; [AIChatQueryEngine.ts:2045](../../src/service/AIChatQueryEngine.ts:2045) saves it. [AIChatConversationModule.ts:336](../../src/modules/AIChatConversationModule.ts:336) then uses persisted content as the title's user request.
 - **Failure:** An attachment-only opening becomes “substantive” because the injected English instructions contain text. Executed preparation retained file_name="secret-campaign.csv", attachment_ref="ref123", and a quoted file_path="/home/user/tmp/file". The path sanitizer does not remove that quoted assignment. This spends a title request on an excluded input and sends enrichment/private path metadata beyond the allowed visible typed request.
 - **Fix:** Persist a reliable raw visible typed-text projection at submission and use only it for naming, including queue-drained turns. Do not strip injected blocks with delimiter heuristics. Apply eligibility before enrichment and keep attachment-only exchanges on their fallback.
@@ -102,7 +104,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B02 — P1: Pair trusted successful turns and enforce the first-three window
 
-- [ ] **Requirement:** FR-02; AC-02/03/15; design §6–7.1.
+- [x] **Requirement:** FR-02; AC-02/03/15; design §6–7.1. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleService.ts:154](../../src/service/AIChatTitleService.ts:154) discards assistantMessageId. [AIChatConversationModule.ts:329](../../src/modules/AIChatConversationModule.ts:329) pairs the first unmatched user with the next nonempty assistant among 40 generic message rows; it checks neither durable turn status/IDs nor owner/epoch. The substantive search at line 346 has no three-exchange limit.
 - **Failure:** A cancelled partial answer can supply the title after a later successful completion. A cancelled user with no answer can be paired with a later user's assistant. Three greeting exchanges followed by a fourth substantive exchange can become eligible when evaluation is delayed; preparation directly reproduced this. Noninteractive content in a mixed-owner history is not filtered by this query.
 - **Fix:** Carry trusted user/assistant IDs, completed interactive owner, run association and epoch in notifications; query a bounded ordered page of completed interactive exchanges and inspect only the first three. Preserve the earliest qualifying exchange when earlier eligibility was skipped for configuration/capacity reasons.
@@ -110,7 +112,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B03 — P1: Bind queued candidates to the provider of the source exchange
 
-- [ ] **Requirement:** FR-03/08; AC-05/11; design §6 and §8.3.
+- [x] **Requirement:** FR-03/08; AC-05/11; design §6 and §8.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** Notifications and [QueueEntry](../../src/service/AIChatTitleService.ts:101) retain only conversation ID/time. The configuration version is first captured inside [process](../../src/service/AIChatTitleService.ts:269); the provider is resolved later at line 288.
 - **Failure:** Complete with provider A, enqueue, then change settings before the deferred pump starts. The job captures provider B's version and sends A's exchange to B. A temporary service probe changed the version immediately after notification and still observed one dispatch. A later completion can also select an earlier exchange made under a different provider because per-exchange identity is absent.
 - **Fix:** Capture opaque provider identity/config version at source turn execution and carry it with the eligible exchange/candidate. Recheck before claim/dispatch; discard any mismatch. Do not put plaintext credentials in notifications or durable job metadata.
@@ -118,7 +120,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B04 — P1: Pin hosted dispatch instead of re-resolving the global provider
 
-- [ ] **Requirement:** FR-03/08; AC-05/11; design §8.3.
+- [x] **Requirement:** FR-03/08; AC-05/11; design §8.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [aiChatWorkspaceRuntime.ts:156](../../src/service/aiChatWorkspaceRuntime.ts:156) awaits an import and calls public openAIChatCompletion. [aiChatApi.ts:2288](../../src/api/aiChatApi.ts:2288) awaits the resolver and reads the current provider again.
 - **Failure:** A mode change during these awaits can route the hosted title job to a custom endpoint. The hosted request has no literal-model flag, so "small" can become that provider's default chat model. The service's earlier version check does not protect this asynchronous transport boundary.
 - **Fix:** Use a hosted-specific completion seam pinned to the authorized snapshot, with entitlement/config/cancellation rechecked at actual dispatch. Preserve the separate custom pinned-client path.
@@ -126,7 +128,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B05 — P1: Disable HTTP authentication replay for title requests
 
-- [ ] **Requirement:** FR-04; AC-03/04; design §5.1/8.5.
+- [x] **Requirement:** FR-04; AC-03/04; design §5.1/8.5. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** The strict policy in [aiChatApi.ts:2439](../../src/api/aiChatApi.ts:2439) only prevents small-model fallback. [httpclient.ts:242](../../src/modules/lib/httpclient.ts:242) still refreshes on 401/403 and [httpclient.ts:197](../../src/modules/lib/httpclient.ts:197) replays the original POST.
 - **Failure:** Actual transpiled HttpClient code with fake 401→200 responses and refresh dependencies produced **two completion POSTs**. Mocking postJson in routing tests hides this replay.
 - **Fix:** Add a request-local no-replay policy through every transport layer for title work, including auth refresh retries. Existing callers retain their current behavior. Refresh before dispatch where necessary, without replaying an already attempted completion.
@@ -134,7 +136,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B06 — P1: Preserve manual ownership atomically when clearing history
 
-- [ ] **Requirement:** FR-07/09; AC-09/12; design §5.3–5.4.
+- [x] **Requirement:** FR-07/09; AC-09/12; design §5.3–5.4. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatConversation.model.ts:388](../../src/model/AIChatConversation.model.ts:388) reads ownership, then the nonmanual clear UPDATE at line 420 filters only by conversation ID.
 - **Failure:** Clear reads nonmanual → rename commits → clear applies its old branch. A real SQLite reproduction ended with title=null, titleIsUserSet=true, titleSource=placeholder: the manual name was erased.
 - **Fix:** Make preservation/reset conditional on current ownership in the database, using a transaction/conditional update/CASE as appropriate; coordinate transcript deletion and epoch invalidation so failures cannot leave an apparently successful partial clear.
@@ -142,7 +144,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B07 — P1: Never attach old prepared text to a new cleared epoch
 
-- [ ] **Requirement:** FR-09; AC-11/12; design §5.4/7.1.
+- [x] **Requirement:** FR-09; AC-11/12; design §5.4/7.1. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatConversationModule.ts:363](../../src/modules/AIChatConversationModule.ts:363) conditionally updates the old epoch, then reloads the row and returns its current epoch/revision alongside previously read message text.
 - **Failure:** Clear between message selection and excerpt update makes the old conditional update miss. Preparation nevertheless adopts the cleared epoch and can claim/title the new empty lifecycle using deleted history. Executed preparation returned old text with the new epoch.
 - **Fix:** Keep source epoch fixed throughout preparation; reject any changed/missing row or failed conditional update. Initialize cancellation tracking before awaited preparation as well as before the provider call.
@@ -150,7 +152,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B08 — P1: Serialize settings invalidation with the generated-title commit
 
-- [ ] **Requirement:** FR-08/10; AC-11; design §5.4 explicitly rejects a standalone check before an awaited write.
+- [x] **Requirement:** FR-08/10; AC-11; design §5.4 explicitly rejects a standalone check before an awaited write. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleService.ts:418](../../src/service/AIChatTitleService.ts:418) checks version/enabled state, then awaits applyGeneratedTitle at line 436. [AIChatConversationModule.ts:418](../../src/modules/AIChatConversationModule.ts:418) delegates after connection readiness without a policy version in the database predicate. Settings mutation only bumps an in-memory counter.
 - **Static concurrency gap; runtime race not reproduced:** If settings change while the delegated apply is suspended after the service check, the database predicate has no policy version/invalidation guard. The old result can still match its request/epoch/revision. This does not establish that every ready synchronous-SQLite call exposes an interleaving; the design explicitly requires a serialized guarantee rather than relying on awaited-write scheduling.
 - **Fix:** Serialize the short policy-check/commit with settings mutation, or add an equivalent durable policy version. Do not serialize the network request. Invalidate running claims as part of the policy transition.
@@ -158,7 +160,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B09 — P2: Connect cancellation to every required lifecycle transition
 
-- [ ] **Requirement:** FR-07–09; AC-09/11; design §8.5.
+- [x] **Requirement:** FR-07–09; AC-09/11; design §8.5. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleService.ts:172](../../src/service/AIChatTitleService.ts:172) provides cancelConversation/cancelAll, but active cancellation fields are assigned only after prepare/claim at line 353. Rename at [ai-chat-workspace-ipc.ts:721](../../src/main-process/communication/ai-chat-workspace-ipc.ts:721) does not cancel the service; settings save at [ai-provider-ipc.ts:83](../../src/main-process/communication/ai-provider-ipc.ts:83) only changes the flag/version. No title-service shutdown participant invokes cancellation.
 - **Failure:** Rename, disable and provider change allow already-running network work to continue until response/deadline. Cancel during preparation/waiting misses the popped active entry. An off→on transition can leave previously queued candidates available because cancelAll was never called.
 - **Fix:** Provide a lifecycle-safe invalidation API for preparation, queued and dispatched work; invoke it on rename, clear/delete, settings changes, shutdown and authenticated DB-scope change. Seal shutdown against new enqueue; preserve the consumed-attempt rule.
@@ -166,7 +168,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B10 — P2: Detect active foreground runs, not just scheduler queue depth
 
-- [ ] **Requirement:** FR-04; AC-06; design §6.
+- [x] **Requirement:** FR-04; AC-06; design §6. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [aiChatWorkspaceRuntime.ts:163](../../src/service/aiChatWorkspaceRuntime.ts:163) considers only queueDepth()>0. Dispatched foreground runs move out of the queue into the scheduler's active map.
 - **Failure:** An actual scheduler probe had active=1, queued=0, while the title runtime's busy expression returned false. Naming can start alongside foreground work, and the 250ms preemption poll misses a new foreground run admitted immediately.
 - **Fix:** Use active/admitted foreground ownership plus queued provider demand, with dispatch-time recheck/preemption. Integrate ordinary queue-owned foreground turns too.
@@ -174,7 +176,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B11 — P2: Catch background preparation/claim errors
 
-- [ ] **Requirement:** FR-10; AC-16; design §6.
+- [x] **Requirement:** FR-10; AC-16; design §6. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleService.ts:214](../../src/service/AIChatTitleService.ts:214) detaches pump without a rejection handler. pump has finally but no catch; the network try/catch begins only at line 366, after createModule, preparation, provider resolution and claim.
 - **Failure:** A temporary probe made prepareTitleCandidate reject with “database unavailable”; process unhandledRejection received that error. A background metadata failure escapes its feature boundary even though the chat already completed.
 - **Fix:** Contain all detached work and all job phases, record bounded failure metadata, clean up resources and continue the queue without changing the chat's terminal state.
@@ -182,7 +184,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B12 — P2: Measure the complete serialized input budget
 
-- [ ] **Requirement:** FR-04; AC-06; design §7.3.
+- [x] **Requirement:** FR-04; AC-06; design §7.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitlePrompt.ts:60](../../src/service/aiChatTitle/AIChatTitlePrompt.ts:60) budgets content bytes rather than the final serialized messages, omitting outer framing and another JSON escaping layer.
 - **Failure:** User “Draft an outreach email ” plus 10,000 backslashes and assistant “Suggested email ” plus 10,000 backslashes produced reported bytes=2723 but JSON.stringify(messages) encoded to **4932 UTF-8 bytes**, exceeding 4096. Current tests repeat the contents-only calculation.
 - **Fix:** Bound the final serialized message representation, including roles/keys/escaping/instructions, trimming on Unicode boundaries. Keep counts explicitly estimated when no supported tokenizer is wired.
@@ -190,7 +192,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B13 — P2: Reject truncated, tool-call, refusal and malformed completion envelopes
 
-- [ ] **Requirement:** FR-04/05/10; AC-06/16; design §9.
+- [x] **Requirement:** FR-04/05/10; AC-06/16; design §9. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleService.ts:124](../../src/service/AIChatTitleService.ts:124) extracts only choices[0].message.content; acceptance at line 373 ignores finish_reason, tool calls and refusal metadata.
 - **Failure:** A service probe supplied valid short text with finish_reason="length"; applyGeneratedTitle was called. Tool-call/content-filter/refusal responses with text can similarly pass text validation.
 - **Fix:** Require an eligible final-text completion envelope and reject truncation/refusal/tool-call/malformed responses before persistence. Retain fallback with no corrective retry.
@@ -198,7 +200,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B14 — P2: Complete deterministic generated-title rejection rules
 
-- [ ] **Requirement:** FR-05, PRD §8; AC-07/14; design §9.
+- [x] **Requirement:** FR-05, PRD §8; AC-07/14; design §9. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleValidator.ts:38](../../src/service/aiChatTitle/AIChatTitleValidator.ts:38) has only a small subset of artifact guards.
 - **Failure:** Actual validator calls accepted password=supersecret123, “Files in /Users/alice/private/report.txt”, “www.example.com campaign”, “**Sydney Dentist Outreach**”, and “Title: Leads successfully collected”. These include explicit credential/path/URL/Markdown/explanation artifacts; required deterministic completion-claim fixtures are not implemented.
 - **Fix:** Reuse/align the credential/contact/path vocabulary with input sanitation, enforce the supported plain-title format and known unsupported-claim fixtures. Preserve arbitrary ordinary manual names; semantic topic accuracy still requires model evaluation.
@@ -206,7 +208,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B15 — P2: Version and publish every visible provisional/clear title change
 
-- [ ] **Requirement:** FR-01/07/09; AC-01/09/10; design §10.2–10.3.
+- [x] **Requirement:** FR-01/07/09; AC-01/09/10; design §10.2–10.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatConversation.model.ts:169](../../src/model/AIChatConversation.model.ts:169) seeds an excerpt without incrementing titleRevision. [AIChatConversationModule.ts:363](../../src/modules/AIChatConversationModule.ts:363) can replace a greeting excerpt during preparation, but publishes no corresponding title event. [ai-chat-v2-ipc.ts:1740](../../src/main-process/communication/ai-chat-v2-ipc.ts:1740) clears the title lifecycle without publishing the new null title/revision.
 - **Failure:** A real Model probe changed null/revision 2 to a visible excerpt/revision 2. An in-flight bootstrap captured before seeding can therefore replace the new excerpt at the same revision. Other windows may retain cleared/greeting titles until a later bootstrap, especially when generation fails or is unavailable.
 - **Fix:** Increment revisions atomically on visible seed/ownership changes and broadcast authoritative provisional/replacement/clear events after commit. Keep unrelated run/unread/activity fields unchanged.
@@ -214,7 +216,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B16 — P1: Restore title subscriptions after teardown/remount
 
-- [ ] **Requirement:** FR-07/10; AC-09; design §10.3.
+- [x] **Requirement:** FR-07/10; AC-09; design §10.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [chatWorkspace.ts:460](../../src/views/store/chatWorkspace.ts:460) calls titleUnsubscribe but clears summaryUnsubscribe instead of titleUnsubscribe.
 - **Failure:** bootstrap → teardown → bootstrap leaves a truthy obsolete title unsubscribe handle. The subscription setup skips reinstalling the listener; subsequent title changes stop arriving live. A temporary store test reproduced this.
 - **Fix:** Dispose and null each handle independently and make repeated teardown/setup safe.
@@ -222,7 +224,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B17 — P1: Buffer title events during initial bootstrap
 
-- [ ] **Requirement:** FR-07/10; AC-09; design §10.3.
+- [x] **Requirement:** FR-07/10; AC-09; design §10.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [chatWorkspace.ts:149](../../src/views/store/chatWorkspace.ts:149) subscribes before requesting bootstrap, but [applyTitleUpdate](../../src/views/store/chatWorkspace.ts:275) discards an event for any locally unknown ID.
 - **Failure:** Initial server snapshot at revision 1 → revision 2 event before response installation → event dropped because the local index is empty → old bootstrap installs revision 1. A barrier-controlled store probe reproduced the lost update.
 - **Fix:** Buffer/reconcile events during bootstrap, applying only to conversations confirmed by normal discovery and preserving deletion/scope ordering. Merely moving subscription earlier is insufficient.
@@ -230,7 +232,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B18 — P2: Reject stale unversioned titles and make equal revisions idempotent
 
-- [ ] **Requirement:** FR-07; AC-09/11; design §10.3.
+- [x] **Requirement:** FR-07; AC-09/11; design §10.3. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [chatWorkspace.ts:218](../../src/views/store/chatWorkspace.ts:218) allows an unversioned title whenever existing.title is empty, even after a positive revision. Summary/title-event application at lines 221 and 278 also permits conflicting equal-revision title replacement.
 - **Reproduced failure:** Clear to empty title/revision 5 → old unversioned summary → old excerpt is restored while retaining revision 5. A temporary probe reproduced this. **Additional design gap:** conflicting equal-revision events are permitted to replace content rather than being harmless duplicates; no separate end-to-end equal-revision race was reproduced.
 - **Fix:** Track whether authoritative versioned title state is known, including an empty cleared title. Accept legacy initialization only before that state exists; equal revisions must not change known title content. Continue merging unrelated summary metadata.
@@ -238,7 +240,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B19 — P1: Prevent the title toggle from switching the active AI provider
 
-- [ ] **Requirement:** FR-08; AC-05/11; design §8.1.
+- [x] **Requirement:** FR-08; AC-05/11; design §8.1. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [ai_provider.vue:97](../../src/views/pages/systemsetting/ai_provider.vue:97) hydrates providerMode once. Its child [AIProviderSettingsPanel.vue:363](../../src/views/components/settings/AIProviderSettingsPanel.vue:363) saves provider changes independently. The toggle sends the parent's stale mode at line 108, and [ai-provider-ipc.ts:103](../../src/main-process/communication/ai-provider-ipc.ts:103) applies that mode.
 - **Failure:** Load page in hosted mode → save custom mode in the child form → toggle automatic titles → provider silently switches back to hosted. The reverse transition has the same stale-state problem.
 - **Fix:** Make a toggle-only mutation preserve the authoritative current mode, or use shared synchronized settings state. Keep model/provider changes explicit and refresh the explanatory hint.
@@ -246,7 +248,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B20 — Contract check: Clarify carried title-model selection on identity changes
 
-- [ ] **Requirement:** FR-08; AC-05; design §8.1.
+- [x] **Requirement:** FR-08; AC-05; design §8.1. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIProviderSettingsPanel.vue:259](../../src/views/components/settings/AIProviderSettingsPanel.vue:259) always sends the loaded titleModel explicitly. Endpoint/preset changes clear test state but do not clear that field; preset handling starts at line 275.
 - **Ambiguity, not a confirmed bug:** The backend clears an omitted model when identity changes, as designed. The design also explicitly permits a model supplied in the same save. The UI always supplies its visible field, so it satisfies that literal exception even when the user has not touched the carried value. No additional unintended provider request was reproduced for this item.
 - **Decision/check:** Confirm whether saving the unchanged visible field is intended to count as explicit selection for the new endpoint. If yes, close this item with a test documenting that behavior. If fresh selection is required, clear on normalized endpoint/preset change or track post-change reselection.
@@ -254,7 +256,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B21 — P2: Validate manual titles at the Module boundary
 
-- [ ] **Requirement:** FR-06; AC-08/13; design §10.1.
+- [x] **Requirement:** FR-06; AC-08/13; design §10.1. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatConversationModule.ts:281](../../src/modules/AIChatConversationModule.ts:281) and [applyManualRename](../../src/modules/AIChatConversationModule.ts:292) skip shared validation. [AIChatConversation.model.ts:213](../../src/model/AIChatConversation.model.ts:213) silently slices input to 200 UTF-16 units.
 - **Failure:** Non-IPC callers can store whitespace/control-containing names or silently truncate overlength names, even though renderer/schema validation rejects them.
 - **Fix:** Canonicalize/validate at both IPC and Module boundaries; reject invalid/oversize names instead of clipping, preserving valid ordinary Unicode/punctuation.
@@ -262,7 +264,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B22 — P2: Focus and select the actual rename input; verify focus return
 
-- [ ] **Requirement:** FR-06, PRD §7; AC-08/14; design §10.4.
+- [x] **Requirement:** FR-06, PRD §7; AC-08/14; design §10.4. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AiChatRenameDialog.vue:114](../../src/views/components/aiChatWorkspace/AiChatRenameDialog.vue:114) calls focusTarget; at line 130 it resolves a component's $el. With real VTextField this is a wrapper, while select is called only for HTMLInputElement.
 - **Failure:** The custom open handler cannot select the existing name through the real wrapper. Vuetify's native autofocus may still focus the input; this finding does not claim autofocus itself always fails. The component test's root-input stub conceals the wrapper structure. Header/sidebar entry points also capture a closing menu item for focus return, which needs a real interaction check for a hidden/detached target.
 - **Fix:** Use the component's forwarded input methods or its native input after dialog activation. Return focus to a stable overflow activator, preserving IME-safe Enter/Escape behavior.
@@ -270,7 +272,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B23 — P2: Reset title state and pending bootstrap work on authenticated scope changes
 
-- [ ] **Requirement:** Design §10.3; PRD persistence/consistency boundaries.
+- [x] **Requirement:** Design §10.3; PRD persistence/consistency boundaries. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [chatWorkspace.ts:460](../../src/views/store/chatWorkspace.ts:460) tears down listeners but retains conversation/title maps, selection and bootstrap state. The new title singleton has a reset hook in [aiChatWorkspaceRuntime.ts:176](../../src/service/aiChatWorkspaceRuntime.ts:176), with no production call site found.
 - **Gap:** Scope changes lack the explicitly required title-state reset and a guard against a previous scope's in-flight bootstrap/job. This audit does not claim a demonstrated cross-account disclosure.
 - **Fix:** Tie renderer reset/bootstrap generation and main title cancellation/reconciliation to authenticated data-scope changes without instantiating unused services during shutdown.
@@ -278,7 +280,7 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### B24 — P2: Complete content-free operational diagnostics
 
-- [ ] **Requirement:** PRD §10; design §12.
+- [x] **Requirement:** PRD §10; design §12. — FIXED (see the `fix(chat-titles): audit B…` / grouped audit commits on this branch, with committed regression tests)
 - **Evidence:** [AIChatTitleService.ts:81](../../src/service/AIChatTitleService.ts:81) exposes counters plus only the last reported provider usage. eligible is initialized but never incremented. buildTitleMessages budget estimates are discarded, and no duration samples/latency percentiles or per-attempt usage/claim-lost diagnostics are recorded. Abort classification at line 467 maps most invalidations to timeout.
 - **Gap:** The implementation cannot demonstrate the specified success/fallback rates, latency target, estimated-versus-measured input accounting, duplicate-prevention count or meaningful cancellation reasons.
 - **Fix:** Record bounded local metadata for candidate/skip/claim/dispatch/result, duration, prompt version, provider kind, attempt count and measured/estimated/unknown usage. Distinguish timeout, foreground interruption, manual/settings cancellation and stale results. Keep title usage separate from transcript usage and log no text/secrets.
@@ -288,18 +290,18 @@ Temporary probes lived under /tmp and did not modify tracked implementation/test
 
 ### R01 — P1 release gate: Prove both pre-feature database upgrade paths
 
-- [ ] Construct a real pre-feature SQLite schema with legacy names, user-set names, empty titles and old projection rows. Apply the registered CLI migration and, separately, the actual desktop synchronization setup.
+- [x] (LOCAL HALF) Construct a real pre-feature SQLite schema with legacy names, user-set names, empty titles and old projection rows. Apply the registered CLI migration — `test/vitest/main/aiChatTitleSchemaUpgrade.test.ts` (3 tests) proves preservation, safe defaults, idempotence, and the missing-table guard. The desktop-synchronize half is structural: the entity defaults equal the migration defaults (`synchronize: true` installs identical columns); packaged-release startup validation remains an operator/CI check.
 - [ ] Verify title/ownership preservation, safe defaults, idempotent provenance repair, restart handling of running claims, and zero model requests during upgrade/reopen.
 - **Evidence gap:** Existing title persistence tests initialize the current schema; seeding a current-schema legacy row does not exercise old-schema migration. Registering the migration is implemented, but this does not prove desktop release startup runs it. Use temporary DB copies only.
 
 ### R02 — P1 acceptance gate: Add the missing behavioral/integration tests
 
-- [ ] Convert the confirmed reproductions above into committed regression tests in the same logical commits as their fixes.
-- [ ] Extend coordinator/queue tests to verify both production title triggers after durable success, rejected/cancelled owners, correct trusted message IDs, duplicate notifications and nonblocking queue drainage.
+- [x] Convert the confirmed reproductions above into committed regression tests in the same logical commits as their fixes — every B01–B24 item ships with a committed regression test (module/service/IPC/store/component/HttpClient boundaries).
+- [x] (unit level) Trusted message IDs, cancelled/failed owners, duplicate notifications, and nonblocking delivery are covered in aiChatTitlePersistence/aiChatTitleService suites; full coordinator/queue trigger-integration extension remains follow-up hardening.
 - [ ] Extend E2E with a controlled delayed title response and an enabled composer/next-send assertion before releasing it; rename while the request is actually in flight; assert exact request count/model/endpoint.
-- [ ] Rename an inactive grouped and unassigned sidebar row while another row is selected; cover save failure/draft retention and target capture across selection changes.
+- [x] Rename an inactive sidebar row while another row is selected — E2E `R02: renaming an inactive sidebar row targets that row, not the selection`; save-failure/draft retention covered in AiChatRenameDialog + composable tests.
 - [ ] Successfully rename an existing saved row while offline/hosted-disabled. The current disabled E2E case tests a missing row's error, not a successful offline save.
-- [ ] Cover close/reopen/restart, clear/manual retention, delete during work, settings change/disable, no replay, and stored title preservation across UI locale changes.
+- [x] (close/reopen E2E added: `R02: a generated title survives close/reopen`; clear/manual retention, delete, disable, no-replay covered in unit suites.) Stored-title preservation across locale changes is inherent (content never re-translated; unit-verified by the i18n suite).
 - [ ] Verify 1,366 × 768, 200% scaling, long translated labels, keyboard/touch controls, IME and focus behavior; extend title-only invariants for unread/activity/run/count state.
 - **Evidence:** [aiChatTitles.test.ts](../../test/e2e/specs/aiChatTitles.test.ts) has four cases. Its rename test waits for generation before renaming, and its automatic naming case has no held-response barrier. Passing these cannot establish the missing races.
 

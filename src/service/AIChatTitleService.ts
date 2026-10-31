@@ -101,6 +101,12 @@ export interface AIChatTitleDiagnostics {
    * provider reported it (never fabricated; absent -> unknown).
    */
   lastProviderUsage: { promptTokens: number; completionTokens: number } | null;
+  /** B24: bounded dispatch-duration samples (ms), newest last. */
+  dispatchDurationsMs: number[];
+  /** B24: estimated serialized input bytes of the last dispatch. */
+  lastBudgetEstimateBytes: number | null;
+  /** B24: claim races lost (conditional update matched zero rows). */
+  claimsLost: number;
 }
 
 interface QueueEntry {
@@ -127,6 +133,9 @@ function emptyDiagnostics(): AIChatTitleDiagnostics {
     droppedMissingModel: 0,
     failedByCode: {},
     lastProviderUsage: null,
+    dispatchDurationsMs: [],
+    lastBudgetEstimateBytes: null,
+    claimsLost: 0,
   };
 }
 
@@ -199,10 +208,14 @@ export class AIChatTitleService {
     this.schedulePump();
   }
 
+  /** Why the active dispatch's controller was aborted (B24 classification). */
+  private activeAbortReason: "deadline" | "foreground" | "cancelled" | null = null;
+
   /** Best-effort cancel: drop queued work and abort an in-flight dispatch. */
   cancelConversation(conversationId: string): void {
     this.queue.delete(conversationId);
     if (this.activeConversationId === conversationId) {
+      this.activeAbortReason = "cancelled";
       this.activeAbort?.abort();
     }
   }
@@ -219,6 +232,7 @@ export class AIChatTitleService {
   /** Drop all queued work (feature disable / provider change best effort). */
   cancelAll(): void {
     this.queue.clear();
+    this.activeAbortReason = "cancelled";
     this.activeAbort?.abort();
   }
 
@@ -229,6 +243,7 @@ export class AIChatTitleService {
       lastProviderUsage: this.diagnostics.lastProviderUsage
         ? { ...this.diagnostics.lastProviderUsage }
         : null,
+      dispatchDurationsMs: [...this.diagnostics.dispatchDurationsMs],
     };
   }
 
@@ -380,7 +395,12 @@ export class AIChatTitleService {
       revision: candidate.revision,
       requestId,
     });
-    if (!claimed) return; // lost the race / state moved: never dispatch
+    if (!claimed) {
+      // B24: the conditional update matched zero rows — another writer moved
+      // the state first.
+      this.diagnostics.claimsLost += 1;
+      return;
+    }
     this.diagnostics.claimed += 1;
 
     // Recheck configuration immediately after claiming and before sending;
@@ -404,10 +424,11 @@ export class AIChatTitleService {
       return;
     }
 
-    const { messages } = buildTitleMessages({
+    const { messages, budget } = buildTitleMessages({
       userText: candidate.userText,
       assistantExcerpt: candidate.assistantExcerpt,
     });
+    this.diagnostics.lastBudgetEstimateBytes = budget.bytes; // B24
     const request: OpenAIChatCompletionRequest = {
       messages: messages.map((message) => ({ ...message })),
       model,
@@ -424,15 +445,19 @@ export class AIChatTitleService {
     const controller = new AbortController();
     this.activeAbort = controller;
     this.activeConversationId = conversationId;
-    const deadline = setTimeout(
-      () => controller.abort(),
-      TITLE_REQUEST_BUDGET_MS
-    );
+    const deadline = setTimeout(() => {
+      this.activeAbortReason = "deadline";
+      controller.abort();
+    }, TITLE_REQUEST_BUDGET_MS);
     // Foreground preemption mid-flight: abort naming to favor chat; the
     // attempt stays consumed and the excerpt is retained (design §6).
     const foregroundWatch = setInterval(() => {
-      if (this.deps.isForegroundBusy()) controller.abort();
+      if (this.deps.isForegroundBusy()) {
+        this.activeAbortReason = "foreground";
+        controller.abort();
+      }
     }, FOREGROUND_POLL_MS);
+    const dispatchedAt = Date.now(); // B24
 
     try {
       this.diagnostics.dispatched += 1;
@@ -553,13 +578,24 @@ export class AIChatTitleService {
         .catch(() => undefined);
       this.recordFailure(code);
     } finally {
+      // B24: bounded duration sample (last 50 dispatches).
+      this.diagnostics.dispatchDurationsMs.push(Date.now() - dispatchedAt);
+      if (this.diagnostics.dispatchDurationsMs.length > 50) {
+        this.diagnostics.dispatchDurationsMs.shift();
+      }
       clearTimeout(deadline);
       clearInterval(foregroundWatch);
+      this.activeAbortReason = null;
     }
   }
 
   private classifyError(err: unknown): ChatTitleFailureCode {
     if (err instanceof Error && err.name === "AbortError") {
+      // B24: distinguish deadline expiry, foreground preemption, and manual
+      // invalidation instead of guessing from the busy snapshot.
+      if (this.activeAbortReason === "deadline") return "timeout";
+      if (this.activeAbortReason === "foreground") return "interrupted";
+      if (this.activeAbortReason === "cancelled") return "interrupted";
       return this.deps.isForegroundBusy() ? "interrupted" : "timeout";
     }
     return "error";

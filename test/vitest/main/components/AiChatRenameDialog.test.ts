@@ -76,6 +76,57 @@ function findSave(wrapper: ReturnType<typeof mountDialog>) {
 }
 
 describe("AiChatRenameDialog", () => {
+  it("B22: with a real-shaped VTextField wrapper, focus AND selection land on the inner input", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const wrapper = mount(AiChatRenameDialog, {
+      attachTo: host,
+      props: {
+        modelValue: true,
+        initialTitle: "Sydney Dentists",
+        saving: false,
+        error: null,
+      },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          // B22: real VTextField shape — a WRAPPER div around the input.
+          "v-dialog": {
+            template: '<div v-if="modelValue"><slot /></div>',
+            props: ["modelValue"],
+          },
+          "v-card": { template: "<div><slot /></div>" },
+          "v-card-title": { template: "<div><slot /></div>" },
+          "v-card-text": { template: "<div><slot /></div>" },
+          "v-card-actions": { template: "<div><slot /></div>" },
+          "v-text-field": {
+            template:
+              '<div class="v-text-field__wrapper"><input ref="inner" :value="modelValue" data-testid="rename-dialog-input" @input="$emit(\'update:modelValue\', $event.target.value)" /></div>',
+            props: ["modelValue", "errorMessages", "label", "hint", "counter"],
+            emits: ["update:modelValue"],
+          },
+          "v-btn": {
+            template:
+              '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
+            props: ["disabled", "loading"],
+            emits: ["click"],
+          },
+          "v-spacer": { template: "<span />" },
+          "v-icon": { template: "<i />" },
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const inner = wrapper.find('input[data-testid="rename-dialog-input"]')
+      .element as HTMLInputElement;
+    expect(document.activeElement).toBe(inner);
+    // Selection covers the prefilled name (select-on-open).
+    expect(inner.selectionStart).toBe(0);
+    expect(inner.selectionEnd).toBe("Sydney Dentists".length);
+    wrapper.unmount();
+    host.remove();
+  });
+
   it("prefills the input with the current title when opened", async () => {
     const wrapper = mountDialog();
     const input = wrapper.find('[data-testid="rename-dialog-input"]');

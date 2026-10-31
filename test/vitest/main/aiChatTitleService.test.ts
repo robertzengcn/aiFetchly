@@ -383,7 +383,8 @@ describe("AIChatTitleService", () => {
     await waitFor(() => h.completeTitle.mock.calls.length === 1);
     h.service.cancelConversation("v2-cancel");
     await waitFor(() => h.moduleFake.failures.length >= 1);
-    expect(h.moduleFake.failures).toEqual(["timeout"]);
+    // B24: a manual invalidation classifies as interrupted, not timeout.
+    expect(h.moduleFake.failures).toEqual(["interrupted"]);
     expect(h.broadcasts).toHaveLength(0);
   });
 

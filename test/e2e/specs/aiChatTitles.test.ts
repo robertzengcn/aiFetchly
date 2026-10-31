@@ -158,6 +158,90 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     ).toBeHidden();
   });
 
+  test("R02: renaming an inactive sidebar row targets that row, not the selection (AC-08)", async ({
+    titlesApp,
+    fakeAi,
+  }) => {
+    await fakeAi.setScenario("stream-text");
+    await openChat(titlesApp);
+    await sendMessage(titlesApp, "Find dentists in Perth");
+    await expect(
+      titlesApp.mainWindow.getByTestId("workspace-transcript")
+    ).toContainText("world", { timeout: 30_000 });
+
+    // Second conversation stays selected while the FIRST row is renamed.
+    await titlesApp.mainWindow.getByTestId("workspace-new-chat").click();
+    await expect(composer(titlesApp)).toBeVisible({ timeout: 30_000 });
+    await sendMessage(titlesApp, "Find plumbers in Brisbane");
+    await expect(
+      titlesApp.mainWindow.getByTestId("workspace-transcript")
+    ).toContainText("world", { timeout: 30_000 });
+
+    // Expand the unassigned folder and capture the first row's id.
+    const tree = titlesApp.mainWindow.getByTestId("workspace-tree");
+    await tree.locator('[data-nav-row="unassigned"]').click();
+    const firstRow = tree.locator('[data-testid^="workspace-conversation-v2-"]').first();
+    const firstRowId = (await firstRow.getAttribute("data-testid")) ?? "";
+    const firstRowMenuId = firstRowId.replace(
+      "workspace-conversation-",
+      "workspace-row-menu-"
+    );
+
+    // SELECT the second conversation (row 2), then rename row 1.
+    const rows = tree.locator('[data-testid^="workspace-conversation-v2-"]');
+    const secondRow = rows.nth(1);
+    const secondRowId = (await secondRow.getAttribute("data-testid")) ?? "";
+    await secondRow.click();
+    await expect(headerTitle(titlesApp)).toBeVisible();
+
+    await titlesApp.mainWindow.getByTestId(firstRowMenuId).click();
+    await titlesApp.mainWindow
+      .getByTestId(
+        firstRowMenuId.replace("workspace-row-menu-", "workspace-row-rename-")
+      )
+      .click();
+    const input = titlesApp.mainWindow
+      .getByTestId("rename-dialog-input")
+      .locator("input");
+    await input.fill("Renamed Inactive Row");
+    await titlesApp.mainWindow.getByTestId("rename-dialog-save").click();
+    await expect(
+      titlesApp.mainWindow.getByTestId("rename-dialog")
+    ).toBeHidden({ timeout: 10_000 });
+
+    // The INACTIVE row shows the new name; the selected conversation's
+    // header is untouched by the row-scoped action.
+    await expect(
+      tree.locator(`[data-testid="${firstRowId}"]`)
+    ).toContainText("Renamed Inactive Row", { timeout: 10_000 });
+    void secondRowId;
+    await expect(headerTitle(titlesApp)).not.toContainText(
+      "Renamed Inactive Row"
+    );
+  });
+
+  test("R02: a generated title survives close/reopen of the window (AC-03/12)", async ({
+    titlesApp,
+    fakeAi,
+  }) => {
+    await fakeAi.setScenario("stream-text");
+    await fakeAi.queueNonStreamingContents([GENERATED_TITLE]);
+    await openChat(titlesApp);
+    await sendMessage(
+      titlesApp,
+      "Find Sydney dentists and draft the outreach email"
+    );
+    await expect(headerTitle(titlesApp)).toHaveText(GENERATED_TITLE, {
+      timeout: 30_000,
+    });
+    // Reload the same window: the persisted title must come back.
+    await titlesApp.mainWindow.reload();
+    await expect(composer(titlesApp)).toBeVisible({ timeout: 30_000 });
+    await expect(headerTitle(titlesApp)).toHaveText(GENERATED_TITLE, {
+      timeout: 30_000,
+    });
+  });
+
   test("rename UI works with hosted AI disabled; a missing row is reported, never faked (AC-13/FR-10)", async ({
     disabledApp,
   }) => {

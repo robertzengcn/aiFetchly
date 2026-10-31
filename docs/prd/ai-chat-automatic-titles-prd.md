@@ -1,6 +1,6 @@
 # AI Chat Automatic Titles and Manual Renaming — PRD
 
-Status: Proposed; implementation has not started.
+Status: Implemented (worktree branch `worktree-ai-chat-automatic-titles`); all FR-01–FR-10 coded with regression tests and Electron E2E coverage. Open items are operator release gates: human-scored multilingual evaluation, deployed hosted strict-routing evidence, adapter capability checks, and the staged enablement/rollback drill — see the audit TODO and its post-remediation status.
 Date: 2026-10-28
 Scope: AiFetchly workspace AI chat, including interactive messages drained from its pending-message queue.
 Companion: [Technical design](ai-chat-automatic-titles-technical-design.md).
