@@ -107,16 +107,48 @@ jobs:
       #   run: yarn rebuild-canvas
 
       - name: Build application
+        shell: bash
+        env:
+          # Mirror the macOS leg: run the WiX maker in its own process so the
+          # making phase starts with a fresh, small V8 heap instead of the full
+          # packaging working set, and guard the package phase so a hang shows
+          # diagnostics instead of an opaque cancellation.
+          PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000"
+          PACKAGE_GUARD_STALL_MS: "900000"
         run: |
+          set -euo pipefail
           echo "Current working directory: $(pwd)"
-          # Increase Node.js heap size to prevent out-of-memory errors during build
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          echo "Building with increased heap size (4GB)"
+
+          # Run #383 crashed with V8 "Fatal process out of memory: Zone"
+          # (exit code 0x80000003) inside the Forge Node process while
+          # candle.exe/light.exe compressed the packaged payload for the MSI.
+          # Cap the old-space heap at the level the Linux packaged-smoke leg
+          # uses (test.yml packaged-smoke-github) so the Forge process leaves
+          # memory headroom for the WiX tooling instead of hoarding a 4 GB
+          # old-space ceiling.
+          export NODE_OPTIONS="--max-old-space-size=3072"
+          echo "Building with NODE_OPTIONS=${NODE_OPTIONS}"
+
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
+          node scripts/run-packaging-with-hang-guard.js --platform=win32 --arch=x64
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package end"
+
+          # Forensics for the MSI phase: byte/file totals right before WiX.
+          echo "[$(date -u +%FT%TZ)] packaged app stats:"
+          echo "files: $(find out/aiFetchly-win32-x64 -type f | wc -l)"
+          du -sh out/aiFetchly-win32-x64 2>/dev/null || true
+          du -sh out/aiFetchly-win32-x64/resources/app.asar 2>/dev/null || true
+          du -sh out/aiFetchly-win32-x64/resources/app.asar.unpacked 2>/dev/null || true
+
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package (WiX) start"
           # Windows CI ships WiX MSI only (no Squirrel Setup.exe).
-          yarn make-win:test -- --targets=@electron-forge/maker-wix
+          # --skip-package reuses the package just produced above so the WiX
+          # maker runs with a fresh Node heap.
+          yarn make-win:test -- --targets=@electron-forge/maker-wix --skip-package
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package (WiX) end"
+
           # Fail if unpacked workers require asar-only pure-JS packages.
           yarn verify-packaged-app
-        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
