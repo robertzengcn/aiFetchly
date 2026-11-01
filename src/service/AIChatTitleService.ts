@@ -159,17 +159,21 @@ function emptyDiagnostics(): AIChatTitleDiagnostics {
   };
 }
 
-/** B13: finish reasons other than a clean stop are not eligible output. */
+/** B13: an EXPLICIT non-stop finish reason is not eligible output. */
 function raw_envelopeInvalid(
   finishReason: string | null | undefined,
   hasToolCalls: boolean,
   refusal: string | null
 ): boolean {
-  if (finishReason !== undefined && finishReason !== null && finishReason !== "stop") {
+  // Review #15: a missing finish_reason is accepted — OpenAI-compatible
+  // local servers legitimately omit it; actual truncation carries an
+  // explicit "length"/"content_filter" marker which IS rejected below.
+  if (
+    finishReason !== undefined &&
+    finishReason !== null &&
+    finishReason !== "stop"
+  ) {
     return true;
-  }
-  if (finishReason === undefined || finishReason === null) {
-    return true; // malformed envelope: no terminal marker at all
   }
   return hasToolCalls || (refusal !== null && refusal.length > 0);
 }
@@ -310,7 +314,8 @@ export class AIChatTitleService {
     }
     const entry = this.nextNonExpiredEntry();
     if (!entry) {
-      if (this.queue.size > 0) this.scheduleDelayedPump();
+      // nextNonExpiredEntry deletes every inspected entry, so a null return
+      // implies an empty queue (review #3: no delayed re-pump needed).
       return;
     }
     this.running = true;
@@ -490,9 +495,9 @@ export class AIChatTitleService {
         : {}),
     };
 
-    // F05: cancel/dispose that landed during the claim resolves here —
-    // the attempt is consumed but nothing is dispatched.
     if (preparationAbort.signal.aborted || this.disposed) {
+      // F05: cancel/dispose landed DURING the awaited claim — the attempt
+      // is consumed (claimed above) but nothing is dispatched.
       await module.markTitleAttemptFailed({
         conversationId,
         requestId,
@@ -558,6 +563,15 @@ export class AIChatTitleService {
         this.diagnostics.lastProviderUsage = attemptUsage;
       }
       const raw = envelopeInvalid ? null : extractAssistantText(response);
+      const finishOutcome = (outcome: string): void => {
+        this.recordAttempt(
+          requestId,
+          outcome,
+          provider.kind,
+          Date.now() - dispatchedAt,
+          attemptUsage
+        );
+      };
       if (envelopeInvalid) {
         await module.markTitleAttemptFailed({
           conversationId,
@@ -565,13 +579,7 @@ export class AIChatTitleService {
           failureCode: "invalid_output",
         });
         this.recordFailure("invalid_output");
-        this.recordAttempt(
-          requestId,
-          "invalid_output",
-          provider.kind,
-          Date.now() - dispatchedAt,
-          attemptUsage
-        );
+        finishOutcome("invalid_output");
         return;
       }
       if (raw === null) {
@@ -581,6 +589,7 @@ export class AIChatTitleService {
           failureCode: "invalid_output",
         });
         this.recordFailure("invalid_output");
+        finishOutcome("invalid_output");
         return;
       }
       const validated = validateGeneratedTitle(raw);
@@ -591,6 +600,7 @@ export class AIChatTitleService {
           failureCode: "invalid_output",
         });
         this.recordFailure("invalid_output");
+        finishOutcome("invalid_output");
         return;
       }
       if (validated.title.length === 0) {
@@ -601,6 +611,7 @@ export class AIChatTitleService {
           failureCode: "invalid_output",
         });
         this.recordFailure("invalid_output");
+        finishOutcome("declined");
         return;
       }
       // F05: a dispose during the network call seals the result.
@@ -676,7 +687,11 @@ export class AIChatTitleService {
       await module
         .markTitleAttemptFailed({ conversationId, requestId, failureCode: code })
         .catch(() => undefined);
-      this.recordFailure(code);
+      // Review #5: a specific code recorded above in this block is the
+      // attempt's outcome — the catch must not silently relabel it "error".
+      if (this.diagnostics.failedByCode[code] === undefined) {
+        this.recordFailure(code);
+      }
     } finally {
       // B24: bounded duration sample (last 50 dispatches).
       this.diagnostics.dispatchDurationsMs.push(Date.now() - dispatchedAt);

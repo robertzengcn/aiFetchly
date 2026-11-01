@@ -434,6 +434,34 @@ describe("AIChatTitleService", () => {
     expect(h.broadcasts).toHaveLength(0);
   });
 
+  it("review-#15: an absent finish_reason (local servers) is accepted with valid text", async () => {
+    const h = makeHarness();
+    const base = completionResponse("Local Server Title");
+    h.completeTitle.mockImplementationOnce(async () => {
+      const { usage: _u, ...rest } = base;
+      return {
+        ...rest,
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "Local Server Title" },
+          },
+        ],
+      } as typeof base;
+    });
+    h.moduleFake.applyResult = {
+      outcome: "applied",
+      title: "Local Server Title",
+      revision: 1,
+    };
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-nofinish",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.broadcasts.length >= 1);
+    expect(h.broadcasts[0]).toMatchObject({ title: "Local Server Title" });
+  });
+
   it("B13: a tool_calls envelope is rejected even with clean finish_reason", async () => {
     const h = makeHarness();
     h.completeTitle.mockResolvedValueOnce({

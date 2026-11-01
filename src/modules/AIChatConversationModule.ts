@@ -425,12 +425,19 @@ export class AIChatConversationModule extends BaseModule {
       if (meta.source === "scheduled-loop") continue; // F02: excluded owner
       if (message.role === "user") {
         const typed = safeText.get(message.messageId) ?? "";
-        if (typed.trim().length === 0 && pending !== null) {
-          continue; // attachment-only follow-up mid-turn: keep the turn's typed text
+        const turnId = meta.turnId ?? null;
+        // Review #11: an attachment-only row in the SAME turn as a typed
+        // pending keeps the turn's typed text; a NEW turn (with or without
+        // typed text) always replaces the pending exchange — an
+        // attachment-only opening consumes its own window slot (F03).
+        const sameTypedTurn =
+          pending !== null &&
+          pending.typedText.trim().length > 0 &&
+          turnId !== null &&
+          pending.turnId === turnId;
+        if (!sameTypedTurn) {
+          pending = { turnId, typedText: typed };
         }
-        // A new user row ends any unanswered pending turn (F02: zero-row
-        // cancellations must not pair with a later user's assistant).
-        pending = { turnId: meta.turnId ?? null, typedText: typed };
       } else if (message.role === "assistant") {
         const content = message.content?.trim() ?? "";
         // An empty assistant row is not a completed exchange — the turn may
@@ -446,10 +453,14 @@ export class AIChatConversationModule extends BaseModule {
           trustedSeen = true;
         }
         if (pending === null) continue;
+        // Review #12: symmetric legacy rule — an assistant WITHOUT turn
+        // metadata pairs only with a pending exchange that also predates
+        // turn ids; it never pairs across owners/features.
+        const assistantTurnId = meta.turnId ?? null;
         const turnCompatible =
-          pending.turnId === null || meta.turnId === undefined ||
-          meta.turnId === null ||
-          meta.turnId === pending.turnId;
+          assistantTurnId === null
+            ? pending.turnId === null
+            : pending.turnId === null || pending.turnId === assistantTurnId;
         if (!turnCompatible) continue; // a foreign turn's answer
         exchanges.push({
           userText: pending.typedText,
@@ -800,8 +811,11 @@ export class AIChatConversationModule extends BaseModule {
           conversationId: conv.conversationId,
           // Filled by the workspace-key backfill; null rows stay Unassigned.
           workspaceKey: null,
+          // Review C2: the visible backfill excerpt runs the SAME bounded
+          // sanitization as live seeding — emails/URLs/keys in pre-feature
+          // first messages must never surface in the sidebar.
           title: firstUser
-            ? excerpt(firstUser.content, TITLE_EXCERPT_MAX)
+            ? sanitizeExcerpt(firstUser.content, GENERATED_TITLE_MAX_CODEPOINTS)
             : null,
           preview: excerpt(conv.lastMessage, PREVIEW_EXCERPT_MAX),
           createdAt: conv.createdAt,

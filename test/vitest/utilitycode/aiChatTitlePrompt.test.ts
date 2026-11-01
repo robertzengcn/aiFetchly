@@ -177,6 +177,35 @@ describe("validateGeneratedTitle", () => {
   });
 
   it.each([
+    // Review C1: stems accidentally matched by the optional-accent French
+    // alternates — valid topics that must NEVER consume the single attempt.
+    ["Envoy Proxy Setup"],
+    ["Stamp Collecting Guide"],
+    ["Data Collection Plan"],
+    ["Collections Management"],
+  ])("review-C1: topic words with claim-adjacent stems pass %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(true);
+  });
+
+  it.each([
+    // Spanish feminine forms previously slipped through.
+    ["Factura enviada a clientes"],
+  ])("review-C1: feminine claim forms are still rejected %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(false);
+  });
+
+  it("review-#13: tabs, zero-width spaces, and internal double spaces normalize or reject", () => {
+    const tabbed = validateGeneratedTitle("Fix\tthe\tbug");
+    expect(tabbed.ok && tabbed.title).toBe("Fix the bug");
+    const zwsp = validateGeneratedTitle("Bug\u200Breport");
+    expect(zwsp.ok).toBe(false);
+  });
+
+  it("review-#14: a truncated-JSON artifact is rejected", () => {
+    expect(validateGeneratedTitle('{"title": "Fix login').ok).toBe(false);
+  });
+
+  it.each([
     ["Email Consent Management"],
     ["Consent-Based Outreach"],
     ["Unsent Email Review"],

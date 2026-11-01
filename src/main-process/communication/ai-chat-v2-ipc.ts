@@ -1753,12 +1753,17 @@ async function handleClearConversation(
       getSharedAIChatTitleService().cancelConversation(conversationId);
       // B15: publish the post-clear title state (null for nonmanual) so
       // every window drops the old name without waiting for bootstrap.
-      if (cleared) {
+      if (
+        cleared &&
+        (cleared.titleSource === "placeholder" || cleared.titleSource === "user")
+      ) {
+        // Runtime guard: the event's provenance must be one of the two
+        // post-clear states — never a cast.
         sharedWorkspaceEventRouter.broadcastTitleUpdate({
           conversationId,
           title: cleared.title,
           titleRevision: cleared.titleRevision,
-          titleSource: cleared.titleSource as "placeholder" | "user",
+          titleSource: cleared.titleSource,
         });
       }
     } catch (err) {
@@ -1808,12 +1813,16 @@ async function handleClearAll(): Promise<
       for (const conversationId of projections) {
         titleService.cancelConversation(conversationId);
         const cleared = await conversationModule.clearTitleLifecycle(conversationId);
-        if (cleared) {
+        if (
+          cleared &&
+          (cleared.titleSource === "placeholder" ||
+            cleared.titleSource === "user")
+        ) {
           sharedWorkspaceEventRouter.broadcastTitleUpdate({
             conversationId,
             title: cleared.title,
             titleRevision: cleared.titleRevision,
-            titleSource: cleared.titleSource as "placeholder" | "user",
+            titleSource: cleared.titleSource,
           });
         }
       }

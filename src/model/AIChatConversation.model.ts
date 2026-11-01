@@ -310,13 +310,14 @@ export class AIChatConversationModel extends BaseDb {
             `UPDATE ai_chat_conversations
              SET title = ?, titleSource = 'ai', titleGenerationStatus = 'succeeded',
                  titleFailureCode = NULL, titleRevision = titleRevision + 1,
-                 updatedAt = CURRENT_TIMESTAMP
+                 updatedAt = ?
              WHERE conversationId = ? AND titleEpoch = ? AND titleRevision = ?
                AND titleRequestId = ? AND titleGenerationStatus = 'running'
-               AND titleIsUserSet = 0`
+               AND titleIsUserSet = 0 AND archivedAt IS NULL`
           )
           .run([
             input.title.slice(0, CONVERSATION_TITLE_MAX_LENGTH),
+            new Date().toISOString(),
             input.conversationId,
             input.epoch,
             input.revision,
@@ -326,11 +327,14 @@ export class AIChatConversationModel extends BaseDb {
           const row = await this.getByConversationId(input.conversationId);
           return row ? { outcome: "stale" } : { outcome: "missing" };
         }
-        const row = await this.getByConversationId(input.conversationId);
+        // Review #9: return the values THIS write committed — a concurrent
+        // rename between the write and a re-read must not be republished
+        // under the "ai" provenance label (its own higher revision wins in
+        // every renderer anyway).
         return {
           outcome: "applied",
-          title: row?.title ?? input.title,
-          revision: row?.titleRevision ?? input.revision + 1,
+          title: input.title.slice(0, CONVERSATION_TITLE_MAX_LENGTH),
+          revision: input.revision + 1,
         };
       }
       // No raw handle (unexpected driver shape): fall through to the
@@ -350,16 +354,18 @@ export class AIChatConversationModel extends BaseDb {
       .where(
         "conversationId = :conversationId AND titleEpoch = :epoch" +
           " AND titleRevision = :revision AND titleRequestId = :requestId" +
-          " AND titleGenerationStatus = 'running' AND titleIsUserSet = 0",
+          " AND titleGenerationStatus = 'running' AND titleIsUserSet = 0" +
+          " AND archivedAt IS NULL",
         input
       )
       .execute();
     if ((result.affected ?? 0) === 1) {
-      const row = await this.getByConversationId(input.conversationId);
+      // Review #9: same as the guarded raw path — report what THIS write
+      // committed, never a re-read that may include a concurrent rename.
       return {
         outcome: "applied",
-        title: row?.title ?? input.title,
-        revision: row?.titleRevision ?? input.revision + 1,
+        title: input.title.slice(0, CONVERSATION_TITLE_MAX_LENGTH),
+        revision: input.revision + 1,
       };
     }
     const row = await this.getByConversationId(input.conversationId);

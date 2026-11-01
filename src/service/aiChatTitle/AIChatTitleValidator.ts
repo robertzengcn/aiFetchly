@@ -10,7 +10,7 @@ import {
  * The control ranges are the point of this pattern - detecting them.
  */
 // eslint-disable-next-line no-control-regex
-const CONTROL_OR_BIDI = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/;
+const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/;
 
 /**
  * B14: deterministic artifact/claim detectors for model output. A title is
@@ -32,7 +32,7 @@ const EXPLANATION_PREFIX = /^(?:title|name|topic|chat title|标题|タイトル|
  * request; only the explicit adverbial form claims work.
  */
 const COMPLETION_CLAIM =
-  /(?:\b(?:successfully|already)\s+)?\b(?:collected|sent|delivered|completed)\b|\b(?:successfully|already)\s+generated\b|已(?:收集|发送|送达|完成)|(?:enviado?s?|recogido?s?|recopilado?s?|completado?s?)\b|envoyé?s?|collecté?s?|\bgesendet\b|\bgesammelt\b|abgeschlossen|送信済み|収集済み|完了済み/i;
+  /(?:\b(?:successfully|already)\s+)?\b(?:collected|sent|delivered|completed)\b|\b(?:successfully|already)\s+generated\b|已(?:收集|发送|送达|完成)|\b(?:enviado?s?|enviada?s?|recogido?s?|recogida?s?|recopilado?s?|recopilada?s?|completado?s?|completada?s?)\b|\benvoyé(?:e|es|s)?\b|\bcollecté(?:e|es|s)?\b|\bgesendet\b|\bgesammelt\b|\babgeschlossen\b|送信済み|収集済み|完了済み/i;
 
 export type GeneratedTitleValidation =
   | { ok: true; title: string }
@@ -48,7 +48,12 @@ export type ManualTitleValidation =
  * malformed response must never replace the excerpt.
  */
 export function validateGeneratedTitle(raw: string): GeneratedTitleValidation {
-  let text = raw.trim();
+  // A multi-line response is never a title — check BEFORE normalization
+  // collapses the newlines that prove it.
+  if (raw.includes("\n")) return { ok: false, reason: "invalid" };
+  // #13: collapse internal whitespace (tabs/double spaces are rendering
+  // artifacts, not title content).
+  let text = normalizeText(raw);
   // Strip at most one matching outer quote pair.
   if (text.length >= 2) {
     const first = text[0];
@@ -69,7 +74,7 @@ export function validateGeneratedTitle(raw: string): GeneratedTitleValidation {
   if (COMPLETION_CLAIM.test(text)) return { ok: false, reason: "invalid" };
   // Post-sanitize leak guards: reject obvious contact artifacts rather than
   // storing them (design §9).
-  if (/[}@]|sk-/.test(text)) {
+  if (/[}@{]|sk-|"/.test(text)) {
     return { ok: false, reason: "invalid" };
   }
   if (countCodepoints(text) > GENERATED_TITLE_MAX_CODEPOINTS) {
