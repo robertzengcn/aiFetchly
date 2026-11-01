@@ -1024,6 +1024,36 @@ module.exports = {
         language: 1033,
         manufacturer: "Robert Zeng",
         icon: "./src/assets/images/icon.ico",
+        // Run #383: the test-branch Windows MSI build died with V8 "Fatal
+        // process out of memory: Zone" (exit 0x80000003) while light.exe
+        // mszip-compressed the whole packaged payload (electron dist +
+        // app.asar + unpacked bundles, several hundred MB) inside the same
+        // limited CI runner as the Forge Node process. Light's default Media
+        // compression is mszip; skipping compression entirely turns the
+        // cabinet build into an I/O-bound copy with a small, flat memory
+        // footprint. Applying it only to NODE_ENV=test builds keeps
+        // release/store installers compressed as before; a bigger test-only
+        // artifact is the accepted trade-off.
+        beforeCreate: (creator) => {
+          if (process.env.NODE_ENV !== "test") {
+            return;
+          }
+          const mediaTagOpen =
+            '<Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>';
+          const mediaTagNoCompression =
+            '<Media Id="1" Cabinet="product.cab" EmbedCab="yes" CompressionLevel="none"/>';
+          if (!creator.wixTemplate.includes(mediaTagOpen)) {
+            throw new Error(
+              "[forge] maker-wix beforeCreate: expected the electron-wix-msi wix.xml Media tag " +
+                `${mediaTagOpen} but it is absent — the CompressionLevel patch would be a no-op.` +
+                " Update the marker if electron-wix-msi changed its template."
+            );
+          }
+          creator.wixTemplate = creator.wixTemplate.replace(
+            mediaTagOpen,
+            mediaTagNoCompression
+          );
+        },
         // Custom UI template
         ui: {
           chooseDirectory: true,
