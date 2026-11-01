@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
@@ -1996,6 +1997,8 @@ export class AIChatQueryEngine {
       // Titles B01: raw visible typed text (bounded) — persisted BEFORE any
       // attachment/mention/pasted enrichment so naming never sees it.
       safeTypedText: (request.message ?? "").slice(0, 2000),
+        // r3 G01: bind the user row to the provider executing its turn.
+        sourceProviderVersion: currentProviderConfigVersion(),
         source: scheduledContext ? "scheduled-loop" : "chat-v2",
         ...(generatedImageRefMetadata
           ? { generatedImageReferences: generatedImageRefMetadata }
@@ -3264,6 +3267,20 @@ export class AIChatQueryEngine {
     /** T15 route classification, threaded from runTurn. */
     readonly taskRoute?: TaskExecutionRoute;
   }): Promise<AIChatTurnTerminalEvent> {
+    // r3 G01: the queue promotes the durable user row BEFORE the engine
+    // assigns the turn — stamp the association onto that row so the
+    // exchange identity is complete on both sides (best-effort bounded
+    // metadata merge; failure degrades association to role order only).
+    if (input.turnId && input.sourceUserMessageId) {
+      const module0 = new AIChatV2Module();
+      await module0
+        .stampUserMessageTurnIdentity(
+          input.sourceUserMessageId,
+          input.turnId,
+          currentProviderConfigVersion()
+        )
+        .catch(() => undefined);
+    }
     const {
       conversationId,
       assistantMessageId,
@@ -4843,6 +4860,37 @@ export class AIChatQueryEngine {
     taskExecutionBinding?: LoopTaskExecutionBinding
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
+    // r3 G01: durable exchange identity for every terminal assistant save —
+    // the still-registered active turn carries the turnId this exchange was
+    // executed under (cleared only after these saves).
+    // (r3 G01) Only terminal variants carry a conversationId; pause variants
+    // persist via their resumed turn instead.
+    const g01ConversationId =
+      result.type === "completed" ||
+      result.type === "cancelled" ||
+      result.type === "failed"
+        ? result.conversationId
+        : null;
+    const g01TurnId = g01ConversationId
+      ? this.activeTurns.get(g01ConversationId)?.turnId
+      : undefined;
+    const g01ProviderVersion = currentProviderConfigVersion();
+    // Scheduled turns reuse their stable user message id (`scheduled-user-…`,
+    // ScheduledAiMessageRunner §14.2) as the turn id — their terminal rows
+    // must never masquerade as interactive chat-v2.
+    const g01Source: "chat-v2" | "scheduled-loop" = g01TurnId?.startsWith(
+      "scheduled-user-"
+    )
+      ? "scheduled-loop"
+      : "chat-v2";
+    /** Spread into each terminal assistant metadata block below. */
+    const g01Identity: {
+      turnId?: string;
+      sourceProviderVersion: number;
+    } = {
+      ...(g01TurnId ? { turnId: g01TurnId } : {}),
+      sourceProviderVersion: g01ProviderVersion,
+    };
     // Persist deferred-catalog discovered state on terminal results so it
     // survives app restart / conversation reload (FR-5/AC-8). Pause variants
     // carry the snapshot on `pending` and persist via the resumed turn.
@@ -4878,7 +4926,8 @@ export class AIChatQueryEngine {
             model: result.model,
             tokensUsed: result.totalTokens,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
               ...buildReasoningMetadata(result.reasoningContent, result.model),
@@ -5103,7 +5152,8 @@ export class AIChatQueryEngine {
             messageId: assistantMessageId,
             model: result.model,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: "cancelled",
               cancelled: true,
@@ -5203,7 +5253,8 @@ export class AIChatQueryEngine {
             messageId: assistantMessageId,
             model: result.model,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: "error",
               error: userSafeError(result.error),

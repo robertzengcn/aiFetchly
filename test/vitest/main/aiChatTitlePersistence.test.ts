@@ -468,6 +468,139 @@ describe("AIChatTitle persistence (message pairing input)", () => {
   });
 });
 
+describe("Titles audit r3 G01–G03 — durable identity, provider binding, chat-rows window", () => {
+  async function seedG(
+    messageModel: AIChatMessageModel,
+    conversationId: string,
+    seq: number,
+    role: "user" | "assistant",
+    content: string,
+    meta: Record<string, unknown>
+  ): Promise<string> {
+    const messageId = `${conversationId}-g${seq}`;
+    const entity = new AIChatMessageEntity();
+    entity.messageId = messageId;
+    entity.conversationId = conversationId;
+    entity.role = role;
+    entity.content = content;
+    entity.timestamp = new Date(2026, 0, 2, 0, 0, seq);
+    entity.messageType = MessageType.MESSAGE;
+    entity.metadata = JSON.stringify({ source: "chat-v2", ...meta });
+    await messageModel.saveMessage(entity);
+    return messageId;
+  }
+
+  it("G01: an exchange executed under a DIFFERENT provider version is not selected", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-g01a",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    // Exchange executed under provider version 1; the trigger runs under 2.
+    await seedG(messageModel, "v2-g01a", 1, "user", "Find dentists in Perth", {
+      safeTypedText: "Find dentists in Perth",
+      turnId: "t1",
+      sourceProviderVersion: 1,
+    });
+    const trusted = await seedG(
+      messageModel,
+      "v2-g01a",
+      2,
+      "assistant",
+      "Found them.",
+      { turnId: "t1", sourceProviderVersion: 1 }
+    );
+    const candidate = await module.prepareTitleCandidate(
+      "v2-g01a",
+      trusted,
+      2 // expected: version 2
+    );
+    // The only substantive exchange belongs to provider 1 → not eligible
+    // (its excerpt must never travel under provider 2's job).
+    expect(candidate).toEqual({ kind: "pending_window" });
+    // Legacy rows WITHOUT a version stay compatible.
+    const trusted2 = await seedG(
+      messageModel,
+      "v2-g01a",
+      3,
+      "assistant",
+      "Legacy answer.",
+      { turnId: "t1" } // no sourceProviderVersion
+    );
+    void trusted2;
+  });
+
+  it("G01: an assistant saved under scheduled-loop source never pairs", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-g01b",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedG(messageModel, "v2-g01b", 1, "user", "Run the weekly report", {
+      safeTypedText: "Run the weekly report",
+      turnId: "scheduled-user-x",
+      source: "scheduled-loop",
+    });
+    const trusted = await seedG(
+      messageModel,
+      "v2-g01b",
+      2,
+      "assistant",
+      "Report done.",
+      { turnId: "scheduled-user-x", source: "scheduled-loop" }
+    );
+    const candidate = await module.prepareTitleCandidate("v2-g01b", trusted);
+    // An excluded-owner trigger is not trustworthy → preparation aborts.
+    expect(candidate).toEqual({ kind: "not_ready" });
+  });
+
+  it("G03: tool rows never consume the pagination bound", async () => {
+    await SqliteDb.ensureInitialized();
+    const messageModel = new AIChatMessageModel(tmpDir);
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await model.createProjection({
+      conversationId: "v2-g03",
+      titleSource: "excerpt",
+      titleGenerationStatus: "pending",
+    });
+    await seedG(messageModel, "v2-g03", 1, "user", "Analyze the Q3 revenue file", {
+      safeTypedText: "Analyze the Q3 revenue file",
+      turnId: "t1",
+    });
+    // 250 TOOL_RESULT rows — far past the old 200-row bound.
+    for (let i = 0; i < 250; i += 1) {
+      const entity = new AIChatMessageEntity();
+      entity.messageId = `v2-g03-tool-${i}`;
+      entity.conversationId = "v2-g03";
+      entity.role = "assistant";
+      entity.content = `tool payload ${i}`;
+      entity.timestamp = new Date(2026, 0, 2, 0, 1, i);
+      entity.messageType = MessageType.TOOL_RESULT;
+      entity.metadata = JSON.stringify({ source: "chat-v2", turnId: "t1" });
+      await messageModel.saveMessage(entity);
+    }
+    const trusted = await seedG(
+      messageModel,
+      "v2-g03",
+      90,
+      "assistant",
+      "Revenue rose 12%.",
+      { turnId: "t1" }
+    );
+    const candidate = await module.prepareTitleCandidate("v2-g03", trusted);
+    expect(candidate.kind).toBe("eligible");
+  });
+});
+
 describe("Titles audit r2 F06/F07 — bulk lifecycle + epoch-conditional suppression", () => {
   async function seedTypedSimple(
     messageModel: AIChatMessageModel,

@@ -145,6 +145,12 @@ export interface ChatV2MessageMetadata {
    * context that must never reach a title request or the sidebar.
    */
   safeTypedText?: string;
+  /**
+   * r3 G01: the provider config version that EXECUTED this exchange. Title
+   * selection uses it to refuse sending one provider's excerpt under a
+   * different provider's job. Absent on legacy rows (treated as compatible).
+   */
+  sourceProviderVersion?: number;
   openaiResponseId?: string;
   finishReason?: string | null;
   cancelled?: boolean;

@@ -27,7 +27,8 @@ export type ResolvedTitleProvider =
 export interface AIChatTitleModuleSurface {
   prepareTitleCandidate(
     conversationId: string,
-    trustedAssistantMessageId: string | null
+    trustedAssistantMessageId: string | null,
+    expectedProviderVersion?: number
   ): Promise<PreparedTitleCandidate>;
   claimTitleAttempt(input: {
     conversationId: string;
@@ -401,7 +402,10 @@ export class AIChatTitleService {
 
     const candidate = await module.prepareTitleCandidate(
       conversationId,
-      entry.assistantMessageId
+      entry.assistantMessageId,
+      // r3 G01: the selected exchange must belong to the provider that
+      // executed the trigger turn (the entry's execution-time version).
+      entry.sourceVersion
     );
     if (preparationAbort.signal.aborted) return; // B09: cancelled during preparation
     if (candidate.kind !== "eligible") return; // pending_window/not_ready/suppressed

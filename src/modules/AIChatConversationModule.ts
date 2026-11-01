@@ -336,7 +336,10 @@ export class AIChatConversationModule extends BaseModule {
    */
   async prepareTitleCandidate(
     conversationId: string,
-    trustedAssistantMessageId: string | null = null
+    trustedAssistantMessageId: string | null = null,
+    /** r3 G01: the provider version that executed the TRIGGER turn. The
+     * selected exchange must belong to the same provider identity. */
+    expectedProviderVersion?: number
   ): Promise<PreparedTitleCandidate> {
     await this.ensureConnection();
     const convModel = this.convModel();
@@ -362,9 +365,11 @@ export class AIChatConversationModule extends BaseModule {
       offset < ROW_BOUND;
       offset += PAGE
     ) {
+      // G03: chat rows ONLY — tool/plan rows are excluded in SQL so a
+      // tool-heavy first answer cannot consume the bound.
       const page = await this
         .messageModel()
-        .getMessagesByConversation(conversationId, PAGE, offset);
+        .getChatExchangeRows(conversationId, PAGE, offset);
       messages.push(...page);
       if (
         page.length < PAGE ||
@@ -384,6 +389,7 @@ export class AIChatConversationModule extends BaseModule {
         error?: string;
         source?: string;
         turnId?: string;
+        sourceProviderVersion?: number;
       }
     >();
     for (const message of messages) {
@@ -393,6 +399,7 @@ export class AIChatConversationModule extends BaseModule {
         error?: string;
         source?: string;
         turnId?: string;
+        sourceProviderVersion?: number;
       }
       let meta: RowTurnMeta | null = null;
       if (message.metadata) {
@@ -481,12 +488,22 @@ export class AIChatConversationModule extends BaseModule {
     // F03: the window counts completed exchanges regardless of typed text
     // (attachment-only openings consume window slots); substantiveness is
     // evaluated only on typed text.
+    // r3 G01: only exchanges executed under the EXPECTED provider identity
+    // are selectable — one provider's excerpt never travels under another
+    // provider's job. Legacy rows without a version are compatible.
+    const providerCompatible = (assistantId: string): boolean => {
+      if (expectedProviderVersion === undefined) return true;
+      const meta = rowMeta.get(assistantId);
+      const version = meta?.sourceProviderVersion;
+      return version === undefined || version === expectedProviderVersion;
+    };
     const substantive = exchanges
       .slice(0, 3) // first-three-completed-exchanges window
       .find(
         (exchange) =>
           exchange.userText.trim().length > 0 &&
-          isSubstantiveRequest(exchange.userText)
+          isSubstantiveRequest(exchange.userText) &&
+          providerCompatible(exchange.assistantId)
       );
     if (substantive) {
       const userText = sanitizeText(normalizeText(substantive.userText));

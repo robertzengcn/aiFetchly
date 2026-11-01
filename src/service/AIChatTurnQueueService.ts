@@ -510,6 +510,16 @@ export class AIChatTurnQueueService {
       pendingMessageId: parked.pendingMessageId,
       status: outcome,
     });
+    // r3 G02: a parked/resumed turn that durably completes reaches the SAME
+    // title trigger as the normal drain path — cancelled/failed outcomes
+    // never notify (FR-02 exclusions).
+    if (outcome === "completed") {
+      this.deps.onInteractiveTurnCompleted?.({
+        conversationId,
+        assistantMessageId: `assistant-pending-${parked.pendingMessageId}`,
+        sourceProviderVersion: currentProviderConfigVersion(),
+      });
+    }
     return true;
   }
 

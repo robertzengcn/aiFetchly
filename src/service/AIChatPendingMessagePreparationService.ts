@@ -1,3 +1,4 @@
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import {
   DocumentService,
   type StagedAttachmentReference,
@@ -365,6 +366,9 @@ export class AIChatPendingMessagePreparationService {
       source: "chat-v2",
       // Titles B01: raw visible typed text (bounded) — before enrichment.
       safeTypedText: (request.message ?? "").slice(0, 2000),
+      // r3 G01: bind the user row to the provider executing its turn
+      // (captured at accept; the drain executes under the same identity).
+      sourceProviderVersion: currentProviderConfigVersion(),
       ...(attachmentMetadata.length > 0
         ? { attachments: attachmentMetadata }
         : {}),
