@@ -223,6 +223,15 @@ export async function getConversationBusyReason(
 /** One-time-per-process projection backfill guard. */
 let backfillStarted = false;
 
+/**
+ * F17: authenticated DB-scope reset — a new scope must re-run schema
+ * readiness/title reconciliation; a FAILED first pass stays retryable
+ * because backfillStarted is only set after success.
+ */
+export function resetWorkspaceBackfillForScopeChange(): void {
+  backfillStarted = false;
+}
+
 function toMessageView(row: {
   messageId: string;
   conversationId: string;
@@ -323,7 +332,9 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // Idempotent backfill once per process: inserts missing projection
       // rows and workspace keys for legacy conversations.
       if (!backfillStarted) {
-        backfillStarted = true;
+        // F17: mark as started only AFTER the readiness work succeeds so a
+        // failed pass remains retryable for this scope.
+        let readinessOk = true;
         // Chat-titles design §6/§11: interrupted title claims fall back
         // permanently for their lifecycle; legacy user rows are repaired.
         // Never enqueues naming work and never scans history for jobs.
@@ -332,10 +343,14 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
             await conversationModule.reconcileTitleStateOnStartup();
           void titleReconcile;
         } catch (err) {
+          readinessOk = false;
           console.warn(
             "[ai-chat-workspace] title startup reconciliation failed:",
             err
           );
+        }
+        if (readinessOk) {
+          backfillStarted = true;
         }
         // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
         // bootstrap reports runtime state (design §19.4 / FR-036).

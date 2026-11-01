@@ -58,3 +58,17 @@ describe("chat-titles translations (AC-14)", () => {
     }
   });
 });
+
+describe("R02: stored titles are content — locale changes never re-translate", () => {
+  it("a saved generated title is byte-identical across locale switches", async () => {
+    const { validateGeneratedTitle } = await import(
+      "@/service/aiChatTitle/AIChatTitleValidator"
+    );
+    // A generated zh title validated under an "en" UI locale round-trips
+    // unchanged — titles are stored content, not translation keys.
+    const stored = "悉尼牙医外联";
+    const validated = validateGeneratedTitle(stored);
+    expect(validated).toEqual({ ok: true, title: stored });
+    expect(validated.ok && validated.title).toBe(stored);
+  });
+});

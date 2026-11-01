@@ -342,6 +342,13 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   // Titles B09/B23: drop the title singleton and its queued/in-flight work
   // so a previous scope's excerpt can never reach the new scope's provider.
   resetSharedAIChatTitleService();
+  // Titles F17: the new scope must re-run schema readiness + interrupted-
+  // claim reconciliation (and a previously failed pass stays retryable).
+  void import("@/main-process/communication/ai-chat-workspace-ipc").then(
+    ({ resetWorkspaceBackfillForScopeChange }) => {
+      resetWorkspaceBackfillForScopeChange();
+    }
+  );
   // Clear the shared lightweight route cooldowns so one account/provider
   // cannot suppress another (tech-design §12).
   resetLightweightRuntime();

@@ -76,10 +76,17 @@ export function useConversationRename() {
   function closeDialog(): void {
     renameTargetId.value = null;
     renameError.value = null;
-    if (activatorEl) {
+    // F14: return focus to the captured activator only while it is still
+    // connected and focusable — a hidden/detached menu item is skipped in
+    // favor of nothing (never a silent focus steal).
+    if (
+      activatorEl &&
+      activatorEl.isConnected &&
+      !activatorEl.hasAttribute("disabled")
+    ) {
       activatorEl.focus?.();
-      activatorEl = null;
     }
+    activatorEl = null;
   }
 
   return {

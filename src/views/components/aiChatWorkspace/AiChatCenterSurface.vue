@@ -610,7 +610,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, getCurrentInstance,
+} from "vue";
 import { buildUploadedAttachments } from "@/views/components/aiChatV2/aiChatV2Attachment";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
@@ -3037,14 +3038,29 @@ function openProviderSettings(): void {
   void router.push({ name: "system_setting_ai_provider" });
 }
 
+function headerRenameActivator(): HTMLElement | null {
+  const el = headerRootEl();
+  return el?.querySelector<HTMLElement>('[data-testid="workspace-header-overflow"]') ?? null;
+}
+
+function headerRootEl(): HTMLElement | null {
+  const vc = getCurrentInstance();
+  const el = vc?.proxy?.$el;
+  if (el instanceof HTMLElement) return el;
+  return null;
+}
+
 function onRename(): void {
   if (!conversationId.value) return;
   // Chat-titles FR-06: shared dialog/composable; explicit save errors stay
   // visible and the draft is preserved on failure (no silent swallow).
+  // F14: focus returns to the STABLE overflow activator (the menu item
+  // closes with the dialog and is never a valid target).
+  const overflowActivator = headerRenameActivator();
   headerRename.openRename(
     conversationId.value,
     headerTitle.value ?? "",
-    document.activeElement instanceof HTMLElement ? document.activeElement : null
+    overflowActivator
   );
 }
 

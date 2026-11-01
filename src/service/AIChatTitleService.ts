@@ -9,7 +9,10 @@ import {
   TITLE_MAX_OUTPUT_TOKENS,
   TITLE_REQUEST_BUDGET_MS,
 } from "@/service/aiChatTitle/AIChatTitleText";
-import { buildTitleMessages } from "@/service/aiChatTitle/AIChatTitlePrompt";
+import {
+  buildTitleMessages,
+  CHAT_TITLE_PROMPT_VERSION,
+} from "@/service/aiChatTitle/AIChatTitlePrompt";
 import { validateGeneratedTitle } from "@/service/aiChatTitle/AIChatTitleValidator";
 import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
@@ -107,6 +110,22 @@ export interface AIChatTitleDiagnostics {
   lastBudgetEstimateBytes: number | null;
   /** B24: claim races lost (conditional update matched zero rows). */
   claimsLost: number;
+  /**
+   * F16: bounded per-attempt outcome metadata (last 50). Usage is
+   * "provider"-measured when reported and "unknown" otherwise — a prior
+   * request's numbers never stand in for a later one, including
+   * provider-charged invalid output.
+   */
+  attemptRecords: Array<{
+    requestId: string;
+    outcome: string;
+    providerKind: string;
+    promptVersion: string;
+    durationMs: number;
+    budgetEstimateBytes: number | null;
+    usage: { promptTokens: number; completionTokens: number } | null;
+    usageSource: "provider" | "unknown";
+  }>;
 }
 
 interface QueueEntry {
@@ -136,6 +155,7 @@ function emptyDiagnostics(): AIChatTitleDiagnostics {
     dispatchDurationsMs: [],
     lastBudgetEstimateBytes: null,
     claimsLost: 0,
+    attemptRecords: [],
   };
 }
 
@@ -251,6 +271,9 @@ export class AIChatTitleService {
         ? { ...this.diagnostics.lastProviderUsage }
         : null,
       dispatchDurationsMs: [...this.diagnostics.dispatchDurationsMs],
+      attemptRecords: this.diagnostics.attemptRecords.map((record) => ({
+        ...record,
+      })),
     };
   }
 
@@ -342,6 +365,17 @@ export class AIChatTitleService {
       // Settings changed between the source exchange and the pump: the
       // excerpt must not travel to the newly selected provider.
       this.recordFailure("provider_changed");
+      return;
+    }
+
+    // F18 (design §8.4): hosted entitlement / custom-provider availability
+    // is resolved BEFORE any context preparation — with AI unavailable the
+    // service performs zero candidate reads, excerpt writes, or
+    // suppressions. Custom-provider-without-hosted-subscription still works
+    // (the resolver's local path carries its own availability).
+    const earlyProvider = this.deps.resolveTitleProvider();
+    if (!earlyProvider) {
+      this.diagnostics.droppedProviderUnavailable += 1;
       return;
     }
 
@@ -508,6 +542,21 @@ export class AIChatTitleService {
         choice?.message?.refusal ?? null;
       const envelopeInvalid =
         raw_envelopeInvalid(finishReason, hasToolCalls, refusal);
+      // F16: usage is captured for EVERY returned response — including
+      // provider-charged invalid envelopes — and absent usage stays unknown.
+      const reportedUsage = response.usage;
+      const attemptUsage =
+        reportedUsage &&
+        typeof reportedUsage.prompt_tokens === "number" &&
+        typeof reportedUsage.completion_tokens === "number"
+          ? {
+              promptTokens: reportedUsage.prompt_tokens,
+              completionTokens: reportedUsage.completion_tokens,
+            }
+          : null;
+      if (attemptUsage) {
+        this.diagnostics.lastProviderUsage = attemptUsage;
+      }
       const raw = envelopeInvalid ? null : extractAssistantText(response);
       if (envelopeInvalid) {
         await module.markTitleAttemptFailed({
@@ -516,6 +565,13 @@ export class AIChatTitleService {
           failureCode: "invalid_output",
         });
         this.recordFailure("invalid_output");
+        this.recordAttempt(
+          requestId,
+          "invalid_output",
+          provider.kind,
+          Date.now() - dispatchedAt,
+          attemptUsage
+        );
         return;
       }
       if (raw === null) {
@@ -526,18 +582,6 @@ export class AIChatTitleService {
         });
         this.recordFailure("invalid_output");
         return;
-      }
-      // §12: capture actual provider usage when reported (never estimated).
-      const usage = response.usage;
-      if (
-        usage &&
-        typeof usage.prompt_tokens === "number" &&
-        typeof usage.completion_tokens === "number"
-      ) {
-        this.diagnostics.lastProviderUsage = {
-          promptTokens: usage.prompt_tokens,
-          completionTokens: usage.completion_tokens,
-        };
       }
       const validated = validateGeneratedTitle(raw);
       if (!validated.ok) {
@@ -603,6 +647,13 @@ export class AIChatTitleService {
       });
       if (applied.outcome === "applied") {
         this.diagnostics.succeeded += 1;
+        this.recordAttempt(
+          requestId,
+          "succeeded",
+          provider.kind,
+          Date.now() - dispatchedAt,
+          attemptUsage
+        );
         // Publish only AFTER the committed write (invariant 4).
         this.deps.broadcastTitle({
           conversationId,
@@ -612,6 +663,13 @@ export class AIChatTitleService {
         });
       } else {
         this.diagnostics.stale += 1; // manual rename/clear won the race
+        this.recordAttempt(
+          requestId,
+          "stale",
+          provider.kind,
+          Date.now() - dispatchedAt,
+          attemptUsage
+        );
       }
     } catch (err) {
       const code = this.classifyError(err);
@@ -642,6 +700,29 @@ export class AIChatTitleService {
       return this.deps.isForegroundBusy() ? "interrupted" : "timeout";
     }
     return "error";
+  }
+
+  /** F16: append a bounded per-attempt outcome record. */
+  private recordAttempt(
+    requestId: string,
+    outcome: string,
+    providerKind: string,
+    durationMs: number,
+    usage: { promptTokens: number; completionTokens: number } | null
+  ): void {
+    this.diagnostics.attemptRecords.push({
+      requestId,
+      outcome,
+      providerKind,
+      promptVersion: CHAT_TITLE_PROMPT_VERSION,
+      durationMs,
+      budgetEstimateBytes: this.diagnostics.lastBudgetEstimateBytes,
+      usage,
+      usageSource: usage ? "provider" : "unknown",
+    });
+    if (this.diagnostics.attemptRecords.length > 50) {
+      this.diagnostics.attemptRecords.shift();
+    }
   }
 
   private recordFailure(code: ChatTitleFailureCode): void {

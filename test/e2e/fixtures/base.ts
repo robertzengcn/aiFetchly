@@ -33,6 +33,8 @@ export interface E2EFixtures {
   aiApp: LaunchedApp;
   /** aiApp + seeded title model (chat-titles specs only; PRD FR-03). */
   titlesApp: LaunchedApp;
+  /** Local-enabled provider at a dead endpoint (offline rename; titles R02). */
+  offlineApp: LaunchedApp;
   disabledApp: LaunchedApp;
   /** Authenticated launch with AI disabled — for shell/UI-only specs. */
   shellApp: LaunchedApp;
@@ -117,6 +119,24 @@ export const e2eTest = base.extend<E2EFixtures>({
     const app = await launchAiFetchly({
       testRoot,
       fakeAiBaseUrl: fakeAi.providerBaseUrl,
+    });
+    await use(app);
+    await closeApp(app);
+  },
+
+  // Titles R02 (AC-13): local-enabled provider pointed at a DEAD loopback
+  // port — sends fail at transport but the conversation row persists, so a
+  // SAVED row can be renamed fully offline.
+  offlineApp: async ({ testRoot }, use) => {
+    writeStateManifest(testRoot, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: "http://127.0.0.1:9",
+      workspacePath: testRoot.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot,
+      fakeAiBaseUrl: "http://127.0.0.1:9",
     });
     await use(app);
     await closeApp(app);

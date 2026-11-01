@@ -93,12 +93,15 @@ const shell = useAppShellStore();
 
   function onSidebarRename(conversationId: string): void {
     const conversation = chatWorkspace.conversationsById.get(conversationId);
-    // §7.5: focus returns to the invoking control (the row's menu item) on
-    // dialog close — capture it while it is still the active element.
+    // F14: focus returns to the row's STABLE menu activator button (the
+    // transient menu item closes with the dialog and must not be targeted).
+    const activator = document.querySelector<HTMLElement>(
+      `[data-testid="workspace-row-menu-${conversationId}"]`
+    );
     sidebarRename.openRename(
       conversationId,
       conversation?.title ?? "",
-      document.activeElement instanceof HTMLElement ? document.activeElement : null
+      activator
     );
   }
 const innerPageShell = useInnerPageShellFlag();

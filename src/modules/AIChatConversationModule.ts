@@ -280,9 +280,10 @@ export class AIChatConversationModule extends BaseModule {
   }
 
   async rename(conversationId: string, title: string): Promise<boolean> {
-    await this.ensureConnection();
-    const updated = await this.convModel().rename(conversationId, title);
-    return updated !== null;
+    // F15: the compatibility path runs the SAME canonical validation as the
+    // IPC action — no unvalidated bypass at the Module boundary.
+    const result = await this.applyManualRename(conversationId, title);
+    return result.outcome === "renamed";
   }
 
   /**

@@ -60,13 +60,16 @@ async function renameFromHeader(
   });
 }
 
+/** F19: assert clean teardown on the app THIS test used. */
+async function clean(app: { mainWindow: import("@playwright/test").Page }): Promise<void> {
+  assertCleanTeardown(app as Parameters<typeof assertCleanTeardown>[0]);
+}
+
 test.describe("AI chat automatic titles + manual renaming", () => {
-  test.afterEach(({ app, titlesApp, disabledApp }) => {
-    const a = app ?? titlesApp ?? disabledApp;
-    if (a) {
-      assertCleanTeardown(a);
-    }
-  });
+  // F19: NO shared afterEach that destructures app fixtures — Playwright
+  // would instantiate every requested fixture (launching extra Electron
+  // instances against the shared root). Each test asserts teardown on the
+  // ONE app it actually used.
 
   test("a completed substantive exchange names the chat and the chat stays usable (AC-01)", async ({
     titlesApp,
@@ -92,6 +95,7 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     await expect(titlesApp.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
       timeout: 30_000,
     });
+    await clean(titlesApp);
   });
 
   test("a manual rename wins and survives later model activity (AC-09, AC-03)", async ({
@@ -122,6 +126,7 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     // Give any (incorrect) second title request a window to land.
     await titlesApp.mainWindow.waitForTimeout(2_000);
     await expect(headerTitle(titlesApp)).toHaveText("Sydney Dentists — Q4");
+    await clean(titlesApp);
   });
 
   test("rename dialog validates empty input and cancels cleanly (AC-08)", async ({
@@ -156,6 +161,7 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     await expect(
       titlesApp.mainWindow.getByTestId("rename-dialog")
     ).toBeHidden();
+    await clean(titlesApp);
   });
 
   test("R02: renaming an inactive sidebar row targets that row, not the selection (AC-08)", async ({
@@ -218,6 +224,7 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     await expect(headerTitle(titlesApp)).not.toContainText(
       "Renamed Inactive Row"
     );
+    await clean(titlesApp);
   });
 
   test("R02: a generated title survives close/reopen of the window (AC-03/12)", async ({
@@ -240,6 +247,34 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     await expect(headerTitle(titlesApp)).toHaveText(GENERATED_TITLE, {
       timeout: 30_000,
     });
+    await clean(titlesApp);
+  });
+
+  test("R02/AC-13: an existing SAVED row renames successfully fully offline", async ({
+    offlineApp,
+  }) => {
+    await openChat(offlineApp);
+    // The send fails at transport, but the durable conversation row (with
+    // its provisional excerpt) persists — this is the SAVED-row case.
+    await sendMessage(offlineApp, "draft an outreach email for Berlin cafes");
+    await offlineApp.mainWindow.waitForTimeout(2_500);
+
+    await offlineApp.mainWindow.getByTestId("workspace-header-overflow").click();
+    await offlineApp.mainWindow
+      .getByTestId("workspace-overflow-rename")
+      .click();
+    const input = offlineApp.mainWindow
+      .getByTestId("rename-dialog-input")
+      .locator("input");
+    await expect(input).toBeVisible({ timeout: 10_000 });
+    await input.fill("Berlin Cafe Outreach");
+    await offlineApp.mainWindow.getByTestId("rename-dialog-save").click();
+
+    // Persisted locally with no working provider: the header shows the name.
+    await expect(headerTitle(offlineApp)).toHaveText("Berlin Cafe Outreach", {
+      timeout: 10_000,
+    });
+    await clean(offlineApp);
   });
 
   test("rename UI works with hosted AI disabled; a missing row is reported, never faked (AC-13/FR-10)", async ({
@@ -270,5 +305,6 @@ test.describe("AI chat automatic titles + manual renaming", () => {
     ).toContainText("no longer available", { timeout: 10_000 });
     // Draft preserved for retry; the dialog never reports false success.
     await expect(input).toHaveValue("Offline Renamed Chat");
+    await clean(disabledApp);
   });
 });

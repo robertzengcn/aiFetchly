@@ -491,6 +491,85 @@ describe("AIChatTitleService", () => {
     expect(h.broadcasts[1]).toMatchObject({ titleSource: "ai" });
   });
 
+  it("F18: an unavailable provider skips context preparation entirely", async () => {
+    const h = makeHarness(null); // resolveTitleProvider -> null
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-earlygate",
+      assistantMessageId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(h.moduleFake.candidates).toBe(0); // zero preparation work
+    expect(h.completeTitle).not.toHaveBeenCalled();
+    expect(h.service.getDiagnostics().droppedProviderUnavailable).toBe(1);
+  });
+
+  it("F16: per-attempt records keep provider usage and unknown distinct", async () => {
+    const h = makeHarness();
+    // First dispatch reports usage; second returns none — its record must be
+    // "unknown", never inheriting the prior request's numbers.
+    h.completeTitle.mockImplementationOnce(async () => {
+      const base = completionResponse("First Title");
+      return {
+        ...base,
+        usage: { prompt_tokens: 120, completion_tokens: 8, total_tokens: 128 },
+      };
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-usage1",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.broadcasts.length >= 1);
+    h.moduleFake.candidateSequence = [
+      {
+        kind: "eligible",
+        userText: "Second task",
+        assistantExcerpt: "ok",
+        epoch: 0,
+        revision: 0,
+        visibleTitle: "Second task",
+        titleSource: "excerpt",
+        excerptRefreshed: false,
+      },
+    ];
+    // Second response reports NO usage — its record must be "unknown".
+    h.completeTitle.mockImplementationOnce(async () => {
+      const { usage: _usage, ...rest } = completionResponse("Second Title");
+      return rest;
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-usage2",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.broadcasts.length >= 2);
+    const records = h.service.getDiagnostics().attemptRecords;
+    const succeeded = records.filter((r) => r.outcome === "succeeded");
+    expect(succeeded).toHaveLength(2);
+    expect(succeeded[0]).toMatchObject({
+      usage: { promptTokens: 120, completionTokens: 8 },
+      usageSource: "provider",
+    });
+    expect(succeeded[1]).toMatchObject({
+      usage: null,
+      usageSource: "unknown",
+    });
+  });
+
+  it("F16: a provider-charged invalid envelope records unknown-or-reported usage", async () => {
+    const h = makeHarness();
+    const base = completionResponse("Truncated");
+    h.completeTitle.mockImplementationOnce(async () => ({
+      ...base,
+      choices: [{ ...base.choices[0], finish_reason: "length" }],
+    }));
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-charged",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    const records = h.service.getDiagnostics().attemptRecords;
+    expect(records.at(-1)).toMatchObject({ outcome: "invalid_output" });
+  });
+
   it("F05: a cancel landing during the awaited claim dispatches nothing", async () => {
     const h = makeHarness();
     const originalClaim = h.moduleFake.module.claimTitleAttempt.bind(

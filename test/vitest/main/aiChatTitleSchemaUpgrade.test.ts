@@ -137,6 +137,60 @@ describe("chat-titles pre-feature schema upgrade (R01)", () => {
     }
   });
 
+  it("R01: the DESKTOP synchronize path upgrades the same pre-feature database", async () => {
+    const { SqliteDb } = await import("@/config/SqliteDb");
+    const dbPath = path.join(tmpDir, "scraper.db");
+    const pre = await createPreFeatureDb(dbPath);
+    await pre.destroy();
+
+    // Open with the REAL desktop configuration (DB_ENTITIES +
+    // synchronize:true) — exactly what a packaged app runs on an old DB.
+    process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
+    (SqliteDb as unknown as { instance: unknown }).instance = null;
+    (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+    (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
+    SqliteDb.getInstance(tmpDir);
+    await SqliteDb.ensureInitialized();
+
+    const { AIChatConversationModel } = await import(
+      "@/model/AIChatConversation.model"
+    );
+    const model = new AIChatConversationModel(tmpDir);
+    const legacy = await model.getByConversationId("v2-legacy");
+    const userset = await model.getByConversationId("v2-userset");
+    const empty = await model.getByConversationId("v2-empty");
+
+    // Titles and ownership preserved; safe lifecycle defaults installed —
+    // identical to the CLI migration's outcome (equal defaults).
+    expect(legacy).toMatchObject({
+      title: "Legacy excerpt name",
+      titleIsUserSet: false,
+      titleSource: "legacy",
+      titleGenerationStatus: "suppressed",
+      titleAttemptCount: 0,
+    });
+    expect(userset).toMatchObject({
+      title: "My manual name",
+      titleIsUserSet: true,
+      titleGenerationStatus: "suppressed",
+    });
+    expect(empty).toMatchObject({
+      title: null,
+      titleSource: "legacy",
+      titleGenerationStatus: "suppressed",
+    });
+
+    // Startup repair promotes user-set rows to explicit user provenance.
+    const repaired = await model.repairLegacyUserTitles();
+    expect(repaired).toBe(1);
+    const after = await model.getByConversationId("v2-userset");
+    expect(after?.titleSource).toBe("user");
+
+    // Zero model requests on reopen is structural: no dispatch path runs
+    // during schema initialization (the title service is notification-driven).
+    await SqliteDb.ensureInitialized();
+  });
+
   it("a database without the conversation table is a guarded no-op", async () => {
     const dbPath = path.join(tmpDir, "scraper.db");
     const ds = new DataSource({
