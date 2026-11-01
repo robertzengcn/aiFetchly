@@ -877,7 +877,11 @@ function onRequestWorkspaceRemove(): void {
 // --- Header + run strip projection ------------------------------------------
 const headerTitle = computed(() => {
   const summary = workspaceStore.selectedConversation;
-  return summary?.title || selectedStore.selectedTitle;
+  // F12: an AUTHORITATIVE summary with an intentionally empty title (cleared
+  // nonmanual name) must NOT fall back to the old selection snapshot — the
+  // header shows the localized placeholder instead.
+  if (summary) return summary.title;
+  return selectedStore.selectedTitle;
 });
 
 const recovering = computed(() => selectedStore.recovery !== null);

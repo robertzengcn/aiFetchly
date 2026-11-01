@@ -88,6 +88,20 @@ describe("buildTitleMessages", () => {
     ).not.toThrow();
   });
 
+  it("F08: the serialized ceiling is unconditional at production input limits", () => {
+    // Audit r2 reproduction: 2000-unit user text + escape-heavy assistant.
+    const userText = "Draft email " + "u".repeat(1988);
+    const assistantText =
+      "Suggested plan " + "\\".repeat(838) + "a".repeat(10_000);
+    const { messages, budget } = buildTitleMessages({
+      userText,
+      assistantExcerpt: assistantText,
+    });
+    // Assert the ACTUAL serialized size, not only the reported budget.
+    expect(utf8ByteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4096);
+    expect(budget.bytes).toBe(utf8ByteLength(JSON.stringify(messages)));
+  });
+
   it("prefers user intent in the 70/30 split", () => {
     const { messages } = buildTitleMessages({
       userText: "u".repeat(5000),
@@ -150,6 +164,25 @@ describe("validateGeneratedTitle", () => {
       return;
     }
     expect(result.ok).toBe(false);
+  });
+
+  it.each([
+    ["Analyze /Users/alice/private/report.txt"],
+    ["Analysis (/Users/alice/private/report.txt)"],
+    ["Analyze /srv/customer-secrets/report.csv"],
+    ["Report on /Volumes/Backup/data.xlsx"],
+    ["`/var/log/audit.log` findings"],
+  ])("F09: rejects ordinary quoted/bracketed absolute paths %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(false);
+  });
+
+  it.each([
+    ["Email Consent Management"],
+    ["Consent-Based Outreach"],
+    ["Unsent Email Review"],
+    ["AI-Generated Image Editing"],
+  ])("F10: harmless topic words are no longer rejected %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(true);
   });
 
   it.each([

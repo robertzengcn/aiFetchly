@@ -20,13 +20,19 @@ const CONTROL_OR_BIDI = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u202A-\u202E\u
 const CREDENTIAL_ASSIGNMENT =
   /(?:api[-_]?key|apikey|secret|token|password|passwd|pwd|authorization|auth|mot de passe|passwort|contrase(?:ñ|n)a|contraseña|パスワード|密码|口令|密钥)\s*(?:[:=：＝]|\b(?:is|es|est|ist)\b|是|：|は)\s*[^\s]+/i;
 const ABSOLUTE_PATH =
-  /(?:^|\s)\/(?:home|Users|var|tmp|opt|etc|mnt|root|data)\/|\b[A-Za-z]:\\/;
+  /(?:^|[\s("'[<{`,:;])\/(?:home|Users|var|tmp|opt|etc|mnt|root|data|srv|Volumes|private|media)\/|\b[A-Za-z]:\\/;
 const URL_OR_DOMAIN = /\b(?:https?:\/\/|www\.)\S+/i;
 const MARKDOWN_DECORATION = /\*\*|__|^\s*#{1,6}\s|`/;
 const EXPLANATION_PREFIX = /^(?:title|name|topic|chat title|标题|タイトル|titre|título|titel)\s*[:：]/i;
-/** Deterministic unsupported-completion claims (design §9 fixture set). */
+/**
+ * Deterministic unsupported-completion claims (design §9 fixture set).
+ * F10: every English verb carries a LEADING word boundary (no more
+ * "Consent"/"Unsent" suffix hits) and bare "generated" is excluded —
+ * "AI-Generated Image Editing" describes an artifact, not a completed
+ * request; only the explicit adverbial form claims work.
+ */
 const COMPLETION_CLAIM =
-  /(?:\b(?:successfully|already)\s+)?(?:collected|sent|delivered|completed|generated)\b|已(?:收集|发送|送达|完成|生成)|(?:enviado?s?|recogido?s?|recopilado?s?|completado?s?|generado?s?)\b|envoyé?s?|collecté?s?|gesendet|gesammelt|abgeschlossen|送信済み|収集済み|完了済み/i;
+  /(?:\b(?:successfully|already)\s+)?\b(?:collected|sent|delivered|completed)\b|\b(?:successfully|already)\s+generated\b|已(?:收集|发送|送达|完成)|(?:enviado?s?|recogido?s?|recopilado?s?|completado?s?)\b|envoyé?s?|collecté?s?|\bgesendet\b|\bgesammelt\b|abgeschlossen|送信済み|収集済み|完了済み/i;
 
 export type GeneratedTitleValidation =
   | { ok: true; title: string }

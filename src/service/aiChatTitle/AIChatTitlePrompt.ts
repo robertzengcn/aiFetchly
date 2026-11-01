@@ -72,10 +72,13 @@ export function buildTitleMessages(input: {
   );
   let messages: readonly TitlePromptMessage[] = [];
   let serializedBytes = 0;
-  // B12: budget the FINAL serialized representation — roles, keys, and the
-  // extra JSON-escaping layer (backslashes/quotes can double the encoded
-  // size versus raw content). Trim on Unicode boundaries until it fits.
-  for (let round = 0; round < 8; round += 1) {
+  // B12/F08: budget the FINAL serialized representation — roles, keys, and
+  // the extra JSON-escaping layer (backslashes/quotes can double the encoded
+  // size versus raw content). REBUILD after every trim and continue until
+  // the serialization fits; each round removes at least one code point, so
+  // the loop terminates when the content is exhausted (fixed framing alone
+  // is far below the budget, guaranteeing convergence).
+  for (;;) {
     const userContent =
       EXCERPT_FRAME_PREFIX +
       JSON.stringify({
@@ -101,7 +104,9 @@ export function buildTitleMessages(input: {
       const drop = Math.min(chars.length, Math.max(1, Math.ceil(excess / 2)));
       assistant = chars.slice(0, chars.length - drop).join("");
     } else {
-      break; // nothing left to trim; framing alone exceeds the budget
+      // Both exhausted and still over (impossible for this fixed framing;
+      // kept as an explicit safe result rather than an infinite loop).
+      break;
     }
   }
   return {

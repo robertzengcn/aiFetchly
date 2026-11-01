@@ -32,8 +32,10 @@ const BEARER_CREDENTIAL = /\bbearer\s+[^\s]+/gi;
 const SK_STYLE_KEY = /\bsk-[A-Za-z0-9_-]{8,}\b/g;
 const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 const URL = /\b(?:https?:\/\/|www\.)\S+/gi;
+// F09: match absolute paths behind ordinary file-analysis syntax — start of
+// string, whitespace, quotes, brackets, parentheses, backticks, or commas.
 const UNIX_ABSOLUTE_PATH =
-  /(?:^|\s)\/(?:home|Users|var|tmp|opt|etc|mnt|root|data)\/[^\s]*/g;
+  /(?:^|[\s("'[<{`,:;])\/(?:home|Users|var|tmp|opt|etc|mnt|root|data|srv|Volumes|private|media)\/[^\s"'\]>)}`]*/g;
 const WINDOWS_ABSOLUTE_PATH = /\b[A-Za-z]:\\[^\s"<>|?*]+/g;
 
 /**
@@ -49,9 +51,11 @@ export function sanitizeText(text: string): string {
     .replace(SK_STYLE_KEY, "[redacted]")
     .replace(URL, "[link]")
     .replace(EMAIL, "[email]")
-    .replace(UNIX_ABSOLUTE_PATH, (match) =>
-      match.startsWith(" ") ? ` [path]` : "[path]"
-    )
+    .replace(UNIX_ABSOLUTE_PATH, (match) => {
+      const lead = match[0];
+      const keepsLead = /[\s("'[<{`,:;]/.test(lead);
+      return keepsLead ? `${lead}[path]` : "[path]";
+    })
     .replace(WINDOWS_ABSOLUTE_PATH, "[path]");
 }
 

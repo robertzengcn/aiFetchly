@@ -110,6 +110,14 @@ window.addEventListener(
   "aifetchly:ai-provider-settings-changed",
   hydrateTitlesSettings
 );
+// F13: cleanup registered INSIDE script setup — a block outside the script
+// tags never executes and leaks the listener across route revisits.
+onUnmounted(() => {
+  window.removeEventListener(
+    "aifetchly:ai-provider-settings-changed",
+    hydrateTitlesSettings
+  );
+});
 
 async function onAutoTitlesToggle(value: boolean | null): Promise<void> {
   if (typeof value !== "boolean") return;
@@ -142,10 +150,3 @@ function onReasoningVisibilityChange(value: boolean | null): void {
 </script>
 
 <style scoped></style>
-
-onUnmounted(() => {
-  window.removeEventListener(
-    "aifetchly:ai-provider-settings-changed",
-    hydrateTitlesSettings
-  );
-});

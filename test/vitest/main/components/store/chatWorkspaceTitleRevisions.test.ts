@@ -168,6 +168,36 @@ describe("chatWorkspace store title revision reconciliation", () => {
     expect(s.conversationsById.get("v2-buf")?.titleRevision).toBe(2);
   });
 
+  it("F11: a stale superseded bootstrap owns nothing — no error write, no buffer drain", async () => {
+    const s = store();
+    const { bootstrapWorkspace } = await import("@/views/api/aiChatWorkspace");
+    const release = { fn: null as null | ((v: WorkspaceSidebarResponse) => void) };
+    vi.mocked(bootstrapWorkspace).mockImplementationOnce(
+      () =>
+        new Promise<WorkspaceSidebarResponse>((resolve) => {
+          release.fn = resolve;
+        })
+    );
+    const stale = s.bootstrap(); // request A
+    // A newer same-scope request supersedes A and completes first.
+    await s.bootstrap();
+    expect(s.bootstrapped).toBe(true);
+    // A's response arrives late: it must install nothing.
+    release.fn?.({
+      workspaces: [],
+      unassigned: [summary("v2-stale", { title: "Stale Row" })],
+      selectedConversationId: null,
+    });
+    await stale;
+    expect(s.conversationsById.get("v2-stale")).toBeUndefined();
+    // A stale REJECTION also must not set the current error.
+    vi.mocked(bootstrapWorkspace).mockRejectedValueOnce(new Error("old scope"));
+    const staleFail = s.bootstrap();
+    await s.bootstrap(); // newer succeeds
+    await staleFail.catch(() => undefined);
+    expect(s.bootstrapError).toBeNull();
+  });
+
   it("B18: a known cleared-empty title rejects a later legacy unversioned title", () => {
     const s = store();
     // Cleared to empty at revision 5 (authoritative versioned state).

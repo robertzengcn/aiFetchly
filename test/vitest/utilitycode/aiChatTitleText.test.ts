@@ -51,6 +51,21 @@ describe("sanitizeText", () => {
     );
   });
 
+  it("F09: redacts quoted/bracketed/backticked paths and /srv // /Volumes roots", () => {
+    expect(sanitizeText('Analyze "/Users/alice/private/report.txt" now')).toBe(
+      "Analyze \"[path]\" now"
+    );
+    expect(
+      sanitizeText("Analysis (/Users/alice/private/report.txt) done")
+    ).toBe("Analysis ([path]) done");
+    expect(
+      sanitizeText("Check /srv/customer-secrets/report.csv please")
+    ).toBe("Check [path] please");
+    expect(sanitizeText("Mounted at /Volumes/Backup/data.xlsx")).toBe(
+      "Mounted at [path]"
+    );
+  });
+
   it("replaces absolute unix and windows paths but keeps topic words", () => {
     expect(sanitizeText("open /home/robert/report.csv now")).toBe(
       "open [path] now"

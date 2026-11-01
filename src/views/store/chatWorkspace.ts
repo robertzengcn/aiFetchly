@@ -142,10 +142,13 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
   let bootstrapInFlight = false;
   const pendingTitleEvents = new Map<string, ChatTitleUpdatedEvent>();
   /**
-   * B23: monotonic scope/bootstrap generation. A response from a previous
-   * generation (scope reset raced an in-flight request) installs nothing.
+   * B23/F11: monotonic scope/bootstrap generation. EVERY request captures the
+   * current value and only the newest request may install results, write
+   * errors, clear in-flight state, or drain the title buffer — a stale
+   * success, rejection, or scope-reset response owns nothing.
    */
   let bootstrapGeneration = 0;
+  let activeBootstrapGeneration: number | null = null;
 
   function rebuildConversationIndex(): void {
     const index = new Map<string, WorkspaceConversationSummary>();
@@ -169,12 +172,13 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     bootstrapError.value = null;
     startEventSubscriptions();
     bootstrapInFlight = true;
-    const generation = bootstrapGeneration;
+    const generation = ++bootstrapGeneration;
+    activeBootstrapGeneration = generation;
     try {
       const response = await bootstrapWorkspace();
-      if (generation !== bootstrapGeneration) {
-        return; // B23: a scope reset landed — this response is stale
-      }
+      // F11/B23: a scope reset or a NEWER request superseded this one —
+      // install nothing and own no state transitions.
+      if (generation !== bootstrapGeneration) return;
       workspaces.value = mergeGroupTitles(response.workspaces);
       unassigned.value = mergeUnassignedTitles(response.unassigned);
       rebuildConversationIndex();
@@ -185,15 +189,23 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       }
       bootstrapped.value = true;
     } catch (err) {
+      // F11: a superseded request's rejection must not set the current
+      // scope's error state.
+      if (generation !== bootstrapGeneration) return;
       bootstrapError.value =
         err instanceof Error ? err.message : "Failed to load workspace";
     } finally {
-      bootstrapInFlight = false;
-      // B17: reconcile events buffered during the request (newer wins).
-      const buffered = [...pendingTitleEvents.values()];
-      pendingTitleEvents.clear();
-      for (const event of buffered) {
-        applyTitleUpdate(event);
+      // F11: only the ACTIVE request may clear in-flight state and drain
+      // the shared buffer — a stale request must not consume current events.
+      if (activeBootstrapGeneration === generation) {
+        activeBootstrapGeneration = null;
+        bootstrapInFlight = false;
+        // B17: reconcile events buffered during the request (newer wins).
+        const buffered = [...pendingTitleEvents.values()];
+        pendingTitleEvents.clear();
+        for (const event of buffered) {
+          applyTitleUpdate(event);
+        }
       }
     }
   }
@@ -532,7 +544,9 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
    * can populate the new scope. Safe to call repeatedly.
    */
   function resetForScopeChange(): void {
-    bootstrapGeneration += 1; // B23: invalidate in-flight bootstrap responses
+    bootstrapGeneration += 1; // B23/F11: invalidate in-flight bootstrap work
+    activeBootstrapGeneration = null;
+    bootstrapInFlight = false;
     teardown();
     workspaces.value = [];
     unassigned.value = [];
