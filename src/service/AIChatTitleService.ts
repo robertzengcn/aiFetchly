@@ -438,6 +438,17 @@ export class AIChatTitleService {
       model = SMALL_MODEL_ALIAS;
     }
 
+    // G04: revalidate foreground priority and queue TTL AFTER the awaited
+    // preparation — a turn that started, or an entry that aged out, during
+    // preparation must not dispatch.
+    if (this.deps.isForegroundBusy()) {
+      this.diagnostics.expired += 1; // yielded to foreground; no attempt consumed
+      return;
+    }
+    if (Date.now() - entry.enqueuedAt > QUEUE_ENTRY_TTL_MS) {
+      this.diagnostics.expired += 1;
+      return;
+    }
     // F05: a cancel/dispose during the awaited claim must still seal this
     // attempt — check immediately after the claim returns.
     if (preparationAbort.signal.aborted || this.disposed) {
@@ -510,8 +521,11 @@ export class AIChatTitleService {
       this.recordFailure("interrupted");
       return;
     }
-    // F05: ONE linked token spans preparation/claim/transport/application —
-    // the preparation controller's abort tears down the transport too.
+    // F05/G04: ONE linked token spans preparation/claim/transport/
+    // application. The transport controller links FROM the preparation
+    // controller, and the job fence reads BOTH — cancelConversation swaps
+    // activeAbort to the transport controller mid-flight, so every later
+    // guard must observe either signal.
     const controller = new AbortController();
     const abortWithTransport = (): void => controller.abort();
     if (preparationAbort.signal.aborted) controller.abort();
@@ -520,6 +534,11 @@ export class AIChatTitleService {
     });
     this.activeAbort = controller;
     this.activeConversationId = conversationId;
+    /** G04: authoritative job fence — either signal or dispose counts. */
+    const jobCancelled = (): boolean =>
+      preparationAbort.signal.aborted ||
+      controller.signal.aborted ||
+      this.disposed;
     const deadline = setTimeout(() => {
       this.activeAbortReason = "deadline";
       controller.abort();
@@ -618,8 +637,9 @@ export class AIChatTitleService {
         finishOutcome("declined");
         return;
       }
-      // F05: a dispose during the network call seals the result.
-      if (this.disposed || preparationAbort.signal.aborted) {
+      // F05/G04: cancellation landing on EITHER signal during the network
+      // call (or a dispose) seals the result.
+      if (jobCancelled()) {
         await module.markTitleAttemptFailed({
           conversationId,
           requestId,
@@ -657,7 +677,10 @@ export class AIChatTitleService {
         epoch: candidate.epoch,
         revision: candidate.revision,
         requestId,
-        policyCheck: () => currentTitlePolicyEpoch() === epochAtCheck,
+        // G04: the synchronous commit fence covers settings epoch AND the
+        // job's own cancellation state — a cancelled job never commits.
+        policyCheck: () =>
+          currentTitlePolicyEpoch() === epochAtCheck && !jobCancelled(),
         title: validated.title,
       });
       if (applied.outcome === "applied") {

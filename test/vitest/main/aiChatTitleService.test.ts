@@ -598,6 +598,59 @@ describe("AIChatTitleService", () => {
     expect(records.at(-1)).toMatchObject({ outcome: "invalid_output" });
   });
 
+  it("G04: a cancel during the network call (transport controller) seals the result", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockImplementationOnce(async (_p, _r, signal) => {
+      // Noncooperative completion: the response resolves DESPITE the abort.
+      h.service.cancelConversation("v2-g04net");
+      return completionResponse("Late After Cancel");
+    });
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-g04net",
+      assistantMessageId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(h.moduleFake.applies).toHaveLength(0);
+    expect(h.broadcasts).toHaveLength(0);
+  });
+
+  it("G04: foreground work starting during preparation prevents dispatch (no attempt consumed)", async () => {
+    const h = makeHarness();
+    const originalPrepare = h.moduleFake.module.prepareTitleCandidate.bind(
+      h.moduleFake.module
+    );
+    h.moduleFake.module.prepareTitleCandidate = async (...args) => {
+      h.foregroundBusy.value = true; // foreground starts mid-preparation
+      return originalPrepare(...args);
+    };
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-g04fg",
+      assistantMessageId: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(h.completeTitle).not.toHaveBeenCalled();
+    expect(h.moduleFake.claims).toBe(0); // attempt unconsumed
+    h.foregroundBusy.value = false;
+  });
+
+  it("G04: an entry aged past the TTL during preparation never dispatches", async () => {
+    const h = makeHarness();
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-g04ttl",
+      assistantMessageId: null,
+    });
+    // Age the entry out while it is queued/preparing — the pump's setTimeout
+    // has not run yet, so the map still holds the live entry object.
+    const queue = (h.service as unknown as {
+      queue: Map<string, { enqueuedAt: number }>;
+    }).queue;
+    const entry = queue.get("v2-g04ttl");
+    if (entry) entry.enqueuedAt = Date.now() - 61_000;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(h.completeTitle).not.toHaveBeenCalled();
+    expect(h.moduleFake.claims).toBe(0);
+  });
+
   it("F05: a cancel landing during the awaited claim dispatches nothing", async () => {
     const h = makeHarness();
     const originalClaim = h.moduleFake.module.claimTitleAttempt.bind(

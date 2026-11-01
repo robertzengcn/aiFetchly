@@ -222,14 +222,21 @@ export async function getConversationBusyReason(
 
 /** One-time-per-process projection backfill guard. */
 let backfillStarted = false;
+/**
+ * r3 G05: single-flight readiness — concurrent first bootstraps share ONE
+ * in-flight pass instead of racing duplicate reconciliation/backfill work.
+ */
+let backfillInFlight: Promise<void> | null = null;
 
 /**
  * F17: authenticated DB-scope reset — a new scope must re-run schema
  * readiness/title reconciliation; a FAILED first pass stays retryable
- * because backfillStarted is only set after success.
+ * because backfillStarted is only set after success. An in-flight pass from
+ * the previous scope is orphaned (its success cannot mark the new scope).
  */
 export function resetWorkspaceBackfillForScopeChange(): void {
   backfillStarted = false;
+  backfillInFlight = null;
 }
 
 function toMessageView(row: {
@@ -332,6 +339,17 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // Idempotent backfill once per process: inserts missing projection
       // rows and workspace keys for legacy conversations.
       if (!backfillStarted) {
+        if (backfillInFlight) {
+          // G05: another bootstrap is running this pass — join it and do
+          // not duplicate reconciliation work.
+          await backfillInFlight.catch(() => undefined);
+        } else {
+        // G05: publish the in-flight pass so joiners wait instead of racing.
+        let releaseInFlight!: () => void;
+        backfillInFlight = new Promise<void>((resolve) => {
+          releaseInFlight = resolve;
+        });
+        void releaseInFlight; // released at the end of this block
         // F17: mark as started only AFTER the readiness work succeeds so a
         // failed pass remains retryable for this scope.
         let readinessOk = true;
@@ -351,6 +369,9 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         }
         if (readinessOk) {
           backfillStarted = true;
+        }
+        releaseInFlight();
+        backfillInFlight = null;
         }
         // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
         // bootstrap reports runtime state (design §19.4 / FR-036).
