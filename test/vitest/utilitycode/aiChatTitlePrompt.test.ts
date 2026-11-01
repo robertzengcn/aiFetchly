@@ -177,6 +177,25 @@ describe("validateGeneratedTitle", () => {
   });
 
   it.each([
+    // r3 G07/G08: input-detector/output-detector symmetry + sk- boundary.
+    ["Bearer huntertwo Report"],
+    ["Analyze /workspace/leads.csv"],
+    ["Open C:/Projects/client-secrets.csv"],
+    ["Share at \\\\server\\share\\data"],
+  ])("r3-G07: output rejects Bearer/drive-slash/UNC forms %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(false);
+  });
+
+  it.each([
+    ["Task-Based Outreach"],
+    ["Risk-Based Lead Scoring"],
+    ["Mask-Based Segmentation"],
+    ["Desk-Research Strategy"],
+  ])("r3-G08: sk- substring topics are no longer rejected %s", (raw) => {
+    expect(validateGeneratedTitle(raw).ok).toBe(true);
+  });
+
+  it.each([
     // Review C1: stems accidentally matched by the optional-accent French
     // alternates — valid topics that must NEVER consume the single attempt.
     ["Envoy Proxy Setup"],

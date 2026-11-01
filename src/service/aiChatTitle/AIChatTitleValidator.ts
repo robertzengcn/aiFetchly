@@ -18,9 +18,12 @@ const CONTROL_OR_BIDI = /[\u0000-\u0009\u000B-\u001F\u007F-\u009F\u200B-\u200F\u
  * stored. Aligned with the input sanitizer vocabulary.
  */
 const CREDENTIAL_ASSIGNMENT =
-  /(?:api[-_]?key|apikey|secret|token|password|passwd|pwd|authorization|auth|mot de passe|passwort|contrase(?:ñ|n)a|contraseña|パスワード|密码|口令|密钥)\s*(?:[:=：＝]|\b(?:is|es|est|ist)\b|是|：|は)\s*[^\s]+/i;
+  /(?:api[-_]?key|apikey|api key|secret|token|password|passwd|pwd|authorization|auth|mot de passe|passwort|contrase(?:ñ|n)a|contraseña|パスワード|密码|口令|密钥)["']?\s*(?:[:=：＝]|\b(?:is|es|est|ist)\b|是|：|は)\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/i;
+const BEARER_OUTPUT = /\bbearer\s+[^\s,;]+/i;
+// r3 G07: shared path grammar — any POSIX first-segment root behind ordinary
+// syntax boundaries, Windows drive (both slashes), and UNC server/share.
 const ABSOLUTE_PATH =
-  /(?:^|[\s("'[<{`,:;])\/(?:home|Users|var|tmp|opt|etc|mnt|root|data|srv|Volumes|private|media)\/|\b[A-Za-z]:\\/;
+  /(?:^|[\s("'[<{`,:;(])\/(?:[A-Za-z0-9._@-]+\/)+|\b[A-Za-z]:[\\/]|\\\\[A-Za-z0-9._-]+\\/;
 const URL_OR_DOMAIN = /\b(?:https?:\/\/|www\.)\S+/i;
 const MARKDOWN_DECORATION = /\*\*|__|^\s*#{1,6}\s|`/;
 const EXPLANATION_PREFIX = /^(?:title|name|topic|chat title|标题|タイトル|titre|título|titel)\s*[:：]/i;
@@ -67,6 +70,7 @@ export function validateGeneratedTitle(raw: string): GeneratedTitleValidation {
   if (text.includes("```")) return { ok: false, reason: "invalid" };
   // B14: deterministic artifact/claim rejection (design §9).
   if (CREDENTIAL_ASSIGNMENT.test(text)) return { ok: false, reason: "invalid" };
+  if (BEARER_OUTPUT.test(text)) return { ok: false, reason: "invalid" };
   if (ABSOLUTE_PATH.test(text)) return { ok: false, reason: "invalid" };
   if (URL_OR_DOMAIN.test(text)) return { ok: false, reason: "invalid" };
   if (MARKDOWN_DECORATION.test(text)) return { ok: false, reason: "invalid" };
@@ -74,7 +78,7 @@ export function validateGeneratedTitle(raw: string): GeneratedTitleValidation {
   if (COMPLETION_CLAIM.test(text)) return { ok: false, reason: "invalid" };
   // Post-sanitize leak guards: reject obvious contact artifacts rather than
   // storing them (design §9).
-  if (/[}@{]|sk-|"/.test(text)) {
+  if (/[}@{"]|\bsk-/.test(text)) {
     return { ok: false, reason: "invalid" };
   }
   if (countCodepoints(text) > GENERATED_TITLE_MAX_CODEPOINTS) {

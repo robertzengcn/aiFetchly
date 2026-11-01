@@ -51,6 +51,34 @@ describe("sanitizeText", () => {
     );
   });
 
+  it("G07: quoted multiword credentials, JSON labels, drive-slash, UNC, and root-level files are redacted", () => {
+    expect(sanitizeText('password="hunter two" ok')).toBe("[redacted] ok");
+    expect(sanitizeText('api_key=\'secret token value\' now')).toBe(
+      "[redacted] now"
+    );
+    // JSON form: the quoted KEY's trailing quote is tolerated; the quoted
+    // VALUE is redacted whole.
+    expect(sanitizeText('"password": "my secret" in json')).toBe(
+      '"[redacted] in json'
+    );
+    expect(sanitizeText("API key: secretToken here")).toBe("[redacted] here");
+    expect(sanitizeText("Analyze /workspace/report.csv now")).toBe(
+      "Analyze [path] now"
+    );
+    expect(sanitizeText("Check /customer-secrets.csv please")).toBe(
+      "Check [path] please"
+    );
+    expect(sanitizeText("Open C:/Projects/client-secrets.csv now")).toBe(
+      "Open [path] now"
+    );
+    expect(sanitizeText("Share at \\\\server\\share\\data ok")).toBe(
+      "Share at [path] ok"
+    );
+    expect(sanitizeText('Read "/home/alice/My Secrets.csv" now')).toBe(
+      'Read "[path]" now'
+    );
+  });
+
   it("F09: redacts quoted/bracketed/backticked paths and /srv // /Volumes roots", () => {
     expect(sanitizeText('Analyze "/Users/alice/private/report.txt" now')).toBe(
       "Analyze \"[path]\" now"

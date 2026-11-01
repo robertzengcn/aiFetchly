@@ -26,17 +26,31 @@ export function normalizeText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-const CREDENTIAL_ASSIGNMENT =
-  /(?:api[-_]?key|apikey|secret|token|password|passwd|pwd|authorization|auth|mot de passe|passwort|contrase(?:ñ|n)a|contraseña|パスワード|密码|口令|密钥)\s*(?:[:=：＝]|\b(?:is|es|est|ist)\b|是|：|は)\s*[^\s]+/gi;
-const BEARER_CREDENTIAL = /\bbearer\s+[^\s]+/gi;
+/**
+ * r3 G07: one bounded credential grammar. The value side accepts QUOTED
+ * multiword values ("hunter two", JSON string values) so the whole secret is
+ * redacted; keys tolerate a trailing quote/label separator ("api key":).
+ */
+const CREDENTIAL_KEYS =
+  "api[-_]?key|apikey|api key|secret|token|password|passwd|pwd|authorization|auth|mot de passe|passwort|contrase(?:ñ|n)a|contraseña|パスワード|密码|口令|密钥";
+const CREDENTIAL_ASSIGNMENT = new RegExp(
+  `(?:${CREDENTIAL_KEYS})["']?\\s*(?:[:=：＝]|\\b(?:is|es|est|ist)\\b|是|：|は)\\s*(?:"[^"]*"|'[^']*'|[^\\s,;]+)`,
+  "gi"
+);
+const BEARER_CREDENTIAL =
+  /\bbearer\s+(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi;
 const SK_STYLE_KEY = /\bsk-[A-Za-z0-9_-]{8,}\b/g;
 const EMAIL = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
 const URL = /\b(?:https?:\/\/|www\.)\S+/gi;
-// F09: match absolute paths behind ordinary file-analysis syntax — start of
-// string, whitespace, quotes, brackets, parentheses, backticks, or commas.
+// F09/G07: absolute paths behind ordinary file-analysis syntax — start of
+// string, whitespace, quotes, brackets, parentheses, backticks, commas,
+// colons, semicolons, and open parens. ANY first-path-segment root counts
+// (not a fixed list), and quoted filenames with spaces are consumed to the
+// closing quote.
 const UNIX_ABSOLUTE_PATH =
-  /(?:^|[\s("'[<{`,:;])\/(?:home|Users|var|tmp|opt|etc|mnt|root|data|srv|Volumes|private|media)\/[^\s"'\]>)}`]*/g;
-const WINDOWS_ABSOLUTE_PATH = /\b[A-Za-z]:\\[^\s"<>|?*]+/g;
+  /(["'`(])\/(?:[A-Za-z0-9._@ -]+\/)*[A-Za-z0-9._@ -]*[^"'`\s]*(?=\1)|(?:^|[\s("'[<{`,:;(])\/(?:[A-Za-z0-9._@-]+\/)+[^\s"'\]>)}`;,)]*|(?:^|[\s("'[<{`,:;(])\/[A-Za-z0-9._@-]*\.(?:csv|xlsx?|docx?|pdf|txt|json|tsv|md|log|sql|db|env|pem|key|png|jpe?g|zip|tar|gz)\S*/g;
+const WINDOWS_ABSOLUTE_PATH =
+  /\b[A-Za-z]:[\\/][^\s"<>|?*]+|\\\\[A-Za-z0-9._-]+\\[^\s"<>|?*]+/g;
 
 /**
  * Replace incidental contact/credential/path artifacts with generic markers
@@ -51,12 +65,18 @@ export function sanitizeText(text: string): string {
     .replace(SK_STYLE_KEY, "[redacted]")
     .replace(URL, "[link]")
     .replace(EMAIL, "[email]")
+    // Windows forms FIRST: a drive slash (C:/x) would otherwise be caught
+    // mid-path by the POSIX branch (its boundary set includes ':').
+    .replace(WINDOWS_ABSOLUTE_PATH, (match) => {
+      const lead = match[0];
+      const keepsLead = /[\s"'[<{(`,;(/]/.test(lead);
+      return keepsLead ? `${lead}[path]` : "[path]";
+    })
     .replace(UNIX_ABSOLUTE_PATH, (match) => {
       const lead = match[0];
       const keepsLead = /[\s("'[<{`,:;]/.test(lead);
       return keepsLead ? `${lead}[path]` : "[path]";
-    })
-    .replace(WINDOWS_ABSOLUTE_PATH, "[path]");
+    });
 }
 
 /**

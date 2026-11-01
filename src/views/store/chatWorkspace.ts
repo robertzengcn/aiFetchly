@@ -340,10 +340,27 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       }
       return;
     }
-    // B18: equal revisions are idempotent duplicates — content never
-    // changes at the same revision. Older revisions are ignored.
     titleVersionedKnown.add(event.conversationId);
-    if (event.titleRevision <= existing.titleRevision) return;
+    // r3 G06: the FIRST versioned title initializes the row — a local
+    // placeholder (revision 0, empty title) accepts revision 0 as the
+    // authoritative seed. After initialization, equal revisions are
+    // idempotent duplicates (content never changes) and older are ignored.
+    const uninitializedPlaceholder =
+      existing.title === "" && existing.titleRevision === 0;
+    if (
+      !uninitializedPlaceholder &&
+      event.titleRevision < existing.titleRevision
+    ) {
+      return;
+    }
+    if (
+      !uninitializedPlaceholder &&
+      event.titleRevision === existing.titleRevision &&
+      existing.title !== (event.title ?? "")
+    ) {
+      // Equal revision, conflicting content: never overwrite (B18).
+      return;
+    }
     const updated: WorkspaceConversationSummary = {
       ...existing,
       title: event.title ?? "",

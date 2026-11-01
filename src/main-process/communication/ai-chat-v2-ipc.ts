@@ -667,7 +667,7 @@ function createBroadcastEventSink(identity?: {
  * pending/waiting/terminal attention without private detail; the selected
  * conversation keeps full detail via the detail channel above.
  */
-function broadcastQueueSummary(input: {
+async function broadcastQueueSummary(input: {
   conversationId: string;
   runId: string | null;
   /** Audit R03: accepted append identity the fact's turn was scheduled from. */
@@ -680,7 +680,23 @@ function broadcastQueueSummary(input: {
     | "run_completed"
     | "run_failed"
     | "run_cancelled";
-}): void {
+}): Promise<void> {
+  // r3 G06: queue-owned turns publish the authoritative title + revision
+  // too, so a first send's provisional excerpt reaches every window without
+  // waiting for a coordinator summary or bootstrap.
+  let title: string | undefined;
+  let titleRevision: number | undefined;
+  try {
+    const projection = await new AIChatConversationModule().getConversationProjection(
+      input.conversationId
+    );
+    if (projection?.title !== null && projection?.title !== undefined) {
+      title = projection.title;
+      titleRevision = projection.titleRevision;
+    }
+  } catch {
+    // best effort — the summary still carries run state
+  }
   const runtimeStatus =
     input.reason === "permission_required"
       ? ("awaiting_permission" as const)
@@ -694,6 +710,9 @@ function broadcastQueueSummary(input: {
   sharedWorkspaceEventRouter.broadcastSummary({
     conversationId: input.conversationId,
     workspaceKey: null,
+    ...(title !== undefined
+      ? { title, ...(titleRevision !== undefined ? { titleRevision } : {}) }
+      : {}),
     runtimeStatus,
     attention:
       input.reason === "permission_required"
@@ -734,7 +753,7 @@ export function getQueueService(): AIChatTurnQueueService {
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
       },
       streamSinkFactory: (identity) => createBroadcastEventSink(identity),
-      summarySink: (input) => broadcastQueueSummary(input),
+      summarySink: (input) => void broadcastQueueSummary(input),
       tryAcquireLease: ({ conversationId }) =>
         AIChatConversationTurnCoordinator.getInstance().tryAcquire({
           conversationId,
