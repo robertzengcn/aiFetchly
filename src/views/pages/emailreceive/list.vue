@@ -59,6 +59,16 @@
       {{ t("emailReceive.select_email_service_hint") || "Please select an Email Service to view messages." }}
     </v-alert>
 
+    <v-alert
+      v-if="rowActionMessage"
+      type="info"
+      variant="tonal"
+      density="compact"
+      class="mb-2"
+      role="status"
+      data-testid="org-row-message"
+    >{{ rowActionMessage }}</v-alert>
+
     <v-data-table-server
       :headers="headers"
       :items="serverItems"
@@ -88,6 +98,21 @@
       </template>
       <template #item.actions="{ item }">
         <v-icon size="small" @click="openDetail(item.id)">mdi-eye</v-icon>
+        <v-icon
+          size="small"
+          class="ml-2"
+          data-testid="org-row-forward"
+          :title="t('emailOrganization.forward_button') || 'Forward'"
+          @click="openDetail(item.id)"
+        >mdi-forward</v-icon>
+        <v-icon
+          size="small"
+          class="ml-2"
+          data-testid="org-row-trash"
+          :title="t('emailOrganization.trash_button') || 'Trash'"
+          :class="{ 'text-medium-emphasis': trashingRowId === item.id }"
+          @click="trashRow(item.id)"
+        >mdi-delete</v-icon>
       </template>
     </v-data-table-server>
   </AppPageShell>
@@ -101,6 +126,7 @@ import { useI18n } from "vue-i18n";
 import type { Header } from "@/entityTypes/commonType";
 import { CapitalizeFirstLetter } from "@/views/utils/function";
 import { listReceivedMessages, syncUnreadEmails } from "@/views/api/emailreceive";
+import { moveMessageToTrash } from "@/views/api/emailorganization";
 import { getEmailServiceList } from "@/views/api/emailservice";
 import type { EmailServiceListdata } from "@/entityTypes/emailmarketingType";
 import type { ReceivedMessageListDto } from "@/entityTypes/emailReceiveTypes";
@@ -220,6 +246,29 @@ async function syncNow() {
     console.error("Sync failed:", err);
   } finally {
     syncing.value = false;
+  }
+}
+
+const trashingRowId = ref<number | null>(null);
+const rowActionMessage = ref<string | null>(null);
+
+async function trashRow(id: number) {
+  if (trashingRowId.value !== null) return;
+  trashingRowId.value = id;
+  try {
+    const result = await moveMessageToTrash(id);
+    if (result.success) {
+      rowActionMessage.value =
+        t('emailOrganization.trash_success') || 'Moved to Trash.';
+    } else {
+      rowActionMessage.value = `${t('emailOrganization.action_failed') || 'Action failed'}: ${result.errorCode ?? result.status}`;
+    }
+    await reload();
+  } catch (err) {
+    console.error('Trash failed:', err);
+    rowActionMessage.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    trashingRowId.value = null;
   }
 }
 

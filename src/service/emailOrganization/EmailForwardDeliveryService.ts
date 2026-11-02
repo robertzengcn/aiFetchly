@@ -295,6 +295,9 @@ export class EmailForwardDeliveryService extends BaseModule {
       const ccRecipients = JSON.parse(revision.ccRecipientsJson ?? "[]") as string[];
       const bccRecipients = JSON.parse(revision.bccRecipientsJson ?? "[]") as string[];
       const envelopeRecipients = JSON.parse(revision.envelopeRecipientsJson) as string[];
+      if (envelopeRecipients.length === 0) {
+        return await this.failNoDispatch(claim.itemId, operation.operationId, "VALIDATION_FAILED", "At least one recipient is required.", requestCorrelationId);
+      }
       if (envelopeRecipients.length > EMAIL_ORGANIZATION_LIMITS.maxRecipients) {
         return await this.failNoDispatch(claim.itemId, operation.operationId, "TOO_MANY_RECIPIENTS", "Envelope recipients exceed the limit.", requestCorrelationId);
       }

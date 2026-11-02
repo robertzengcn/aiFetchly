@@ -12,6 +12,7 @@ import { EmailOrganizationAuditModel, type RecordAuditInput } from "@/model/Emai
 import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
 import { EmailOrganizationOperationItemEntity } from "@/entity/EmailOrganizationOperationItem.entity";
 import { EmailOrganizationAttemptEntity } from "@/entity/EmailOrganizationAttempt.entity";
+import { EmailOrganizationAuditEntity } from "@/entity/EmailOrganizationAudit.entity";
 
 /**
  * Business facade for organization operations. IPC handlers and services

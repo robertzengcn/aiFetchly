@@ -6,7 +6,11 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { EmailForwardMaterializer } from "@/service/emailOrganization/EmailForwardMaterializer";
 import { EmailForwardDraftService } from "@/service/emailOrganization/EmailForwardDraftService";
 import { EmailForwardDeliveryService } from "@/service/emailOrganization/EmailForwardDeliveryService";
-import type { ForwardSender, SenderParam } from "@/service/emailOrganization/EmailForwardDeliveryService";
+import type {
+  ForwardSender,
+  SenderParam,
+  ForwardSenderFactory,
+} from "@/service/emailOrganization/EmailForwardDeliveryService";
 import type {
   EmailMailboxAdapter,
   FolderListResult,

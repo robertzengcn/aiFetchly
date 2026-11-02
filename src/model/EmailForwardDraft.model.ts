@@ -29,8 +29,16 @@ export class EmailForwardDraftModel extends BaseDb {
 
   /** Creates the draft plus its first revision in one transaction. */
   async createDraftWithRevision(
-    draft: Omit<EmailForwardDraftEntity, "id" | "createdAt" | "updatedAt">,
-    revision: Omit<EmailForwardRevisionEntity, "id" | "createdAt" | "updatedAt">,
+    draft: {
+      messageId: number;
+      emailServiceId: number;
+      status: EmailForwardDraftEntity["status"];
+      currentRevisionId: number | null;
+      conversationId: number | null;
+      provenance: string;
+      submittedAt: Date | null;
+    },
+    revision: Record<string, unknown>,
     expectedRevisionNumber: number
   ): Promise<{ draft: EmailForwardDraftEntity; revision: EmailForwardRevisionEntity }> {
     return await runReplyTxn(this.sqliteDb, async (manager) => {
@@ -66,7 +74,7 @@ export class EmailForwardDraftModel extends BaseDb {
   async appendRevision(
     draftId: number,
     expectedCurrentRevisionId: number | null,
-    revision: Omit<EmailForwardRevisionEntity, "id" | "createdAt" | "updatedAt" | "draftId" | "revisionNumber">
+    revision: Record<string, unknown>
   ): Promise<{ ok: true; revision: EmailForwardRevisionEntity } | { ok: false }> {
     return await runReplyTxn(this.sqliteDb, async (manager) => {
       const draftRepo = manager.getRepository(EmailForwardDraftEntity);

@@ -302,7 +302,9 @@ function buildForwardedHeaderBlock(parsed: ParsedMail, subject: string): string 
 }
 
 function addressList(value: ParsedMail["to"]): string[] {
-  const addresses = Array.isArray(value) ? value.flatMap((entry) => entry.value) : value?.value ?? [];
+  const addresses: Array<{ name?: string; address?: string }> = Array.isArray(value)
+    ? value.flatMap((entry) => entry.value)
+    : (value?.value ?? []);
   return addresses
     .map((entry) => formatAddress(entry.name, entry.address))
     .filter((entry) => entry !== "");

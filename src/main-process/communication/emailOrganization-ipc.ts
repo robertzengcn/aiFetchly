@@ -112,7 +112,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
         const service = new EmailForwardDraftService();
         return await service.createDraft({
           messageId: input.messageId,
-          to: input.to,
+          to: input.to ?? [],
           cc: input.cc,
           bcc: input.bcc,
           note: input.note ?? null,

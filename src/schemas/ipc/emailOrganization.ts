@@ -30,7 +30,9 @@ export const emailOrgAttachmentSelectionSchema = lazySchema(() =>
 export const emailForwardDraftCreateInputSchema = lazySchema(() =>
   z.strictObject({
     messageId: positiveInt,
-    to: recipientList.min(1),
+    // Optional at review time: the dialog is inspectable before recipients
+    // are typed; delivery refuses an empty envelope at send time.
+    to: recipientList.optional(),
     cc: recipientList.optional(),
     bcc: recipientList.optional(),
     note: z.string().max(2000).nullable().optional(),

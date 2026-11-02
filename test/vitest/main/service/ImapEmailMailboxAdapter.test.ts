@@ -85,7 +85,7 @@ class FakeConnection implements MailboxActionConnection {
     mailbox.messages.delete(uid);
     destinationMailbox.messages.set(nextUid, bytes);
     return {
-      path: mailbox.path ?? "INBOX",
+      path: "INBOX",
       destination,
       uidValidity: BigInt(destinationMailbox.uidValidity),
       uidMap: this.state.reportUidMap === false ? undefined : new Map([[uid, nextUid]]),
@@ -174,16 +174,16 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
 
   it("fetches full source with a PEEK query that cannot set \\Seen", async () => {
     const state = makeState();
-    let connection: FakeConnection | null = null;
+    const connectionRef: { value: FakeConnection | null } = { value: null };
     const adapter = new ImapEmailMailboxAdapter({
       connectionFactory: () => {
-        connection = new FakeConnection(state);
-        return connection;
+        connectionRef.value = new FakeConnection(state);
+        return connectionRef.value;
       },
     });
     const result = await adapter.fetchFullSource(config, location);
     expect(result.status).toBe("fetched");
-    const fetchCalls = (connection as FakeConnection).calls.filter(
+    const fetchCalls = (connectionRef.value as FakeConnection).calls.filter(
       (call) => call.kind === "fetchOne"
     );
     expect(fetchCalls.length).toBe(1);

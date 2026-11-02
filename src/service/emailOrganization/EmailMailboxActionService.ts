@@ -18,7 +18,7 @@ import {
 } from "@/service/emailOrganization/EmailForwardEnvelopeHasher";
 import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
-import type { EmailActionResult } from "@/entityTypes/emailOrganizationTypes";
+import type { EmailActionResult, EmailActionStatus } from "@/entityTypes/emailOrganizationTypes";
 import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
 
 /**
@@ -668,16 +668,22 @@ export class EmailMailboxActionService extends BaseModule {
     }
     const status = operation.status;
     const success = status === "succeeded";
+    // The tool contract's EmailActionStatus has no prepared/authorized
+    // states; pre-execution states surface as running (open work exists).
+    const actionStatus: EmailActionStatus =
+      status === "prepared" || status === "awaiting_approval" || status === "authorized"
+        ? "running"
+        : status;
     return {
       success,
       operationId,
-      status,
+      status: actionStatus,
       completed: operation.completedCount,
       failed: operation.failedCount,
       unresolved: operation.unknownCount,
       pending: operation.pendingCount,
       cancelled: operation.cancelledCount,
-      errorCode: operation.errorCode ?? null,
+      errorCode: operation.errorCode ?? undefined,
       retryable:
         operation.errorCode === "NETWORK_BEFORE_DISPATCH" ||
         operation.errorCode === "AUTHENTICATION_FAILED",

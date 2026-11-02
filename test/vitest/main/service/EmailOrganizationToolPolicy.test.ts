@@ -115,7 +115,7 @@ describe("scheduled-loop hard block (FR-16)", () => {
           autoApproveTools: [name],
         } as never,
         toolName: name,
-        approvalMode: "auto",
+        approvalMode: "approve_for_me",
       });
       expect(decision.allowed, name).toBe(false);
     }

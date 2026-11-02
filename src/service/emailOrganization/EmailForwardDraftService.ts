@@ -463,13 +463,9 @@ export class EmailForwardDraftService extends BaseModule {
     const cleanTo = to.map((address) => address.trim()).filter((address) => address !== "");
     const cleanCc = (cc ?? []).map((address) => address.trim()).filter((address) => address !== "");
     const cleanBcc = (bcc ?? []).map((address) => address.trim()).filter((address) => address !== "");
-    if (cleanTo.length === 0) {
-      throw new EmailOrganizationActionError(
-        "VALIDATION_FAILED",
-        "At least one To recipient is required.",
-        false
-      );
-    }
+    // Empty recipients are allowed while drafting (the review dialog is
+    // inspectable before recipients are typed); delivery refuses an empty
+    // envelope at send time.
     const envelope = buildEnvelopeRecipients(cleanTo, cleanCc, cleanBcc);
     if (envelope.length > EMAIL_ORGANIZATION_LIMITS.maxRecipients) {
       throw new EmailOrganizationActionError(

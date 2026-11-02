@@ -4,11 +4,21 @@ import { EmailForwardDraftModel } from "@/model/EmailForwardDraft.model";
 import { EmailForwardDraftEntity } from "@/entity/EmailForwardDraft.entity";
 import { EmailForwardRevisionEntity } from "@/entity/EmailForwardRevision.entity";
 
-type DraftInsert = Omit<EmailForwardDraftEntity, "id" | "createdAt" | "updatedAt">;
-type RevisionInsert = Omit<EmailForwardRevisionEntity, "id" | "createdAt" | "updatedAt">;
-type RevisionAppend = Omit<
-  EmailForwardRevisionEntity,
-  "id" | "createdAt" | "updatedAt" | "draftId" | "revisionNumber"
+/** Strips BaseEntity methods from entity row shapes. */
+type DataFields<T> = {
+  [K in keyof T as T[K] extends (...args: never[]) => unknown ? never : K]: T[K];
+};
+type DraftInsert = DataFields<
+  Omit<EmailForwardDraftEntity, "id" | "createdAt" | "updatedAt">
+>;
+type RevisionInsert = DataFields<
+  Omit<EmailForwardRevisionEntity, "id" | "createdAt" | "updatedAt">
+>;
+type RevisionAppend = DataFields<
+  Omit<
+    EmailForwardRevisionEntity,
+    "id" | "createdAt" | "updatedAt" | "draftId" | "revisionNumber"
+  >
 >;
 
 /** Business facade over forward drafts and revisions. */

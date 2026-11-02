@@ -86,7 +86,8 @@ export interface SendForwardResultDto {
 
 export interface CreateForwardDraftInput {
   messageId: number;
-  to: string[];
+  /** Optional while drafting; delivery refuses an empty envelope at send. */
+  to?: string[];
   cc?: string[];
   bcc?: string[];
   note?: string | null;
