@@ -33,6 +33,8 @@ export type ProxyListEntity={
     statusName?:string
     googlePass?:number
     googlePassName?:string
+    /** PRD P-FR-07: HTTP/HTTPS proxies are usable by the managed browser. */
+    browser_usable?:boolean
 }
 export type ProxylistResp={
     status:boolean,

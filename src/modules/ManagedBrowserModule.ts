@@ -21,6 +21,12 @@ import {
 import { AccountSessionService } from "@/modules/AccountSessionService";
 import { getDefaultBrowserAiAvailabilityService } from "@/service/browserDecision/BrowserAiAvailabilityService";
 import { parseUrlIdentity } from "@/service/browserDecision/RegistrableDomain";
+import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
+import {
+  selectProxyForSession,
+  type ProxyRow,
+} from "@/service/browserProxy/BrowserProxySelectionService";
+import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import {
   ManagedBrowserLeaseService,
@@ -106,6 +112,12 @@ export class ManagedBrowserError extends Error {
 export interface StartManagedBrowserInput {
   readonly accountId?: number;
   readonly purpose: string;
+  /**
+   * PRD P-FR-01: optional proxy choice at session start. Account
+   * sessions default to their linked proxy; `direct`/different-proxy
+   * requests for account sessions require confirmation (P-FR-03).
+   */
+  readonly proxy?: BrowserProxySelection;
   readonly requestedStartUrl?: string;
   readonly conversationId?: string;
 }
@@ -128,6 +140,8 @@ interface ActiveSessionRecord {
   readonly leaseKey: string;
   /** Registrable domain for the per-site session cap (null = unknown). */
   readonly siteDomain: string | null;
+  /** PRD P-FR-05: proxy switches used by this session (cap 3). */
+  proxySwitchCount: number;
   /** Assigned once, right after construction (record needs the client ref). */
   client: ManagedBrowserWorkerClient;
   readonly accountLabel: string;
@@ -483,9 +497,39 @@ export class ManagedBrowserModule {
       );
     }
 
+    // 4a. PRD P-FR-01: explicit proxy choice at session start. Selection
+    // is fail-closed: SOCKS/unknown/unusable proxies are rejected, and an
+    // account session moving off its linked proxy requires confirmation.
+    let explicitProxy: ResolvedSessionProxy | null = null;
+    if (input.proxy) {
+      const linkedRows = await this.loadProxyRowsForAccount(accountId);
+      const selection = await selectProxyForSession({
+        selection: input.proxy,
+        linkedProxies: linkedRows,
+        loadProxyById: async (proxyId) =>
+          (await this.loadProxyRowById(proxyId)) ?? null,
+        isAccountSession: accountId > 0,
+      });
+      if (selection.status === "resolved") {
+        explicitProxy = selection.proxy;
+      } else if (selection.status === "confirmation_required") {
+        throw new ManagedBrowserError(
+          "proxy_confirmation_required",
+          selection.reasonCode
+        );
+      } else {
+        throw new ManagedBrowserError(
+          selection.reasonCode === "proxy_not_found"
+            ? "proxy_not_found"
+            : "proxy_no_usable_proxy",
+          selection.reasonCode
+        );
+      }
+    }
+
     // 4b. GAP-11: an unresolvable account proxy FAILS the start before any
     // resource work — the session must never silently fall back to direct.
-    if (account.proxy?.mode === "unresolvable") {
+    if (account.proxy?.mode === "unresolvable" && !explicitProxy) {
       throw new ManagedBrowserError(
         "proxy_unavailable",
         account.proxy.reasonCode
@@ -600,6 +644,7 @@ export class ManagedBrowserModule {
         leaseToken: lease.leaseToken,
         leaseKey,
         siteDomain: requestedSiteDomain,
+        proxySwitchCount: 0,
         client: null as unknown as ManagedBrowserWorkerClient,
         accountLabel: account.accountLabel,
         platformLabel: manifest.platformName,
@@ -664,17 +709,18 @@ export class ManagedBrowserModule {
         matchesAllowedDomain(cookie.domain, manifest.allowedDomainSuffixes)
       );
       let startCookies: NormalizedCookie[] = allowedCookies;
+      const effectiveProxy = explicitProxy ?? account.proxy ?? null;
       const sessionProxy =
-        account.proxy && account.proxy.mode !== "direct"
+        effectiveProxy && effectiveProxy.mode !== "direct"
           ? {
-              mode: account.proxy.mode,
-              host: account.proxy.host,
-              port: account.proxy.port,
-              ...(account.proxy.username
-                ? { username: account.proxy.username }
+              mode: effectiveProxy.mode as "http" | "https",
+              host: effectiveProxy.host,
+              port: effectiveProxy.port,
+              ...(effectiveProxy.username
+                ? { username: effectiveProxy.username }
                 : {}),
-              ...(account.proxy.password
-                ? { password: account.proxy.password }
+              ...(effectiveProxy.password
+                ? { password: effectiveProxy.password }
                 : {}),
             }
           : ({ mode: "direct" } as const);
@@ -1504,6 +1550,87 @@ export class ManagedBrowserModule {
     }
   }
 
+  /** Raw (encrypted-at-rest) proxy rows linked to an account. */
+  private async loadProxyRowsForAccount(accountId: number): Promise<ProxyRow[]> {
+    if (accountId <= 0) {
+      return [];
+    }
+    try {
+      const { SocialAccountModule: Sam } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const accounts = await new Sam().getAllSocialAccounts();
+      const account = accounts.find((a) => a.id === accountId);
+      return (account?.proxy ?? []).map((row) => ({
+        id: row.id,
+        host: row.host,
+        port: row.port,
+        user: row.user ?? null,
+        pass: row.pass ?? null,
+        protocol: row.protocol ?? null,
+        country_code: row.country_code ?? null,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Load one proxy row by id (main process; pass stays encrypted). */
+  private async loadProxyRowById(proxyId: number): Promise<ProxyRow | null> {
+    try {
+      const { ProxyModel } = await import("@/model/Proxy.model");
+      const model = new ProxyModel(this.dbpath);
+      const row = await model.getProxyById(proxyId);
+      if (!row) {
+        return null;
+      }
+      return {
+        id: row.id,
+        host: row.host,
+        port: row.port,
+        user: row.user ?? null,
+        pass: row.pass ?? null,
+        protocol: row.protocol ?? null,
+        country_code: row.country_code ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * PRD P-FR-02: controlled proxy switch. The session is stopped and a
+   * fresh session starts with the new proxy under the same account (the
+   * account cookies persist through the account session path). Capped at
+   * three switches per session (P-FR-05); always fail-closed.
+   */
+  public async switchSessionProxy(
+    sessionId: string,
+    target: BrowserProxySelection,
+    conversationId?: string
+  ): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    if (record.proxySwitchCount >= 3) {
+      throw new ManagedBrowserError("proxy_switch_limit");
+    }
+    if (
+      conversationId &&
+      record.conversationId &&
+      record.conversationId !== conversationId
+    ) {
+      throw new ManagedBrowserError("session_not_owned");
+    }
+    const accountId = record.accountId;
+    const conversation = record.conversationId ?? undefined;
+    await this.stop(sessionId, "user_stop");
+    return await this.start({
+      ...(accountId > 0 ? { accountId } : {}),
+      purpose: "proxy_switch",
+      proxy: target,
+      ...(conversation ? { conversationId: conversation } : {}),
+    });
+  }
+
   /**
    * Registrable domain used for the per-site session cap: the requested
    * start URL when present, otherwise the platform's known login URL.
@@ -1783,6 +1910,10 @@ const ERROR_CODES: ReadonlySet<string> = new Set<string>([
   "insufficient_memory",
   "site_limit_reached",
   "session_not_owned",
+  "proxy_confirmation_required",
+  "proxy_not_found",
+  "proxy_no_usable_proxy",
+  "proxy_switch_limit",
   "session_cookie_missing",
   "browser_dependency_missing",
   "browser_incompatible",
@@ -1913,12 +2044,19 @@ async function resolveAccountProxy(
         port > 0 &&
         port <= 65535
       ) {
+        // P-FR-08: the stored pass may be FieldCipher-encrypted; only
+        // a main-process decryption ever reaches the browser launch.
+        const decrypted = await ProxyCredentialCodec.decryptForUse(
+          proxy.pass ?? null
+        );
         return {
-          mode: protocol,
+          mode: protocol as "http" | "https",
           host: proxy.host,
           port,
           ...(proxy.user ? { username: proxy.user } : {}),
-          ...(proxy.pass ? { password: proxy.pass } : {}),
+          ...(decrypted.password
+                    ? { password: decrypted.password }
+                    : {}),
         };
       }
     }

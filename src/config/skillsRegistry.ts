@@ -5250,6 +5250,38 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
+      name: "browser_set_proxy",
+      description:
+        "Switch the managed browser session's proxy (PRD P-FR-02). Pass { proxy_id } " +
+        "(from proxy_list), { auto: true, country_code? }, or \"direct\". Performs a " +
+        "controlled restart: the session stops and a fresh one starts under the same " +
+        "account with the new proxy. Never falls back to direct on failure; failing " +
+        "proxies return a structured reason so another proxy can be chosen.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id." },
+          proxy: {
+            description:
+              "{ proxy_id } | { auto: true, country_code? } | \"direct\".",
+          },
+        },
+        required: ["session_id", "proxy"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      timeoutClass: "browser",
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().setProxy(a, context),
+          args,
+          context
+        ),
+    },
+    {
       name: "browser_clear_cache",
       description:
         "Clear the persistent browser cache for the session's account. REQUIRES a confirmation_id " +

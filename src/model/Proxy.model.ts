@@ -2,6 +2,7 @@ import { BaseDb } from "./Basedb";
 import { Brackets, In, Repository } from "typeorm";
 import { ProxyEntity } from "@/entity/Proxy.entity";
 import { ProxyListEntity } from "@/entityTypes/proxyType";
+import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
 
 export class ProxyModel extends BaseDb {
   private repository: Repository<ProxyEntity> | null = null;
@@ -44,20 +45,32 @@ export class ProxyModel extends BaseDb {
       .orderBy("proxy.createdAt", "DESC")
       .getMany();
 
-    // Convert to ProxyListEntity format
-    const proxyListEntities: ProxyListEntity[] = records.map((proxy) => ({
-      id: proxy.id,
-      host: proxy.host,
-      port: proxy.port,
-      username: proxy.user,
-      password: proxy.pass,
-      protocol: proxy.protocol,
-      country_code: proxy.country_code,
-      addtime: proxy.addtime || "",
-      checktime: proxy.updatedAt?.toISOString(),
-      status: 1, // Default status
-      statusName: "Active",
-    }));
+    // Convert to ProxyListEntity format. Passwords decrypt in the main
+    // process only (P-FR-08); legacy plaintext rows migrate lazily.
+    const proxyListEntities: ProxyListEntity[] = [];
+    for (const proxy of records) {
+      const decrypted = await ProxyCredentialCodec.decryptForUse(proxy.pass);
+      if (decrypted.needsMigration && decrypted.password) {
+        await this.migratePlaintextPass(proxy.id, decrypted.password);
+      }
+      proxyListEntities.push({
+        id: proxy.id,
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.user,
+        password: decrypted.password,
+        protocol: proxy.protocol,
+        country_code: proxy.country_code,
+        addtime: proxy.addtime || "",
+        checktime: proxy.updatedAt?.toISOString(),
+        status: 1, // Default status
+        statusName: "Active",
+        browser_usable:
+          proxy.protocol === null || proxy.protocol === undefined
+            ? true
+            : ["http", "https"].includes(proxy.protocol.toLowerCase()),
+      });
+    }
 
     return {
       total,
@@ -91,14 +104,35 @@ export class ProxyModel extends BaseDb {
    */
   async saveProxy(proxyData: Partial<ProxyEntity>): Promise<ProxyEntity> {
     const repository = await this.getRepository();
+    // P-FR-08: proxy passwords are encrypted at rest with FieldCipher.
+    const toPersist: Partial<ProxyEntity> = {
+      ...proxyData,
+      pass: await ProxyCredentialCodec.encryptForStorage(proxyData.pass ?? null),
+    };
     if (proxyData.id) {
       // Update existing proxy
-      await repository.update(proxyData.id, proxyData);
+      await repository.update(proxyData.id, toPersist);
       return (await this.getProxyById(proxyData.id)) as ProxyEntity;
     } else {
       // Create new proxy
-      const proxy = repository.create(proxyData);
+      const proxy = repository.create(toPersist);
       return await repository.save(proxy);
+    }
+  }
+
+  /** One-time lazy migration of a legacy plaintext pass (P-FR-08). */
+  private async migratePlaintextPass(
+    id: number,
+    plaintext: string
+  ): Promise<void> {
+    try {
+      const encrypted = await ProxyCredentialCodec.encryptForStorage(plaintext);
+      if (encrypted) {
+        const repository = await this.getRepository();
+        await repository.update(id, { pass: encrypted });
+      }
+    } catch {
+      // Migration is best-effort; the plaintext row is retried on next read.
     }
   }
 
@@ -132,15 +166,19 @@ export class ProxyModel extends BaseDb {
     }>
   ): Promise<number> {
     const repository = await this.getRepository();
-    const proxyEntities = proxies.map((proxy) =>
-      repository.create({
-        host: proxy.host,
-        port: proxy.port,
-        user: proxy.user,
-        pass: proxy.pass,
-        protocol: proxy.protocol,
-      })
-    );
+    const proxyEntities = [];
+    for (const proxy of proxies) {
+      proxyEntities.push(
+        repository.create({
+          host: proxy.host,
+          port: proxy.port,
+          user: proxy.user,
+          // P-FR-08: encrypt imported passwords at rest.
+          pass: await ProxyCredentialCodec.encryptForStorage(proxy.pass ?? null),
+          protocol: proxy.protocol,
+        })
+      );
+    }
 
     const result = await repository.save(proxyEntities);
     return result.length;

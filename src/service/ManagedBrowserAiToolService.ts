@@ -10,6 +10,8 @@ import {
   type SemanticActionDescriptor,
 } from "@/service/browserDecision/BrowserApprovalFingerprint";
 import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
+import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
+import { browserSetProxyToolSchema } from "@/schemas/aiTools/browserProxy";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -186,6 +188,15 @@ export interface BrowserModuleLike {
   ): Promise<void>;
   /** Cancel the active worker request (GAP-14). */
   cancelActiveRequest?(sessionId: string): Promise<void>;
+  /**
+   * PRD P-FR-02: controlled proxy switch (stop + fresh start).
+   * Optional for fakes.
+   */
+  switchSessionProxy?(
+    sessionId: string,
+    target: BrowserProxySelection,
+    conversationId?: string
+  ): Promise<SafeManagedBrowserStatus>;
   /** Consume the approval decision bound to this exact program (TODO-MSB-002). */
   consumeApprovalForProgram?(input: {
     sessionId: string;
@@ -353,6 +364,7 @@ export class ManagedBrowserAiToolService {
           purpose: parsed.data.purpose,
           requestedStartUrl: parsed.data.requested_start_url,
           conversationId: context.conversationId,
+          ...(parsed.data.proxy ? { proxy: parsed.data.proxy } : {}),
         },
         { aiEntryPoint: true }
       );
@@ -833,6 +845,41 @@ export class ManagedBrowserAiToolService {
       return { ...status };
     } catch (error) {
       this.wrapModuleError(error);
+    }
+  }
+
+  /**
+   * PRD P-FR-02: switch the session's proxy (controlled restart).
+   * Owner-checked and capped per session in the module.
+   */
+  public async setProxy(
+    args: Record<string, unknown>,
+    context: BrowserToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    this.ensureAiEnabled();
+    const parsed = browserSetProxyToolSchema().safeParse(args);
+    if (!parsed.success) {
+      throw new ManagedBrowserAiToolError(
+        "invalid_tool_arguments",
+        undefined,
+        formatZodValidationError("browser_set_proxy", parsed.error)
+      );
+    }
+    await this.ensureBrowserEnabled();
+    this.ensureSession(parsed.data.session_id, context.conversationId);
+    if (!this.browserModule.switchSessionProxy) {
+      throw new ManagedBrowserAiToolError("internal_error");
+    }
+    try {
+      const status = await this.browserModule.switchSessionProxy(
+        parsed.data.session_id,
+        parsed.data.proxy,
+        context.conversationId
+      );
+      return { ...status, notice: null };
+    } catch (error) {
+      this.wrapModuleError(error);
+      throw error;
     }
   }
 
