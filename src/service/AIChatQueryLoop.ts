@@ -6393,7 +6393,7 @@ export class AIChatQueryLoop {
     // H5: expiry is decided on the MONOTONIC clock anchored when the job was
     // admitted (`deadlinePerfMs`); a wall-clock change can never extend or
     // truncate the job. `deadlineAt` (epoch) survives only for display.
-    const deadlinePerfAt =
+    let deadlinePerfAt =
       deadlinePerfMs ??
       performance.now() +
         Math.min(deadlineMs ?? ASYNC_POLL_MAX_MS, ASYNC_POLL_MAX_MS);
@@ -6476,6 +6476,11 @@ export class AIChatQueryLoop {
     );
 
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
+    // PRD C-FR-09: time while the job (or any child task) reports
+    // waiting_for_user/paused is EXCLUDED from the poll deadline. The
+    // deadline is frozen while waiting and extended by the waited amount
+    // on resume, so a 45-minute handoff never trips ASYNC_POLL_MAX_MS.
+    let userWaitSincePerfMs: number | null = null;
     while (true) {
       // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
       // the poll interval is only a backstop; the absolute deadline governs
@@ -6503,6 +6508,17 @@ export class AIChatQueryLoop {
           stopCleanedUp,
           startedAt
         );
+      }
+
+      // Freeze the deadline while the user is being waited for: the
+      // wait state is read through the non-accounting probe so the
+      // backoff/rate-limit bookkeeping is unaffected.
+      const userWait = registry.isWaitingForUser(jobId);
+      if (userWait.waiting) {
+        userWaitSincePerfMs = userWaitSincePerfMs ?? performance.now();
+      } else if (userWaitSincePerfMs !== null) {
+        deadlinePerfAt += performance.now() - userWaitSincePerfMs;
+        userWaitSincePerfMs = null;
       }
 
       if (performance.now() >= deadlinePerfAt) {
