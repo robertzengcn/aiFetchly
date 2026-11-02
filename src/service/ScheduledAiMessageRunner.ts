@@ -249,6 +249,13 @@ export class ScheduledAiMessageRunner {
         conversationId,
         scheduleId
       );
+      // BUGFIX 2026-11-02: mirror the loop path's post-turn result bump so
+      // the sidebar preview/result timestamps advance for standalone runs.
+      await this.recordProjection({
+        conversationId,
+        isResult: result.status === "completed",
+        previewText: result.assistantFinalMessage || task.message,
+      });
       return result;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -1429,6 +1436,20 @@ export class ScheduledAiMessageRunner {
         runId,
         scheduleId: scheduleKey,
         clearPermissionBackstop,
+      });
+      // BUGFIX 2026-11-02: standalone scheduled runs never advanced the
+      // workspace sidebar projection — a brand-new task conversation had no
+      // ai_chat_conversations row at all, so Run Now's workspace folder
+      // could not render (manual or event-driven refresh had nothing to
+      // show) until an app restart ran the once-per-process backfill.
+      // Mirror the interactive submit-time bump: an idempotent
+      // recordMessagePersisted that creates the row stamped with the
+      // binding's workspace key BEFORE any event-driven sidebar refresh
+      // races it.
+      await this.recordProjection({
+        conversationId,
+        isResult: false,
+        previewText: task.message,
       });
       const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
       const innerSink = new ScheduledLoopEventSink((event) => {

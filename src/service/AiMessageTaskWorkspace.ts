@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { WorkspaceModule } from "@/modules/WorkspaceModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 
 /**
  * Resolve an absolute directory the user (or an approved schedule tool call)
@@ -58,6 +59,24 @@ export async function bindApprovedWorkspace(
   const approved = await module.approveWorkspace(record.id);
   if (!approved) {
     throw new Error("Failed to approve workspace");
+  }
+  // BUGFIX 2026-11-02 (Run Now folder refresh): the schedule flows bind the
+  // workspace for a conversation that may have NO messages yet, and nothing
+  // on the schedule path creates the ai_chat_conversations projection row —
+  // getWorkspaceSidebar only renders projected conversations, so the sidebar
+  // (manual or event-driven refresh) showed nothing until an app restart.
+  // Ensure the row exists with the resolved key; failure is a display hint
+  // and must never fail the binding.
+  try {
+    await new AIChatConversationModule().ensureConversationProjection(
+      conversationId,
+      record?.workspaceKey ?? null
+    );
+  } catch (err) {
+    console.warn(
+      "[ai-workspace] projection ensure after workspace bind failed:",
+      err
+    );
   }
   return canonical;
 }
