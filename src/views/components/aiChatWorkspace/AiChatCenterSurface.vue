@@ -3039,16 +3039,21 @@ function openProviderSettings(): void {
 }
 
 function headerRenameActivator(): HTMLElement | null {
-  const el = headerRootEl();
-  return el?.querySelector<HTMLElement>('[data-testid="workspace-header-overflow"]') ?? null;
+  // r3 G10: getCurrentInstance() is NULL inside a DOM event handler —
+  // capture the component proxy at SETUP time instead.
+  const el = surfaceRootEl;
+  return (
+    el?.querySelector<HTMLElement>(
+      '[data-testid="workspace-header-overflow"]'
+    ) ?? null
+  );
 }
 
-function headerRootEl(): HTMLElement | null {
-  const vc = getCurrentInstance();
-  const el = vc?.proxy?.$el;
-  if (el instanceof HTMLElement) return el;
-  return null;
-}
+const surfaceSetupInstance = getCurrentInstance();
+const surfaceRootEl: HTMLElement | null = (() => {
+  const el = surfaceSetupInstance?.proxy?.$el ?? null;
+  return el instanceof HTMLElement ? el : null;
+})();
 
 function onRename(): void {
   if (!conversationId.value) return;

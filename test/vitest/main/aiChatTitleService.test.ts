@@ -598,6 +598,51 @@ describe("AIChatTitleService", () => {
     expect(records.at(-1)).toMatchObject({ outcome: "invalid_output" });
   });
 
+  it("G11: two attempts failing with the same code both count", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockRejectedValue(
+      Object.assign(new Error("HTTP 500"), { name: "HttpResponseError" })
+    );
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-g11a",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-g11b",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 2);
+    expect(h.moduleFake.failures).toEqual(["error", "error"]);
+    expect(h.service.getDiagnostics().failedByCode["error"]).toBe(2);
+  });
+
+  it("G11: a specific outcome is never relabeled by the catch (records once)", async () => {
+    const h = makeHarness();
+    const originalFail = h.moduleFake.module.markTitleAttemptFailed.bind(
+      h.moduleFake.module
+    );
+    let failCount = 0;
+    h.moduleFake.module.markTitleAttemptFailed = async (input) => {
+      failCount += 1;
+      if (failCount === 1 && input.failureCode === "invalid_output") {
+        // Specific outcome recorded; then the finally/catch path runs —
+        // the diagnostics must show invalid_output, not a second error.
+        await originalFail(input);
+        return;
+      }
+      await originalFail(input);
+    };
+    h.completeTitle.mockImplementationOnce(async () => completionResponse(""));
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-g11c",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.service.getDiagnostics().failedByCode["invalid_output"]).toBe(1);
+    expect(h.service.getDiagnostics().failedByCode["error"]).toBeUndefined();
+  });
+
   it("G04: a cancel during the network call (transport controller) seals the result", async () => {
     const h = makeHarness();
     h.completeTitle.mockImplementationOnce(async (_p, _r, signal) => {

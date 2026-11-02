@@ -457,6 +457,14 @@ export class AIChatTitleService {
       return;
     }
     const requestId = this.deps.requestIdFactory();
+    /** r3 G11: true once this attempt recorded a specific outcome — the
+     * generic catch must never relabel or double-count it. */
+    let attemptOutcomeRecorded = false;
+    const recordAttemptFailure = (code: ChatTitleFailureCode): void => {
+      if (attemptOutcomeRecorded) return;
+      attemptOutcomeRecorded = true;
+      this.recordFailure(code);
+    };
     const claimed = await module.claimTitleAttempt({
       conversationId,
       epoch: candidate.epoch,
@@ -479,7 +487,7 @@ export class AIChatTitleService {
         requestId,
         failureCode: "provider_changed",
       });
-      this.recordFailure("provider_changed");
+      recordAttemptFailure("provider_changed");
       return;
     }
     if (!this.isEnabled()) {
@@ -488,7 +496,7 @@ export class AIChatTitleService {
         requestId,
         failureCode: "feature_disabled",
       });
-      this.recordFailure("feature_disabled");
+      recordAttemptFailure("feature_disabled");
       return;
     }
 
@@ -518,7 +526,7 @@ export class AIChatTitleService {
         requestId,
         failureCode: "interrupted",
       });
-      this.recordFailure("interrupted");
+      recordAttemptFailure("interrupted");
       return;
     }
     // F05/G04: ONE linked token spans preparation/claim/transport/
@@ -601,7 +609,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "invalid_output",
         });
-        this.recordFailure("invalid_output");
+        recordAttemptFailure("invalid_output");
         finishOutcome("invalid_output");
         return;
       }
@@ -611,7 +619,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "invalid_output",
         });
-        this.recordFailure("invalid_output");
+        recordAttemptFailure("invalid_output");
         finishOutcome("invalid_output");
         return;
       }
@@ -622,7 +630,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "invalid_output",
         });
-        this.recordFailure("invalid_output");
+        recordAttemptFailure("invalid_output");
         finishOutcome("invalid_output");
         return;
       }
@@ -633,7 +641,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "invalid_output",
         });
-        this.recordFailure("invalid_output");
+        recordAttemptFailure("invalid_output");
         finishOutcome("declined");
         return;
       }
@@ -645,7 +653,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "interrupted",
         });
-        this.recordFailure("interrupted");
+        recordAttemptFailure("interrupted");
         return;
       }
       // FR-10 / design §5.4: recheck the captured configuration version and
@@ -657,7 +665,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "provider_changed",
         });
-        this.recordFailure("provider_changed");
+        recordAttemptFailure("provider_changed");
         return;
       }
       if (!this.isEnabled()) {
@@ -666,7 +674,7 @@ export class AIChatTitleService {
           requestId,
           failureCode: "feature_disabled",
         });
-        this.recordFailure("feature_disabled");
+        recordAttemptFailure("feature_disabled");
         return;
       }
       // B08: capture the policy gate synchronously; the model re-checks it
@@ -714,9 +722,9 @@ export class AIChatTitleService {
       await module
         .markTitleAttemptFailed({ conversationId, requestId, failureCode: code })
         .catch(() => undefined);
-      // Review #5: a specific code recorded above in this block is the
-      // attempt's outcome — the catch must not silently relabel it "error".
-      if (this.diagnostics.failedByCode[code] === undefined) {
+      // r3 G11/review #5: a specific code already recorded for THIS
+      // attempt is its outcome — the catch never relabels or double-counts.
+      if (!attemptOutcomeRecorded) {
         this.recordFailure(code);
       }
     } finally {

@@ -8,7 +8,31 @@ Sources: [PRD](ai-chat-automatic-titles-prd.md), [technical design](ai-chat-auto
 
 ## Verdict and audit boundary
 
-**Not all requirements are correctly implemented or acceptance-complete.** Several earlier repairs are present, but remaining issues include missing completion hooks, incomplete persisted turn/provider identity, cancellation/application races, provisional-title propagation, privacy recognition, and UI request ownership.
+> **STATUS UPDATE (post-r3-remediation, 2026-11-02, same branch):** all
+> groups G01–G11 are FIXED with committed regression tests (commits
+> `cb0704f79` G01–G03, `0dc965f53` G04–G05, `179538a0c` G06–G08, plus the
+> G09–G11/R01/R04 unit). Producer-side durable identity (turnId +
+> sourceProviderVersion on engine terminal saves, queued promotions,
+> preparation), provider-bound candidate selection, parked-resume triggers,
+> a unified cancellation fence with foreground/TTL rechecks and a
+> policy-gated commit, pre-deletion title fences for single/bulk clear,
+> single-flight scope readiness, authoritative first-title initialization +
+> queue-summary titles, one shared privacy grammar (quoted credentials, JSON
+> labels, Bearer, UNC/drive-slash/any-root/quoted-filename paths) in both
+> sanitizer and validator, bounded sk-, setup-time focus capture with
+> post-deactivation restore, generation-owned rename/settings callbacks, and
+> per-attempt finalize-once diagnostics. The pre-existing multiline-output
+> regression noted in pending code was fixed in the /review commit
+> (`a072ebf69`: raw-newline check before normalization). Remaining OPEN items
+> are exactly R02 (human-scored multilingual quality/latency incl. the locale
+> tie-breaker), R03 (staged enablement/rollback + packaged checks in the
+> release environment), and R01's manual accessibility/scaling pass; the
+> baseline E2E launch-fixture timeouts were observed under concurrent-session
+> interference (see the stale-dev-server gotcha in the project memory) and
+> the title spec passes 7/7 on a clean run. The original audit verdict is
+> preserved below.
+
+**Original verdict (2026-11-01): Not all requirements are correctly implemented or acceptance-complete.** Several earlier repairs are present, but remaining issues include missing completion hooks, incomplete persisted turn/provider identity, cancellation/application races, provisional-title propagation, privacy recognition, and UI request ownership.
 
 Related defects are grouped below by root cause. Each group lists the similar paths that must be fixed together and the regression matrix required before closure. This is not a claim that static review can prove absence of every possible bug.
 
@@ -72,7 +96,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G01 — P1: Establish one authoritative persisted exchange/provenance contract
 
-- [ ] Persist and consume the same complete identity on every supported producer: user message, assistant message, turn/run, interactive owner, durable terminal outcome, content epoch and source-provider identity.
+- [x] Persist and consume the same complete identity on every supported producer: user message, assistant message, turn/run, interactive owner, durable terminal outcome, content epoch and source-provider identity. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected writers/consumers:** [AIChatQueryEngine.ts:4874](../../src/service/AIChatQueryEngine.ts:4874), cancelled/failed/catch-partial assistant saves around 5100/5200/6204; [AIChatPendingMessage.model.ts](../../src/model/AIChatPendingMessage.model.ts) user promotion; [AIChatV2Module.ts:102](../../src/modules/AIChatV2Module.ts:102) user/assistant persistence; [AIChatConversationModule.ts:378](../../src/modules/AIChatConversationModule.ts:378) candidate metadata/pairing; both completion-owner notifications.
 - **Committed-code association failures:** engine terminal assistant saves omit turnId; queued promotion users also omit it. The candidate accepts missing IDs, so its “durable association” often reduces to role order. A cancelled zero-row typed request followed by a separate attachment-only request can reuse the cancelled text; steering “yes” can replace the opening task; a scheduled assistant is saved as chat-v2 even though its user is scheduled-loop; local slash-command confirmations consume the interactive eligibility window. TrustedSeen is set before successful association. Owner-level cancelled status after engine success is never consulted.
 - **Pending-edit consequence:** stricter missing-ID compatibility reduces some incorrect pairings, but a normal direct user's non-null turnId now cannot pair with the engine's assistant lacking turnId. Updating the consumer alone cannot fix incomplete producers. Both writers and selection must change together.
@@ -83,7 +107,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G02 — P1: Trigger naming from every successful durable terminal path
 
-- [ ] Route all successful completed interactive owners through one idempotent post-persistence notification.
+- [x] Route all successful completed interactive owners through one idempotent post-persistence notification. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected paths:** normal queue drain invokes the callback at [AIChatTurnQueueService.ts:1298](../../src/service/AIChatTurnQueueService.ts:1298), but [settleParkedRunContinuation](../../src/service/AIChatTurnQueueService.ts:483) and [notifyExternalTurnTerminal](../../src/service/AIChatTurnQueueService.ts:832) finish resumed permission/plan turns without it. Production engine terminal wiring reaches this settlement path.
 - **Reproduced:** a parked run's completed notification durably commits, flushes the terminal and projects the result, then deletes the parked identity with **zero title notifications**.
 - **Fix:** retain source-provider and message/run identity in parked state and invoke the common successful-terminal hook after committed completion. Do not add the trigger to generic terminal hooks that also run for cancelled/failed/permission-only outcomes.
@@ -92,7 +116,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G03 — P2: Bound relevant exchanges and selected text, not a larger arbitrary transcript prefix
 
-- [ ] Replace the first-40-then-200-row workaround with a bounded query of relevant verified exchanges and direct trusted-ID validation.
+- [x] Replace the first-40-then-200-row workaround with a bounded query of relevant verified exchanges and direct trusted-ID validation. — FIXED with committed regression tests (r3 remediation commits)
 - **Evidence:** [AIChatConversationModule.ts:354](../../src/modules/AIChatConversationModule.ts:354) loads up to 200 generic rows, including tools, and only filters later. A first substantive answer after 201 tool rows reproduces not_ready. Every later notification repeats the same prefix.
 - **Impact:** increasing the cutoff merely moves the failure; it can still miss the first three valid exchanges and unnecessarily materialize tool contents.
 - **Fix/regression matrix:** query the first three completed interactive exchanges using G01's durable metadata; bound text at selection. Test first/third exchange behind hundreds of tool/scheduled rows, very large tool bodies, and a much later notification. Avoid an unbounded history scan.
@@ -100,7 +124,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G04 — P1: Use a single cancellation/policy fence across every asynchronous phase
 
-- [ ] Make cancellation, disposal, foreground priority, deadline/queue expiry and settings invalidation authoritative immediately before dispatch and in the final commit decision.
+- [x] Make cancellation, disposal, foreground priority, deadline/queue expiry and settings invalidation authoritative immediately before dispatch and in the final commit decision. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected phases:** [AIChatTitleService.ts:384](../../src/service/AIChatTitleService.ts:384) foreground wait; awaited preparation/claim; transport controller around 506; post-response guard around 607; policyCheck passed to applyGeneratedTitle around 645; Module connection wait and Model update.
 - **Reproduced phase matrix:**
 
@@ -120,7 +144,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G05 — P1: Own destructive lifecycle fencing and readiness in the Module/admission layer
 
-- [ ] Fence old title work before destructive history operations and serialize clear/delete with new-run admission.
+- [x] Fence old title work before destructive history operations and serialize clear/delete with new-run admission. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected paths:** [ai-chat-v2-ipc.ts:1746](../../src/main-process/communication/ai-chat-v2-ipc.ts:1746) single clear deletes messages before title reset/cancel; bulk clear around 1799 does the full transcript deletion before per-conversation title lifecycle work; direct [AIChatV2Module.ts:389](../../src/modules/AIChatV2Module.ts:389) clearConversation and clearAllV2History callers bypass the IPC-only title policy.
 - **Failure windows:** crash/reset failure after transcript deletion leaves the old title/claim/epoch beside empty history. Single-clear lifecycle errors are swallowed and success is returned; bulk reports partial failure but is already destructive. Pending provenance-event guards do not change this order.
 - **Related admission race, static/unverified:** clear/delete's busy check is separated from deletion by awaits and no held lifecycle/admission lock. A new send can be admitted after the check; later projection upsert can recreate a deleted row. The Model's no-upsert generated-title writer alone does not fence other projection writers.
@@ -131,7 +155,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G06 — P2: Publish and initialize every authoritative provisional title
 
-- [ ] Treat first authoritative title state separately from an equal-revision duplicate, and emit committed seed/replacement/clear metadata from every producer.
+- [x] Treat first authoritative title state separately from an equal-revision duplicate, and emit committed seed/replacement/clear metadata from every producer. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected paths:** [AIChatConversation.model.ts:83](../../src/model/AIChatConversation.model.ts:83) creates a visible excerpt at revision 0; [chatWorkspace.ts:266](../../src/views/store/chatWorkspace.ts:266) and applyTitleUpdate around 345 reject the first revision-0 title against a local placeholder 0. The version-known set can then prevent legacy initialization too.
 - **Missing queue path:** [broadcastQueueSummary](../../src/main-process/communication/ai-chat-v2-ipc.ts:670) carries no title/revision. [AIChatConversationModule.ts:633](../../src/modules/AIChatConversationModule.ts:633) discards the returned seeded projection without publishing. The title service only emits when excerptRefreshed; an unchanged first excerpt is not emitted, and off/unavailable exits earlier.
 - **Result:** first sends can remain New chat in header/sidebar with naming disabled, a missing title model or queue-owned execution, despite a saved excerpt. A later bootstrap can repair the display, but FR-01 requires immediate propagation.
@@ -140,7 +164,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G07 — P1: Share one bounded privacy grammar across excerpts, both prompt fields and generated output
 
-- [ ] Fix all ordinary credential/path recognition variants together, rather than adding a root/quote spelling per audit.
+- [x] Fix all ordinary credential/path recognition variants together, rather than adding a root/quote spelling per audit. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected callers:** [AIChatTitleText.ts:29](../../src/service/aiChatTitle/AIChatTitleText.ts:29) sanitation; live/post-clear Model excerpts; candidate replacement and user/assistant request text; [AIChatTitleValidator.ts:20](../../src/service/aiChatTitle/AIChatTitleValidator.ts:20) output guards.
 
 | Family | Reproduced examples / current result |
@@ -160,7 +184,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G08 — P2: Validate raw output structure before normalization and use complete lexical boundaries
 
-- [ ] Separate raw response-format rejection, safe whitespace canonicalization, actual secret shapes and unsupported-action claim detection.
+- [x] Separate raw response-format rejection, safe whitespace canonicalization, actual secret shapes and unsupported-action claim detection. — FIXED with committed regression tests (r3 remediation commits)
 - **Still reproduced in pending code:** final sk- substring guard rejects Task-Based Outreach, Risk-Based Lead Scoring, Mask-Based Segmentation and Desk-Research Strategy. These are ordinary topics, not credentials.
 - **Pending-code regression:** [AIChatTitleValidator.ts:53](../../src/service/aiChatTitle/AIChatTitleValidator.ts:53) normalizes whitespace before checking for newlines. “Sydney Dentist Outreach” followed by a newline and “Extra explanation” is accepted as one title. The existing malformed-output test fails. Check one-line/control/format rules on raw trimmed output before losing the evidence.
 - **Partly repaired during audit:** committed French/German patterns rejected Collect Leads, Collecting, Envoy and unfinished-task topics; pending patterns add boundaries and fix those examples. Retain a multilingual matrix rather than reopening already-repaired examples as current bugs. Include genuine singular accented completion claims as well as harmless words.
@@ -170,7 +194,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G09 — P2: Give all UI async completions target/scope/lifetime ownership
 
-- [ ] Apply the bootstrap-generation principle to rename and settings hydration/save callbacks as well.
+- [x] Apply the bootstrap-generation principle to rename and settings hydration/save callbacks as well. — FIXED with committed regression tests (r3 remediation commits)
 - **Rename:** [conversationRename.ts:41](../../src/views/composables/conversationRename.ts:41) applies a response, closes dialog state and restores focus without checking current authenticated scope, component lifetime or target generation. A probe resolves an old-scope rename into a new-scope row with the same conversation ID; a prior save can also close replacement dialog state.
 - **Settings:** [ai_provider.vue:100](../../src/views/pages/systemsetting/ai_provider.vue:100) applies every hydration GET independently of save responses. Reproduced ordering: initial GET captures ON → OFF save succeeds → old GET resolves → switch displays ON while persistence remains OFF.
 - **Fix/regression matrix:** generation/abort ownership for success, failure, finally and focus; reset/unmount/change target while rename is pending; delayed initial/settings-change GET after toggle; overlapping saves/hydration and provider changes. A same-ID cross-scope probe is not a claim that production conversation IDs routinely collide.
@@ -178,7 +202,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G10 — P2: Capture stable rename activators during setup and restore after actual deactivation
 
-- [ ] Fix both header/sidebar return-focus paths and the shared composable timing.
+- [x] Fix both header/sidebar return-focus paths and the shared composable timing. — FIXED with committed regression tests (r3 remediation commits)
 - **Affected paths:** [AiChatCenterSurface.vue:3047](../../src/views/components/aiChatWorkspace/AiChatCenterSurface.vue:3047) calls getCurrentInstance inside a DOM handler, where it is null; [conversationRename.ts:76](../../src/views/composables/conversationRename.ts:76) restores synchronously while Vuetify's dialog focus trap remains active.
 - **Reproduced with real VDialog:** even a connected stable opener does not regain focus immediately or after ticks when Cancel calls the shared synchronous close handler. Inner-input selection fixes do not establish return-focus correctness.
 - **Fix/regression matrix:** capture the component/ref during setup, pass a stable header/row overflow control, and restore after dialog deactivation. Test real Vuetify Save/Cancel/Escape, header/sidebar/inactive-row entry, IME and selection/scope changes.
@@ -186,7 +210,7 @@ xvfb-run -a yarn playwright test test/e2e/specs/aiChatTitles.test.ts
 
 ### G11 — P2: Finalize diagnostics once per attempt on every outcome
 
-- [ ] Centralize per-attempt outcome/usage recording, counter increments and cleanup in one finalization path.
+- [x] Centralize per-attempt outcome/usage recording, counter increments and cleanup in one finalization path. — FIXED with committed regression tests (r3 remediation commits)
 - **Committed baseline:** invalid envelope/success/stale record attempts; null text, invalid/empty titles, transport errors, cancellation, settings changes and disable branches omit records.
 - **Pending partial repair:** invalid/null/empty text now records more outcomes, but early invalidation and transport-error branches still do not. [AIChatTitleService.ts:692](../../src/service/AIChatTitleService.ts:692) now tests whether the global failedByCode bucket exists before incrementing, suppressing subsequent failures of that class rather than deduplicating a single attempt.
 - **Fix:** use a per-attempt finalized/outcome flag, capture measured usage for every returned response, represent absent usage as unknown, and count each distinct attempt exactly once. Keep bounded local metadata, not prompts/titles or external analytics.

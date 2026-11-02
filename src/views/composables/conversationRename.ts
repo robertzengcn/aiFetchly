@@ -1,4 +1,4 @@
-import { ref } from "vue";
+import { nextTick, ref } from "vue";
 import { renameConversation } from "@/views/api/aiChatWorkspace";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 
@@ -21,12 +21,19 @@ export function useConversationRename() {
   const renameError = ref<string | null>(null);
   /** Element to return focus to when the dialog closes (a11y §7.5). */
   let activatorEl: HTMLElement | null = null;
+  /**
+   * r3 G09: monotonic dialog generation — a save started for an EARLIER
+   * dialog open (or a previous authenticated scope reusing the same
+   * conversation id) can never apply its response to the current one.
+   */
+  let renameGeneration = 0;
 
   function openRename(
     conversationId: string,
     currentTitle: string,
     sourceEl?: HTMLElement | null
   ): void {
+    renameGeneration += 1; // invalidate any in-flight save from before
     renameTargetId.value = conversationId;
     renameInitialTitle.value = currentTitle;
     renameError.value = null;
@@ -41,6 +48,7 @@ export function useConversationRename() {
   async function commitRename(title: string): Promise<boolean> {
     const conversationId = renameTargetId.value;
     if (!conversationId || renameSaving.value) return false;
+    const generation = renameGeneration;
     renameSaving.value = true;
     renameError.value = null;
     try {
@@ -48,6 +56,9 @@ export function useConversationRename() {
         conversationId,
         title,
       });
+      // r3 G09: a newer dialog open (or scope reset) superseded this save —
+      // its response owns nothing.
+      if (generation !== renameGeneration) return false;
       // Authoritative post-commit response wins; the title-only event is an
       // idempotent second source (revision-guarded in the store).
       chatWorkspace.applyTitleUpdate({
@@ -59,6 +70,7 @@ export function useConversationRename() {
       closeDialog();
       return true;
     } catch (err) {
+      if (generation !== renameGeneration) return false; // superseded
       const message = err instanceof Error ? err.message : String(err);
       renameError.value = message.includes("conversation_not_found")
         ? "unavailable"
@@ -76,17 +88,22 @@ export function useConversationRename() {
   function closeDialog(): void {
     renameTargetId.value = null;
     renameError.value = null;
-    // F14: return focus to the captured activator only while it is still
-    // connected and focusable — a hidden/detached menu item is skipped in
-    // favor of nothing (never a silent focus steal).
-    if (
-      activatorEl &&
-      activatorEl.isConnected &&
-      !activatorEl.hasAttribute("disabled")
-    ) {
-      activatorEl.focus?.();
-    }
+    // F14/r3 G10: restore focus AFTER actual dialog deactivation — Vuetify's
+    // focus trap is released on leave, so a synchronous call is overridden.
+    // Two ticks cover the trap teardown + DOM restore.
+    const target = activatorEl;
     activatorEl = null;
+    void nextTick(() => {
+      void nextTick(() => {
+        if (
+          target &&
+          target.isConnected &&
+          !target.hasAttribute("disabled")
+        ) {
+          target.focus?.();
+        }
+      });
+    });
   }
 
   return {

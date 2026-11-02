@@ -97,9 +97,14 @@ const providerMode = ref<"hosted" | "local">("hosted");
 // Hydrate once on setup so the switch reflects stored settings, and
 // RE-hydrate whenever the provider panel saves (B19: the panel's save
 // dispatches a window event) so the toggle hint always matches the live mode.
+let hydrationGeneration = 0;
 function hydrateTitlesSettings(): void {
+  // r3 G09: only the NEWEST hydration response applies — a delayed older
+  // GET can never overwrite the state a newer save just confirmed.
+  const generation = ++hydrationGeneration;
   void getAIProviderSettings()
     .then((view) => {
+      if (generation !== hydrationGeneration) return;
       autoChatTitles.value = view.autoChatTitlesEnabled;
       providerMode.value = view.mode;
     })
@@ -127,6 +132,7 @@ async function onAutoTitlesToggle(value: boolean | null): Promise<void> {
     const view = await saveAIProviderSettings({
       autoChatTitlesEnabled: value,
     });
+    hydrationGeneration += 1; // r3 G09: the save result supersedes pending GETs
     autoChatTitles.value = view.autoChatTitlesEnabled;
     providerMode.value = view.mode;
   } catch {
