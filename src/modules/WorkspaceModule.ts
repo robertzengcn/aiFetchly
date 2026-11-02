@@ -1,5 +1,6 @@
 import { BaseModule } from "@/modules/baseModule";
 import { WorkspaceModel } from "@/model/Workspace.model";
+import { WorkspaceKeyService } from "@/service/WorkspaceKeyService";
 import {
   WorkspaceRecord,
   WorkspaceSummary,
@@ -22,6 +23,27 @@ export class WorkspaceModule extends BaseModule {
 
     // Check for existing non-revoked workspace for this conversation
     const existing = await model.findByConversation(input.conversationId);
+    void existing;
+
+    // Resolve the stable grouping key at BIND time (bugfix 2026-11-02):
+    // the workspace-key backfill only runs once per process at the first
+    // bootstrap, so bindings created afterwards (the new-chat workspace
+    // pick, a scheduled task's workspace_path) previously stayed null and
+    // the sidebar never grouped them in the same session. A path that
+    // cannot be resolved keeps the row null-keyed — the conversation stays
+    // visible under Unassigned (design §26.3 semantics, never guessed).
+    let workspaceKey: string | null = null;
+    let canonicalRootPath: string | null = null;
+    try {
+      const resolution = await new WorkspaceKeyService().resolve(input.rootPath);
+      workspaceKey = resolution.workspaceKey;
+      canonicalRootPath = resolution.canonicalRootPath;
+    } catch (err) {
+      console.warn(
+        "[WorkspaceModule] workspace key resolution failed at bind time:",
+        err
+      );
+    }
 
     // Always call upsert to create a new row (model does not support update-in-place)
     // The model returns the newest workspace by createdAt DESC in findByConversation
@@ -30,6 +52,8 @@ export class WorkspaceModule extends BaseModule {
       rootPath: input.rootPath,
       label: input.label ?? null,
       approvalState: "pending",
+      workspaceKey,
+      canonicalRootPath,
     });
   }
 

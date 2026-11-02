@@ -18,18 +18,28 @@ export class WorkspaceModel extends BaseDb {
   /**
    * Create a new workspace record.
    * Does NOT accept an id field — the database auto-assigns it on insert.
+   *
+   * `workspaceKey` / `canonicalRootPath` are the resolved stable identity
+   * persisted with the row (bugfix 2026-11-02: resolved by the CALLING
+   * module at bind time, so bindings created mid-session group immediately
+   * instead of waiting for the once-per-process backfill). Undefined stays
+   * null — identical to the legacy pre-backfill shape.
    */
   async upsert(input: {
     conversationId: string;
     rootPath: string;
     label: string | null;
     approvalState: WorkspaceApprovalState;
+    workspaceKey?: string | null;
+    canonicalRootPath?: string | null;
   }): Promise<WorkspaceRecord> {
     const entity = this.repository.create({
       conversationId: input.conversationId,
       rootPath: input.rootPath,
       label: input.label,
       approvalState: input.approvalState,
+      workspaceKey: input.workspaceKey ?? null,
+      canonicalRootPath: input.canonicalRootPath ?? null,
     });
     const saved = await this.repository.save(entity);
     return this.toRecord(saved);
@@ -136,6 +146,7 @@ export class WorkspaceModel extends BaseDb {
       rootPath: e.rootPath,
       label: e.label,
       approvalState: e.approvalState,
+      workspaceKey: e.workspaceKey ?? null,
       createdAt: e.createdAt ? e.createdAt.toISOString() : "",
       approvedAt: e.approvedAt ? e.approvedAt.toISOString() : null,
       revokedAt: e.revokedAt ? e.revokedAt.toISOString() : null,
