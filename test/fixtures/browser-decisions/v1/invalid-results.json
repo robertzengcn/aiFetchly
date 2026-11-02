@@ -1,0 +1,92 @@
+[
+  {
+    "name": "select-without-option",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "SELECT", "target_id": "c1", "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "operation_not_supported_by_target"
+  },
+  {
+    "name": "select-target-without-option-id",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "SELECT", "target_id": "c3", "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "option_required"
+  },
+  {
+    "name": "unknown-target",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "CLICK", "target_id": "c999", "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "unknown_target"
+  },
+  {
+    "name": "operation-not-supported-by-target",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "EXTRACT", "target_id": "c1", "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "operation_not_supported_by_target"
+  },
+  {
+    "name": "fabricated-option",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "SELECT", "target_id": "c3", "option_id": "opt_fabricated", "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "unknown_option"
+  },
+  {
+    "name": "escalate-no-target-ok",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "ESCALATE", "target_id": null, "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": null
+  },
+  {
+    "name": "targeted-operation-without-target",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "CLICK", "target_id": null, "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "target_required"
+  },
+  {
+    "name": "press-key-without-key",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "PRESS_KEY", "target_id": null, "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "key_required"
+  },
+  {
+    "name": "navigate-without-url",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "NAVIGATE", "target_id": null, "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "url_required"
+  },
+  {
+    "name": "scroll-with-unexpected-target",
+    "result": {
+      "status": "decided",
+      "action": { "operation": "SCROLL_DOWN", "target_id": "c2", "option_id": null, "key": null, "url": null },
+      "uncertainty": { "source": "unavailable", "confidence": null }
+    },
+    "expected_violation": "unexpected_fields"
+  }
+]

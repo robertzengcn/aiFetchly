@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "request_id": "req_0001",
+  "task_id": "task_0001",
+  "step_id": "step_0001",
+  "observation_id": "obs_0001",
+  "page_revision": 7,
+  "goal": "Search the site for 'supplier prices' and open the second result.",
+  "subgoal": "Type the search query into the search box.",
+  "constraints": ["Never submit, publish, or delete anything."],
+  "url": "https://example.test/search",
+  "title": "Example Market",
+  "candidates": [
+    {
+      "candidate_id": "c1",
+      "role": "textbox",
+      "name": "Search",
+      "allowed_operations": ["CLICK", "FILL"]
+    },
+    {
+      "candidate_id": "c2",
+      "role": "button",
+      "name": "Search",
+      "allowed_operations": ["CLICK"]
+    },
+    {
+      "candidate_id": "c3",
+      "role": "listbox",
+      "name": "Category",
+      "allowed_operations": ["CLICK", "SELECT"],
+      "option_ids": ["opt_a", "opt_b"],
+      "option_labels": ["All", "Recent"]
+    }
+  ],
+  "recent_actions": [],
+  "allowed_operations": ["CLICK", "FILL", "SELECT", "PRESS_KEY", "NAVIGATE", "GO_BACK", "HOVER", "SCROLL_UP", "SCROLL_DOWN", "WAIT", "EXTRACT", "DONE", "ESCALATE"],
+  "deadline_ms": 3000
+}

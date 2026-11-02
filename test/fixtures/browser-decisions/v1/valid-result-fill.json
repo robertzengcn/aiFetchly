@@ -1,0 +1,15 @@
+{
+  "status": "decided",
+  "action": {
+    "operation": "FILL",
+    "target_id": "c1",
+    "option_id": null,
+    "key": null,
+    "url": null
+  },
+  "uncertainty": {
+    "source": "unavailable",
+    "confidence": null,
+    "calibration_version": null
+  }
+}
