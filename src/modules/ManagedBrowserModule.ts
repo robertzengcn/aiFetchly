@@ -1702,6 +1702,8 @@ export class ManagedBrowserModule {
     }
     const accountId = record.accountId;
     const conversation = record.conversationId ?? undefined;
+    // T10: the switch reopens the page the user was on (P-FR-02).
+    const lastUrl = record.currentOrigin ?? undefined;
     // P-FR-05: the cap is per SESSION LINEAGE, not per record — each
     // switch stops this record and starts a fresh one, so the count is
     // carried in a module-level map keyed by the lineage.
@@ -1717,6 +1719,9 @@ export class ManagedBrowserModule {
       purpose: "proxy_switch",
       proxy: target,
       ...(conversation ? { conversationId: conversation } : {}),
+      ...(lastUrl && lastUrl !== "about:blank"
+        ? { requestedStartUrl: lastUrl }
+        : {}),
     });
   }
 
