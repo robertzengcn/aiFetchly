@@ -145,7 +145,10 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
         uncertainty: { source: "unavailable", confidence: null },
       },
     ]);
-    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+    deps.runActions = async (
+      _sessionId: string,
+      _input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => ({
       effect: "unknown",
       pageRevision: 3,
       results: [{ success: false, errorCode: "internal_error" }],
@@ -335,7 +338,10 @@ describe("BrowserTaskRunner T06/T07/T08", () => {
       },
     ]);
     const actions: RunnerAction[] = [];
-    deps.runActions = async (input: { actions: RunnerAction[] }): Promise<RunnerExecutionResult> => {
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
       actions.push(...input.actions);
       return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
     };

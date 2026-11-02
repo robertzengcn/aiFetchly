@@ -528,9 +528,9 @@ describe("ManagedBrowserModule.start gates", () => {
   it("rejects platforms not present in the site registry", async () => {
     const previous = siteRegistryMock.current;
     siteRegistryMock.current = {
-      getSite: async () => null,
-      listSites: async () => [],
-    };
+      getSite: async (): Promise<null> => null,
+      listSites: async (): Promise<never[]> => [],
+    } as unknown as typeof siteRegistryMock.current;
     try {
       const h = makeHarness({
         accountLookup: async () => ({ platformId: 5, accountLabel: "Bing" }),
