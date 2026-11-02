@@ -239,3 +239,154 @@ describe("scheduled-turn liveness for the selected view", () => {
     expect(store.isBusy).toBe(false);
   });
 });
+
+describe("scheduled-turn live presentation in the workspace transcript", () => {
+  /** The presenter batches token deltas on a ~50ms flush window. */
+  async function flushPresenterBatch(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  it("the scheduled start paints the pending assistant row and flags running", async () => {
+    await selectSnapshot("v2-live");
+    const store = useSelectedConversationStore();
+    expect(store.isBusy).toBe(false);
+
+    emitScheduled(scheduledEvent("v2-live", "start"));
+
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.isBusy).toBe(true);
+    expect(store.activeAssistantMessageId).toBe(
+      "scheduled-assistant-7-42"
+    );
+    expect(
+      store.messages.some(
+        (m) => m.id === "scheduled-assistant-7-42" && m.role === "assistant"
+      )
+    ).toBe(true);
+  });
+
+  it("scheduled tokens stream content into the pending assistant row", async () => {
+    await selectSnapshot("v2-stream");
+    emitScheduled(scheduledEvent("v2-stream", "start"));
+    emitScheduled({
+      ...scheduledEvent("v2-stream", "token"),
+      contentDelta: "Hello",
+    });
+    emitScheduled({
+      ...scheduledEvent("v2-stream", "token"),
+      contentDelta: " world",
+    });
+
+    await flushPresenterBatch();
+
+    const store = useSelectedConversationStore();
+    const row = store.messages.find((m) => m.id === "scheduled-assistant-7-42");
+    expect(row?.content).toBe("Hello world");
+    expect(store.streamStatus).toBe("streaming");
+  });
+
+  it("the scheduled terminal finalizes the row and clears the running flag", async () => {
+    await selectSnapshot("v2-final");
+    emitScheduled(scheduledEvent("v2-final", "start"));
+    emitScheduled({
+      ...scheduledEvent("v2-final", "token"),
+      contentDelta: "Answer",
+    });
+    await flushPresenterBatch();
+
+    emitScheduled(scheduledEvent("v2-final", "done"));
+
+    const store = useSelectedConversationStore();
+    expect(store.runtimeStatus).toBe("idle");
+    expect(store.streamStatus).toBe("idle");
+    expect(store.activeAssistantMessageId).toBe(null);
+    expect(store.isBusy).toBe(false);
+    const row = store.messages.find(
+      (m) => m.id === "scheduled-assistant-7-42"
+    );
+    expect(row?.content).toBe("Answer");
+  });
+
+  it("a scheduled error terminal raises the stream error and clears running", async () => {
+    await selectSnapshot("v2-fail");
+    emitScheduled(scheduledEvent("v2-fail", "start"));
+
+    emitScheduled({
+      ...scheduledEvent("v2-fail", "error"),
+      errorMessage: "provider unreachable",
+    });
+
+    const store = useSelectedConversationStore();
+    expect(store.runtimeStatus).toBe("idle");
+    expect(store.errorMessage).toBe("provider unreachable");
+    expect(store.streamStatus).toBe("error");
+    expect(store.isBusy).toBe(false);
+  });
+
+  it("a live interactive run owns the view — scheduled facts paint nothing", async () => {
+    await selectSnapshot("v2-busy-live", {
+      runtimeStatus: "running",
+      activeRunId: "run-interactive",
+    });
+
+    emitScheduled(scheduledEvent("v2-busy-live", "start", 77));
+    emitScheduled({
+      ...scheduledEvent("v2-busy-live", "token", 77),
+      contentDelta: " should not appear",
+    });
+    await flushPresenterBatch();
+
+    const store = useSelectedConversationStore();
+    expect(store.activeRunId).toBe("run-interactive");
+    expect(store.activeAssistantMessageId).toBe(null);
+    expect(
+      store.messages.some(
+        (m) => m.id === "scheduled-assistant-7-77"
+      )
+    ).toBe(false);
+  });
+
+  it("a queued view is not stomped by scheduled liveness", async () => {
+    await selectSnapshot("v2-queued", {
+      runtimeStatus: "queued",
+      activeRunId: "pending-1",
+    });
+
+    emitScheduled(scheduledEvent("v2-queued", "start", 88));
+
+    const store = useSelectedConversationStore();
+    expect(store.runtimeStatus).toBe("queued");
+    expect(store.activeRunId).toBe("pending-1");
+    expect(
+      store.messages.some(
+        (m) => m.id === "scheduled-assistant-7-88"
+      )
+    ).toBe(false);
+  });
+
+  it("an awaiting-permission view is not stomped by scheduled liveness", async () => {
+    await selectSnapshot("v2-parked", {
+      runtimeStatus: "awaiting_permission",
+      activeRunId: "scheduled-90",
+    });
+
+    emitScheduled(scheduledEvent("v2-parked", "token", 90));
+
+    const store = useSelectedConversationStore();
+    expect(store.runtimeStatus).toBe("awaiting_permission");
+    expect(store.activeRunId).toBe("scheduled-90");
+  });
+
+  it("foreign-conversation scheduled facts never paint the selected transcript", async () => {
+    await selectSnapshot("v2-picked");
+    emitScheduled(scheduledEvent("v2-stranger", "start"));
+
+    const store = useSelectedConversationStore();
+    expect(store.isBusy).toBe(false);
+    expect(
+      store.messages.some(
+        (m) => m.id === "scheduled-assistant-7-42"
+      )
+    ).toBe(false);
+  });
+});
