@@ -37,6 +37,18 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
+  async findByIdempotencyKey(
+    idempotencyKey: string
+  ): Promise<EmailOrganizationOperationEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.findByIdempotencyKey(idempotencyKey);
+    } catch (error) {
+      log.error("Error finding operation by idempotency key:", error);
+      throw error;
+    }
+  }
+
   async readOperation(operationId: string): Promise<EmailOrganizationOperationEntity | null> {
     try {
       await this.ensureConnection();

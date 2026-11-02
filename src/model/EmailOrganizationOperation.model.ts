@@ -179,6 +179,12 @@ export class EmailOrganizationOperationModel extends BaseDb {
     }
   }
 
+  async findByIdempotencyKey(
+    idempotencyKey: string
+  ): Promise<EmailOrganizationOperationEntity | null> {
+    return await this.operationRepository.findOne({ where: { idempotencyKey } });
+  }
+
   async read(operationId: string): Promise<EmailOrganizationOperationEntity | null> {
     return await this.operationRepository.findOne({
       where: { operationId },

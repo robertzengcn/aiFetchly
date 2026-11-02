@@ -1,0 +1,108 @@
+import { log } from "@/modules/Logger";
+import { BaseModule } from "@/modules/baseModule";
+import { EmailForwardDraftModel } from "@/model/EmailForwardDraft.model";
+import { EmailForwardDraftEntity } from "@/entity/EmailForwardDraft.entity";
+import { EmailForwardRevisionEntity } from "@/entity/EmailForwardRevision.entity";
+
+type DraftInsert = Omit<EmailForwardDraftEntity, "id" | "createdAt" | "updatedAt">;
+type RevisionInsert = Omit<EmailForwardRevisionEntity, "id" | "createdAt" | "updatedAt">;
+type RevisionAppend = Omit<
+  EmailForwardRevisionEntity,
+  "id" | "createdAt" | "updatedAt" | "draftId" | "revisionNumber"
+>;
+
+/** Business facade over forward drafts and revisions. */
+export class EmailForwardDraftModule extends BaseModule {
+  private draftModel: EmailForwardDraftModel;
+
+  constructor() {
+    super();
+    this.draftModel = new EmailForwardDraftModel(this.dbpath);
+  }
+
+  async createDraftWithRevision(
+    draft: DraftInsert,
+    revision: RevisionInsert,
+    expectedRevisionNumber: number
+  ): Promise<{ draft: EmailForwardDraftEntity; revision: EmailForwardRevisionEntity }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.createDraftWithRevision(
+        draft,
+        revision,
+        expectedRevisionNumber
+      );
+    } catch (error) {
+      log.error("Error creating forward draft:", error);
+      throw error;
+    }
+  }
+
+  async appendRevision(
+    draftId: number,
+    expectedCurrentRevisionId: number | null,
+    revision: RevisionAppend
+  ): Promise<{ ok: true; revision: EmailForwardRevisionEntity } | { ok: false }> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.appendRevision(
+        draftId,
+        expectedCurrentRevisionId,
+        revision
+      );
+    } catch (error) {
+      log.error("Error appending forward revision:", error);
+      throw error;
+    }
+  }
+
+  async readDraft(id: number): Promise<EmailForwardDraftEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.readDraft(id);
+    } catch (error) {
+      log.error("Error reading forward draft:", error);
+      throw error;
+    }
+  }
+
+  async readRevision(id: number): Promise<EmailForwardRevisionEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.readRevision(id);
+    } catch (error) {
+      log.error("Error reading forward revision:", error);
+      throw error;
+    }
+  }
+
+  async readCurrentRevision(draftId: number): Promise<EmailForwardRevisionEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.readCurrentRevision(draftId);
+    } catch (error) {
+      log.error("Error reading current forward revision:", error);
+      throw error;
+    }
+  }
+
+  async markSubmitted(draftId: number, revisionId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.markSubmitted(draftId, revisionId);
+    } catch (error) {
+      log.error("Error marking forward draft submitted:", error);
+      throw error;
+    }
+  }
+
+  async markDiscarded(draftId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.markDiscarded(draftId);
+    } catch (error) {
+      log.error("Error discarding forward draft:", error);
+      throw error;
+    }
+  }
+}

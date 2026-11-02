@@ -184,6 +184,8 @@ export interface EmailForwardAttachmentManifestEntry {
   readonly disposition: "attachment" | "inline";
   readonly contentId: string | null;
   readonly selected: boolean;
+  /** Encrypted artifact reference; stripped from tool/UI projections. */
+  readonly artifactId: string | null;
 }
 
 /** Per-recipient outcome for a forward submission. */
