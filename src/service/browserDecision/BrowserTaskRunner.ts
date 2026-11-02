@@ -94,6 +94,20 @@ export interface RunnerDeps {
   readonly awaitHandoff?: (
     reason: string
   ) => Promise<"resolved" | "expired" | "cancelled">;
+  /**
+   * T19: durable cursor hooks (best-effort persistence; failures never
+   * block execution but ARE logged by the module).
+   */
+  readonly persistCursor?: (input: {
+    phase: string;
+    leafSteps: number;
+    decisionRequests: number;
+    recoveryCalls: number;
+  }) => Promise<void>;
+  readonly persistActionIntent?: (actionType: string) => Promise<void>;
+  readonly persistActionOutcome?: (
+    outcome: "confirmed" | "no_effect" | "unknown"
+  ) => Promise<void>;
   readonly control?: ReturnType<typeof getDefaultAgentTaskControlService>;
   readonly now?: () => number;
 }
@@ -330,9 +344,13 @@ export class BrowserTaskRunner {
             continue;
           }
           this.leafSteps++;
+          await this.deps.persistActionIntent?.(action.operation);
           const execution = await this.deps.runActions(this.input.sessionId, {
             actions: [programAction],
           });
+          await this.deps.persistActionOutcome?.(
+            execution.effect === "unknown" ? "unknown" : "confirmed"
+          );
           const processed = await this.processExecution(
             action.operation,
             null,
@@ -390,10 +408,14 @@ export class BrowserTaskRunner {
         }
 
         this.leafSteps++;
+        await this.deps.persistActionIntent?.(action.operation);
         const execution = await this.deps.runActions(this.input.sessionId, {
           actions: [programAction],
         });
-        const processed = await this.processExecution(
+        await this.deps.persistActionOutcome?.(
+          execution.effect === "unknown" ? "unknown" : "confirmed"
+        );
+                const processed = await this.processExecution(
           action.operation,
           { role: target.role, name: target.name },
           execution,

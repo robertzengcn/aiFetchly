@@ -103,6 +103,18 @@ function sendToRenderer(
 }
 
 export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
+  // T19/C-FR-14: on startup, every non-terminal browser task from a prior
+  // run is marked interrupted — no automatic resume, no mutation replay.
+  void (async () => {
+    try {
+      const { getDefaultBrowserTaskModule } = await import(
+        "@/modules/BrowserTaskModule"
+      );
+      await getDefaultBrowserTaskModule().markUnfinishedInterrupted();
+    } catch {
+      // startup sweep is best-effort
+    }
+  })();
   // PRD A-FR-05: credential-card requests reach the parent conversation as
   // an event; the card submits through the single-use validated channel.
   getCredentialCardWaitRegistry().setSink((request) =>

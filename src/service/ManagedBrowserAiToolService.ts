@@ -1058,7 +1058,35 @@ export class ManagedBrowserAiToolService {
       }
     );
     const awaitedResultRef: { taskId?: string } = {};
-    const runner = new BrowserTaskRunner(
+    // T19: durable admission BEFORE any mutation; the frozen route and
+    // provider revision are persisted for attribution + recovery.
+    try {
+      const { getDefaultBrowserTaskModule } = await import(
+        "@/modules/BrowserTaskModule"
+      );
+      const { providerConfigKey } = await import(
+        "@/service/aiProvider/AIProviderConfigVersion"
+      );
+      const admissionTaskId = `task_${Date.now().toString(36)}${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
+      awaitedResultRef.taskId = admissionTaskId;
+      await getDefaultBrowserTaskModule().recordAdmission({
+        taskId: admissionTaskId,
+        sessionId: parsed.data.session_id,
+        conversationId: context.conversationId,
+        providerMode: route,
+        providerConfigKey: providerConfigKey(),
+      });
+    } catch {
+      // Persistence failure before admission: the task cannot run with a
+      // durable cursor (design §6.2) — refuse rather than mutate unjournaled.
+      throw new ManagedBrowserAiToolError(
+        "internal_error",
+        undefined,
+        "task_cursor_unavailable"
+      );
+    }    const runner = new BrowserTaskRunner(
       {
         sessionId: parsed.data.session_id,
         conversationId: context.conversationId,
@@ -1149,6 +1177,36 @@ export class ManagedBrowserAiToolService {
         // T14/C-FR-02: a handoff stop BLOCKS inside this job until the
         // user resolves the existing handoff dialog; user-wait time is
         // excluded from active budgets by the control service.
+        // T19: durable cursor — admission, per-phase cursor, mutation
+        // journal (intent before dispatch, outcome after), terminal.
+        persistCursor: async (cursor) => {
+          const { getDefaultBrowserTaskModule } = await import(
+            "@/modules/BrowserTaskModule"
+          );
+          await getDefaultBrowserTaskModule()
+            .recordCursor({ taskId: awaitedResultRef.taskId ?? "", ...cursor })
+            .catch(() => undefined);
+        },
+        persistActionIntent: async (actionType) => {
+          const { getDefaultBrowserTaskModule } = await import(
+            "@/modules/BrowserTaskModule"
+          );
+          if (awaitedResultRef.taskId) {
+            await getDefaultBrowserTaskModule()
+              .recordActionIntent({ taskId: awaitedResultRef.taskId, actionType })
+              .catch(() => undefined);
+          }
+        },
+        persistActionOutcome: async (outcome) => {
+          const { getDefaultBrowserTaskModule } = await import(
+            "@/modules/BrowserTaskModule"
+          );
+          if (awaitedResultRef.taskId) {
+            await getDefaultBrowserTaskModule()
+              .recordActionOutcome({ taskId: awaitedResultRef.taskId, outcome })
+              .catch(() => undefined);
+          }
+        },
         awaitHandoff: async (reason) => {
           const { awaitUserResolution } = await import(
             "@/service/browserAgents/HandoffCoordinator"
@@ -1172,6 +1230,23 @@ export class ManagedBrowserAiToolService {
     try {
       const result = await runner.run();
       awaitedResultRef.taskId = result.taskId;
+      try {
+        const { getDefaultBrowserTaskModule } = await import(
+          "@/modules/BrowserTaskModule"
+        );
+        await getDefaultBrowserTaskModule().recordTerminal({
+          taskId: result.taskId,
+          phase:
+            result.status === "completed"
+              ? "completed"
+              : result.status === "cancelled"
+                ? "cancelled"
+                : "failed",
+          reason: result.reason,
+        });
+      } catch {
+        // best-effort terminal persistence
+      }
       return { ...result };
     } catch (error) {
       this.wrapModuleError(error);
