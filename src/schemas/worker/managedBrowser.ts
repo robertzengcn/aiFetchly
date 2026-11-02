@@ -519,6 +519,17 @@ const cancelRequestMessageSchema = z.strictObject({
   targetRequestId: requestIdSchema.nullable(),
 });
 
+/**
+ * PRD D-FR-15a: pin/unpin an observation epoch so its element refs stay
+ * resolvable across pending approvals, decisions, and handoffs.
+ */
+const pinObservationMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("PIN_OBSERVATION"),
+  observationId: z.string().min(1).max(64),
+  pinned: z.boolean(),
+});
+
 const stopSessionMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("STOP_SESSION"),
@@ -548,6 +559,7 @@ export const managedBrowserInboundSchema = lazySchema(() =>
     resumeHandoffMessageSchema,
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
+    pinObservationMessageSchema,
     stopSessionMessageSchema,
     evaluateScriptMessageSchema,
   ])
@@ -579,6 +591,8 @@ const elementSummarySchema = z.strictObject({
 
 const observationSchema = z.strictObject({
   sessionId: sessionIdSchema,
+  /** Opaque per-snapshot identity (PRD D-FR-15a/27); stable per epoch. */
+  observationId: z.string().min(1).max(64),
   pageRevision: z.number().int().positive(),
   url: z.string().max(2048),
   origin: z.string().max(512),

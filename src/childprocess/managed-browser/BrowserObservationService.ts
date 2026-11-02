@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { MANAGED_BROWSER_OBSERVATION_BUDGETS } from "@/config/managedBrowser";
 import type {
   BrowserElementSummary,
@@ -200,6 +201,11 @@ export function shapeElementRecord(
 export async function buildObservation(
   input: BuildObservationInput
 ): Promise<BrowserObservation> {
+  // PRD D-FR-15a: one opaque identity per snapshot. All refs registered
+  // during this collection belong to this observation epoch, which the
+  // main process can pin across pending approvals/handoffs.
+  const observationId = randomUUID();
+  input.registry.beginObservation(observationId);
   const notices: BrowserNotice[] = [{ code: "untrusted_content" }];
   let records: CollectedElementRecord[] = [];
   let title = input.title ?? "";
@@ -274,12 +280,14 @@ export async function buildObservation(
     notices.push({ code: "sensitive_field_visible" });
   }
 
+  input.registry.commitObservation(observationId);
   // Final payload scrub (GAP-04): free-form page text is the leak surface —
   // planted canaries, rendered tokens, key=value pairs in prose.
   const safeTitle = redactSecretsInText(title);
   const safeText = redactSecretsInText(textBudget.text);
   return {
     sessionId: input.sessionId,
+    observationId,
     pageRevision: input.registry.currentRevision,
     url,
     origin: extractOrigin(input.page.url()) ?? url,

@@ -4,6 +4,11 @@ import {
   BrowserAiAvailabilityService,
   getDefaultBrowserAiAvailabilityService,
 } from "@/service/browserDecision/BrowserAiAvailabilityService";
+import {
+  computeApprovalFingerprint,
+  digestSecretValue,
+  type SemanticActionDescriptor,
+} from "@/service/browserDecision/BrowserApprovalFingerprint";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -166,8 +171,18 @@ export interface BrowserModuleLike {
   }): void;
   /** Latest sanitized observation (ref → role/name resolution, GAP-01). */
   getLastObservation?(sessionId: string): {
+    observationId?: string;
     elements: ReadonlyArray<{ ref: string; role: string; name: string }>;
   } | null;
+  /**
+   * PRD D-FR-15a: pin/unpin an observation epoch so its refs stay
+   * resolvable across pending approvals (optional for fakes).
+   */
+  setObservationPin?(
+    sessionId: string,
+    observationId: string | null,
+    pinned: boolean
+  ): Promise<void>;
   /** Cancel the active worker request (GAP-14). */
   cancelActiveRequest?(sessionId: string): Promise<void>;
   /** Consume the approval decision bound to this exact program (TODO-MSB-002). */
@@ -436,7 +451,7 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_run_actions", parsed.error)
       );
     }
-    this.ensureSession(parsed.data.session_id);
+    const sessionStatus = this.ensureSession(parsed.data.session_id);
     const program = parsed.data.program as BrowserActionProgram;
 
     // Risk gate over the whole program (§15.4).
@@ -485,7 +500,15 @@ export class ManagedBrowserAiToolService {
     // bound to the exact program digest + page revision and consumed
     // single-use; a different program or a mutated revision never matches.
     if (assessment.requiresApproval) {
-      const programDigest = computeProgramDigest(program);
+      // PRD D-FR-27: bind the approval to the SEMANTIC action (operation,
+      // role/name, value digest, key/option, site domain) — not to random
+      // reference tokens that change on every reobservation.
+      const programDigest = computeApprovalFingerprint({
+        actions: buildSemanticActionDescriptors(program, descriptorFor),
+        siteRegistrableDomain: extractRegistrableDomainSafe(
+          sessionStatus.currentOrigin
+        ),
+      });
       const priorDecision =
         this.browserModule.consumeApprovalForProgram?.({
           sessionId: parsed.data.session_id,
@@ -493,6 +516,13 @@ export class ManagedBrowserAiToolService {
           pageRevision: parsed.data.page_revision,
         }) ?? null;
       if (priorDecision !== "approve") {
+        // PRD D-FR-15a: keep this observation's refs alive while the user
+        // decides; the module unpins when the decision is recorded.
+        void this.browserModule.setObservationPin?.(
+          parsed.data.session_id,
+          observation?.observationId ?? null,
+          true
+        );
         this.browserModule.notifyApprovalRequired?.({
           sessionId: parsed.data.session_id,
           requestId: context.toolCallId,
@@ -859,6 +889,60 @@ export function flattenProgramActions(
 }
 
 /** Stable digest of the exact program an approval authorizes. */
+/**
+ * PRD D-FR-27: reduce a program to semantic descriptors for approval
+ * binding. Values are digested, never included.
+ */
+export function buildSemanticActionDescriptors(
+  program: BrowserActionProgram,
+  descriptorFor: (ref: string) => {
+    readonly role: string;
+    readonly name: string;
+  } | null
+): SemanticActionDescriptor[] {
+  const describe = (action: BrowserLeafAction): SemanticActionDescriptor => {
+    const target =
+      "ref" in action ? descriptorFor(action.ref) : null;
+    return {
+      operation: action.type,
+      role: target?.role ?? null,
+      name: target?.name ?? null,
+      context: null,
+      valueDigest:
+        action.type === "fill" ? digestSecretValue(action.value) : null,
+      key: action.type === "press_key" ? action.key : null,
+      optionId: null,
+    };
+  };
+  const walk = (nodes: readonly BrowserAction[]): SemanticActionDescriptor[] =>
+    nodes.flatMap((node) =>
+      node.type === "if"
+        ? walk(node.then)
+        : node.type === "repeat"
+          ? walk(node.body)
+          : [describe(node)]
+    );
+  return walk(program.actions);
+}
+
+/** Registrable domain of the session's current origin (fail-closed null). */
+export function extractRegistrableDomainSafe(
+  origin: string | null | undefined
+): string | null {
+  if (!origin) {
+    return null;
+  }
+  try {
+    const { registrableDomainOf } =
+      require("@/service/browserDecision/RegistrableDomain") as {
+        registrableDomainOf: (host: string | null | undefined) => string | null;
+      };
+    return registrableDomainOf(new URL(origin).hostname);
+  } catch {
+    return null;
+  }
+}
+
 export function computeProgramDigest(
   program: BrowserActionProgram
 ): string {

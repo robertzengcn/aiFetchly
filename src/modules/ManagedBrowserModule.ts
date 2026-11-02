@@ -352,6 +352,41 @@ export class ManagedBrowserModule {
   }
 
   /** Surface an approval request (called by the AI tool layer, §17). */
+  /**
+   * PRD D-FR-15a: pin/unpin an observation epoch in the worker so its
+   * element references stay resolvable across pending approvals and
+   * handoffs. Best-effort: an old worker or a stopped session ignores it.
+   */
+  public async setObservationPin(
+    sessionId: string,
+    observationId: string | null,
+    pinned: boolean
+  ): Promise<void> {
+    if (!observationId) {
+      return;
+    }
+    const record = this.sessions.get(sessionId);
+    if (!record || !record.client) {
+      return;
+    }
+    await record.client
+      .request(
+        { type: "PIN_OBSERVATION", observationId, pinned },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      )
+      .catch(() => undefined);
+  }
+
+  /** Unpin the session's latest observation (approval decided/resumed). */
+  private unpinLastObservation(sessionId: string): void {
+    const record = this.sessions.get(sessionId);
+    const observationId = record?.lastObservation?.observationId ?? null;
+    if (observationId) {
+      void this.setObservationPin(sessionId, observationId, false);
+    }
+  }
+
   public notifyApprovalRequired(input: {
     readonly sessionId: string;
     readonly requestId: string;
@@ -807,6 +842,9 @@ export class ManagedBrowserModule {
       programDigest: input.programDigest ?? null,
       pageRevision: input.pageRevision ?? null,
     });
+    // PRD D-FR-15a: the pending work ended, so the pinned observation's
+    // TTL restarts from now.
+    this.unpinLastObservation(input.sessionId);
   }
 
   /**
@@ -1037,6 +1075,13 @@ export class ManagedBrowserModule {
     );
     record.state = "handoff";
     record.handoffReason = reason;
+    // PRD D-FR-15a: keep the latest observation's refs resolvable for
+    // the whole handoff window (may last up to 60 minutes).
+    void this.setObservationPin(
+      sessionId,
+      record.lastObservation?.observationId ?? null,
+      true
+    );
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }
@@ -1074,6 +1119,8 @@ export class ManagedBrowserModule {
         false
       );
       this.publishNotice(record, "task_resuming", "verify-resume", {}, false);
+      // PRD D-FR-15a: pending work ended with the successful verification.
+      this.unpinLastObservation(sessionId);
     } else {
       const returned =
         message.type === "SESSION_STATE_CHANGED" ? message.state : priorState;
@@ -1111,6 +1158,8 @@ export class ManagedBrowserModule {
     if (message.type === "SESSION_STATE_CHANGED") {
       record.state = message.state;
     }
+    // PRD D-FR-15a: handoff ended; the pinned observation's TTL restarts.
+    this.unpinLastObservation(sessionId);
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }

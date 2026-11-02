@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 
 import {
   ManagedBrowserWorkerClient,
@@ -63,7 +64,7 @@ function baseOutbound(
   sequence: number
 ): Record<string, unknown> {
   return {
-    protocolVersion: 1,
+    protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
     sessionId,
     requestId: "evt-test-1",
     sequence,
@@ -288,6 +289,7 @@ describe("ManagedBrowserWorkerClient", () => {
 function validObservation(): Record<string, unknown> {
   return {
     sessionId: SESSION_ID,
+    observationId: "obs_client0001",
     pageRevision: 1,
     url: "https://www.youtube.com/watch",
     origin: "https://www.youtube.com",

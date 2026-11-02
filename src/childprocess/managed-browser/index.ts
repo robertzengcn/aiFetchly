@@ -214,6 +214,24 @@ parentPort.on("message", async (event: { data: unknown }) => {
           })
         );
         return;
+      case "PIN_OBSERVATION":
+        // PRD D-FR-15a: keep a pending observation's refs resolvable.
+        if (message.pinned) {
+          session.pinObservation(message.observationId);
+        } else {
+          session.unpinObservation(message.observationId);
+        }
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+            reasonCode: message.pinned
+              ? "observation_pinned"
+              : "observation_unpinned",
+          })
+        );
+        return;
       case "EVALUATE_SCRIPT":
         await session.evaluateScript(
           message.requestId,

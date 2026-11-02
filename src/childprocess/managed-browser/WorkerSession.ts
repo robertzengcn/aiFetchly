@@ -692,6 +692,15 @@ export class WorkerSession {
     });
   }
 
+  /** PRD D-FR-15a: pin/unpin an observation epoch (pending approvals). */
+  public pinObservation(observationId: string): boolean {
+    return this.registry.pinObservation(observationId);
+  }
+
+  public unpinObservation(observationId: string): boolean {
+    return this.registry.unpinObservation(observationId);
+  }
+
   public cancelCurrent(): void {
     // Review fix: cancelling the CURRENT request must not permanently set
     // the terminal `cancelled` flag — that bricked every later program

@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 
 /** Worker protocol version stamped on every message (design §8.1). */
-export const MANAGED_BROWSER_PROTOCOL_VERSION = 1;
+export const MANAGED_BROWSER_PROTOCOL_VERSION = 2;
 
 /** Opaque session ids look like `mb_<random>` (never derived from cookies). */
 export const MANAGED_BROWSER_SESSION_ID_PREFIX = "mb_";
@@ -89,10 +89,16 @@ export const MANAGED_BROWSER_OBSERVATION_BUDGETS = {
   maxSerializedBytes: 64 * 1024,
 } as const;
 
-/** Page reference registry bounds (design §14.3). */
+/** Page reference registry bounds (design §14.3, PRD D-FR-15a). */
 export const MANAGED_BROWSER_REFERENCE_REGISTRY = {
   maxEntries: 200,
   entryTtlMs: 60_000,
+  // Refs are scoped per observation epoch: whole observations are
+  // evicted, pending/pinned observations never expire by TTL, and a
+  // bounded number of committed unpinned observations is kept alongside
+  // pinned ones (hard total cap included).
+  maxUnpinnedObservations: 2,
+  maxObservations: 8,
 } as const;
 
 // ---------------------------------------------------------------------------
