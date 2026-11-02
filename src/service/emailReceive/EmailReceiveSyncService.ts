@@ -31,6 +31,8 @@ import {
   normalizeStoredMessageId,
   normalizedIdsMatch,
 } from "@/service/emailReceive/EmailReplyIdentity";
+import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
+import type { UpsertLocationInput } from "@/model/EmailMessageLocation.model";
 
 /** Result of a manual or AI-triggered sync. */
 export interface EmailReceiveSyncResult {
@@ -57,6 +59,7 @@ export class EmailReceiveSyncService {
   private messageModule: EmailReceivedMessageModule;
   private auditModule: EmailReplyAuditLogModule;
   private conversationModule: EmailConversationModule;
+  private locationModule: EmailMessageLocationModule;
   private readonly clientFactory: (
     protocol: EmailReceiveProtocol
   ) => EmailReceiveClient;
@@ -69,6 +72,7 @@ export class EmailReceiveSyncService {
     this.messageModule = new EmailReceivedMessageModule();
     this.conversationModule = new EmailConversationModule();
     this.auditModule = new EmailReplyAuditLogModule();
+    this.locationModule = new EmailMessageLocationModule();
     this.clientFactory =
       options?.clientFactory ??
       ((protocol: EmailReceiveProtocol) =>
@@ -198,6 +202,7 @@ export class EmailReceiveSyncService {
     for (const p of parsed) {
       const saved = await this.storeFetchedMessage(emailServiceId, p);
       messageIds.push(saved.id);
+      await this.recordMessageLocation(saved.id, emailServiceId, p);
       await this.normalizeAndAssociate(emailServiceId, p, saved.id);
       await this.writeAudit(
         emailServiceId,
@@ -291,6 +296,53 @@ export class EmailReceiveSyncService {
       legacyRow.normalizedMessageId ??
       normalizeStoredMessageId(legacyRow.messageId);
     return normalizedIdsMatch(fetchedNormalized, legacyNormalized);
+  }
+
+  /**
+   * Record the folder-aware location observed by this sync (design §5.2).
+   *
+   * A fetched message from a folder with observable UIDVALIDITY becomes a
+   * `verified` location (mutation-eligible). Legacy bare UIDs (UIDVALIDITY
+   * unobservable) and POP3 rows stay `legacy_unverified` — readable but
+   * never eligible for remote actions. Best-effort: a location failure is
+   * logged and never aborts the sync.
+   */
+  private async recordMessageLocation(
+    messageId: number,
+    emailServiceId: number,
+    p: ParsedInboundEmail
+  ): Promise<void> {
+    try {
+      const protocol: UpsertLocationInput["protocol"] =
+        p.providerFolder === null && !isNamespacedProviderUid(p.providerUid) &&
+        p.providerUid.startsWith("pop3:")
+          ? "pop3"
+          : "imap";
+      const namespaced = parseNamespacedProviderUid(p.providerUid);
+      const verified = namespaced !== null && protocol === "imap";
+      const input: UpsertLocationInput = {
+        messageId,
+        emailServiceId,
+        protocol,
+        folderPath: p.providerFolder,
+        uidValidity: namespaced ? namespaced.uidValidity : p.providerUidValidity,
+        providerUid: namespaced ? namespaced.uid : p.providerUid,
+        state: verified ? "verified" : "legacy_unverified",
+      };
+      const result = await this.locationModule.upsertLocation(input);
+      if (result.status === "conflict") {
+        log.warn(
+          `[EmailReceiveSync] location tuple conflict for message ${messageId} ` +
+            `(account=${emailServiceId}, folder=${String(p.providerFolder)}); ` +
+            `treating as an independent occurrence and leaving the existing row`
+        );
+      }
+    } catch (error) {
+      log.warn(
+        `[EmailReceiveSync] failed to record location for message ${messageId}:`,
+        error
+      );
+    }
   }
 
   private toEntity(

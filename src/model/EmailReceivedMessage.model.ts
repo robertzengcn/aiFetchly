@@ -501,6 +501,40 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await qb.getMany();
   }
 
+  /**
+   * Cursor batch (ids strictly greater than afterId) carrying only the
+   * provider-identity columns, used by the message-location backfill.
+   */
+  async listForLocationBackfill(
+    afterId: number,
+    limit: number
+  ): Promise<
+    Array<
+      Pick<
+        EmailReceivedMessageEntity,
+        | "id"
+        | "emailServiceId"
+        | "providerUid"
+        | "providerFolder"
+        | "providerUidValidity"
+      >
+    >
+  > {
+    return await this.repository
+      .createQueryBuilder("msg")
+      .select([
+        "msg.id",
+        "msg.emailServiceId",
+        "msg.providerUid",
+        "msg.providerFolder",
+        "msg.providerUidValidity",
+      ])
+      .where("msg.id > :afterId", { afterId })
+      .orderBy("msg.id", "ASC")
+      .take(limit)
+      .getMany();
+  }
+
   /** Bulk-set normalization + conversation fields at sync time (P1/P2). */
   async updateNormalization(
     messageId: number,

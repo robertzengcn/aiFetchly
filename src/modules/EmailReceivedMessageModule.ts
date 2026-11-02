@@ -120,6 +120,31 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /** Cursor batch for the message-location backfill (provider identity only). */
+  async listForLocationBackfill(
+    afterId: number,
+    limit: number
+  ): Promise<
+    Array<
+      Pick<
+        EmailReceivedMessageEntity,
+        | "id"
+        | "emailServiceId"
+        | "providerUid"
+        | "providerFolder"
+        | "providerUidValidity"
+      >
+    >
+  > {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.listForLocationBackfill(afterId, limit);
+    } catch (error) {
+      console.error("Error listing messages for location backfill:", error);
+      throw error;
+    }
+  }
+
   async updateNormalization(
     messageId: number,
     fields: {
