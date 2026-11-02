@@ -251,6 +251,7 @@ export type RunnerAuthorizedOutcome =
       readonly effect: "known" | "unknown";
       readonly pageRevision: number;
       readonly results: ReadonlyArray<{ success: boolean; errorCode: string | null }>;
+      readonly extracted?: readonly unknown[];
     }
   | {
       readonly kind: "stop";

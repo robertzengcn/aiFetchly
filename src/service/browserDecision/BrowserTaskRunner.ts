@@ -105,6 +105,8 @@ export interface RunnerObservation {
 
 export type RunnerAction =
   | { type: "go_back" }
+  | { type: "navigate"; url: string }
+  | { type: "extract"; refs: string[] }
   | { type: "click"; ref: string; pageRevision: number; expectedRole: string; expectedName: string }
   | { type: "fill"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; value: string }
   | { type: "select"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; values: string[] }
@@ -122,6 +124,8 @@ export interface RunnerExecutionResult {
   }>;
   /** Policy stop from the authorized seam (never bypassed, never retried). */
   readonly stopCode?: "approval_required" | "handoff_required";
+  /** T18: extracted values (EXTRACT) for completion criteria. */
+  readonly extracted?: readonly unknown[];
 }
 
 
@@ -136,6 +140,11 @@ export class BrowserTaskRunner {
   private lastFailureKey: string | null = null;
   private consecutiveEquivalentFailures = 0;
   private readonly maxEquivalentFailures: number;
+  /** T18: a bounded recovery decision awaiting execution. */
+  private pendingRecovery: BrowserDecisionResult | null = null;
+  /** T18: chat-route progress check (D-FR-19) — digest every 5 steps. */
+  private lastProgressDigest: string | null = null;
+  private stepsSinceProgressCheck = 0;
 
   constructor(
     private readonly input: BrowserTaskInput,
@@ -177,6 +186,13 @@ export class BrowserTaskRunner {
         const candidates = buildDecisionCandidates({ elements: observation.elements });
         const decisionInput = this.buildDecisionInput(observation, candidates);
         let decision: BrowserDecisionResult;
+        if (this.pendingRecovery) {
+          // T18: consume the bounded recovery decision through the normal
+          // validate/execute path (no second execution machinery).
+          decision = this.pendingRecovery;
+          this.pendingRecovery = null;
+          this.decisionRequests++;
+        } else
         try {
           // T09: each provider attempt is bounded by an abortable timer
           // capped by the remaining active runtime (PRD §8 request
@@ -248,6 +264,9 @@ export class BrowserTaskRunner {
         }
         const action = decision.action;
         if (action.operation === "DONE") {
+          // D-AC-09: verification uses FRESH state, never the snapshot the
+          // decision itself saw — the model cannot certify its own claim.
+          observation = (await this.deps.observe(this.input.sessionId)) ?? observation;
           const verification = this.verifyCompletion(observation, extracted);
           if (verification.verified) {
             return this.terminal("completed", "verified", [...evidence, verification.evidence], extracted, observation);
@@ -272,7 +291,9 @@ export class BrowserTaskRunner {
           action.operation === "SCROLL_UP" ||
           action.operation === "SCROLL_DOWN" ||
           action.operation === "GO_BACK" ||
-          action.operation === "PRESS_KEY"
+          action.operation === "PRESS_KEY" ||
+          action.operation === "NAVIGATE" ||
+          action.operation === "EXTRACT"
         ) {
           // T06/T07: untargeted operations take the SAME policy-stop,
           // unknown-effect, and failure accounting as targeted ones.
@@ -283,9 +304,17 @@ export class BrowserTaskRunner {
                 ? { type: "scroll", direction: "down", amount: 600 }
                 : action.operation === "GO_BACK"
                   ? { type: "go_back" }
-                  : action.key
-                    ? { type: "press_key", key: action.key }
-                    : null;
+                  : action.operation === "NAVIGATE"
+                    ? action.url
+                      ? { type: "navigate", url: action.url }
+                      : null
+                    : action.operation === "EXTRACT"
+                      ? action.target_id
+                        ? { type: "extract", refs: [action.target_id] }
+                        : null
+                      : action.key
+                        ? { type: "press_key", key: action.key }
+                        : null;
           if (!programAction) {
             evidence.push("key_required");
             continue;
@@ -309,6 +338,11 @@ export class BrowserTaskRunner {
               await this.deps.observe(this.input.sessionId)
             );
           }
+          if (action.operation === "EXTRACT" && execution.extracted) {
+            // T18: extracted values land in the task result so the
+            // extract_nonempty criterion can verify.
+            extracted.push(...execution.extracted);
+          }
           observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
@@ -317,6 +351,15 @@ export class BrowserTaskRunner {
         if (violation) {
           evidence.push(`invalid_decision:${violation}`);
           if (++this.consecutiveEquivalentFailures >= this.maxEquivalentFailures) {
+            const recovered = await this.recoverOnce(
+              decisionInput,
+              `previous decision was invalid (${violation}); choose a DIFFERENT operation or ESCALATE`,
+              signal
+            );
+            if (recovered) {
+              this.consecutiveEquivalentFailures = 0;
+              continue;
+            }
             return this.terminal("failed", `repeated_invalid_decision:${violation}`, evidence, extracted, observation);
           }
           continue;
@@ -347,6 +390,21 @@ export class BrowserTaskRunner {
           evidence
         );
         if (processed.stop) {
+          // T18: a failures-exhausted stop gets ONE bounded recovery
+          // before the terminal lands; policy stops never recover.
+          if (processed.stop.reason.startsWith("three_equivalent_failures")) {
+            const recovered = await this.recoverOnce(
+              decisionInput,
+              `three equivalent failures on ${action.operation} ${target.name}: ${processed.stop.reason}`,
+              signal
+            );
+            if (recovered) {
+              this.consecutiveEquivalentFailures = 0;
+              this.lastFailureKey = null;
+              observation = await this.deps.observe(this.input.sessionId);
+              continue;
+            }
+          }
           return this.terminal(
             processed.stop.status,
             processed.stop.reason,
@@ -358,6 +416,18 @@ export class BrowserTaskRunner {
 
         // D-FR-11: fresh observation after the action (already cached by the module).
         observation = await this.deps.observe(this.input.sessionId);
+        if (!observation) {
+          continue;
+        }
+        // T18: chat-route progress check every 5 steps.
+        const progress = await this.checkProgress(
+          observation,
+          decisionInput,
+          signal
+        );
+        if (progress === "no_progress") {
+          return this.terminal("partial", "no_progress", evidence, extracted, observation);
+        }
       }
       return this.terminal(
         "partial",
@@ -391,15 +461,85 @@ export class BrowserTaskRunner {
       title: observation.title.slice(0, 512),
       candidates: candidates as BrowserDecisionInput["candidates"],
       recent_actions: [],
-      // D-FR-16: offer only operations the runner can actually execute.
-      // NAVIGATE (same-site policy plumbing) and EXTRACT (field schema
-      // executor) are not implemented yet and are excluded so the model
-      // never burns decisions on unsupported operations.
-      allowed_operations: RUNNER_OPERATIONS.filter(
-        (op) => op !== "NAVIGATE" && op !== "EXTRACT"
-      ),
+      // D-FR-16: every offered operation is executable (T18).
+      allowed_operations: RUNNER_OPERATIONS,
       deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
     };
+  }
+
+  /**
+   * T18: ONE bounded recovery decision (D-FR-22/23). Issues a new
+   * decision with the specific failure reason as the subgoal; the main
+   * loop consumes it through the normal validate/execute path. Budget:
+   * recoveryCalls, never reset, never recursive.
+   */
+  private async recoverOnce(
+    decisionInput: BrowserDecisionInput,
+    reason: string,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    if (this.recoveryCalls >= this.budget.recoveryCalls) {
+      return false;
+    }
+    this.recoveryCalls++;
+    const recoveryInput: BrowserDecisionInput = {
+      ...decisionInput,
+      step_id: `${decisionInput.step_id}_recovery${this.recoveryCalls}`,
+      subgoal: reason.slice(0, 1000),
+      recent_actions: [
+        ...decisionInput.recent_actions,
+        {
+          operation: decisionInput.recent_actions.at(-1)?.operation ?? "CLICK",
+          target_descriptor: null,
+          outcome: "failed" as const,
+          error_code: reason.slice(0, 64),
+        },
+      ].slice(-6),
+    };
+    try {
+      const result = await this.deps.decisionClient.decide(
+        recoveryInput,
+        signal
+      );
+      if (result.status === "decided") {
+        this.pendingRecovery = result;
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * T18: chat-route progress check (D-FR-19). Every 5 leaf steps the
+   * URL + visible-text digest must change; otherwise one bounded
+   * recovery is attempted before the task ends no_progress.
+   */
+  private async checkProgress(
+    observation: RunnerObservation,
+    decisionInput: BrowserDecisionInput,
+    signal: AbortSignal
+  ): Promise<"ok" | "no_progress"> {
+    this.stepsSinceProgressCheck++;
+    if (this.stepsSinceProgressCheck < 5) {
+      return "ok";
+    }
+    this.stepsSinceProgressCheck = 0;
+    const digest = `${observation.url}|${observation.visibleText.slice(0, 200)}`;
+    if (this.lastProgressDigest !== null && digest === this.lastProgressDigest) {
+      const recovered = await this.recoverOnce(
+        decisionInput,
+        "no progress for 5 steps; the page did not change - try a DIFFERENT approach or ESCALATE",
+        signal
+      );
+      if (recovered) {
+        return "ok";
+      }
+      return "no_progress";
+    }
+    this.lastProgressDigest = digest;
+    return "ok";
   }
 
   /**
@@ -441,6 +581,7 @@ export class BrowserTaskRunner {
           stop: {
             status: "failed",
             reason: `three_equivalent_failures:${stepResult.errorCode}`,
+            // T18: bounded recovery happens before the terminal lands.
           },
         };
       }

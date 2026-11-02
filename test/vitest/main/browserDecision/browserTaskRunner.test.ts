@@ -163,7 +163,7 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     expect(result.counts.leafSteps).toBe(1);
   });
 
-  it("stops after three equivalent failures (D-FR-25)", async () => {
+  it("attempts bounded recovery after three equivalent failures, then stops (D-FR-25/22)", async () => {
     let calls = 0;
     const deps = makeRunnerDeps(
       [0, 1, 2, 3].map(() => ({
@@ -180,6 +180,8 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
         results: [{ success: false, errorCode: "internal_error" }],
       };
     };
+    // The fake deps.decide only serves the initial script; the recovery
+    // call goes through the same client, so give it a script-tail answer.
     const runner = new BrowserTaskRunner(
       { sessionId: "mb_r4", conversationId: "conv-1", goal: "click go" },
       deps
@@ -187,7 +189,14 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     const result = await runner.run();
     expect(result.status).toBe("failed");
     expect(result.reason).toContain("three_equivalent_failures");
-    expect(calls).toBe(3);
+    // 3 failing decisions + 1 bounded recovery call + the recovered
+    // decision's own follow-up (script exhausted -> llm_required).
+    expect(calls).toBe(5);
+    expect(result.counts.recoveryCalls).toBe(1);
+    // The recovered decision also failed; the follow-up decision saw the
+    // exhausted script and escalated honestly -> partial, not failed.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated:script_end");
   });
 
   it("normalizes ESCALATE to a truthful partial result", async () => {
