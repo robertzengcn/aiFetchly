@@ -214,6 +214,16 @@ parentPort.on("message", async (event: { data: unknown }) => {
           })
         );
         return;
+      case "FILL_LOGIN_FORM":
+        // PRD A-FR-08: the password lives only inside this call.
+        await session.fillLoginForm(message.requestId, {
+          mode: message.mode,
+          allowedDomainSuffixes: message.allowedDomainSuffixes,
+          recipe: message.recipe,
+          username: message.username,
+          password: message.password,
+        });
+        return;
       case "PIN_OBSERVATION":
         // PRD D-FR-15a: keep a pending observation's refs resolvable.
         if (message.pinned) {

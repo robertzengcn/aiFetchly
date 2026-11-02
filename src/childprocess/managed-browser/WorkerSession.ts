@@ -9,6 +9,7 @@ import {
 import type {
   AuthenticationAssessment,
   BrowserObservation,
+  WorkerLoginRecipe,
   ManagedBrowserErrorCode,
   ManagedBrowserSessionState,
 } from "@/entityTypes/managedBrowserTypes";
@@ -38,7 +39,8 @@ import {
   buildObservation,
   type ObservationPageLike,
 } from "@/childprocess/managed-browser/BrowserObservationService";
-import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageReferenceRegistry";
+import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageReferenceRegistry";import { LoginFormFiller } from "@/childprocess/managed-browser/LoginFormFiller";
+
 import type {
   ExecutorElementHandle,
   ExecutorPageLike,
@@ -173,6 +175,7 @@ export class WorkerSession {
   private readonly registry =
     new PageReferenceRegistry<ExecutorElementHandle>();
   private readonly executor = new BrowserActionExecutor();
+  private readonly loginFiller = new LoginFormFiller();
   private adapter: PlatformBrowserAdapter =
     new YouTubeBrowserAdapter();
 
@@ -707,6 +710,48 @@ export class WorkerSession {
           ? "challenge"
           : "verification_unknown",
     });
+  }
+
+  /**
+   * PRD A-FR-08/16..21: privileged credential fill. The password exists
+   * only inside this call; the result carries outcome + field stamps and
+   * NEVER a value. Returns through LOGIN_FORM_RESULT.
+   */
+  public async fillLoginForm(
+    requestId: string,
+    input: {
+      mode: "login" | "register";
+      allowedDomainSuffixes: string[];
+      recipe: WorkerLoginRecipe | null;
+      username: string;
+      password: string;
+    }
+  ): Promise<void> {
+    const page = this.requirePage(requestId);
+    if (!page) {
+      return;
+    }
+    try {
+      const firstStep = input.recipe?.steps[0] ?? null;
+      const result = await this.loginFiller.fill(page, {
+        mode: input.mode,
+        allowedDomainSuffixes: input.allowedDomainSuffixes,
+        recipeStep: firstStep,
+        username: input.username,
+        password: input.password,
+      });
+      this.send({
+        ...this.base(requestId),
+        type: "LOGIN_FORM_RESULT",
+        outcome: result.outcome,
+        reasonCode: result.reasonCode ?? null,
+        filledFieldStamps: [...result.filledFieldStamps],
+      });
+    } finally {
+      // A-FR-08: wipe local references to the credential.
+      input.password = "";
+      input.username = "";
+    }
   }
 
   /** PRD D-FR-15a: pin/unpin an observation epoch (pending approvals). */

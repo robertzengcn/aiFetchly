@@ -4,6 +4,7 @@ import {
   Column,
   ManyToMany,
   JoinTable,
+  Index,
 } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 import { ProxyEntity } from "@/entity/Proxy.entity";
@@ -39,6 +40,22 @@ export class SocialAccountEntity extends AuditableEntity {
 
   @Column({ type: "varchar", length: 255, nullable: true })
   email!: string;
+
+  /** PRD A-FR-03/13: BrowserSite link (backfilled from social_type_id). */
+  @Column({ type: "integer", nullable: true })
+  @Index()
+  site_id!: number | null;
+
+  /** Q-01: per-account opt-in for AI-driven sign-in. */
+  @Column({ type: "boolean", default: false })
+  ai_use_enabled!: boolean;
+
+  /** A-FR-10: automated sign-in cooldown bookkeeping. */
+  @Column({ type: "datetime", nullable: true })
+  last_login_failure_at!: Date | null;
+
+  @Column({ type: "varchar", length: 64, nullable: true })
+  last_login_failure_reason!: string | null;
 
   @ManyToMany(() => ProxyEntity)
   @JoinTable({

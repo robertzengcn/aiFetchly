@@ -5282,6 +5282,45 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
+      name: "browser_sign_in",
+      description:
+        "Sign in to the CURRENT site with a saved account (PRD A-FR-01). Call this at a " +
+        "login wall instead of browser_request_handoff when the user likely has a saved " +
+        "account. You may pass account_id (from list_social_accounts) and username_hint. " +
+        "You NEVER provide or see the password: the app fills the credential form " +
+        "itself. If no saved account exists, the user is asked in a secure card; if " +
+        "automated sign-in fails, the existing handoff dialog opens with a reason.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id." },
+          intent: {
+            type: "string",
+            description: "login (default) or register (needs explicit user confirmation).",
+          },
+          account_id: { type: "number", description: "Saved account id, when you must pick among several." },
+          username_hint: { type: "string", description: "Optional username pre-fill for the credential card (max 256 chars)." },
+        },
+        required: ["session_id"],
+      },
+      tier: "main",
+      requiresConfirmation: false,
+      permissionCategory: "automation",
+      source: "built-in",
+      // Async: waits for the credential card / handoff inside its job so
+      // chat rendering never blocks (A-FR-01).
+      async: true,
+      resolveTimeoutClass: () => "async",
+      resolveAsync: () => true,
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().signIn(a, context),
+          args,
+          context
+        ),
+    },
+    {
       name: "browser_site_upsert",
       description:
         "Register a NEW website with the browser site registry by homepage URL " +

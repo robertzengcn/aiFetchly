@@ -14,6 +14,8 @@ import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxyS
 import { browserSetProxyToolSchema } from "@/schemas/aiTools/browserProxy";
 import { browserSiteUpsertToolSchema } from "@/schemas/aiTools/browserSite";
 import { getDefaultBrowserSiteModule } from "@/modules/BrowserSiteModule";
+import { browserSignInToolSchema } from "@/schemas/aiTools/browserSignIn";
+import { getDefaultBrowserCredentialLoginService } from "@/service/browserLogin/BrowserCredentialLoginService";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -883,6 +885,43 @@ export class ManagedBrowserAiToolService {
       this.wrapModuleError(error);
       throw error;
     }
+  }
+
+  /**
+   * PRD A-FR-01/14: credential-free sign-in trigger. The runner and the
+   * LLM never see or type a password; the privileged service fills the
+   * form and waits for the user's credential card INSIDE this call (the
+   * tool is registered async so the wait happens in its job).
+   */
+  public async signIn(
+    args: Record<string, unknown>,
+    context: BrowserToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    this.ensureAiEnabled();
+    const parsed = browserSignInToolSchema().safeParse(args);
+    if (!parsed.success) {
+      throw new ManagedBrowserAiToolError(
+        "invalid_tool_arguments",
+        undefined,
+        formatZodValidationError("browser_sign_in", parsed.error)
+      );
+    }
+    await this.ensureBrowserEnabled();
+    this.ensureSession(parsed.data.session_id, context.conversationId);
+    const result = await getDefaultBrowserCredentialLoginService().signIn({
+      sessionId: parsed.data.session_id,
+      conversationId: context.conversationId,
+      intent: parsed.data.intent,
+      ...(parsed.data.account_id !== undefined
+        ? { accountId: parsed.data.account_id }
+        : {}),
+      ...(parsed.data.username_hint !== undefined
+        ? { usernameHint: parsed.data.username_hint }
+        : {}),
+    });
+    // A-FR-04: the username MAY appear in the result; the password never
+    // exists here at all.
+    return { ...result };
   }
 
   /**

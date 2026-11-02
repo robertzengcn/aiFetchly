@@ -734,6 +734,13 @@ export const MANAGED_BROWSER_VERIFY_MANUAL_LOGIN =
 export const MANAGED_BROWSER_RESUME = "managed-browser:resume";
 export const MANAGED_BROWSER_STOP = "managed-browser:stop";
 export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
+// PRD A-FR-05/06: secure credential card. The request event carries the
+// site domain from the MAIN process; the submit channel is renderer-only,
+// Zod-validated, single-use, and never logged (A-FR-06).
+export const MANAGED_BROWSER_CREDENTIAL_REQUEST =
+  "managed-browser:credential-request";
+export const MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL =
+  "managed-browser:submit-login-credential";
 export const MANAGED_BROWSER_CANCEL_ACTIVE = "managed-browser:cancel-active";
 export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
   "managed-browser:capture-screenshot";

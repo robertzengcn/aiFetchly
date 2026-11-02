@@ -9,6 +9,7 @@ import {
   MANAGED_BROWSER_RESUME,
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
   MANAGED_BROWSER_CANCEL_ACTIVE,
   MANAGED_BROWSER_CAPTURE_SCREENSHOT,
   MANAGED_BROWSER_EXTEND_HANDOFF,
@@ -95,6 +96,25 @@ export async function stopManagedBrowser(
   reason: "user_stop" | "cancelled" | "shutdown" = "user_stop"
 ): Promise<SafeManagedBrowserStatus> {
   return await windowInvoke(MANAGED_BROWSER_STOP, { sessionId, reason });
+}
+
+/**
+ * PRD A-FR-05/06: submit the credential card. Values travel over this
+ * validated channel straight to encrypted storage or the one-time
+ * in-memory store — never into chat state.
+ */
+export async function submitBrowserLoginCredential(input: {
+  requestId: string;
+  conversationId: string;
+  username: string;
+  password: string;
+  save: boolean;
+  cancelled?: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL, {
+    ...input,
+    cancelled: input.cancelled ?? false,
+  });
 }
 
 export async function approveBrowserAction(input: {

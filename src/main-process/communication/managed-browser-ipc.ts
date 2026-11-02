@@ -17,6 +17,7 @@ import {
   MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
   MANAGED_BROWSER_CLEAR_CACHE,
   MANAGED_BROWSER_UPDATE_SETTINGS,
+  MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
   MANAGED_BROWSER_STATUS_EVENT,
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
@@ -26,6 +27,8 @@ import {
 import {
   registerValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { browserCredentialSubmitSchema } from "@/schemas/ipc/browserCredential";
+import { getCredentialCardWaitRegistry } from "@/service/browserLogin/BrowserCredentialLoginService";
 import {
   listEligibleAccountsInputSchema,
   managedBrowserStartInputSchema,
@@ -121,6 +124,31 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   // Eligible-account listing is a management READ (also used by the
   // settings page) — not AI execution — so it stays ungated; the actual
   // START channel above carries the AI gate.
+  // PRD A-FR-05/06: the credential card request event carries ONLY the
+  // main-process-derived site domain and a single-use request id; the
+  // submit handler validates and forwards to the wait registry, which
+  // resolves the in-job sign-in. Values never touch chat or logs.
+  registerValidatedHandler(
+    MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
+    browserCredentialSubmitSchema,
+    async (input) => {
+      const entry = getCredentialCardWaitRegistry().consume({
+        requestId: input.requestId,
+        conversationId: callerConversationId(input),
+      });
+      if (!entry) {
+        return { accepted: false };
+      }
+      entry.resolve({
+        username: input.username,
+        password: input.password,
+        save: input.save,
+        cancelled: input.cancelled,
+      });
+      return { accepted: true };
+    }
+  );
+
   registerValidatedHandler(
     MANAGED_BROWSER_LIST_ELIGIBLE_ACCOUNTS,
     listEligibleAccountsInputSchema,

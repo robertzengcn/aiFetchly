@@ -536,6 +536,35 @@ const stopSessionMessageSchema = z.strictObject({
   reason: z.enum(["user_stop", "cancelled", "shutdown", "error"]),
 });
 
+/**
+ * PRD A-FR-16..21: privileged login-form fill. The password travels
+ * ONLY inside this single request and is wiped after use; results carry
+ * outcome stamps, never values.
+ */
+const loginRecipeStepSchema = z.strictObject({
+  usernameField: z.string().max(128).nullable(),
+  passwordField: z.string().max(128).nullable(),
+  submitVia: z.enum(["form", "enter"]),
+});
+
+const loginRecipeSchema = z.strictObject({
+  version: z.literal(1),
+  formAction: z.string().max(2048).nullable(),
+  steps: z.array(loginRecipeStepSchema).min(1).max(3),
+});
+
+export type WorkerLoginRecipe = z.infer<ReturnType<typeof loginRecipeSchema>>;
+
+const fillLoginFormMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("FILL_LOGIN_FORM"),
+  mode: z.enum(["login", "register"]),
+  allowedDomainSuffixes: z.array(z.string().min(1).max(253)).max(16),
+  recipe: loginRecipeSchema.nullable(),
+  username: z.string().min(1).max(256),
+  password: z.string().min(1).max(1024),
+});
+
 const evaluateScriptMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("EVALUATE_SCRIPT"),
@@ -560,6 +589,7 @@ export const managedBrowserInboundSchema = lazySchema(() =>
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
     pinObservationMessageSchema,
+    fillLoginFormMessageSchema,
     stopSessionMessageSchema,
     evaluateScriptMessageSchema,
   ])
@@ -768,6 +798,16 @@ const sessionStoppedMessageSchema = z.strictObject({
   reasonCode: z.string().min(1).max(64).nullable(),
 });
 
+/** A-FR-08/09: outcome of the privileged login fill. No values, ever. */
+const loginFormResultMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("LOGIN_FORM_RESULT"),
+  outcome: z.enum(["success", "wrong_credential", "challenge", "unknown"]),
+  reasonCode: z.string().max(64).nullable(),
+  /** Stamps of the fields the filler touched ([credential] masking). */
+  filledFieldStamps: z.array(z.string().max(128)).max(16),
+});
+
 const evaluateScriptResultMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("EVALUATE_SCRIPT_RESULT"),
@@ -812,6 +852,7 @@ export const managedBrowserOutboundSchema = lazySchema(() =>
     screenshotResultMessageSchema,
     handoffRequiredMessageSchema,
     challengeDetectedMessageSchema,
+    loginFormResultMessageSchema,
     refreshedCookiesMessageSchema,
     sessionStoppedMessageSchema,
     evaluateScriptResultMessageSchema,

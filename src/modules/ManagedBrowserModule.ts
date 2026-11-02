@@ -21,6 +21,7 @@ import {
 import { AccountSessionService } from "@/modules/AccountSessionService";
 import { getDefaultBrowserAiAvailabilityService } from "@/service/browserDecision/BrowserAiAvailabilityService";
 import { parseUrlIdentity } from "@/service/browserDecision/RegistrableDomain";
+import type { WorkerLoginRecipe } from "@/schemas/worker/managedBrowser";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
 import {
   selectProxyForSession,
@@ -1596,6 +1597,49 @@ export class ManagedBrowserModule {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * PRD A-FR-08: send the privileged FILL_LOGIN_FORM request. The
+   * credential payload is passed through verbatim to the worker and
+   * NEVER logged here; the result carries outcome + stamps only.
+   */
+  public async fillLoginForm(
+    sessionId: string,
+    input: {
+      mode: "login" | "register";
+      allowedDomainSuffixes: string[];
+      recipe: WorkerLoginRecipe | null;
+      username: string;
+      password: string;
+    }
+  ): Promise<{
+    outcome: "success" | "wrong_credential" | "challenge" | "unknown";
+    reasonCode: string | null;
+    filledFieldStamps: string[];
+  }> {
+    const record = this.requireSession(sessionId);
+    const message = await this.requestWorker(
+      record,
+      {
+        type: "FILL_LOGIN_FORM",
+        mode: input.mode,
+        allowedDomainSuffixes: input.allowedDomainSuffixes,
+        recipe: input.recipe,
+        username: input.username,
+        password: input.password,
+      },
+      MANAGED_BROWSER_TIMEOUTS.initialVerificationMs,
+      (m) => m.type === "LOGIN_FORM_RESULT" || m.type === "HANDOFF_REQUIRED"
+    );
+    if (message.type === "HANDOFF_REQUIRED") {
+      return { outcome: "unknown", reasonCode: "handoff_required", filledFieldStamps: [] };
+    }
+    return {
+      outcome: message.outcome,
+      reasonCode: message.reasonCode ?? null,
+      filledFieldStamps: message.filledFieldStamps,
+    };
   }
 
   /**

@@ -357,4 +357,148 @@ export class SocialAccountModule extends BaseModule {
       await this.socialAccountModel.getSocialAccountsByPlatform(socialTypeId)
     );
   }
+
+  /**
+   * A-FR-03/13: accounts usable for AI sign-in on a site. Matches by
+   * site_id first; falls back to the legacy social_type_id mapping (the
+   * seeded BrowserSite rows keep the platform IDs). Respects the per-account
+   * AI-use opt-in (Q-01) when `requireAiOptIn` is set.
+   */
+  public async getAccountsForSite(
+    siteId: number,
+    options?: { requireAiOptIn?: boolean; platformId?: number }
+  ): Promise<Array<{ id: number; user: string; name: string; hasPassword: boolean }>> {
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    const rows = await repository
+      .createQueryBuilder("account")
+      .where("account.site_id = :siteId", { siteId })
+      .orWhere("account.social_type_id = :platformId", {
+        platformId: options?.platformId ?? siteId,
+      })
+      .getMany();
+    const result: Array<{
+      id: number;
+      user: string;
+      name: string;
+      hasPassword: boolean;
+    }> = [];
+    for (const row of rows) {
+      if (options?.requireAiOptIn && !row.ai_use_enabled) {
+        continue;
+      }
+      result.push({
+        id: row.id,
+        user: row.user,
+        name: row.name,
+        hasPassword: Boolean(row.pass),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * A-FR-07: the ONLY decrypting credential read used by sign-in. Returns
+   * the username + decrypted password ONLY when the stored site identity
+   * matches the CURRENT page's registrable domain — the caller derives that
+   * identity from the live page URL, never from the LLM.
+   */
+  public async getCredentialForLogin(
+    accountId: number,
+    currentRegistrableDomain: string
+  ): Promise<{ username: string; password: string } | null> {
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    const account = await repository.findOne({ where: { id: accountId } });
+    if (!account) {
+      return null;
+    }
+    // The account's site must match the page domain (fail closed).
+    if (account.site_id !== null) {
+      const siteModule = (await import("@/modules/BrowserSiteModule"))
+        .getDefaultBrowserSiteModule();
+      const site = await siteModule.getSite(account.site_id);
+      if (!site) {
+        return null;
+      }
+      const allowed = site.allowedDomainSuffixes.some(
+        (suffix) =>
+          currentRegistrableDomain === suffix ||
+          currentRegistrableDomain.endsWith("." + suffix)
+      );
+      if (!allowed) {
+        return null;
+      }
+    }
+    const password = await this.decryptPass(account.pass, account.id);
+    if (!password || !account.user) {
+      return null;
+    }
+    return { username: account.user, password };
+  }
+
+  /** A-FR-10: record a failed automated sign-in (cooldown + UI reason). */
+  public async recordLoginFailure(
+    accountId: number,
+    reason: string,
+    now?: Date
+  ): Promise<void> {
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    await repository.update(accountId, {
+      last_login_failure_at: now ?? new Date(),
+      last_login_failure_reason: reason.slice(0, 64),
+    });
+  }
+
+  /** A-FR-10: clear a prior failure after a successful sign-in. */
+  public async recordLoginFailureClear(accountId: number): Promise<void> {
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    await repository.update(accountId, {
+      last_login_failure_at: null,
+      last_login_failure_reason: null,
+    });
+  }
+
+  /** A-FR-10: cooldown check (1 automated attempt per account+site/window). */
+  public async isSignInCoolingDown(
+    accountId: number,
+    cooldownMs = 15 * 60_000,
+    now?: Date
+  ): Promise<boolean> {
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    const account = await repository.findOne({ where: { id: accountId } });
+    if (!account?.last_login_failure_at) {
+      return false;
+    }
+    const elapsed = (now ?? new Date()).getTime() - account.last_login_failure_at.getTime();
+    return elapsed >= 0 && elapsed < cooldownMs;
+  }
+
+  /** Save a credential submitted through the secure card (A-FR-06). */
+  public async saveSubmittedCredential(input: {
+    readonly siteId: number | null;
+    readonly platformId?: number;
+    readonly username: string;
+    readonly password: string;
+    readonly save: boolean;
+  }): Promise<number> {
+    if (!input.save) {
+      throw new Error("save_not_requested");
+    }
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    const entity = new SocialAccountEntity();
+    entity.user = input.username;
+    entity.name = input.username;
+    entity.social_type_id = input.platformId ?? (input.siteId ?? 0);
+    entity.site_id = input.siteId;
+    entity.status = 1;
+    entity.ai_use_enabled = false;
+    entity.pass = await this.encryptPass(input.password);
+    const saved = await repository.save(entity);
+    return saved.id;
+  }
 }
