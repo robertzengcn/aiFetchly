@@ -310,6 +310,23 @@ export class EmailReplyDraftModule extends BaseModule {
     }
   }
 
+  /** Invalidate pending reply work for one message after a location change. */
+  async invalidateUnsentDraftsForMessage(
+    messageId: number,
+    reason: string
+  ): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.invalidateUnsentDraftsForMessage(
+        messageId,
+        reason
+      );
+    } catch (error) {
+      console.error("Error invalidating unsent drafts for message:", error);
+      throw error;
+    }
+  }
+
   async reconcileDelivery(input: {
     attemptId: number;
     draftId: number;

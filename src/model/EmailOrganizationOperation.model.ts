@@ -460,11 +460,22 @@ export class EmailOrganizationOperationModel extends BaseDb {
     const nextStatus = deriveOperationStatus(itemStatuses, operation.cancelRequestedAt !== null);
     const display = countItemsForDisplay(itemStatuses);
 
+    // Surface a representative item error code on the aggregate for failed
+    // or unresolved operations (UI reason-code mapping, design §13).
+    let aggregateErrorCode: string | null = null;
+    if (nextStatus === "failed" || nextStatus === "needs_reconciliation") {
+      const firstProblem = items.find(
+        (item) => item.errorCode !== null && (item.status === "failed" || item.status === "outcome_unknown")
+      );
+      aggregateErrorCode = firstProblem?.errorCode ?? (nextStatus === "needs_reconciliation" ? "OUTCOME_UNKNOWN" : null);
+    }
+
     await opRepo
       .createQueryBuilder()
       .update(EmailOrganizationOperationEntity)
       .set({
         status: nextStatus,
+        errorCode: aggregateErrorCode,
         completedCount: display.completed,
         failedCount: display.failed,
         unknownCount: display.unresolved,
