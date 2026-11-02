@@ -109,6 +109,22 @@ export const EMAIL_REPLY_KNOWLEDGE_SCOPE_UPDATE =
 export const EMAIL_AUTO_REPLY_AUDIT_LIST = "email:autoreply:audit:list";
 export const EMAIL_AUTO_REPLY_AUDIT_DETAIL = "email:autoreply:audit:detail";
 export const EMAIL_REPLY_CHECK_REPLIED = "email:reply:check:replied";
+// Email organization (forward / trash / restore) — Stage B channel surface.
+// Manual mailbox controls are ordinary validated handlers (no AI gate);
+// draft create/update are AI-gated because they serve AI-function requests.
+export const EMAIL_ORG_CAPABILITIES = "email:organization:capabilities";
+export const EMAIL_ORG_FOLDERS = "email:organization:folders";
+export const EMAIL_FORWARD_DRAFT_CREATE = "email:forward:draft:create";
+export const EMAIL_FORWARD_DRAFT_UPDATE = "email:forward:draft:update";
+export const EMAIL_FORWARD_DRAFT_DETAIL = "email:forward:draft:detail";
+export const EMAIL_FORWARD_DRAFT_DISCARD = "email:forward:draft:discard";
+export const EMAIL_ORG_AUTHORIZE = "email:organization:authorize";
+export const EMAIL_ORG_SEND = "email:organization:forward:send";
+export const EMAIL_ORG_TRASH = "email:organization:trash";
+export const EMAIL_ORG_RESTORE = "email:organization:restore";
+export const EMAIL_ORG_OPERATION_GET = "email:organization:operation:get";
+export const EMAIL_ORG_OPERATION_CANCEL = "email:organization:operation:cancel";
+export const EMAIL_ORG_OPERATION_RECONCILE = "email:organization:operation:reconcile";
 export const SOCIALACCOUNTlIST = "socialaccount:list";
 export const SOCIALACCOUNTDETAIL = "socialaccount:detail";
 export const SOCIALACCOUNTSAVE = "socialaccount:save";

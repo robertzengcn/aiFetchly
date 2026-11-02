@@ -71,6 +71,7 @@ import { registerPluginArtifactIpcHandlers } from "@/main-process/communication/
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
 import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
+import { registerEmailOrganizationIpcHandlers } from "@/main-process/communication/emailOrganization-ipc";
 import { registerDiagnosticsIpcHandlers } from "@/main-process/communication/diagnostics-ipc";
 import { registerHooksIpcHandlers } from "@/main-process/communication/hooks-ipc";
 import { registerSlashCommandHandlers } from "@/main-process/communication/slash-command-ipc";
@@ -204,6 +205,7 @@ export function registerCommunicationIpcHandlers(
     registerAIWorkspaceMemoryIpcHandlers();
     registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();
+    registerEmailOrganizationIpcHandlers();
     // Best-effort reply-reliability startup: lift legacy drafts onto immutable
     // revisions and sweep stale in-flight send attempts to delivery_unknown.
     // Fire-and-forget; never blocks app startup.

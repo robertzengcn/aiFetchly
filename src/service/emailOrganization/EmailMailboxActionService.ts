@@ -6,6 +6,7 @@ import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
+import { ImapEmailMailboxAdapter as DefaultMailboxAdapter } from "@/service/emailOrganization/ImapEmailMailboxAdapter";
 import type {
   EmailMailboxAdapter,
   MoveResult,
@@ -71,12 +72,8 @@ export class EmailMailboxActionService extends BaseModule {
     this.capabilityService = options?.capabilityService ?? null;
   }
 
-  private createDefaultAdapter() {
-    const { ImapEmailMailboxAdapter } =
-      require("@/service/emailOrganization/ImapEmailMailboxAdapter") as {
-        ImapEmailMailboxAdapter: new () => EmailMailboxAdapter;
-      };
-    return new ImapEmailMailboxAdapter();
+  private createDefaultAdapter(): EmailMailboxAdapter {
+    return new DefaultMailboxAdapter();
   }
 
   async trashMessage(input: TrashMessageInput): Promise<MailboxActionOutcome> {

@@ -1,0 +1,186 @@
+import { windowInvoke } from "@/views/utils/apirequest";
+import {
+  EMAIL_ORG_CAPABILITIES,
+  EMAIL_ORG_FOLDERS,
+  EMAIL_FORWARD_DRAFT_CREATE,
+  EMAIL_FORWARD_DRAFT_UPDATE,
+  EMAIL_FORWARD_DRAFT_DETAIL,
+  EMAIL_FORWARD_DRAFT_DISCARD,
+  EMAIL_ORG_AUTHORIZE,
+  EMAIL_ORG_SEND,
+  EMAIL_ORG_TRASH,
+  EMAIL_ORG_RESTORE,
+  EMAIL_ORG_OPERATION_GET,
+  EMAIL_ORG_OPERATION_CANCEL,
+  EMAIL_ORG_OPERATION_RECONCILE,
+} from "@/config/channellist";
+import type {
+  EmailOrganizationCapabilityDto,
+  EmailOrganizationFolderDto,
+  EmailOrganizationOperationDto,
+  EmailForwardAttachmentSelection,
+} from "@/entityTypes/emailOrganizationTypes";
+
+/**
+ * Renderer API for the email organization feature (forward / trash /
+ * restore). All calls go through the validated IPC surface; the renderer
+ * never sees credentials, authorization internals or filesystem paths.
+ */
+
+export interface ForwardDraftPreviewDto {
+  draftId: number;
+  revisionId: number;
+  revisionNumber: number;
+  messageId: number;
+  sourceEmailServiceId: number;
+  sendingAccountId: number;
+  fromName: string | null;
+  fromAddress: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  note: string | null;
+  attachmentManifest: Array<{
+    partId: string;
+    displayName: string;
+    contentType: string | null;
+    decodedSize: number;
+    contentHash: string;
+    disposition: "attachment" | "inline";
+    contentId: string | null;
+    selected: boolean;
+  }>;
+  selectedAttachmentCount: number;
+  selectedAttachmentBytes: number;
+  bodyPreviewText: string;
+  validationFindings: string[];
+  composedHash: string;
+  composedMessageId: string;
+  expiresAt: string;
+  expired: boolean;
+}
+
+export interface MailboxActionResultDto {
+  success: boolean;
+  operationId: string;
+  status: string;
+  completed: number;
+  failed: number;
+  unresolved: number;
+  pending: number;
+  cancelled: number;
+  errorCode: string | null;
+  retryable: boolean;
+  priorOperationId?: string;
+}
+
+export interface SendForwardResultDto {
+  status: "submitted" | "failed" | "outcome_unknown" | "already_processed";
+  operationId: string | null;
+  accepted?: string[];
+  rejected?: string[];
+  unknown?: string[];
+  code?: string;
+  error?: string;
+}
+
+export interface CreateForwardDraftInput {
+  messageId: number;
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  note?: string | null;
+  subject?: string | null;
+  senderServiceId?: number | null;
+  attachments?: EmailForwardAttachmentSelection;
+}
+
+export async function getEmailOrganizationCapabilities(
+  emailServiceId: number
+): Promise<EmailOrganizationCapabilityDto> {
+  return await windowInvoke(EMAIL_ORG_CAPABILITIES, { emailServiceId });
+}
+
+export async function listEmailOrganizationFolders(
+  emailServiceId: number
+): Promise<{ folders: EmailOrganizationFolderDto[] }> {
+  return await windowInvoke(EMAIL_ORG_FOLDERS, { emailServiceId });
+}
+
+export async function createForwardDraft(
+  input: CreateForwardDraftInput
+): Promise<ForwardDraftPreviewDto> {
+  return await windowInvoke(EMAIL_FORWARD_DRAFT_CREATE, input);
+}
+
+export async function updateForwardDraft(input: {
+  draftId: number;
+  expectedRevisionId: number;
+  to?: string[];
+  cc?: string[];
+  bcc?: string[];
+  note?: string | null;
+  subject?: string | null;
+  attachments?: EmailForwardAttachmentSelection;
+}): Promise<ForwardDraftPreviewDto> {
+  return await windowInvoke(EMAIL_FORWARD_DRAFT_UPDATE, input);
+}
+
+export async function getForwardDraftDetail(draftId: number): Promise<ForwardDraftPreviewDto> {
+  return await windowInvoke(EMAIL_FORWARD_DRAFT_DETAIL, { draftId });
+}
+
+export async function discardForwardDraft(draftId: number): Promise<{ discarded: boolean }> {
+  return await windowInvoke(EMAIL_FORWARD_DRAFT_DISCARD, { draftId });
+}
+
+/** Authorizes the exact displayed revision (one-time, 15-minute, hash-bound). */
+export async function authorizeForwardRevision(input: {
+  draftId: number;
+  revisionId: number;
+}): Promise<{ authorizationId: number; expiresInSeconds: number }> {
+  return await windowInvoke(EMAIL_ORG_AUTHORIZE, input);
+}
+
+export async function sendApprovedForward(input: {
+  draftId: number;
+  revisionId: number;
+  authorizationId: number;
+}): Promise<SendForwardResultDto> {
+  return await windowInvoke(EMAIL_ORG_SEND, input);
+}
+
+export async function moveMessageToTrash(
+  messageId: number,
+  actionId?: string
+): Promise<MailboxActionResultDto> {
+  return await windowInvoke(EMAIL_ORG_TRASH, { messageId, actionId: actionId ?? null });
+}
+
+export async function restoreFromOperation(
+  operationId: string,
+  destinationFolderPath?: string
+): Promise<MailboxActionResultDto> {
+  return await windowInvoke(EMAIL_ORG_RESTORE, {
+    operationId,
+    destinationFolderPath: destinationFolderPath ?? null,
+  });
+}
+
+export async function getEmailOrganizationOperation(
+  operationId: string
+): Promise<{ operation: EmailOrganizationOperationDto | null }> {
+  return await windowInvoke(EMAIL_ORG_OPERATION_GET, { operationId });
+}
+
+export async function cancelEmailOrganizationOperation(
+  operationId: string
+): Promise<{ cancelled: boolean; operation: EmailOrganizationOperationDto | null }> {
+  return await windowInvoke(EMAIL_ORG_OPERATION_CANCEL, { operationId });
+}
+
+export async function reconcileEmailOrganizationOperation(
+  operationId: string
+): Promise<MailboxActionResultDto> {
+  return await windowInvoke(EMAIL_ORG_OPERATION_RECONCILE, { operationId });
+}
