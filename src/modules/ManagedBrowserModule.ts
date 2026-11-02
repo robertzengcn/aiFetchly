@@ -5,21 +5,28 @@ import { v4 as uuidv4 } from "uuid";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import {
+  MANAGED_BROWSER_SESSION_FREE_MEMORY_MIN_BYTES,
+  MANAGED_BROWSER_MAX_SESSIONS_PER_SITE_DEFAULT,
   MANAGED_BROWSER_ACTION_LIMITS,
   MANAGED_BROWSER_PILOT_PLATFORM_IDS,
   MANAGED_BROWSER_SESSION_ID_PREFIX,
   MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import {
+  PLATFORM_SESSION_MANIFEST,
   getPlatformManifest,
   matchesAllowedDomain,
   type PlatformSessionDefinition,
 } from "@/modules/PlatformSessionManifest";
 import { AccountSessionService } from "@/modules/AccountSessionService";
+import { getDefaultBrowserAiAvailabilityService } from "@/service/browserDecision/BrowserAiAvailabilityService";
+import { parseUrlIdentity } from "@/service/browserDecision/RegistrableDomain";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import {
   ManagedBrowserLeaseService,
   getDefaultManagedBrowserLeaseService,
+  accountLeaseKey,
+  publicSessionLeaseKey,
   type AcquireLeaseResult,
 } from "@/service/ManagedBrowserLeaseService";
 import {
@@ -117,6 +124,10 @@ interface ActiveSessionRecord {
   readonly platformId: number;
   readonly conversationId: string | null;
   readonly leaseToken: string;
+  /** Lease key (account: or public:) used to release this session. */
+  readonly leaseKey: string;
+  /** Registrable domain for the per-site session cap (null = unknown). */
+  readonly siteDomain: string | null;
   /** Assigned once, right after construction (record needs the client ref). */
   client: ManagedBrowserWorkerClient;
   readonly accountLabel: string;
@@ -191,6 +202,8 @@ export interface ManagedBrowserModuleDeps {
   readonly executableResolver?: { resolve(): ExecutableResolutionResult };
   readonly isAiEnabled?: () => boolean;
   readonly mkdtemp?: (prefix: string) => Promise<string>;
+  /** Injectable free-memory probe for tests (PRD M-FR-06 admission). */
+  readonly freemem?: () => number;
   /** Cache coordinator (registry + policy). Defaults to the process singleton. */
   readonly cacheModule?: ManagedBrowserCacheCoordinator;
   readonly resolveCachePolicy?: (
@@ -225,6 +238,7 @@ export class ManagedBrowserModule {
   };
   private readonly isAiEnabled: () => boolean;
   private readonly mkdtemp: (prefix: string) => Promise<string>;
+  private readonly freemem: () => number;
   private readonly cacheModule: ManagedBrowserCacheCoordinator;
   private readonly resolveCachePolicy:
     | ((
@@ -308,6 +322,7 @@ export class ManagedBrowserModule {
       deps.executableResolver ?? new BrowserExecutableResolver();
     this.isAiEnabled = deps.isAiEnabled ?? defaultIsAiEnabled;
     this.mkdtemp = deps.mkdtemp ?? ((prefix) => fs.promises.mkdtemp(prefix));
+    this.freemem = deps.freemem ?? (() => os.freemem());
     this.cacheModule =
       deps.cacheModule ?? getDefaultManagedBrowserCacheModule();
     this.resolveCachePolicy = deps.resolveCachePolicy;
@@ -485,12 +500,48 @@ export class ManagedBrowserModule {
       if (!decision.allowed) throw new ManagedBrowserError("navigation_blocked", decision.reasonCode);
     }
 
-    // 5. Account lease (exclusive; global limit).
+    // 5. Account lease (exclusive per account; setting-backed global
+    // limit). Account-free sessions lease under their OWN session id so
+    // several public sessions can run in parallel (PRD M-FR-06).
     const sessionId = `${MANAGED_BROWSER_SESSION_ID_PREFIX}${uuidv4()
       .replace(/-/g, "")
       .slice(0, 16)}`;
     const sessionNonce = `nonce_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
-    const lease = this.leaseService.acquire(accountId, {
+    const leaseKey =
+      accountId > 0 ? accountLeaseKey(accountId) : publicSessionLeaseKey(sessionId);
+    // Free-memory admission check: each session is a worker plus a headed
+    // Chrome (roughly 300-800 MB). Fail closed when memory is short.
+    const freeMemoryBytes = this.freemem();
+    if (freeMemoryBytes < MANAGED_BROWSER_SESSION_FREE_MEMORY_MIN_BYTES) {
+      throw new ManagedBrowserError("insufficient_memory");
+    }
+    // Per-site cap (PRD M-FR-06): at most maxSessionsPerSite sessions per
+    // registrable domain to limit rate-limit and CAPTCHA exposure.
+    const requestedSiteDomain = this.deriveSessionSiteDomain(
+      account.platformId,
+      input.requestedStartUrl
+    );
+    if (requestedSiteDomain) {
+      const effectiveSettings = await this.settings.getEffectiveSettings();
+      const activeForSite = [...this.sessions.values()].filter(
+        (existing) => existing.siteDomain === requestedSiteDomain
+      ).length;
+      if (activeForSite >= effectiveSettings.maxSessionsPerSite) {
+        throw new ManagedBrowserError("site_limit_reached");
+      }
+    }
+    // Setting-backed global limit (PRD M-FR-06). Defensive for injected
+    // fakes in tests: apply only when the service and setting exist.
+    const settingsForLimit = await this.settings.getEffectiveSettings();
+    if (
+      typeof this.leaseService.setGlobalLimit === "function" &&
+      Number.isFinite(settingsForLimit.maxConcurrentSessions)
+    ) {
+      this.leaseService.setGlobalLimit(
+        settingsForLimit.maxConcurrentSessions
+      );
+    }
+    const lease = this.leaseService.acquire(leaseKey, {
       sessionId,
       ownerConversationId: input.conversationId ?? null,
     });
@@ -499,7 +550,7 @@ export class ManagedBrowserModule {
       if (existing) {
         return this.toSafeStatus(existing);
       }
-      this.leaseService.release(accountId, lease.sessionId, "");
+      this.leaseService.release(leaseKey, lease.sessionId, "");
       throw new ManagedBrowserError("internal_error", "lease_without_record");
     }
     if (lease.status === "account_in_use") {
@@ -547,6 +598,8 @@ export class ManagedBrowserModule {
         platformId: account.platformId,
         conversationId: input.conversationId ?? null,
         leaseToken: lease.leaseToken,
+        leaseKey,
+        siteDomain: requestedSiteDomain,
         client: null as unknown as ManagedBrowserWorkerClient,
         accountLabel: account.accountLabel,
         platformLabel: manifest.platformName,
@@ -586,7 +639,7 @@ export class ManagedBrowserModule {
           // handleTerminalEvent (which owns the final status + notice +
           // deletion).
           this.leaseService.release(
-            accountId,
+            record.leaseKey,
             sessionId,
             record.leaseToken
           );
@@ -689,7 +742,9 @@ export class ManagedBrowserModule {
         // Failures BEFORE supervisor registration (executable resolution,
         // profile creation) can never be released by the supervisor —
         // release the lease directly or it leaks until app restart.
-        this.leaseService.release(accountId, sessionId, lease.leaseToken);
+        // Pre-record failure path (executable missing): the lease key is
+        // still in scope; record.leaseKey does not exist yet.
+        this.leaseService.release(leaseKey, sessionId, lease.leaseToken);
       }
       this.supervisor.handleTerminal(sessionId, cause);
       if (error instanceof ManagedBrowserError) {
@@ -1449,6 +1504,25 @@ export class ManagedBrowserModule {
     }
   }
 
+  /**
+   * Registrable domain used for the per-site session cap: the requested
+   * start URL when present, otherwise the platform's known login URL.
+   */
+  private deriveSessionSiteDomain(
+    platformId: number,
+    requestedStartUrl: string | undefined
+  ): string | null {
+    if (requestedStartUrl) {
+      return parseUrlIdentity(requestedStartUrl)?.registrableDomain ?? null;
+    }
+    const manifest = PLATFORM_SESSION_MANIFEST.find(
+      (entry) => entry.platformId === platformId
+    );
+    return manifest
+      ? parseUrlIdentity(manifest.loginUrl)?.registrableDomain ?? null
+      : null;
+  }
+
   private toSafeStatus(record: ActiveSessionRecord): SafeManagedBrowserStatus {
     return {
       sessionId: record.sessionId,
@@ -1459,6 +1533,7 @@ export class ManagedBrowserModule {
       state: record.state,
       currentOrigin: record.currentOrigin,
       pageTitle: record.pageTitle,
+      ownerConversationId: record.conversationId,
       pageRevision: record.pageRevision,
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,
@@ -1705,6 +1780,9 @@ const ERROR_CODES: ReadonlySet<string> = new Set<string>([
   "account_not_found",
   "account_in_use",
   "global_session_limit",
+  "insufficient_memory",
+  "site_limit_reached",
+  "session_not_owned",
   "session_cookie_missing",
   "browser_dependency_missing",
   "browser_incompatible",
@@ -1870,13 +1948,6 @@ async function resolveAccountProxy(
  */
 function defaultIsAiEnabled(): boolean {
   try {
-    // Lazy require avoids an import cycle through the browserDecision module.
-    const { getDefaultBrowserAiAvailabilityService } =
-      require("@/service/browserDecision/BrowserAiAvailabilityService") as {
-        getDefaultBrowserAiAvailabilityService: () => {
-          isAvailable(): boolean;
-        };
-      };
     return getDefaultBrowserAiAvailabilityService().isAvailable();
   } catch {
     return false;

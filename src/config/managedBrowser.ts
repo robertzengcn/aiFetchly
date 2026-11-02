@@ -21,8 +21,17 @@ export const MANAGED_BROWSER_PROTOCOL_VERSION = 2;
 /** Opaque session ids look like `mb_<random>` (never derived from cookies). */
 export const MANAGED_BROWSER_SESSION_ID_PREFIX = "mb_";
 
-/** Hard cap of concurrently active managed browser sessions (design §7.2). */
+/**
+ * Fallback cap of concurrently active managed browser sessions. The
+ * EFFECTIVE limit is setting-backed (PRD M-FR-06): default 3, hard max 5,
+ * further reduced by the free-memory check.
+ */
 export const MANAGED_BROWSER_GLOBAL_SESSION_LIMIT = 1;
+export const MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_DEFAULT = 3;
+export const MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_MAX = 5;
+export const MANAGED_BROWSER_MAX_SESSIONS_PER_SITE_DEFAULT = 2;
+/** Per-session memory estimate (worker + headed Chrome) for admission. */
+export const MANAGED_BROWSER_SESSION_FREE_MEMORY_MIN_BYTES = 800 * 1024 * 1024;
 
 /** Pilot platform allowlist — platform ids from PlatformSessionManifest. */
 export const MANAGED_BROWSER_PILOT_PLATFORM_IDS: readonly number[] = [2]; // YouTube
@@ -229,6 +238,8 @@ export const MANAGED_BROWSER_SETTING_KEYS = {
   cacheEnabled: "managed-browser-cache-enabled",
   cacheMaxSizeMb: "managed-browser-cache-max-size-mb",
   cacheClearOnExit: "managed-browser-cache-clear-on-exit",
+  maxConcurrentSessions: "managed-browser-max-concurrent-sessions",
+  maxSessionsPerSite: "managed-browser-max-sessions-per-site",
 } as const;
 
 // ---------------------------------------------------------------------------

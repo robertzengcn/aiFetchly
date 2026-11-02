@@ -221,6 +221,7 @@ export interface SafeManagedBrowserStatus {
   readonly platformLabel: string;
   readonly state: ManagedBrowserSessionState;
   readonly currentOrigin: string | null;
+  readonly ownerConversationId: string | null;
   readonly pageTitle: string | null;
   readonly pageRevision: number;
   readonly authenticated: boolean | null;
@@ -276,6 +277,10 @@ export interface EffectiveManagedBrowserSettings {
   readonly cacheMaxBytes: number;
   readonly clearCacheOnExit: boolean;
   readonly disabledReasonCode: string | null;
+  /** PRD M-FR-06: setting-backed concurrent-session cap (1..5). */
+  readonly maxConcurrentSessions: number;
+  /** PRD M-FR-06: per-registrable-domain session cap. */
+  readonly maxSessionsPerSite: number;
 }
 
 /** Renderer-safe cache status (approximate sizes only, no paths/URLs). */

@@ -83,7 +83,7 @@ class FakeLease {
   public readonly acquireCalls: Array<
     [number, { sessionId: string; ownerConversationId: string | null }]
   > = [];
-  public readonly releaseCalls: Array<[number, string, string]> = [];
+  public readonly releaseCalls: Array<[string, string, string]> = [];
   public next: AcquireLeaseResult = {
     status: "granted",
     leaseToken: "lease-1",
@@ -98,11 +98,11 @@ class FakeLease {
   }
 
   public release(
-    accountId: number,
+    leaseKey: string,
     sessionId: string,
     token: string
   ): "released" {
-    this.releaseCalls.push([accountId, sessionId, token]);
+    this.releaseCalls.push([leaseKey, sessionId, token]);
     return "released";
   }
 }
@@ -557,7 +557,7 @@ describe("ManagedBrowserModule.start gates", () => {
       reasonCode: "lease_without_record",
     });
     expect(h.lease.releaseCalls).toEqual([
-      [ACCOUNT_ID, "mb_ghost0000000001", ""],
+      ["account:" + ACCOUNT_ID, "mb_ghost0000000001", ""],
     ]);
   });
 });
@@ -760,7 +760,7 @@ describe("ManagedBrowserModule terminal handling", () => {
 
     expect(h.lease.releaseCalls).toHaveLength(1);
     expect(h.lease.releaseCalls[0]).toEqual([
-      ACCOUNT_ID,
+      "account:" + ACCOUNT_ID,
       status.sessionId,
       "lease-1",
     ]);

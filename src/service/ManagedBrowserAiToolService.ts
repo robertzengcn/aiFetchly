@@ -9,6 +9,7 @@ import {
   digestSecretValue,
   type SemanticActionDescriptor,
 } from "@/service/browserDecision/BrowserApprovalFingerprint";
+import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -263,13 +264,30 @@ export class ManagedBrowserAiToolService {
     }
   }
 
-  private ensureSession(sessionId: string): SafeManagedBrowserStatus {
+  private ensureSession(
+    sessionId: string,
+    callerConversationId?: string
+  ): SafeManagedBrowserStatus {
     const status = this.browserModule.getStatus(sessionId);
     if (!status) {
       throw new ManagedBrowserAiToolError(
         "worker_exited",
         undefined,
         "no_active_session"
+      );
+    }
+    // PRD M-FR-07: a session owned by a conversation may only be driven
+    // by its owner. Ownerless (renderer-started public) sessions accept
+    // the caller; the parent-conversation exception lands with sub-agents.
+    if (
+      callerConversationId &&
+      status.ownerConversationId &&
+      status.ownerConversationId !== callerConversationId
+    ) {
+      throw new ManagedBrowserAiToolError(
+        "worker_exited",
+        undefined,
+        "session_not_owned"
       );
     }
     return status;
@@ -365,14 +383,15 @@ export class ManagedBrowserAiToolService {
   }
 
   public async getStatus(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserGetStatusToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     return {
       ...(this.browserModule.getStatus(
         parsed.data.session_id
@@ -389,7 +408,7 @@ export class ManagedBrowserAiToolService {
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     context.emitProgress?.({
       phase: "running",
       message: "Observing page",
@@ -411,14 +430,15 @@ export class ManagedBrowserAiToolService {
   }
 
   public async navigate(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserNavigateToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     const assessment = this.classifier.classify({
       actionType: "navigate",
       url: parsed.data.url,
@@ -451,7 +471,7 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_run_actions", parsed.error)
       );
     }
-    const sessionStatus = this.ensureSession(parsed.data.session_id);
+    const sessionStatus = this.ensureSession(parsed.data.session_id, context?.conversationId);
     const program = parsed.data.program as BrowserActionProgram;
 
     // Risk gate over the whole program (§15.4).
@@ -677,7 +697,7 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_evaluate_script", parsed.error)
       );
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     // privileged_script: no permission mode may skip this confirmation.
     const assessment = this.classifier.classify({
       actionType: "run_actions",
@@ -748,14 +768,15 @@ export class ManagedBrowserAiToolService {
    * downstream store). The headed window is the user-facing surface.
    */
   public async captureScreenshot(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserCaptureScreenshotToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     try {
       // Review fix: the model-facing tool uses the SAME sensitive-state
       // gate as the renderer thumbnail — nothing capturable during
@@ -775,14 +796,15 @@ export class ManagedBrowserAiToolService {
   }
 
   public async requestHandoff(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserRequestHandoffToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     void parsed.data.reason; // renderer-initiated semantics only; recorded server-side
     try {
       const status = await this.browserModule.requestHandoff(
@@ -795,14 +817,15 @@ export class ManagedBrowserAiToolService {
   }
 
   public async resumeAfterHandoff(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserResumeAfterHandoffToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     try {
       const status = await this.browserModule.resumeAfterHandoff(
         parsed.data.session_id
@@ -814,14 +837,15 @@ export class ManagedBrowserAiToolService {
   }
 
   public async stopSession(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserStopSessionToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    this.ensureSession(parsed.data.session_id);
+    this.ensureSession(parsed.data.session_id, context?.conversationId);
     try {
       const status = await this.browserModule.stop(
         parsed.data.session_id,
@@ -838,14 +862,15 @@ export class ManagedBrowserAiToolService {
    * or an approval prompt) — the model can never mint one (§13.8).
    */
   public async clearCache(
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    context?: BrowserToolExecutionContext
   ): Promise<Record<string, unknown>> {
     this.ensureAiEnabled();
     const parsed = browserClearCacheToolSchema().safeParse(args);
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
-    const status = this.ensureSession(parsed.data.session_id);
+    const status = this.ensureSession(parsed.data.session_id, context?.conversationId);
     if (status.accountId === 0) return { cleared: false, reasonCode: "ephemeral_public_browser" };
     try {
       const result = await this.cacheModule.clearCache({
@@ -933,10 +958,6 @@ export function extractRegistrableDomainSafe(
     return null;
   }
   try {
-    const { registrableDomainOf } =
-      require("@/service/browserDecision/RegistrableDomain") as {
-        registrableDomainOf: (host: string | null | undefined) => string | null;
-      };
     return registrableDomainOf(new URL(origin).hostname);
   } catch {
     return null;
