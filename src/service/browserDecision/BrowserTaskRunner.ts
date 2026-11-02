@@ -178,7 +178,33 @@ export class BrowserTaskRunner {
         const decisionInput = this.buildDecisionInput(observation, candidates);
         let decision: BrowserDecisionResult;
         try {
-          decision = await this.deps.decisionClient.decide(decisionInput, signal);
+          // T09: each provider attempt is bounded by an abortable timer
+          // capped by the remaining active runtime (PRD §8 request
+          // deadline), and cancelled when the task aborts.
+          const remainingActiveMs = Math.max(
+            0,
+            this.budget.activeRuntimeMs - control.activeTimeMs(this.taskId)
+          );
+          const deadlineMs = Math.min(
+            decisionInput.deadline_ms,
+            remainingActiveMs > 0 ? remainingActiveMs : decisionInput.deadline_ms
+          );
+          const attemptController = new AbortController();
+          const onOuterAbort = (): void => attemptController.abort();
+          signal.addEventListener("abort", onOuterAbort, { once: true });
+          const timer = setTimeout(
+            () => attemptController.abort(),
+            deadlineMs
+          );
+          try {
+            decision = await this.deps.decisionClient.decide(
+              decisionInput,
+              attemptController.signal
+            );
+          } finally {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", onOuterAbort);
+          }
           this.decisionRequests++;
         } catch (error) {
           return this.terminal(
@@ -209,6 +235,17 @@ export class BrowserTaskRunner {
           );
         }
 
+        // T08: the decision may have taken a while — re-check pause/stop
+        // BEFORE acting on it. Held proposals are discarded on resume
+        // (C-FR-06); a fresh decision happens after the gate reopens.
+        try {
+          await gate.waitUntilOpen(signal);
+        } catch {
+          return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+        }
+        if (signal.aborted) {
+          return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+        }
         const action = decision.action;
         if (action.operation === "DONE") {
           const verification = this.verifyCompletion(observation, extracted);
@@ -231,30 +268,47 @@ export class BrowserTaskRunner {
           observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
-        if (action.operation === "SCROLL_UP" || action.operation === "SCROLL_DOWN") {
-          this.leafSteps++;
-          const result = await this.deps.runActions(this.input.sessionId, {
-            actions: [
-              {
-                type: "scroll",
-                direction: action.operation === "SCROLL_UP" ? "up" : "down",
-                amount: 600,
-              },
-            ],
-          });
-          if (result.effect === "unknown") {
-            return this.terminal("failed", "unknown_effect_scroll", evidence, extracted, observation);
+        if (
+          action.operation === "SCROLL_UP" ||
+          action.operation === "SCROLL_DOWN" ||
+          action.operation === "GO_BACK" ||
+          action.operation === "PRESS_KEY"
+        ) {
+          // T06/T07: untargeted operations take the SAME policy-stop,
+          // unknown-effect, and failure accounting as targeted ones.
+          const programAction: RunnerAction | null =
+            action.operation === "SCROLL_UP"
+              ? { type: "scroll", direction: "up", amount: 600 }
+              : action.operation === "SCROLL_DOWN"
+                ? { type: "scroll", direction: "down", amount: 600 }
+                : action.operation === "GO_BACK"
+                  ? { type: "go_back" }
+                  : action.key
+                    ? { type: "press_key", key: action.key }
+                    : null;
+          if (!programAction) {
+            evidence.push("key_required");
+            continue;
           }
-          evidence.push(`scrolled:${action.operation}`);
-          observation = await this.deps.observe(this.input.sessionId);
-          continue;
-        }
-        if (action.operation === "GO_BACK") {
           this.leafSteps++;
-          const result = await this.deps.runActions(this.input.sessionId, {
-            actions: [{ type: "go_back" }],
+          const execution = await this.deps.runActions(this.input.sessionId, {
+            actions: [programAction],
           });
-          void result;
+          const processed = this.processExecution(
+            action.operation,
+            null,
+            execution,
+            evidence
+          );
+          if (processed.stop) {
+            return this.terminal(
+              processed.stop.status,
+              processed.stop.reason,
+              evidence,
+              extracted,
+              await this.deps.observe(this.input.sessionId)
+            );
+          }
           observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
@@ -286,49 +340,20 @@ export class BrowserTaskRunner {
         const execution = await this.deps.runActions(this.input.sessionId, {
           actions: [programAction],
         });
-        if (execution.stopCode) {
-          // D-AC-05: the authorized seam stopped the action (approval
-          // required, or credential/challenge handoff). Terminal, honest,
-          // and NEVER retried or bypassed.
+        const processed = this.processExecution(
+          action.operation,
+          { role: target.role, name: target.name },
+          execution,
+          evidence
+        );
+        if (processed.stop) {
           return this.terminal(
-            "partial",
-            execution.stopCode,
-            [...evidence, `${action.operation}:${target.name}:${execution.stopCode}`],
-            extracted,
-            observation
-          );
-        }
-        evidence.push(`${action.operation}:${target.name}:${execution.effect}`);
-
-        // D-FR-26: an unknown effect never triggers a retry; reconcile state.
-        if (execution.effect === "unknown") {
-          return this.terminal(
-            "partial",
-            "unknown_execution_effect",
+            processed.stop.status,
+            processed.stop.reason,
             evidence,
             extracted,
             await this.deps.observe(this.input.sessionId)
           );
-        }
-
-        const stepResult = execution.results[execution.results.length - 1];
-        if (stepResult && !stepResult.success) {
-          const failureKey = `${action.operation}:${target.role}:${target.name}:${stepResult.errorCode}`;
-          this.consecutiveEquivalentFailures =
-            failureKey === this.lastFailureKey ? this.consecutiveEquivalentFailures + 1 : 1;
-          this.lastFailureKey = failureKey;
-          if (this.consecutiveEquivalentFailures >= this.maxEquivalentFailures) {
-            return this.terminal(
-              "failed",
-              `three_equivalent_failures:${stepResult.errorCode}`,
-              evidence,
-              extracted,
-              await this.deps.observe(this.input.sessionId)
-            );
-          }
-        } else {
-          this.consecutiveEquivalentFailures = 0;
-          this.lastFailureKey = null;
         }
 
         // D-FR-11: fresh observation after the action (already cached by the module).
@@ -375,6 +400,55 @@ export class BrowserTaskRunner {
       ),
       deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
     };
+  }
+
+  /**
+   * T07: ONE post-execution path for every operation - policy stops
+   * (approval/handoff) are terminal and never retried, unknown effects
+   * stop the task (D-FR-26), and equivalent-failure accounting applies
+   * uniformly (D-FR-25).
+   */
+  private processExecution(
+    operation: string,
+    target: { readonly role: string; readonly name: string } | null,
+    execution: RunnerExecutionResult,
+    evidence: string[]
+  ): { stop: { status: "partial" | "failed"; reason: string } | null } {
+    const label = target ? `${operation}:${target.name}` : operation;
+    if (execution.stopCode) {
+      // D-AC-05: the authorized seam stopped the action. Terminal,
+      // honest, and NEVER retried or bypassed.
+      evidence.push(`${label}:${execution.stopCode}`);
+      return { stop: { status: "partial", reason: execution.stopCode } };
+    }
+    evidence.push(`${label}:${execution.effect}`);
+    // D-FR-26: an unknown effect never triggers a retry; reconcile state.
+    if (execution.effect === "unknown") {
+      return { stop: { status: "partial", reason: "unknown_execution_effect" } };
+    }
+    const stepResult = execution.results[execution.results.length - 1];
+    if (stepResult && !stepResult.success) {
+      const failureKey = `${operation}:${target?.role ?? ""}:${
+        target?.name ?? ""
+      }:${stepResult.errorCode}`;
+      this.consecutiveEquivalentFailures =
+        failureKey === this.lastFailureKey
+          ? this.consecutiveEquivalentFailures + 1
+          : 1;
+      this.lastFailureKey = failureKey;
+      if (this.consecutiveEquivalentFailures >= this.maxEquivalentFailures) {
+        return {
+          stop: {
+            status: "failed",
+            reason: `three_equivalent_failures:${stepResult.errorCode}`,
+          },
+        };
+      }
+    } else {
+      this.consecutiveEquivalentFailures = 0;
+      this.lastFailureKey = null;
+    }
+    return { stop: null };
   }
 
   private toRunnerAction(

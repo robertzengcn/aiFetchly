@@ -1083,25 +1083,63 @@ export class ManagedBrowserAiToolService {
         },
         // Design 11.2: runner executions go through the SAME classifier +
         // approval gate as browser_run_actions — never the raw module.
+        // T09: each worker leaf step is bounded by the per-step worker
+        // timeout; a timed-out step aborts the worker command and reports
+        // a failed step (never silently swallowed).
         runActions: async (sessionId, program): Promise<RunnerExecutionResultShape> => {
-          const outcome = await this.runAuthorizedForRunner(
-            sessionId,
-            program.actions as never,
-            context
+          const { limitsForRoute } = await import(
+            "@/service/browserDecision/BrowserTaskLimits"
           );
-          if (outcome.kind === "stop") {
+          const perStepTimeoutMs = limitsForRoute(
+            route
+          ).perStepWorkerTimeoutDefaultMs;
+          const stepController = new AbortController();
+          const onOuterAbort = (): void => stepController.abort();
+          context.signal?.addEventListener("abort", onOuterAbort, { once: true });
+          const stepTimer = setTimeout(
+            () => stepController.abort(),
+            perStepTimeoutMs
+          );
+          try {
+            const outcome = await Promise.race([
+              this.runAuthorizedForRunner(
+                sessionId,
+                program.actions as never,
+                context
+              ),
+              new Promise<"step_timeout">((resolve) =>
+                stepController.signal.addEventListener("abort", () => {
+                  if (!context.signal?.aborted) {
+                    resolve("step_timeout");
+                  }
+                }, { once: true })
+              ),
+            ]);
+            if (outcome === "step_timeout") {
+              void this.browserModule.cancelActiveRequest?.(sessionId);
+              return {
+                effect: "known" as const,
+                pageRevision: 0,
+                results: [{ success: false, errorCode: "stop_timeout" }],
+              };
+            }
+            if (outcome.kind === "stop") {
+              return {
+                effect: "known" as const,
+                pageRevision: 0,
+                results: [],
+                stopCode: outcome.stopCode,
+              };
+            }
             return {
-              effect: "known" as const,
-              pageRevision: 0,
-              results: [],
-              stopCode: outcome.stopCode,
+              effect: outcome.effect,
+              pageRevision: outcome.pageRevision,
+              results: [...outcome.results],
             };
+          } finally {
+            clearTimeout(stepTimer);
+            context.signal?.removeEventListener("abort", onOuterAbort);
           }
-          return {
-            effect: outcome.effect,
-            pageRevision: outcome.pageRevision,
-            results: [...outcome.results],
-          };
         },
         decisionClient,
         route,

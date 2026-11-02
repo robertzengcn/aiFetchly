@@ -245,6 +245,121 @@ describe("BrowserTaskRunner policy stops (D-AC-05)", () => {
   });
 });
 
+describe("BrowserTaskRunner T06/T07/T08", () => {
+  it("sends Enter for an untargeted PRESS_KEY decision (T06)", async () => {
+    const seen: RunnerAction[] = [];
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "PRESS_KEY", target_id: null, option_id: null, key: "Enter", url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ],
+      {},
+      (action) => seen.push(action)
+    );
+    // No completion criteria: DONE would be unverified -> partial. Use a
+    // url criterion matching the fixed observation so DONE verifies.
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_pk1",
+        conversationId: "conv-1",
+        goal: "submit search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([{ type: "press_key", key: "Enter" }]);
+    expect(result.status).toBe("completed");
+  });
+
+  it("applies unknown-effect stop uniformly to GO_BACK (T07)", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "GO_BACK", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "unknown",
+      pageRevision: 3,
+      results: [],
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_gb1", conversationId: "conv-1", goal: "go back" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+  });
+
+  it("applies approval stops uniformly to SCROLL (T07)", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "SCROLL_DOWN", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_sc1", conversationId: "conv-1", goal: "scroll" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_required");
+  });
+
+  it("discards an in-flight decision when the task is cancelled mid-call (T08)", async () => {
+    const aborter = new AbortController();
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    const actions: RunnerAction[] = [];
+    deps.runActions = async (input: { actions: RunnerAction[] }): Promise<RunnerExecutionResult> => {
+      actions.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async () => {
+        aborter.abort(); // user Stop during inference
+        return {
+          status: "decided",
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_t08", conversationId: "conv-1", goal: "click" },
+      { ...deps, signal: aborter.signal }
+    );
+    const result = await runner.run();
+    expect(actions).toEqual([]);
+    expect(result.status).toBe("cancelled");
+  });
+});
+
 describe("DecisionClients (D-FR-16..19)", () => {
   it("chat client returns a decided action from strict JSON", async () => {
     const client = new ChatCompletionDecisionClient(async () => ({

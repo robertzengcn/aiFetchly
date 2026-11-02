@@ -150,6 +150,15 @@ export class BrowserCredentialLoginService {
 
   public async signIn(input: BrowserSignInInput): Promise<BrowserSignInResult> {
     const browserModule = getDefaultManagedBrowserModule();
+    // A-FR-12 / PRD Q-02: registration is out of scope for automated v1 —
+    // an agent can NEVER auto-register with saved or card credentials.
+    // The session hands off so the user can register themselves.
+    if (input.intent === "register") {
+      await browserModule
+        .requestHandoff(input.sessionId, "recovery_flow")
+        .catch(() => undefined);
+      return { status: "handoff_required", reasonCode: "registration_not_confirmed" };
+    }
     const status = browserModule.getStatus(input.sessionId);
     if (!status) {
       return { status: "failed", reasonCode: "no_active_session" };
