@@ -19,6 +19,7 @@ function status(
     platformId: 2,
     accountLabel: "My Channel",
     platformLabel: "YouTube",
+      ownerConversationId: null,
     state: "handoff",
     currentOrigin: null,
     pageTitle: null,

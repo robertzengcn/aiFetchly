@@ -195,6 +195,13 @@ const errorCodeSchema = z.enum([
   "cache_path_invalid",
   "cache_maintenance_failed",
   "cache_limit_invalid",
+  "insufficient_memory",
+  "site_limit_reached",
+  "session_not_owned",
+  "proxy_confirmation_required",
+  "proxy_not_found",
+  "proxy_no_usable_proxy",
+  "proxy_switch_limit",
   "internal_error",
 ]);
 
@@ -554,7 +561,7 @@ const loginRecipeSchema = z.strictObject({
   steps: z.array(loginRecipeStepSchema).min(1).max(3),
 });
 
-export type WorkerLoginRecipe = z.infer<ReturnType<typeof loginRecipeSchema>>;
+export type WorkerLoginRecipe = z.infer<typeof loginRecipeSchema>;
 
 const fillLoginFormMessageSchema = z.strictObject({
   ...messageBase,

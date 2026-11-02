@@ -2,6 +2,8 @@ import { SystemSettingModule } from "@/modules/SystemSettingModule";
 import { isManagedBrowserReleaseFlagEnabled } from "@/config/featureFlags";
 import {
   MANAGED_BROWSER_CACHE_DEFAULTS,
+  MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_DEFAULT,
+  MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_MAX,
   MANAGED_BROWSER_SETTING_KEYS,
   clampCacheMaxSizeMb,
   parseCacheMaxSizeMb,
@@ -18,6 +20,18 @@ import type { EffectiveManagedBrowserSettings } from "@/entityTypes/managedBrows
  * mutating stored user values. Disabling rejects before cookie decryption or
  * worker creation (enforced by ManagedBrowserModule's start order).
  */
+
+/** Parse a bounded positive integer setting; null when unset/invalid. */
+function parseBoundedInt(raw: string | null, min: number, max: number): number | null {
+  if (raw === null || raw.trim() === "") {
+    return null;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(min, Math.min(parsed, max));
+}
 
 /** Structural reader so tests inject a fake without touching the DB. */
 export interface ManagedBrowserSettingReader {
@@ -61,7 +75,7 @@ export class ManagedBrowserSettingsModule {
    *   application release flag AND user managed-browser setting
    */
   public async getEffectiveSettings(): Promise<EffectiveManagedBrowserSettings> {
-    const [browserRaw, cacheRaw, cacheMaxRaw, clearOnExitRaw] =
+    const [browserRaw, cacheRaw, cacheMaxRaw, clearOnExitRaw, maxSessionsRaw, perSiteRaw] =
       await Promise.all([
         this.reader.getSettingValue(
           MANAGED_BROWSER_SETTING_KEYS.browserEnabled
@@ -72,6 +86,12 @@ export class ManagedBrowserSettingsModule {
         ),
         this.reader.getSettingValue(
           MANAGED_BROWSER_SETTING_KEYS.cacheClearOnExit
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.maxConcurrentSessions
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.maxSessionsPerSite
         ),
       ]);
 
@@ -93,6 +113,14 @@ export class ManagedBrowserSettingsModule {
       cacheMaxBytes: parseCacheMaxSizeMb(cacheMaxRaw) * 1024 * 1024,
       clearCacheOnExit: parseStoredToggle(clearOnExitRaw, false),
       disabledReasonCode,
+      // M-FR-06: configurable caps (defaults when unset).
+      maxConcurrentSessions:
+        parseBoundedInt(
+          maxSessionsRaw,
+          1,
+          MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_MAX
+        ) ?? MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_DEFAULT,
+      maxSessionsPerSite: parseBoundedInt(perSiteRaw, 1, 10) ?? 2,
     };
   }
 

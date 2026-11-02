@@ -26,6 +26,7 @@ function status(
     platformId: 2,
     accountLabel: "My Channel",
     platformLabel: "YouTube",
+      ownerConversationId: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",

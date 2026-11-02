@@ -301,6 +301,7 @@ describe("buildObservation", () => {
     const registry = new PageReferenceRegistry<FakeHandle>(1);
     const text = renderObservationCompact({
       sessionId: "mb_observe001",
+      observationId: "obs_compact001",
       pageRevision: 3,
       url: "https://www.youtube.com/feed/history",
       origin: "https://www.youtube.com",

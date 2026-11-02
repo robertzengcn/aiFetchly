@@ -384,6 +384,8 @@ function makeHarness(
     cacheMaxBytes: 500 * 1024 * 1024,
     clearCacheOnExit: true,
     disabledReasonCode: null,
+    maxConcurrentSessions: 3,
+    maxSessionsPerSite: 2,
     ...overrides.settings,
   };
   const module = new ManagedBrowserModule({
@@ -599,9 +601,10 @@ describe("ManagedBrowserModule.start happy path", () => {
       startMessage.cookies.every((c) => c.value !== "attacker-cookie")
     ).toBe(true);
     // Temporary profile under a fresh temp root; cache policy honored.
-    expect(startMessage.storagePolicy.temporaryProfilePath).toContain(
-      "/tmp/mb-fake-root"
-    );
+    // Path separators are normalized so the assertion holds on win32 too.
+    expect(
+      startMessage.storagePolicy.temporaryProfilePath.replace(/\/g, "/")
+    ).toContain("/tmp/mb-fake-root");
     expect(startMessage.storagePolicy.persistentCache).toEqual({
       enabled: false,
       reasonCode: "test_disabled",
@@ -1404,6 +1407,8 @@ describe("review fixes (2026-09-08)", () => {
           cacheMaxBytes: 1,
           clearCacheOnExit: false,
           disabledReasonCode: null,
+          maxConcurrentSessions: 3,
+          maxSessionsPerSite: 2,
         }),
       } as unknown as import("@/modules/ManagedBrowserSettingsModule").ManagedBrowserSettingsModule,
       leaseService: h.lease as unknown as import("@/service/ManagedBrowserLeaseService").ManagedBrowserLeaseService,

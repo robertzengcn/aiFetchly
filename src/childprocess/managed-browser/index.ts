@@ -1,4 +1,5 @@
 import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 import { log } from "@/modules/Logger";
 import {
   managedBrowserInboundSchema,
@@ -69,13 +70,13 @@ const session = new WorkerSession({
 });
 
 function baseMessage(requestId: string): {
-  protocolVersion: 1;
+  protocolVersion: typeof MANAGED_BROWSER_PROTOCOL_VERSION;
   sessionId: string;
   requestId: string;
   sequence: number;
 } {
   return {
-    protocolVersion: 1,
+    protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
     sessionId,
     requestId,
     sequence: nextSequence(),

@@ -20,6 +20,8 @@ const baseSettings: EffectiveManagedBrowserSettings = {
   cacheMaxBytes: 500 * 1024 * 1024,
   clearCacheOnExit: false,
   disabledReasonCode: null,
+      maxConcurrentSessions: 3,
+      maxSessionsPerSite: 2,
 };
 
 const apiMocks = vi.hoisted(() => ({

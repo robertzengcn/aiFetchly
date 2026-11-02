@@ -58,7 +58,7 @@ export class ProxyModel extends BaseDb {
         host: proxy.host,
         port: proxy.port,
         username: proxy.user,
-        password: decrypted.password,
+        password: decrypted.password ?? undefined,
         protocol: proxy.protocol,
         country_code: proxy.country_code,
         addtime: proxy.addtime || "",
@@ -107,7 +107,9 @@ export class ProxyModel extends BaseDb {
     // P-FR-08: proxy passwords are encrypted at rest with FieldCipher.
     const toPersist: Partial<ProxyEntity> = {
       ...proxyData,
-      pass: await ProxyCredentialCodec.encryptForStorage(proxyData.pass ?? null),
+      pass:
+        (await ProxyCredentialCodec.encryptForStorage(proxyData.pass ?? null)) ??
+        undefined,
     };
     if (proxyData.id) {
       // Update existing proxy

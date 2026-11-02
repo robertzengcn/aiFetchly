@@ -9,13 +9,13 @@ import {
 import type {
   AuthenticationAssessment,
   BrowserObservation,
-  WorkerLoginRecipe,
   ManagedBrowserErrorCode,
   ManagedBrowserSessionState,
 } from "@/entityTypes/managedBrowserTypes";
 import type {
   BrowserActionProgram,
   ManagedBrowserInboundMessage,
+  WorkerLoginRecipe,
   ManagedBrowserOutboundMessage,
 } from "@/schemas/worker/managedBrowser";
 import { authenticationAssessmentSchema } from "@/schemas/worker/managedBrowser";
@@ -501,7 +501,13 @@ export class WorkerSession {
         effect: outcome.effect,
         pageRevision: outcome.pageRevision,
         results: [...outcome.results],
-        observation,
+        observation: observation
+          ? {
+              ...observation,
+              elements: [...observation.elements],
+              notices: [...observation.notices],
+            }
+          : null,
       });
       if (outcome.stopCode === "handoff_required") {
         this.runtime.transition("handoff");
@@ -1145,7 +1151,7 @@ export class WorkerSession {
   }
 
   private base(requestId: string): {
-    protocolVersion: 1;
+    protocolVersion: typeof MANAGED_BROWSER_PROTOCOL_VERSION;
     sessionId: string;
     requestId: string;
     sequence: number;
