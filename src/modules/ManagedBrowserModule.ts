@@ -912,8 +912,10 @@ export class ManagedBrowserModule {
   /**
    * GAP-14: propagate job/conversation cancellation to the ACTIVE worker
    * request. The worker aborts the in-flight program between actions and
-   * returns an outcome whose effect reflects uncertainty (cancelled
-   * consequential steps keep effect=unknown).
+   * returns an outcome whose effect reflects uncertainty: with the
+   * dispatch-phase classification in BrowserActionExecutor (PRD D-FR-26),
+   * a cancellation/failure after input dispatch reports effect=unknown,
+   * while a cancellation before any dispatch reports effect=known.
    */
   public async cancelActiveRequest(sessionId: string): Promise<void> {
     const record = this.sessions.get(sessionId);

@@ -97,6 +97,7 @@ export interface BrowserProgramOutcome {
     | "stale_page_reference"
     | "navigation_blocked"
     | "handoff_required"
+    | "unknown_effect"
     | null;
   /** Structured handoff reason when stopCode is handoff_required. */
   readonly handoffReason?: string;
@@ -209,7 +210,10 @@ export class BrowserActionExecutor {
       if (!outcome.success) {
         run.consecutiveFailures++;
         if (outcome.effectUnknown) {
+          // PRD D-FR-26: an unknown effect stops the program immediately
+          // later mutations must not run on top of an unverified state.
           run.effectUnknown = true;
+          return "unknown_effect";
         }
         if (outcome.stopCode) {
           return outcome.stopCode;
@@ -289,13 +293,19 @@ export class BrowserActionExecutor {
     stopCode?: StopCode;
     handoffReason?: string;
   }> {
+    // PRD D-FR-26: classify the failure phase. Once an input event may
+    // have been dispatched, a thrown error is effectUnknown: the page
+    // state can no longer be proven unchanged, so the action is never
+    // reported as a known no-effect failure.
+    const dispatch = { inputSent: false };
     try {
       switch (action.type) {
         case "navigate":
-          return await this.doNavigate(action.url, options);
+          return await this.doNavigate(action.url, options, dispatch);
         case "click":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
+            dispatch.inputSent = true;
             await entry.element.click({ timeout: 5_000 });
             return { success: true };
           });
@@ -303,7 +313,8 @@ export class BrowserActionExecutor {
           return await this.withElement(action, options, async (entry) => {
             const inputType = await this.probeInputType(entry.element);
             if (inputType && isSensitiveInputType(inputType)) {
-              // Credential-like fields always force user handoff.
+              // Credential-like fields always force user handoff. This
+              // fails BEFORE any dispatch: a known no-effect failure.
               return {
                 success: false,
                 errorCode: "challenge_requires_handoff" as const,
@@ -312,7 +323,11 @@ export class BrowserActionExecutor {
               };
             }
             await entry.element.scrollIntoView();
-            // Clear then type with trusted input events; never echo the value.
+            // Clear then type with trusted input events; never echo the
+            // value. Clearing already mutates the field, so dispatch
+            // begins here: a later failure (partial typing, detach) is
+            // an unknown effect.
+            dispatch.inputSent = true;
             await entry.element.evaluate("((el) => { el.value = ''; })");
             await entry.element.type(action.value, { delay: 10 });
             return { success: true };
@@ -320,10 +335,12 @@ export class BrowserActionExecutor {
         case "select":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
+            dispatch.inputSent = true;
             await entry.element.select(...action.values);
             return { success: true };
           });
         case "press_key":
+          dispatch.inputSent = true;
           await options.page.keyboard.press(action.key);
           return { success: true };
         case "scroll":
@@ -342,6 +359,7 @@ export class BrowserActionExecutor {
         case "hover":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
+            dispatch.inputSent = true;
             await entry.element.hover();
             return { success: true };
           });
@@ -359,20 +377,24 @@ export class BrowserActionExecutor {
               };
             }
             await entry.element.scrollIntoView();
+            dispatch.inputSent = true;
             await entry.element.evaluate(
               "((el) => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })"
             );
             return { success: true };
           });
         case "go_back":
+          dispatch.inputSent = true;
           await options.page.evaluate("(() => history.back())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
         case "go_forward":
+          dispatch.inputSent = true;
           await options.page.evaluate("(() => history.forward())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
         case "reload":
+          dispatch.inputSent = true;
           await options.page.evaluate("(() => location.reload())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
@@ -397,17 +419,21 @@ export class BrowserActionExecutor {
           return { success: false, errorCode: "action_not_allowed" };
       }
     } catch {
+      // Pre-dispatch failures (target resolution, stale refs, validation,
+      // read-only actions) are proven no-effect. Anything that threw
+      // after input dispatch is classified unknown (design section 7.3).
       return {
         success: false,
         errorCode: "internal_error",
-        effectUnknown: false,
+        effectUnknown: dispatch.inputSent,
       };
     }
   }
 
   private async doNavigate(
     url: string,
-    options: ExecuteProgramOptions
+    options: ExecuteProgramOptions,
+    dispatch: { inputSent: boolean }
   ): Promise<{
     success: boolean;
     errorCode?: ManagedBrowserErrorCode;
@@ -423,6 +449,8 @@ export class BrowserActionExecutor {
         stopCode: "navigation_blocked",
       };
     }
+    // A navigation that started but failed is an unknown effect (7.3).
+    dispatch.inputSent = true;
     await options.page.goto(url, {
       timeout:
         options.navigateTimeoutMs ??
