@@ -465,23 +465,40 @@ export class WorkerSession {
         shouldCancel: () => this.cancelled || abort.signal.aborted,
         now: this.now,
       });
-      this.send({
-        ...this.base(requestId),
-        type: "ACTION_RESULT",
-        effect: outcome.effect,
-        pageRevision: outcome.pageRevision,
-        results: [...outcome.results],
-        observation: null,
-      });
-      // GAP-05: challenges appearing after an ordinary action must stop
-      // further automation — detect AFTER every action program, before the
-      // runtime returns to ready.
+      // GAP-05 (reordered per PRD D-FR-11 / design 7.1): challenges
+      // appearing after an ordinary action must stop further automation —
+      // detect AFTER every action program and BEFORE sending the result,
+      // so the next-step-ready state can never race the challenge notice.
       if (
         outcome.stopCode !== "handoff_required" &&
         (await this.detectAndReportChallenge())
       ) {
         return;
       }
+      // PRD D-FR-11: send ONE coherent result that carries the effect AND
+      // a fresh sanitized next-step observation, so the caller does not
+      // need an extra observe() round to decide the next action. An
+      // observation failure after a successful input is reported as
+      // observation:null (observation_unavailable) — never as a failed
+      // no-effect action.
+      let observation: BrowserObservation | null = null;
+      if (
+        outcome.stopCode === null || outcome.stopCode === "completed"
+      ) {
+        try {
+          observation = await this.buildObservation(page);
+        } catch {
+          observation = null;
+        }
+      }
+      this.send({
+        ...this.base(requestId),
+        type: "ACTION_RESULT",
+        effect: outcome.effect,
+        pageRevision: outcome.pageRevision,
+        results: [...outcome.results],
+        observation,
+      });
       if (outcome.stopCode === "handoff_required") {
         this.runtime.transition("handoff");
         this.send({

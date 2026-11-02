@@ -939,12 +939,23 @@ export class ManagedBrowserModule {
   ): Promise<ManagedBrowserOutboundMessage> {
     const record = this.requireSession(sessionId);
     this.guard(record, "RUN_ACTIONS");
-    return this.requestWorker(
+    const message = await this.requestWorker(
       record,
       { type: "RUN_ACTIONS", program },
       MANAGED_BROWSER_ACTION_LIMITS.programWallTimeMs,
       (m) => m.type === "ACTION_RESULT" || m.type === "HANDOFF_REQUIRED"
     );
+    // PRD D-FR-11: cache the post-action observation and page revision
+    // BEFORE the caller classifies the next action, so ref resolution and
+    // risk classification use the live page state. A failed/older
+    // snapshot can never replace a newer one.
+    if (message.type === "ACTION_RESULT" && message.observation) {
+      if (message.observation.pageRevision >= record.pageRevision) {
+        record.pageRevision = message.observation.pageRevision;
+        record.lastObservation = message.observation;
+      }
+    }
+    return message;
   }
 
   /**
