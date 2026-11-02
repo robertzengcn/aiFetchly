@@ -80,6 +80,49 @@
       data-testid="workspace-tree"
       @keydown="onTreeKeydown"
     >
+      <!-- BUGFIX 2026-11-02: visible section header with manual refresh + tree
+           collapse so users can re-project the folder list on demand (e.g.
+           after Run Now on a schedule task assigned a workspace while the
+           events were missed). -->
+      <div class="tree-header" data-testid="workspace-tree-header">
+        <span class="tree-header-label">
+          {{ t('workspaceChat.sidebar.projects') || 'Project' }}
+        </span>
+        <span class="tree-header-actions">
+          <v-btn
+            icon
+            variant="text"
+            size="x-small"
+            class="tree-header-btn"
+            :loading="treeRefreshing"
+            :aria-label="t('workspaceChat.sidebar.refresh') || 'Refresh projects'"
+            data-testid="workspace-tree-refresh"
+            @click="refreshTree"
+          >
+            <v-icon icon="mdi-refresh" size="16" aria-hidden="true" />
+          </v-btn>
+          <v-btn
+            icon
+            variant="text"
+            size="x-small"
+            class="tree-header-btn"
+            :aria-expanded="!treeCollapsed"
+            :aria-label="
+              treeCollapsed
+                ? (t('workspaceChat.sidebar.expand') || 'Expand projects')
+                : (t('workspaceChat.sidebar.collapse') || 'Collapse projects')
+            "
+            data-testid="workspace-tree-collapse"
+            @click="treeCollapsed = !treeCollapsed"
+          >
+            <v-icon
+              :icon="treeCollapsed ? 'mdi-chevron-down' : 'mdi-chevron-up'"
+              size="16"
+              aria-hidden="true"
+            />
+          </v-btn>
+        </span>
+      </div>
       <p v-if="bootstrapError" class="sidebar-message error" role="alert">
         {{ t('workspaceChat.sidebar.loadError') || 'Failed to load workspaces' }}
         <button type="button" class="inline-action" @click="emit('retry')">
@@ -93,6 +136,7 @@
         {{ t('workspaceChat.sidebar.empty') || 'No conversations yet' }}
       </p>
 
+      <template v-if="!treeCollapsed">
       <section
         v-for="group in visibleGroups"
         :key="group.workspaceKey"
@@ -167,7 +211,7 @@
       </section>
 
       <section
-        v-if="visibleUnassigned.length > 0"
+        v-if="!treeCollapsed && visibleUnassigned.length > 0"
         class="workspace-group"
         aria-label="Unassigned"
       >
@@ -235,6 +279,7 @@
           </li>
         </ul>
       </section>
+      </template>
     </nav>
 
     <!-- Zone 3: fixed account zone (PRD §10.1) -->
@@ -280,6 +325,24 @@ const bootstrapError = computed(() => workspaceStore.bootstrapError);
 /** Whether the "Other chats" (unassigned) folder is collapsed. Defaults to
  * collapsed so unassigned chats are hidden until the user expands it. */
 const unassignedCollapsed = ref(true);
+
+/**
+ * BUGFIX 2026-11-02: visible Project header state — the whole tree can be
+ * folded to a header (local fold, never disables the keyboard nav data), and
+ * the refresh button re-runs the authoritative bootstrap on demand.
+ */
+const treeCollapsed = ref(false);
+const treeRefreshing = ref(false);
+
+async function refreshTree(): Promise<void> {
+  if (treeRefreshing.value) return;
+  treeRefreshing.value = true;
+  try {
+    await workspaceStore.bootstrap();
+  } finally {
+    treeRefreshing.value = false;
+  }
+}
 
 const unassignedAttention = computed<{
   conversations: readonly WorkspaceConversationSummary[];
@@ -459,6 +522,37 @@ function onTreeKeydown(event: KeyboardEvent): void {
   padding: 14px 6px 4px;
   margin-top: 8px;
   border-top: 1px solid rgba(var(--v-border-color, 0, 0, 0), 0.1);
+}
+
+/* Visible tree section header with manual refresh + fold (bugfix 2026-11-02). */
+.tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px 6px;
+}
+
+.tree-header-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.tree-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tree-header-btn {
+  opacity: 0.7;
+}
+
+.tree-header-btn:hover {
+  opacity: 1;
 }
 
 .sidebar-footer {
