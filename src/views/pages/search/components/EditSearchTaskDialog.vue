@@ -14,7 +14,7 @@
                 v-model="formData.engine"
                 :items="searchEngines"
                 :label="$t('search.search_enginer_name')"
-                :rules="[v => !!v || $t('validation.required')]"
+                :rules="[(v: string) => !!v || $t('validation.required')]"
                 required
               />
             </v-col>
@@ -70,7 +70,7 @@
                 v-model="keywordsText"
                 :label="$t('search.keyword')"
                 :placeholder="$t('search.keywords_placeholder')"
-                :rules="[v => !!v || $t('validation.required')]"
+                :rules="[(v: string) => !!v || $t('validation.required')]"
                 rows="3"
                 required
                 @input="updateKeywords"
