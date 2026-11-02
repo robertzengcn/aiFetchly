@@ -18,6 +18,12 @@ import {
   MANAGED_BROWSER_CLEAR_CACHE,
   MANAGED_BROWSER_UPDATE_SETTINGS,
   MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
+  BROWSER_TASK_PAUSE,
+  BROWSER_TASK_TAKE_CONTROL,
+  BROWSER_TASK_RESUME,
+  BROWSER_TASK_STOP,
+  BROWSER_BATCH_RETURN_NOW,
+  BROWSER_TASK_FOCUS_WINDOW,
   MANAGED_BROWSER_STATUS_EVENT,
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
@@ -29,6 +35,7 @@ import {
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { browserCredentialSubmitSchema } from "@/schemas/ipc/browserCredential";
 import { getCredentialCardWaitRegistry } from "@/service/browserLogin/BrowserCredentialLoginService";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import {
   listEligibleAccountsInputSchema,
   managedBrowserStartInputSchema,
@@ -46,6 +53,13 @@ import {
   managedBrowserClearCacheInputSchema,
   managedBrowserUpdateSettingsInputSchema,
 } from "@/schemas/ipc/managedBrowser";
+import {
+  browserTaskPauseSchema,
+  browserTaskResumeSchema,
+  browserTaskStopSchema,
+  browserBatchReturnNowSchema,
+  browserTaskFocusWindowSchema,
+} from "@/schemas/ipc/browserTaskControl";
 import { getDefaultManagedBrowserModule } from "@/modules/ManagedBrowserModule";
 import {
   getDefaultManagedBrowserCacheModule,
@@ -128,6 +142,80 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   // main-process-derived site domain and a single-use request id; the
   // submit handler validates and forwards to the wait registry, which
   // resolves the in-job sign-in. Values never touch chat or logs.
+  // PRD C-FR-04: user-initiated task control. Every takeover sets BOTH
+  // layers: the browser moves to user control (AI commands rejected) and
+  // the agent loop stops at its next safe point via the control gate.
+  const controlService = getDefaultAgentTaskControlService();
+  const pauseOrTakeControl = async (input: {
+    taskId: string;
+    sessionId?: string;
+  }): Promise<{ ok: boolean }> => {
+    controlService.setState(input.taskId, "paused", "user_paused");
+    if (input.sessionId) {
+      await getDefaultManagedBrowserModule()
+        .requestHandoff(input.sessionId, "user_paused")
+        .catch(() => undefined);
+    }
+    return { ok: true };
+  };
+  registerValidatedHandler(
+    BROWSER_TASK_PAUSE,
+    browserTaskPauseSchema,
+    pauseOrTakeControl
+  );
+  registerValidatedHandler(
+    BROWSER_TASK_TAKE_CONTROL,
+    browserTaskPauseSchema,
+    pauseOrTakeControl
+  );
+  registerValidatedHandler(
+    BROWSER_TASK_RESUME,
+    browserTaskResumeSchema,
+    async (input) => {
+      // C-FR-07: resume advances the page revision (old refs invalid) and
+      // leaves user control; the agent must observe before acting.
+      if (input.sessionId) {
+        await getDefaultManagedBrowserModule()
+          .resumeAfterHandoff(input.sessionId)
+          .catch(() => undefined);
+      }
+      controlService.resume(input.taskId);
+      return { ok: true, instructions: input.instructions ?? null };
+    }
+  );
+  registerValidatedHandler(
+    BROWSER_TASK_STOP,
+    browserTaskStopSchema,
+    async (input) => {
+      controlService.cancel(input.taskId, "user_stop");
+      if (input.sessionId) {
+        await getDefaultManagedBrowserModule()
+          .stop(input.sessionId, "user_stop")
+          .catch(() => undefined);
+      }
+      return { ok: true };
+    }
+  );
+  registerValidatedHandler(
+    BROWSER_BATCH_RETURN_NOW,
+    browserBatchReturnNowSchema,
+    async (input) => {
+      // C-FR-11: finish unfinished tasks as partial — cancel every task
+      // of the batch; the batch collector returns what it has.
+      controlService.cancelBatch(input.batchId);
+      return { ok: true };
+    }
+  );
+  registerValidatedHandler(
+    BROWSER_TASK_FOCUS_WINDOW,
+    browserTaskFocusWindowSchema,
+    async () => {
+      // C-FR-10: never steals focus automatically; the button requests it.
+      // Chrome window focus is a follow-up worker capability.
+      return { ok: false, reason: "focus_not_supported_yet" };
+    }
+  );
+
   registerValidatedHandler(
     MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
     browserCredentialSubmitSchema,

@@ -5282,6 +5282,65 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
+      name: "run_browser_tasks",
+      description:
+        "Run up to 5 independent browser tasks in PARALLEL (PRD M-FR-03). Each task runs on its " +
+        "own managed-browser session via a browser-operator sub-agent and returns a compact " +
+        "result (summary, extracted data, final_url, evidence). Sub-agents do NOT perform " +
+        "consequential actions - they return needs_user proposals. Use for research across " +
+        "several sites at once; use browser_execute_task for one focused multi-step task.",
+      parameters: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                goal: { type: "string" },
+                start_url: { type: "string" },
+                account_id: { type: "number" },
+                proxy_id: { type: "number" },
+                keep_open: { type: "boolean" },
+              },
+              required: ["goal"],
+            },
+          },
+          concurrency: { type: "number", description: "1-3 parallel browsers." },
+        },
+        required: ["tasks"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      async: true,
+      resolveTimeoutClass: () => "async",
+      resolveAsync: () => true,
+      execute: async (args, context) => {
+        const { browserBatchArgsSchema, runBrowserTasksForTool } = await import(
+          "@/service/agentTools/runBrowserTasksTool"
+        );
+        const parsed = browserBatchArgsSchema().safeParse(args);
+        if (!parsed.success) {
+          return {
+            success: false,
+            result: {
+              error: "invalid_tool_arguments",
+              details: parsed.error.issues.slice(0, 5),
+            },
+          };
+        }
+        const { batchId, results } = await runBrowserTasksForTool(
+          parsed.data.tasks,
+          parsed.data.concurrency ?? 2,
+          context.conversationId,
+          context.signal ?? new AbortController().signal
+        );
+        return { success: true, result: { batch_id: batchId, results } };
+      },
+    },
+    {
       name: "browser_sign_in",
       description:
         "Sign in to the CURRENT site with a saved account (PRD A-FR-01). Call this at a " +

@@ -121,6 +121,7 @@ const handoffReasonSchema = z.enum([
   "login_expired",
   "captcha_sensitive_flow",
   "mfa_prompt",
+  "user_paused",
   "passkey_prompt",
   "password_field",
   "recovery_flow",

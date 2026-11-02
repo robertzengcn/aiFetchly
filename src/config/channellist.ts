@@ -741,6 +741,13 @@ export const MANAGED_BROWSER_CREDENTIAL_REQUEST =
   "managed-browser:credential-request";
 export const MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL =
   "managed-browser:submit-login-credential";
+// PRD C-FR-04: renderer-only task control (user actions; no model tool).
+export const BROWSER_TASK_PAUSE = "browser-task:pause";
+export const BROWSER_TASK_TAKE_CONTROL = "browser-task:take-control";
+export const BROWSER_TASK_RESUME = "browser-task:resume";
+export const BROWSER_TASK_STOP = "browser-task:stop";
+export const BROWSER_BATCH_RETURN_NOW = "browser-task:batch-return-now";
+export const BROWSER_TASK_FOCUS_WINDOW = "browser-task:focus-window";
 export const MANAGED_BROWSER_CANCEL_ACTIVE = "managed-browser:cancel-active";
 export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
   "managed-browser:capture-screenshot";

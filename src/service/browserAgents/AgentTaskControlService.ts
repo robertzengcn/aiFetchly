@@ -219,6 +219,18 @@ export class AgentTaskControlService {
     this.resolveAllWaiters(taskId);
   }
 
+  /** C-FR-11: return results now — cancel all tasks of a batch. */
+  public cancelBatch(batchId: string, reason = "batch_return_now"): number {
+    let cancelled = 0;
+    for (const taskId of [...this.tasks.keys()]) {
+      if (taskId.startsWith(`${batchId}:`)) {
+        this.cancel(taskId, reason);
+        cancelled++;
+      }
+    }
+    return cancelled;
+  }
+
   /** Active elapsed ms excluding user waits (D-21). */
   public activeTimeMs(taskId: string): number {
     const record = this.tasks.get(taskId);
