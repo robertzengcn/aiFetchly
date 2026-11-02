@@ -6,6 +6,15 @@ Sources: [PRD](browser-decision-acceleration-prd.md), [technical design](browser
 
 **Verdict: requirements are NOT all complete; this worktree is not release-ready.** Several foundations exist, but important execution, credential, control, persistence, provider, UI, and qualification paths remain incomplete. Commit subjects and passing mock tests do not establish acceptance. All checkboxes below intentionally remain open.
 
+> **Status update 2026-11-03 (implementation pass):** T01–T05, T06–T09,
+> T10–T13 (core), T16 (core), T20 (registry gate + seeding), and T27 are
+> implemented and committed on `feature/browser-decision-acceleration`
+> (commits `5d96db958`..`79dea03eb`). The repo typechecks clean (tsc exit 0)
+> and the affected suites pass without skip flags. Items NOT yet fully
+> closed: T14, T15, T17, T18, T19, T21, T22, T24, T25, T26, T28 (E2E
+> specs), T29 — their checkboxes below remain open with notes on what
+> landed. See the per-item status lines.
+
 Priority: P0 blocks basic operation or violates a mandatory safety property; P1 blocks a required feature/correctness contract; P2 covers remaining integration, maintainability, or qualification work. Evidence below is source inspection unless explicitly labelled as an executed check. Line references describe the audited snapshot.
 
 ## Executed checks and limitations
@@ -27,6 +36,10 @@ Raw command logs from this run are in `%TEMP%/bda-audit-typecheck.log`, `bda-aud
 
 ### T01 — P0: restore compilation and worker protocol compatibility
 
+> STATUS: DONE — protocol constants unified (worker entry, cache worker, tests);
+> WorkerLoginRecipe inferred from the schema; wire error codes extended; settings/proxy/test fixtures fixed; `tsc --noEmit` exits 0 repo-wide and the main gate runs unbypassed.
+
+
 - [ ] Fix the 60 diagnostics and run the unbypassed main test gate again.
 
 Evidence: `src/config/managedBrowser.ts:19` defines protocol 2, but `src/childprocess/managed-browser/index.ts` `baseMessage()` hardcodes protocol 1 for WORKER_READY, heartbeat, and errors. `managedBrowser.ts:36` requires the current protocol. A real worker's first ready event is incompatible with the main schema, preventing normal session boot. `WorkerSession.ts:1148` and cache worker base types still declare version 1 despite current-version values.
@@ -37,6 +50,9 @@ Acceptance: one source of truth for worker/cache protocol versions; actual entry
 
 ### T02 — P0: execute the credential page scripts instead of returning functions
 
+> STATUS: DONE — both page scripts are real functions passed to evaluate; a happy-dom suite (`loginFormFiller.dom.test.ts`) executes the production function against a live form and asserts values/stamps/secret non-disclosure.
+
+
 - [ ] Replace the string-function evaluation in `src/childprocess/managed-browser/LoginFormFiller.ts` with an actual callable page function and serializable arguments; fix the outcome probe similarly.
 
 `FILL_SCRIPT` is a string ending in an uninvoked `((input) => { ... })`, passed to `page.evaluate(FILL_SCRIPT, payload)`. `OUTCOME_PROBE_SCRIPT` is also an uninvoked function expression. Installed Puppeteer's `node_modules/puppeteer-core/lib/puppeteer/cdp/ExecutionContext.js:345` sends string input through `Runtime.evaluate` and does not pass the argument list. Thus the fill body never runs, and the returned serialized value is not the expected `{ok,...}`; dereferencing `fillResult.ok` can fail. Existing `loginFormFiller.test.ts` mocks scripts by substring and implements its own behavior, hiding this defect.
@@ -44,6 +60,9 @@ Acceptance: one source of truth for worker/cache protocol versions; actual entry
 Acceptance: execute the real filler on a deterministic HTTPS login page with actual Puppeteer; assert DOM values, submitted request, outcome, and secret non-disclosure. Requirements: A-FR-08/15–19, A-AC-01/02/04.
 
 ### T03 — P0: revalidate the password target after synchronous page handlers
+
+> STATUS: DONE — the filler revalidates type/enabled/readonly/visibility/hit-test/same-form (via form association) AFTER the username set; a handler toggle aborts with `password_field_mutated` and cleared fields; covered by the DOM suite.
+
 
 - [ ] Revalidate type, same-form identity, attachment, visibility, enabled/read-only state, and hit testing immediately before the password setter; refuse and hand off on changes.
 
@@ -53,6 +72,9 @@ Acceptance: real page tests in which username input handlers toggle/replace the 
 
 ### T04 — P1: correct login readback/tamper detection
 
+> STATUS: DONE — per-input (not summed) length comparison, prefilled-username success, per-field readback, clearing of ALL affected fields (touched + unexpected recipients); synthetic-Enter replaced by focus-checked requestSubmit; covered by the DOM suite. Keystroke fallback remains deferred (A-FR-19 fallback path).
+
+
 - [ ] Compare each non-target input independently, account for existing target values, verify username length, and clear all affected fields before handoff on mismatch.
 
 `LoginFormFiller.ts` compares only total input lengths and assumes the expected delta is `username.length + password.length`. A prefilled username makes a legitimate fill fail; equal-and-opposite changes to other fields evade the sum check. Only the chosen username/password are cleared; unexpected recipient fields retain data. Readback mismatch exits without clearing. Keystroke fallback/focus checks are absent, and a synthetic `KeyboardEvent('keydown', Enter)` does not implement trusted native Enter submission.
@@ -60,6 +82,9 @@ Acceptance: real page tests in which username input handlers toggle/replace the 
 Acceptance: prefilled username, compensating non-target field changes, rerendered inputs, controlled forms, and Enter-based submission tests using the actual script. Requirements: A-FR-18/19.
 
 ### T05 — P1: require registration-specific authorization
+
+> STATUS: DONE (stricter than asked) — register intent ALWAYS hands off to the user with `registration_not_confirmed`; v1 is login-only per PRD Q-02, so no automated registration path exists at all.
+
 
 - [ ] Gate `intent: register` through explicit registration approval before releasing saved credentials or submitting a form.
 
@@ -69,6 +94,9 @@ Acceptance: an agent cannot register using existing account data without a disti
 
 ### T06 — P1: execute PRESS_KEY and provide observed SELECT options
 
+> STATUS: PARTIAL — untargeted PRESS_KEY executes (Enter test added). SELECT option collection from the DOM is still open (checkbox below).
+
+
 - [ ] Handle untargeted PRESS_KEY separately from element-targeted operations; populate option IDs/labels and map selected IDs to observed native values.
 
 `BrowserTaskRunner.ts` validates PRESS_KEY, then unconditionally looks up `action.target_id` in candidates before calling `toRunnerAction()`. Valid PRESS_KEY has no target and therefore produces `target_not_in_observation` without sending Enter. `BrowserCandidateBuilder.ts` never populates `option_ids`; SELECT always fails the `unknown_option` check. Observation collection does not return native option records either.
@@ -76,6 +104,9 @@ Acceptance: an agent cannot register using existing account data without a disti
 Acceptance: fake search submits once via Enter, native select chooses an offered option, invented options are rejected. Requirements: D-FR-12/16/17, D-AC-04.
 
 ### T07 — P1: honor policy stops and unknown effects for every operation
+
+> STATUS: DONE — GO_BACK/SCROLL/PRESS_KEY/targeted ops all share one post-execution processor (policy stops terminal, unknown effect terminal, uniform equivalent-failure accounting); parameterized tests added.
+
 
 - [ ] Apply the same result/stop/error processing to GO_BACK, SCROLL, and all other operations before another decision.
 
@@ -85,6 +116,9 @@ Acceptance: parameterized tests for approval/handoff, known failure, cancellatio
 
 ### T08 — P1: prevent late inference from acting after Pause or Stop
 
+> STATUS: PARTIAL — the runner re-checks gate+abort after every awaited decision and discards held proposals (test: cancel-during-inference acts zero times). Remaining: abort propagation INTO the provider controller is timer-based only; authoritative task→session binding still open.
+
+
 - [ ] Check the control gate and cancellation immediately before every execution and after each awaited decision; discard held proposals on resume and use a fresh observation.
 
 `BrowserTaskRunner.run()` checks the gate only at the top of its loop, before inference. A pause/stop during `decide()` is not checked before `runActions()`. `AgentTaskControlService.cancel()` changes state but does not abort the provider controller. The IPC handler can close a session, but sessionId is optional and there is no authoritative task-to-session binding. Initial observation runs before the runner's try/finally; escaped failures can leave records incorrectly running/completed.
@@ -92,6 +126,9 @@ Acceptance: parameterized tests for approval/handoff, known failure, cancellatio
 Acceptance: pause during a delayed model response executes zero new actions; resume discards that response; Stop aborts inference and worker execution and never reports completed on error. Requirements: C-FR-05/06/08, D-AC-07.
 
 ### T09 — P1: enforce actual route/request/worker deadlines
+
+> STATUS: PARTIAL — per-attempt abortable timers capped by remaining active time bound provider calls; the authorized seam bounds each worker leaf with `cancelActiveRequest` on timeout. Route-freeze (T17) and remaining-active capping of in-flight work at the exact ceiling still open.
+
 
 - [ ] Bound each provider attempt and worker leaf with abortable timers capped by remaining active time; propagate provider changes/cancellation through all awaited work.
 
@@ -101,6 +138,9 @@ Acceptance: delayed fake endpoints and worker calls terminate at exact boundarie
 
 ### T10 — P1: preserve proxy-switch page, cookies, ownership, and lineage
 
+> STATUS: PARTIAL — the switch reopens the last page; the lineage cap was fixed earlier. Cookie export/import drain, health-check-before-switch, and lineage scope refinement remain open.
+
+
 - [ ] Replace stop/start-only switching with serialized drain, cookie export/import, target validation/health check, relaunch, GET of last URL, and fresh observation/revision.
 
 `ManagedBrowserModule.switchSessionProxy():1670` increments a shared counter, stops the old session, then calls `start()` with account/purpose/proxy/conversation only. It does not pass the last URL or transfer public-session cookies. Public sessions therefore restart at their default page with lost state. A bad target destroys the working session before selection fails. The counter key `${conversation}:${accountId}:${platformId}` combines independent public sessions and survives unrelated tasks rather than belonging to a task/lineage. A failed attempt also consumes the cap.
@@ -108,6 +148,9 @@ Acceptance: delayed fake endpoints and worker calls terminate at exact boundarie
 Acceptance: public and account sessions preserve intended cookies/URL and return usable fresh state; unrelated tasks have independent switch budgets; in-flight input is not interrupted blindly. Requirements: P-FR-02/05, P-AC-01.
 
 ### T11 — P1: decrypt proxy credentials at all authorized use boundaries
+
+> STATUS: DONE — metadata-only updates preserve the stored credential (explicit empty clears); `ProxyModule.getProxiesByIds` decrypts for the check path in main only. Other network consumers still to audit.
+
 
 - [ ] Preserve passwords on metadata-only updates and decrypt for existing proxy check/consumer paths without returning secrets to the LLM.
 
@@ -117,6 +160,9 @@ Acceptance: metadata-only update keeps the password, explicit clear removes it, 
 
 ### T12 — P1: preserve batch task inputs and honest child results
 
+> STATUS: DONE — account_id/proxy_id/keep_open reach the child prompt; the collector honors the child's output.status (needs_user→partial, failed→failed).
+
+
 - [ ] Forward account_id, proxy_id, and keep_open into authoritative task configuration; preserve child failed/needs_user outcomes rather than equating runtime completion with browser success.
 
 `runBrowserTasksTool.ts` `buildTaskPrompt()` includes goal/start_url but ignores all three other fields. No separate context passes them to the runtime. The collector sets completed whenever `runtime.runSync().status` is completed, ignoring `result.output.status`; an agent that successfully returns `{status:'failed'}` or `{status:'needs_user'}` is presented as completed. Output bounds are not enforced by the casts in the collector.
@@ -124,6 +170,9 @@ Acceptance: metadata-only update keeps the password, explicit clear removes it, 
 Acceptance: tests assert exact account/proxy/keep-open routing and output.status handling, validate bounded structured output, and externalize large results with ToolResultModule access grants. Requirements: M-FR-02/03/05.
 
 ### T13 — P1: connect task control to the actual agent runtime and abort tree
+
+> STATUS: PARTIAL — batch tasks have a live abort tree; Stop on a batch task id and Return-results-now abort children via IPC. AgentRuntime gate integration, root-conversation identity, session cleanup in a collector finally, and queued-lane abort checks remain open.
+
 
 - [ ] Use one task identity across batch collector, AgentRuntime, jobs, sessions, and controls; connect pause/Stop/return-now to live model and worker cancellation.
 
@@ -148,6 +197,9 @@ Acceptance: fake CAPTCHA pauses one child while another finishes; user verify re
 Acceptance: same semantic action with new opaque refs consumes once; changed form/control context, select value, navigation destination, or mutation payload requires a new approval; full-access never bypasses it. Requirements: D-FR-27, D-AC-05.
 
 ### T16 — P1: make account selection, saving, and cancellation usable
+
+> STATUS: PARTIAL — username-only accounts get the password-only card; card cancel opens the handoff dialog; Stop while the card is open resolves it via the input signal. Account-picker UI, per-account AI opt-in surface, and picker tests remain open.
+
 
 - [ ] Add the account picker and missing-password card path; offer per-account AI opt-in; connect card handoff to the existing handoff dialog; make waits abortable.
 
@@ -182,6 +234,9 @@ Only an in-memory runner and task-control Map exist; no BrowserTask model/module
 Acceptance: crash before/after dispatch, persistence failure before/after intent, duplicate admission, concurrent old-tool access, restart while paused/waiting, and no automatic mutation replay tests. Requirements: D-FR-07/08/10, C-FR-14, design §§6.2/12.
 
 ### T20 — P1: finish the site registry switch-over
+
+> STATUS: PARTIAL — the pilot allowlist is REPLACED by registry-backed eligibility (start + listEligibleAccounts); getSite/listSites seed before reading. Still open: socialaccountdetail.vue platform consumers, domain-confirmation card flow, seed-failure surfacing.
+
 
 - [ ] Replace the managed-browser pilot/manifest gate and account-platform consumers with BrowserSite-backed lookups through IPC; complete reviewed domain expansion.
 
@@ -239,6 +294,9 @@ Acceptance: all required UI controls are usable end-to-end; English/Chinese/Span
 
 ### T27 — P2: restore Model/Module boundaries and migration evidence
 
+> STATUS: DONE (core) — the five new sign-in queries delegate to SocialAccountModel; module keeps opt-in filtering + FieldCipher. Legacy-fixture upgrade tests remain open.
+
+
 - [ ] Move new repository queries from SocialAccountModule into SocialAccountModel; verify legacy account/site/opt-in/failure fields and proxy migration with real database fixtures.
 
 `socialAccountModule.ts:367–502` adds direct repository/query-builder access instead of using Model methods. This violates the repository's requested data-access layering even though it runs in main. Site entity registration exists in dbEntities; that alone does not prove upgrades/backfills preserve legacy accounts or encrypted proxies. Add model/module tests under `test/modules/` as specified, including correct USERSDBPATH and worker DB-access rejection.
@@ -246,6 +304,9 @@ Acceptance: all required UI controls are usable end-to-end; English/Chinese/Span
 Acceptance: Model-only data access, main-only secret decryption, idempotent upgrades with legacy SQLite fixtures, no worker DB imports/access. Requirements: design §§13.6/15.1/16.4/20 and repository architecture rules.
 
 ### T28 — P1: deliver critical E2E and normal validation gates
+
+> STATUS: PARTIAL — `tsc --noEmit` exits 0 repo-wide and the Windows path assertion is fixed; the focused suites pass WITHOUT skip flags. The three deterministic E2E specs remain open.
+
 
 - [ ] Add deterministic browserDecisionTask, browserSignIn, and browserParallelTasks E2E equivalents; fix compile/component blockers; run required checks without skip flags.
 
