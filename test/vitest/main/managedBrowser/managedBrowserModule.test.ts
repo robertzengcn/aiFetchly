@@ -38,6 +38,31 @@ import type { ExecutableResolutionResult } from "@/childprocess/managed-browser/
  * and notice publication.
  */
 
+/**
+ * S-FR-05: the site registry replaced the pilot allowlist inside
+ * ManagedBrowserModule.start; tests control eligibility here.
+ */
+const siteRegistryMock = vi.hoisted(() => ({
+  current: {
+    getSite: async (_siteId: number) => ({
+      siteId: _siteId,
+      name: "Mocked Site",
+      registrableDomain: "example.test",
+      allowedDomainSuffixes: ["example.test"],
+      requiredDomainSuffixes: [],
+      loginUrl: null,
+      verificationUrl: null,
+      loginRecipe: null,
+      source: "builtin",
+      status: "verified",
+    }),
+    listSites: async () => [],
+  },
+}));
+vi.mock("@/modules/BrowserSiteModule", () => ({
+  getDefaultBrowserSiteModule: () => siteRegistryMock.current,
+}));
+
 const ACCOUNT_ID = 101;
 const DESCRIPTOR = {
   path: "/fake/chrome",
@@ -497,17 +522,29 @@ describe("ManagedBrowserModule.start gates", () => {
     ).rejects.toMatchObject({ code: "account_not_found" });
   });
 
-  it("rejects platforms outside the pilot allowlist", async () => {
-    const h = makeHarness({
-      accountLookup: async () => ({ platformId: 5, accountLabel: "Bing" }),
-    });
-    await expect(
-      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
-    ).rejects.toMatchObject({
-      code: "managed_browser_disabled",
-      reasonCode: "platform_not_in_pilot",
-    });
-    expect(h.clients).toHaveLength(0);
+  // S-FR-05: eligibility is registry-backed. The controllable registry
+  // mock (top of file) defaults to admitting; an unregistered platform
+  // still rejects before any worker starts.
+  it("rejects platforms not present in the site registry", async () => {
+    const previous = siteRegistryMock.current;
+    siteRegistryMock.current = {
+      getSite: async () => null,
+      listSites: async () => [],
+    };
+    try {
+      const h = makeHarness({
+        accountLookup: async () => ({ platformId: 5, accountLabel: "Bing" }),
+      });
+      await expect(
+        h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+      ).rejects.toMatchObject({
+        code: "managed_browser_disabled",
+        reasonCode: "platform_not_in_pilot",
+      });
+      expect(h.clients).toHaveLength(0);
+    } finally {
+      siteRegistryMock.current = previous;
+    }
   });
 
   it("rejects account_in_use without touching the worker", async () => {

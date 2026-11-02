@@ -490,14 +490,28 @@ export class ManagedBrowserModule {
           browserProfileImportEnabled: false,
         }
       : getPlatformManifest(account.platformId);
-    if (
-      !manifest ||
-      (!publicBrowsing && !MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.platformId))
-    ) {
+    if (!manifest) {
       throw new ManagedBrowserError(
         "managed_browser_disabled",
         "platform_not_in_pilot"
       );
+    }
+    // S-FR-05: the site registry replaces the pilot allowlist — any
+    // registered site is eligible for an account session (seeded rows
+    // keep the legacy platform IDs; AI-created sites extend eligibility).
+    if (!publicBrowsing) {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const siteMatch =
+        (await getDefaultBrowserSiteModule().getSite(account.platformId)) ??
+        null;
+      if (!siteMatch) {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "platform_not_in_pilot"
+        );
+      }
     }
 
     // 4a. PRD P-FR-01: explicit proxy choice at session start. Selection
@@ -869,10 +883,16 @@ export class ManagedBrowserModule {
         };
       const accounts = await new Sam().getAllSocialAccounts();
       /* eslint-enable @typescript-eslint/no-var-requires */
+      // S-FR-05: eligible = the account's platform is a REGISTERED site.
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const siteModule = getDefaultBrowserSiteModule();
+      const registeredIds = new Set(
+        (await siteModule.listSites()).map((site) => site.siteId)
+      );
       return accounts
-        .filter((account) =>
-          MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.social_type_id)
-        )
+        .filter((account) => registeredIds.has(account.social_type_id))
         .map((account) => ({
           accountId: account.id,
           platformId: account.social_type_id,

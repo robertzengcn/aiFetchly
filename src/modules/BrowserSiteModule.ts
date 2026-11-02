@@ -179,12 +179,14 @@ export class BrowserSiteModule extends BaseModule {
   }
 
   public async getSite(siteId: number): Promise<SiteMatch | null> {
+    await this.ensureSeeded();
     const model = await this.getModel();
     const entity = await model.getSiteById(siteId);
     return entity ? this.toMatch(entity) : null;
   }
 
   public async listSites(): Promise<SiteMatch[]> {
+    await this.ensureSeeded();
     const model = await this.getModel();
     const entities = await model.listSites();
     return Promise.all(entities.map((entity) => this.toMatch(entity)));
