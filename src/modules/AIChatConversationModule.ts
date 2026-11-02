@@ -385,6 +385,28 @@ export class AIChatConversationModule extends BaseModule {
     return newConversationId;
   }
 
+  /**
+   * BUGFIX 2026-11-02 (left menu folder refresh): ensure the sidebar
+   * projection row exists for a conversation whose workspace was just
+   * bound, with the resolved key already stamped. A brand-new chat has not
+   * persisted any message yet — without the row, the very sidebar refresh
+   * that should create the workspace folder would simply not list the chat.
+   * Idempotent; never overwrites an existing row (message persistence owns
+   * its projection updates).
+   */
+  async ensureConversationProjection(
+    conversationId: string,
+    workspaceKey: string | null = null
+  ): Promise<void> {
+    await this.ensureConnection();
+    const existing = await this.convModel().getByConversationId(conversationId);
+    if (existing) return;
+    await this.convModel().createProjection({
+      conversationId,
+      workspaceKey: workspaceKey ?? null,
+    });
+  }
+
   /** Full transcript for export (bounded views; renderer triggers download). */
   async exportConversation(conversationId: string): Promise<
     Array<{
