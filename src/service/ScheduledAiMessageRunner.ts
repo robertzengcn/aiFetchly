@@ -1514,32 +1514,22 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
           return;
         }
-        if (event.type === "start" || event.type === "token") {
-          // [sched-debug] TEMPORARY boundary instrumentation — remove after diagnosis.
-          console.log(
-            "[sched-debug] main emit (executeRunLoop)",
-            JSON.stringify({
-              kind: event.type,
-              conversationId,
-              runId,
-              messageId: assistantMessageId,
-              engineStatus: engine.getConversationRuntimeStatus(conversationId),
-            })
-          );
+        if (event.type === "start") {
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
             messageId: assistantMessageId,
-            kind: event.type === "start" ? "start" : "token",
-            ...(event.type === "token"
-              ? { contentDelta: event.contentDelta }
-              : {}),
+            kind: "start",
+          });
+        } else if (event.type === "token") {
+          this.broadcaster.emitScheduledStream({
+            conversationId,
+            runId,
+            messageId: assistantMessageId,
+            kind: "token",
+            contentDelta: event.contentDelta,
           });
         } else if (event.type === "complete" || event.type === "error") {
-          console.log(
-            "[sched-debug] main emit terminal (executeRunLoop)",
-            JSON.stringify({ kind: event.type, conversationId, runId })
-          );
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
