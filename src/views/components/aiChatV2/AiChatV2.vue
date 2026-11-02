@@ -861,7 +861,6 @@ import {
   subscribeConversationUpdated,
   unsubscribeConversationUpdated,
   subscribeScheduledStream,
-  unsubscribeScheduledStream,
 } from "@/views/api/aiChatScheduledLoop";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 import type {
@@ -1119,6 +1118,10 @@ interface ParkedQueuedTurn {
 }
 const parkedQueuedTurns = new Map<string, ParkedQueuedTurn>();
 let unsubscribePendingEvents: (() => void) | null = null;
+// Per-listener teardown for the shared scheduled-stream channel (bugfix
+// 2026-11-02): the selected-conversation store owns its own listener on the
+// same channel, so unmount must remove exactly this listener.
+let unsubscribeScheduledStreamListener: (() => void) | null = null;
 
 const upsertPendingMessage = (view: AIChatPendingMessageView): void => {
   const current =
@@ -6493,8 +6496,13 @@ onMounted(() => {
   });
   // Scheduled-loop turn completions arrive as a narrow refresh-hint broadcast.
   subscribeConversationUpdated(handleConversationUpdated);
-  // Live scheduled-turn token stream (strict routing renderer-side).
-  subscribeScheduledStream(handleScheduledStream);
+  // Live scheduled-turn token stream (strict routing renderer-side). Capture
+  // the per-listener unsubscribe: the channel is shared with the workspace
+  // selected-conversation store now, so teardown must remove exactly this
+  // listener (bugfix 2026-11-02) instead of wiping the whole channel.
+  unsubscribeScheduledStreamListener = subscribeScheduledStream(
+    handleScheduledStream
+  );
   // Phase 13 (Plan 04) + Phase 14 (Plan 14-04): subscribe to AiFetchly
   // config-changed events so the local command cache refreshes whenever
   // the main process reloads the global config OR a workspace-config
@@ -6581,7 +6589,10 @@ onBeforeUnmount(() => {
   );
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
-  unsubscribeScheduledStream();
+  // Precise teardown (bugfix 2026-11-02): the scheduled-stream channel is
+  // shared with the workspace store — remove only this page's listener.
+  unsubscribeScheduledStreamListener?.();
+  unsubscribeScheduledStreamListener = null;
   unsubscribeAutoCompacted();
   unsubscribeCompactionProgress();
   if (searchDebounceTimer) {

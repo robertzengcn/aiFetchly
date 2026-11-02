@@ -1,7 +1,9 @@
 import { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import type {
+  ConversationRuntimeStatus,
   ConversationSummaryEvent,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 
 /**
  * Process-wide workspace event-routing singletons (design §7.5).
@@ -108,4 +110,82 @@ export function getStartupStreamImplementationConfig(): EnvAIChatStreamImplement
     startupStreamConfig = config ?? new EnvAIChatStreamImplementationConfig();
   }
   return startupStreamConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled-occurrence-aware live runtime projection (bugfix 2026-11-02)
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural shape of the cooperative live-runtime lookup (design §16.1).
+ * Structurally identical to `AIChatConversationModule`'s `LiveRuntimeLookup`;
+ * declared locally so this runtime seam stays free of module-layer imports.
+ */
+export interface CooperativeLiveRuntimeLookup {
+  (
+    conversationId: string
+  ):
+    | {
+        readonly runtimeStatus: ConversationRuntimeStatus;
+        readonly activeRunId: string | null;
+      }
+    | null;
+}
+
+/**
+ * Structural probe over `ScheduledLoopEngineRegistry` (test seam). The
+ * registry keys by conversationId and holds the DEDICATED engine each
+ * scheduled occurrence runs in.
+ */
+export interface ScheduledEngineRegistryProbe {
+  getByConversation(
+    conversationId: string
+  ):
+    | {
+        readonly engine: {
+          /** Engine's own per-turn truth (subset of ConversationRuntimeStatus). */
+          getConversationRuntimeStatus(
+            conversationId: string
+          ): "idle" | "running" | "awaiting_permission" | "awaiting_user";
+        };
+        readonly runId: number;
+      }
+    | undefined;
+}
+
+/**
+ * Complete the live-runtime projection for scheduled occurrences (bugfix
+ * 2026-11-02): a scheduled turn runs in a dedicated engine that BYPASSES
+ * `AIChatCoordinator` and never registers in the interactive singleton's
+ * turn maps, so a live lookup that only consults the coordinator (and the
+ * select snapshot's durable fallback — which only owner-adapter runs have)
+ * projects a mid-run scheduled conversation as idle. The selected chat then
+ * hydrates idle and never shows the running flag / Stop affordance until an
+ * event repairs it (legacy scheduled-task paths emit no detail events).
+ *
+ * Coordinator state always wins; the scheduled engine probe only fills the
+ * coordinator's blind spot. The probe reports the scheduled engine's own
+ * authoritative per-turn status — running, or awaiting permission/user when
+ * the turn is parked — and null (fall through) when the engine itself is
+ * idle (registered-but-not-dispatched window) or no entry exists.
+ */
+export function scheduledAwareLiveRuntime(
+  live: CooperativeLiveRuntimeLookup,
+  scheduledEngines: ScheduledEngineRegistryProbe = ScheduledLoopEngineRegistry.getInstance()
+): CooperativeLiveRuntimeLookup {
+  return (conversationId) => {
+    const liveState = live(conversationId);
+    if (liveState) return liveState;
+    const entry = scheduledEngines.getByConversation(conversationId);
+    if (!entry) return null;
+    const status = entry.engine.getConversationRuntimeStatus(conversationId);
+    if (status === "idle") return null;
+    return {
+      runtimeStatus: status,
+      // Namespaced: scheduled task-run ids are a separate numeric domain
+      // from the workspace run envelopes — never let a consumer mistake
+      // this for a coordinator/durable `run-<uuid>` id.
+      activeRunId: `scheduled-${entry.runId}`,
+    };
+  };
 }
