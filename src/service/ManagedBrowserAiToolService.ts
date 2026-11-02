@@ -1057,6 +1057,7 @@ export class ManagedBrowserAiToolService {
         )) as ChatCompletionLike;
       }
     );
+    const awaitedResultRef: { taskId?: string } = {};
     const runner = new BrowserTaskRunner(
       {
         sessionId: parsed.data.session_id,
@@ -1145,10 +1146,32 @@ export class ManagedBrowserAiToolService {
         decisionClient,
         route,
         signal: context.signal,
+        // T14/C-FR-02: a handoff stop BLOCKS inside this job until the
+        // user resolves the existing handoff dialog; user-wait time is
+        // excluded from active budgets by the control service.
+        awaitHandoff: async (reason) => {
+          const { awaitUserResolution } = await import(
+            "@/service/browserAgents/HandoffCoordinator"
+          );
+          const { getDefaultAgentTaskControlService } = await import(
+            "@/service/browserAgents/AgentTaskControlService"
+          );
+          const controlService = getDefaultAgentTaskControlService();
+          const taskId = (awaitedResultRef.taskId ??
+            `handoff_${context.toolCallId}`) as string;
+          controlService.register(taskId, context.conversationId);
+          return await awaitUserResolution({
+            sessionId: parsed.data.session_id,
+            reason,
+            taskId,
+            signal: context.signal,
+          });
+        },
       }
     );
     try {
       const result = await runner.run();
+      awaitedResultRef.taskId = result.taskId;
       return { ...result };
     } catch (error) {
       this.wrapModuleError(error);

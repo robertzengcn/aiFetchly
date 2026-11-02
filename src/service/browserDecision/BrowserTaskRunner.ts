@@ -84,6 +84,16 @@ export interface RunnerDeps {
   readonly decisionClient: BrowserDecisionClient;
   readonly route: BrowserDecisionRouteKind;
   readonly signal?: AbortSignal;
+  /**
+   * T14 (C-FR-02/D-FR-10a): a handoff stop BLOCKS inside the job for the
+   * user's dialog action. resolved resumes the loop with a fresh
+   * observation; expired/cancelled end the task. User-wait time is
+   * excluded from active budgets by the control service. Omit to keep
+   * the terminal-stop behavior.
+   */
+  readonly awaitHandoff?: (
+    reason: string
+  ) => Promise<"resolved" | "expired" | "cancelled">;
   readonly control?: ReturnType<typeof getDefaultAgentTaskControlService>;
   readonly now?: () => number;
 }
@@ -323,7 +333,7 @@ export class BrowserTaskRunner {
           const execution = await this.deps.runActions(this.input.sessionId, {
             actions: [programAction],
           });
-          const processed = this.processExecution(
+          const processed = await this.processExecution(
             action.operation,
             null,
             execution,
@@ -383,7 +393,7 @@ export class BrowserTaskRunner {
         const execution = await this.deps.runActions(this.input.sessionId, {
           actions: [programAction],
         });
-        const processed = this.processExecution(
+        const processed = await this.processExecution(
           action.operation,
           { role: target.role, name: target.name },
           execution,
@@ -548,13 +558,31 @@ export class BrowserTaskRunner {
    * stop the task (D-FR-26), and equivalent-failure accounting applies
    * uniformly (D-FR-25).
    */
-  private processExecution(
+  private async processExecution(
     operation: string,
     target: { readonly role: string; readonly name: string } | null,
     execution: RunnerExecutionResult,
     evidence: string[]
-  ): { stop: { status: "partial" | "failed"; reason: string } | null } {
+  ): Promise<{
+    stop: { status: "partial" | "failed"; reason: string } | null;
+    resumedFromHandoff?: boolean;
+  }> {
     const label = target ? `${operation}:${target.name}` : operation;
+    if (execution.stopCode === "handoff_required" && this.deps.awaitHandoff) {
+      // T14/C-FR-02: block INSIDE the job for the user's dialog action.
+      evidence.push(`${label}:handoff_awaited`);
+      const resolution = await this.deps.awaitHandoff("challenge_handoff");
+      if (resolution === "resolved") {
+        // C-FR-02: after resolution the agent MUST observe before acting.
+        return { stop: null, resumedFromHandoff: true };
+      }
+      return {
+        stop: {
+          status: "partial",
+          reason: resolution === "expired" ? "handoff_expired" : "handoff_cancelled",
+        },
+      };
+    }
     if (execution.stopCode) {
       // D-AC-05: the authorized seam stopped the action. Terminal,
       // honest, and NEVER retried or bypassed.
