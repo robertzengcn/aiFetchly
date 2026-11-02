@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type { AIChatPendingMessageEvent } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2ScheduledStreamEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   ChatRunDetailEvent,
   ChatRunOwner,
@@ -35,6 +36,7 @@ import {
   subscribeChatV2PendingEvents,
   type DenyToolPermissionResult,
 } from "@/views/api/aiChatV2";
+import { subscribeScheduledStream } from "@/views/api/aiChatScheduledLoop";
 import { windowInvoke } from "@/views/utils/apirequest";
 // G01 (design §18.2): renderer event-receipt → projected-UI timing.
 import {
@@ -903,6 +905,63 @@ export const useSelectedConversationStore = defineStore(
       });
     }
 
+    /**
+     * Scheduled-occurrence liveness (bugfix 2026-11-02). A scheduled turn
+     * bypasses the interactive coordinator entirely, so the selected view's
+     * runtime facts never learned about it through the detail channel — a
+     * chat opened mid-occurrence presented idle with no composer Stop
+     * affordance. The scheduled stream broadcast is the selected view's
+     * liveness source: start/token raise the running flag (also repairing a
+     * selection taken before the occurrence began), done/error clear it so
+     * the flag never outlives the run.
+     */
+    function handleScheduledStreamFact(
+      event: ChatV2ScheduledStreamEvent
+    ): void {
+      if (event.conversationId !== workspaceStore.selectedConversationId) {
+        return;
+      }
+      if (event.kind === "start" || event.kind === "token") {
+        // A live interactive stream (or its not-yet-dismissed error banner)
+        // owns the view — scheduled liveness must never clobber it (same
+        // routing rule as the legacy AiChatV2 scheduled-stream surface).
+        if (
+          streamStatus.value === "streaming" ||
+          streamStatus.value === "error"
+        ) {
+          return;
+        }
+        // Idempotent repair: the flag is already up (selection snapshot or
+        // an earlier scheduled fact) — a token only proves liveness.
+        if (runtimeStatus.value === "running") return;
+        // Synthetic identity in the scheduled namespace ("scheduled-<runId>",
+        // matching the select projection) — coordinator run ids ("run-…")
+        // stay distinguishable from scheduled task-run ids.
+        presenter.hydrateRuntime({
+          runtimeStatus: "running",
+          activeRunId: `scheduled-${event.runId}`,
+        });
+        syncFromPresenter();
+        return;
+      }
+      if (event.kind === "done" || event.kind === "error") {
+        // Clear only a flag the scheduled liveness owns; an idle/queued view
+        // has nothing to retire.
+        if (runtimeStatus.value !== "running") return;
+        presenter.hydrateRuntime({ runtimeStatus: "idle", activeRunId: null });
+        syncFromPresenter();
+      }
+    }
+
+    /** Ensure exactly one scheduled-stream subscription exists per renderer. */
+    let scheduledStreamUnsubscribe: (() => void) | null = null;
+    function ensureScheduledStreamSubscription(): void {
+      if (scheduledStreamUnsubscribe) return;
+      scheduledStreamUnsubscribe = subscribeScheduledStream((event) => {
+        handleScheduledStreamFact(event);
+      });
+    }
+
     function recordTerminalRun(
       conversationId: string,
       runId: string,
@@ -1081,6 +1140,10 @@ export const useSelectedConversationStore = defineStore(
       // Audit D01: the pending lifecycle retirement rides the same app-
       // scoped lifetime as the ledger it protects.
       ensurePendingEventSubscription();
+      // Bugfix 2026-11-02: scheduled occurrences bypass the interactive
+      // coordinator, so the selected view needs the scheduled stream
+      // broadcast as its liveness source (running flag + terminal clear).
+      ensureScheduledStreamSubscription();
       try {
         const snapshot = await selectConversation(conversationId, generation);
         // Apply only if this handshake is still the latest selection.

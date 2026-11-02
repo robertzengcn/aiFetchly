@@ -34,6 +34,13 @@ vi.mock("@/views/utils/apirequest", () => ({
   windowInvoke: vi.fn(),
 }));
 
+// The selected-conversation store installs a scheduled-stream subscription
+// on selection (bugfix 2026-11-02) — stub the channel so it never reaches
+// the real IPC transport here.
+vi.mock("@/views/api/aiChatScheduledLoop", () => ({
+  subscribeScheduledStream: () => () => undefined,
+}));
+
 vi.mock("@/views/api/aiChatV2", () => ({
   denyChatV2ToolPermission: vi.fn(),
   subscribeChatV2PendingEvents: () => () => undefined,

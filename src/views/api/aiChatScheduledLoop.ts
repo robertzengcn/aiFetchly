@@ -1,6 +1,7 @@
 import {
   windowInvoke,
   windowReceive,
+  windowRemoveListener,
   windowRemoveAllListeners,
 } from "@/views/utils/apirequest";
 import {
@@ -94,18 +95,24 @@ export function unsubscribeConversationUpdated(): void {
 /**
  * Subscribe to the live scheduled-turn token stream. Strict routing is enforced
  * renderer-side: the handler should ignore events whose conversationId is not
- * active or while an interactive stream is running. Call unsubscribe in
- * onBeforeUnmount.
+ * active or while an interactive stream is running. Returns a per-listener
+ * unsubscribe — the channel is now shared with the workspace selected-
+ * conversation store, so teardown must use `windowRemoveListener` (precise)
+ * instead of the channel-wide removal the legacy page previously used. Call
+ * the returned unsubscribe in onBeforeUnmount.
  */
 export function subscribeScheduledStream(
   handler: (event: ChatV2ScheduledStreamEvent) => void
-): void {
-  windowReceive(AI_CHAT_V2_SCHEDULED_STREAM, (event) => {
+): () => void {
+  const listener = windowReceive(AI_CHAT_V2_SCHEDULED_STREAM, (event) => {
     handler(event as ChatV2ScheduledStreamEvent);
   });
+  return () => {
+    windowRemoveListener(AI_CHAT_V2_SCHEDULED_STREAM, listener);
+  };
 }
 
-/** Remove all scheduled-stream listeners (call in onBeforeUnmount). */
+/** Remove all scheduled-stream listeners (legacy arg-less teardown). */
 export function unsubscribeScheduledStream(): void {
   windowRemoveAllListeners(AI_CHAT_V2_SCHEDULED_STREAM);
 }

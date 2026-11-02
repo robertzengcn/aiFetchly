@@ -37,6 +37,7 @@ import {
 } from "@/schemas/ipc/aiChatWorkspace";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
 import {
+  scheduledAwareLiveRuntime,
   setQueueTurnDispatcher,
   setRunOwnerResumeRouter,
   sharedWorkspaceEventRouter,
@@ -173,6 +174,14 @@ export async function getConversationBusyReason(
 ): Promise<string | null> {
   if (getAiChatWorkspaceCoordinator().getLiveRuntime(conversationId)) {
     return "live run";
+  }
+  // Scheduled-occurrence probe (bugfix 2026-11-02): a live scheduled turn
+  // bypasses the coordinator and runs in a dedicated engine — without this
+  // a mid-run scheduled conversation reports "not busy" and clear/delete
+  // could wipe the transcript underneath a turn that is still writing
+  // (the SAME projection the select snapshot and the sidebar use).
+  if (scheduledAwareLiveRuntime(() => null)(conversationId)) {
+    return "scheduled turn";
   }
   try {
     if (
@@ -348,7 +357,12 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       }
       const sidebar: WorkspaceSidebarResponse =
         await conversationModule.getWorkspaceSidebar(
-          (conversationId) => coordinator.getLiveRuntime(conversationId),
+          // Scheduled-occurrence-aware (bugfix 2026-11-02): same blind spot
+          // as the select snapshot — a mid-run scheduled conversation must
+          // project running in the sidebar instead of idle.
+          scheduledAwareLiveRuntime(
+            (conversationId) => coordinator.getLiveRuntime(conversationId)
+          ),
           null
         );
       return ok(sidebar);
@@ -401,7 +415,13 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         conversationId,
         limit: 50,
       });
-      const live = coordinator.getLiveRuntime(conversationId);
+      // Scheduled-occurrence-aware live lookup (bugfix 2026-11-02): a live
+      // scheduled turn bypasses the coordinator and runs in a dedicated
+      // engine, so a coordinator-only lookup reports the conversation idle
+      // and the selected view hydrated without its running flag.
+      const live = scheduledAwareLiveRuntime(
+        (id) => coordinator.getLiveRuntime(id)
+      )(conversationId);
       const engineStatus =
         getQueryEngine().getConversationRuntimeStatus(conversationId);
       // B06: ordinary queue-backed turns never populate the coordinator's
