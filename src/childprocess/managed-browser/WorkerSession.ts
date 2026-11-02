@@ -39,7 +39,8 @@ import {
   buildObservation,
   type ObservationPageLike,
 } from "@/childprocess/managed-browser/BrowserObservationService";
-import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageReferenceRegistry";import { LoginFormFiller } from "@/childprocess/managed-browser/LoginFormFiller";
+import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageReferenceRegistry";
+import { LoginFormFiller } from "@/childprocess/managed-browser/LoginFormFiller";
 
 import type {
   ExecutorElementHandle,

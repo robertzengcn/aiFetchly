@@ -421,12 +421,14 @@ export class SocialAccountModule extends BaseModule {
       if (!site) {
         return null;
       }
-      const allowed = site.allowedDomainSuffixes.some(
-        (suffix) =>
-          currentRegistrableDomain === suffix ||
-          currentRegistrableDomain.endsWith("." + suffix)
-      );
-      if (!allowed) {
+      const { hostnameAllowedBySuffixes } =
+        await import("@/service/browserDecision/RegistrableDomain");
+      if (
+        !hostnameAllowedBySuffixes(
+          currentRegistrableDomain,
+          site.allowedDomainSuffixes
+        )
+      ) {
         return null;
       }
     }

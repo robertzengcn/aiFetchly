@@ -23,6 +23,7 @@ export interface BrowserBatchTaskInput {
 
 export interface BrowserBatchTaskResult {
   readonly task_index: number;
+  /** 'partial' is reserved for Return-results-now handling in a later phase. */
   readonly status: "completed" | "failed" | "cancelled" | "partial";
   readonly summary: string;
   readonly extracted: readonly unknown[];

@@ -143,6 +143,9 @@ export function getCredentialCardWaitRegistry(): CredentialCardWaitRegistry {
 }
 
 export class BrowserCredentialLoginService {
+  /** A-FR-10: one automated attempt per account at a time (TOCTOU guard). */
+  private readonly inFlightAccounts = new Set<number>();
+
   public async signIn(input: BrowserSignInInput): Promise<BrowserSignInResult> {
     const browserModule = getDefaultManagedBrowserModule();
     const status = browserModule.getStatus(input.sessionId);
@@ -150,7 +153,11 @@ export class BrowserCredentialLoginService {
       return { status: "failed", reasonCode: "no_active_session" };
     }
     // A-FR-02: site identity comes from the LIVE page URL, never the LLM.
-    const origin = status.currentOrigin;
+    // Refresh the observation first so the origin reflects the page NOW,
+    // not a stale snapshot from before a redirect.
+    await browserModule.observe(input.sessionId).catch(() => undefined);
+    const refreshed = browserModule.getStatus(input.sessionId);
+    const origin = refreshed?.currentOrigin ?? status.currentOrigin;
     if (!origin || !origin.startsWith("https://")) {
       return { status: "failed", reasonCode: "insecure_page" };
     }
@@ -222,7 +229,17 @@ export class BrowserCredentialLoginService {
       };
     }
 
-    // A-FR-10: cooldown — never retry a password the site rejected.
+    // A-FR-10: cooldown — never retry a password the site rejected, and
+    // never run two automated attempts for one account concurrently (the
+    // cooldown check-then-act window would otherwise admit both).
+    if (this.inFlightAccounts.has(chosen.id)) {
+      return {
+        status: "failed",
+        accountId: chosen.id,
+        siteId: site.siteId,
+        reasonCode: "cooldown",
+      };
+    }
     if (await accountModule.isSignInCoolingDown(chosen.id)) {
       return {
         status: "failed",
@@ -231,6 +248,25 @@ export class BrowserCredentialLoginService {
         reasonCode: "cooldown",
       };
     }
+    this.inFlightAccounts.add(chosen.id);
+    try {
+      return await this.attemptCredentialSignIn(
+        input,
+        site,
+        accountModule,
+        chosen
+      );
+    } finally {
+      this.inFlightAccounts.delete(chosen.id);
+    }
+  }
+
+  private async attemptCredentialSignIn(
+    input: BrowserSignInInput,
+    site: SiteMatch,
+    accountModule: SocialAccountModule,
+    chosen: { id: number; user: string }
+  ): Promise<BrowserSignInResult> {
 
     // A-FR-07: the ONLY decrypting read, gated on the live page's domain.
     const registrableDomain = site.registrableDomain;

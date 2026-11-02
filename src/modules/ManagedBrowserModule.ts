@@ -268,6 +268,8 @@ export class ManagedBrowserModule {
   private readonly sessions = new Map<string, ActiveSessionRecord>();
 
   /** Approval decisions keyed by requestId (consumed by the AI tool layer). */
+  /** P-FR-05: proxy switches per session lineage (capped at 3). */
+  private readonly proxySwitchCounts = new Map<string, number>();
   private readonly approvalDecisions = new Map<
     string,
     {
@@ -1020,6 +1022,9 @@ export class ManagedBrowserModule {
       throw new ManagedBrowserError("internal_error");
     }
     record.pageRevision = message.observation.pageRevision;
+    // Track the live origin for the sign-in site gate (A-FR-02) and the
+    // approval fingerprint's site component (D-FR-27).
+    record.currentOrigin = message.observation.origin || record.currentOrigin;
     // Cache the sanitized observation so risk classification can resolve
     // element refs to their role/name descriptors (GAP-01).
     record.lastObservation = message.observation;
@@ -1056,6 +1061,7 @@ export class ManagedBrowserModule {
       if (message.observation.pageRevision >= record.pageRevision) {
         record.pageRevision = message.observation.pageRevision;
         record.lastObservation = message.observation;
+        record.currentOrigin = message.observation.origin || record.currentOrigin;
       }
     }
     return message;
@@ -1572,7 +1578,12 @@ export class ManagedBrowserModule {
         protocol: row.protocol ?? null,
         country_code: row.country_code ?? null,
       }));
-    } catch {
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] proxy row lookup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       return [];
     }
   }
@@ -1597,7 +1608,12 @@ export class ManagedBrowserModule {
         protocol: row.protocol ?? null,
         country_code: row.country_code ?? null,
       };
-    } catch {
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] proxy ${proxyId} lookup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       return null;
     }
   }
@@ -1657,9 +1673,6 @@ export class ManagedBrowserModule {
     conversationId?: string
   ): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
-    if (record.proxySwitchCount >= 3) {
-      throw new ManagedBrowserError("proxy_switch_limit");
-    }
     if (
       conversationId &&
       record.conversationId &&
@@ -1669,6 +1682,15 @@ export class ManagedBrowserModule {
     }
     const accountId = record.accountId;
     const conversation = record.conversationId ?? undefined;
+    // P-FR-05: the cap is per SESSION LINEAGE, not per record — each
+    // switch stops this record and starts a fresh one, so the count is
+    // carried in a module-level map keyed by the lineage.
+    const lineageKey = `${conversation ?? "public"}:${accountId}:${record.platformId}`;
+    const priorCount = this.proxySwitchCounts.get(lineageKey) ?? 0;
+    if (priorCount >= 3) {
+      throw new ManagedBrowserError("proxy_switch_limit");
+    }
+    this.proxySwitchCounts.set(lineageKey, priorCount + 1);
     await this.stop(sessionId, "user_stop");
     return await this.start({
       ...(accountId > 0 ? { accountId } : {}),

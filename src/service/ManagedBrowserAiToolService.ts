@@ -106,7 +106,11 @@ export class ManagedBrowserAiToolError extends Error {
 export interface BrowserToolExecutionContext {
   readonly conversationId: string;
   readonly toolCallId: string;
-  /** Caller already obtained user consent (permission-prompt grant). */
+  /**
+   * Accepted for interface compatibility but DELIBERATELY IGNORED by the
+   * managed-browser tools: consequential actions are ALWAYS-CONFIRM
+   * (TODO-MSB-002) — no consent flag bypasses the approval gate.
+   */
   readonly skipPermissionCheck?: boolean;
   /** Abort signal from the query loop / ToolJobRegistry (GAP-14). */
   readonly signal?: AbortSignal;
@@ -1229,22 +1233,6 @@ export function extractRegistrableDomainSafe(
   } catch {
     return null;
   }
-}
-
-export function computeProgramDigest(
-  program: BrowserActionProgram
-): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        actions: program.actions.map((action) =>
-          JSON.parse(JSON.stringify(action))
-        ),
-        intent: program.intent ?? null,
-      })
-    )
-    .digest("hex");
 }
 
 /**

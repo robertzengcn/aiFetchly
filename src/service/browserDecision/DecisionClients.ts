@@ -16,7 +16,11 @@ import type {
   BrowserDecisionInput,
   BrowserDecisionResult,
 } from "@/entityTypes/browserDecisionTypes";
-import { decisionResultSchema, type DecisionResultWire } from "@/schemas/api/browserDecision";
+import {
+  BROWSER_DECISION_PRESS_KEY_VALUES,
+  decisionResultSchema,
+  type DecisionResultWire,
+} from "@/schemas/api/browserDecision";
 import type { BrowserProposedAction } from "@/entityTypes/browserDecisionTypes";
 
 export class HostedDecisionClient implements BrowserDecisionClient {
@@ -70,8 +74,6 @@ export interface ChatCompletionLike {
 }
 
 export class ChatCompletionDecisionClient implements BrowserDecisionClient {
-  private attempts = 0;
-
   constructor(
     private readonly complete: (
       request: {
@@ -107,7 +109,6 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
     // D-FR-18: at most 2 actual provider attempts per logical decision —
     // one retry for a parse failure, never an open repair loop.
     for (let attempt = 0; attempt < 2; attempt++) {
-      this.attempts++;
       try {
         const response = await this.complete(
           {
@@ -143,9 +144,7 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
   }
 }
 
-const BOUNDED_PRESS_KEYS: ReadonlySet<string> = new Set([
-  "Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
-]);
+const BOUNDED_PRESS_KEYS: ReadonlySet<string> = new Set(BROWSER_DECISION_PRESS_KEY_VALUES);
 
 function validatePressKey(value: unknown): BrowserProposedAction["key"] {
   return typeof value === "string" && BOUNDED_PRESS_KEYS.has(value)

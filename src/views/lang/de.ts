@@ -4240,6 +4240,13 @@ export default {
       stop: "Browser stoppen",
     },
     errors: {
+        insufficient_memory: "Nicht genug freier Speicher für einen weiteren Browser. Schließen Sie einen und versuchen Sie es erneut.",
+        site_limit_reached: "Diese Site hat bereits die maximale Anzahl offener Browser.",
+        session_not_owned: "Diese Browser-Sitzung gehört zu einer anderen Konversation.",
+        proxy_confirmation_required: "Eine Änderung des Proxys dieses Kontos erfordert Ihre Bestätigung.",
+        proxy_not_found: "Der ausgewählte Proxy existiert nicht mehr.",
+        proxy_no_usable_proxy: "Kein benutzbarer HTTP/HTTPS-Proxy verfügbar.",
+        proxy_switch_limit: "Proxy-Wechsel-Limit für diese Browser-Sitzung erreicht.",
       ai_disabled: "KI-Funktionen sind nicht aktiviert",
       managed_browser_disabled: "Der verwaltete Browser ist deaktiviert",
       account_in_use: "Dieses Konto wird bereits verwendet",

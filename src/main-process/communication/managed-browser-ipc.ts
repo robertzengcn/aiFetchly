@@ -235,7 +235,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     async (input) => {
       const entry = getCredentialCardWaitRegistry().consume({
         requestId: input.requestId,
-        conversationId: callerConversationId(input),
+        conversationId: input.conversationId,
       });
       if (!entry) {
         return { accepted: false };

@@ -4239,6 +4239,13 @@ export default {
       stop: "Detener navegador",
     },
     errors: {
+        insufficient_memory: "No hay memoria libre suficiente para otro navegador. Cierra uno e inténtalo de nuevo.",
+        site_limit_reached: "Este sitio ya tiene el número máximo de navegadores abiertos.",
+        session_not_owned: "Esta sesión del navegador pertenece a otra conversación.",
+        proxy_confirmation_required: "Cambiar el proxy de esta cuenta requiere tu confirmación.",
+        proxy_not_found: "El proxy seleccionado ya no existe.",
+        proxy_no_usable_proxy: "No hay ningún proxy HTTP/HTTPS utilizable.",
+        proxy_switch_limit: "Se alcanzó el límite de cambios de proxy para esta sesión.",
       ai_disabled: "Las funciones de IA no están habilitadas",
       managed_browser_disabled: "El navegador gestionado está desactivado",
       account_in_use: "Esta cuenta ya está en uso",

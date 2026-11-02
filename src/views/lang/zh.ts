@@ -3996,6 +3996,13 @@ export default {
       stop: "停止浏览器",
     },
     errors: {
+        insufficient_memory: "可用内存不足，无法再开一个浏览器。请先关闭一个再试。",
+        site_limit_reached: "该站点已达到最大并行浏览器数量。",
+        session_not_owned: "该浏览器会话属于另一个会话窗口。",
+        proxy_confirmation_required: "更改该账户的代理需要您的确认。",
+        proxy_not_found: "所选代理已不存在。",
+        proxy_no_usable_proxy: "没有可用的 HTTP/HTTPS 代理。",
+        proxy_switch_limit: "已达该浏览器会话的代理切换上限。",
       ai_disabled: "AI 功能未启用",
       managed_browser_disabled: "托管浏览器已禁用",
       account_in_use: "该账号已被使用",

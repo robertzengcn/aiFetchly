@@ -262,8 +262,6 @@ export class BrowserSiteModule extends BaseModule {
     if (!entity) {
       return null;
     }
-    const registrable = parseUrlIdentity(`https://${entity.registrableDomain}`);
-    void registrable;
     const current = safeParseSuffixes(entity.allowedDomainSuffixes);
     const proposed = [
       ...new Set(
@@ -292,8 +290,21 @@ export class BrowserSiteModule extends BaseModule {
     if (!entity) {
       return false;
     }
+    // S-FR-04 hardening: every applied domain must be a valid registrable
+    // domain (never a bare public suffix, IP, or single label) — this list
+    // gates credential and cookie release.
+    const validated: string[] = [];
+    for (const domain of input.domains) {
+      const identity = parseUrlIdentity(`https://${domain.trim().toLowerCase()}`);
+      if (identity && identity.hostname === domain.trim().toLowerCase()) {
+        validated.push(identity.hostname);
+      }
+    }
+    if (validated.length === 0) {
+      return false;
+    }
     const current = safeParseSuffixes(entity.allowedDomainSuffixes);
-    const merged = [...new Set([...current, ...input.domains.map((d) => d.toLowerCase())])];
+    const merged = [...new Set([...current, ...validated])];
     entity.allowedDomainSuffixes = JSON.stringify(merged);
     await model.saveSite(entity);
     return true;

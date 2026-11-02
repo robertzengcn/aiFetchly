@@ -70,9 +70,12 @@ const FILL_SCRIPT = `
     const top = document.elementFromPoint(cx, cy);
     return top === el || (top instanceof Node && el.contains(top));
   };
+  // Layer A (A-FR-16): the password field's frame — INCLUDING the top
+  // frame — must be on one of the site's allowed domains. A navigation or
+  // redirect between the main-process site match and this fill must never
+  // receive the credential.
   const frameAllowed = () => {
     try {
-      if (window.top === window) return true;
       return allowedDomainSuffixes.some((suffix) =>
         location.hostname === suffix ||
         location.hostname.endsWith("." + suffix));

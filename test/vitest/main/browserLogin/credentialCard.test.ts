@@ -12,6 +12,18 @@ import {
 
 vi.mock("@/modules/ManagedBrowserModule", () => ({
   getDefaultManagedBrowserModule: () => ({
+    observe: vi.fn().mockResolvedValue({
+      observationId: "obs-live",
+      pageRevision: 1,
+      url: "https://www.example.test/login",
+      origin: "https://www.example.test",
+      title: "Example",
+      state: "ready",
+      elements: [],
+      visibleText: "",
+      notices: [],
+      truncated: false,
+    }),
     getStatus: () => ({
       sessionId: "mb_signin0001",
       accountId: 0,

@@ -5365,7 +5365,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         const { browserBatchArgsSchema, runBrowserTasksForTool } = await import(
           "@/service/agentTools/runBrowserTasksTool"
         );
-        const parsed = browserBatchArgsSchema().safeParse(args);
+        const parsed = browserBatchArgsSchema.safeParse(args);
         if (!parsed.success) {
           return {
             success: false,

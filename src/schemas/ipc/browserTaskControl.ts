@@ -7,29 +7,40 @@
  * task → paused via the control gate).
  */
 import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
 
-export const browserTaskPauseSchema = z.strictObject({
-  taskId: z.string().min(1).max(160),
-  sessionId: z.string().min(1).max(64).optional(),
-});
+export const browserTaskPauseSchema = lazySchema(() =>
+  z.strictObject({
+    taskId: z.string().min(1).max(160),
+    sessionId: z.string().min(1).max(64).optional(),
+  })
+);
 
-export const browserTaskResumeSchema = z.strictObject({
-  taskId: z.string().min(1).max(160),
-  sessionId: z.string().min(1).max(64).optional(),
-  /** C-FR-07: optional steering text appended to the agent transcript. */
-  instructions: z.string().max(2000).optional(),
-});
+export const browserTaskResumeSchema = lazySchema(() =>
+  z.strictObject({
+    taskId: z.string().min(1).max(160),
+    sessionId: z.string().min(1).max(64).optional(),
+    /** C-FR-07: optional steering text appended to the agent transcript. */
+    instructions: z.string().max(2000).optional(),
+  })
+);
 
-export const browserTaskStopSchema = z.strictObject({
-  taskId: z.string().min(1).max(160),
-  sessionId: z.string().min(1).max(64).optional(),
-});
+export const browserTaskStopSchema = lazySchema(() =>
+  z.strictObject({
+    taskId: z.string().min(1).max(160),
+    sessionId: z.string().min(1).max(64).optional(),
+  })
+);
 
-export const browserBatchReturnNowSchema = z.strictObject({
-  batchId: z.string().min(1).max(160),
-});
+export const browserBatchReturnNowSchema = lazySchema(() =>
+  z.strictObject({
+    batchId: z.string().min(1).max(160),
+  })
+);
 
-export const browserTaskFocusWindowSchema = z.strictObject({
-  taskId: z.string().min(1).max(160),
-  sessionId: z.string().min(1).max(64),
-});
+export const browserTaskFocusWindowSchema = lazySchema(() =>
+  z.strictObject({
+    taskId: z.string().min(1).max(160),
+    sessionId: z.string().min(1).max(64),
+  })
+);

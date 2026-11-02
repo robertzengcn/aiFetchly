@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import { MANAGED_BROWSER_GLOBAL_SESSION_LIMIT } from "@/config/managedBrowser";
 
 /**
  * Managed-browser account leases (technical design §7.2).
@@ -61,7 +62,7 @@ export class ManagedBrowserLeaseService {
   private readonly leases = new Map<string, AccountLease>();
   private globalLimit: number;
 
-  constructor(globalLimit = 1) {
+  constructor(globalLimit = MANAGED_BROWSER_GLOBAL_SESSION_LIMIT) {
     this.globalLimit = globalLimit;
   }
 

@@ -131,8 +131,13 @@ export class ProxyModel extends BaseDb {
         const repository = await this.getRepository();
         await repository.update(id, { pass: encrypted });
       }
-    } catch {
+    } catch (error) {
       // Migration is best-effort; the plaintext row is retried on next read.
+      console.warn(
+        `[ProxyModel] plaintext pass migration failed for id=${id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   }
 
@@ -174,7 +179,9 @@ export class ProxyModel extends BaseDb {
           port: proxy.port,
           user: proxy.user,
           // P-FR-08: encrypt imported passwords at rest.
-          pass: await ProxyCredentialCodec.encryptForStorage(proxy.pass ?? null),
+          pass:
+            (await ProxyCredentialCodec.encryptForStorage(proxy.pass ?? null)) ??
+            undefined,
           protocol: proxy.protocol,
         })
       );

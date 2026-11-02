@@ -4220,6 +4220,13 @@ export default {
       stop: "Stop browser",
     },
     errors: {
+        insufficient_memory: "Not enough free memory for another browser. Close one and try again.",
+        site_limit_reached: "This site already has the maximum number of open browsers.",
+        session_not_owned: "This browser session belongs to another conversation.",
+        proxy_confirmation_required: "Changing this account's proxy needs your confirmation.",
+        proxy_not_found: "The selected proxy no longer exists.",
+        proxy_no_usable_proxy: "No usable HTTP/HTTPS proxy is available.",
+        proxy_switch_limit: "Proxy switch limit reached for this browser session.",
       ai_disabled: "AI features are not enabled",
       managed_browser_disabled: "Managed browser is disabled",
       account_in_use: "This account is already in use",

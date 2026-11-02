@@ -4142,6 +4142,13 @@ export default {
       stop: "ブラウザを停止",
     },
     errors: {
+        insufficient_memory: "空きメモリが不足しているため、これ以上ブラウザを開けません。閉じてから再試行してください。",
+        site_limit_reached: "このサイトのブラウザは最大数に達しています。",
+        session_not_owned: "このブラウザセッションは別の会話に属しています。",
+        proxy_confirmation_required: "このアカウントのプロキシ変更には確認が必要です。",
+        proxy_not_found: "選択されたプロキシは存在しません。",
+        proxy_no_usable_proxy: "利用可能な HTTP/HTTPS プロキシがありません。",
+        proxy_switch_limit: "このブラウザセッションのプロキシ切替上限に達しました。",
       ai_disabled: "AI機能が有効ではありません",
       managed_browser_disabled: "管理ブラウザは無効です",
       account_in_use: "このアカウントは使用中です",

@@ -7,25 +7,30 @@
  * never enter chat messages, tool results, transcripts, or logs.
  */
 import { z } from "zod";
+import { lazySchema } from "@/utils/lazySchema";
 
-export const browserCredentialRequestEventSchema = z.strictObject({
+export const browserCredentialRequestEventSchema = lazySchema(() =>
+  z.strictObject({
   requestId: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(64),
   siteDomain: z.string().min(1).max(253),
-  mode: z.enum(["login", "register"]),
-  prefillUsername: z.string().max(256).nullable(),
-});
+    mode: z.enum(["login", "register"]),
+    prefillUsername: z.string().max(256).nullable(),
+  })
+);
 
-export const browserCredentialSubmitSchema = z.strictObject({
+export const browserCredentialSubmitSchema = lazySchema(() =>
+  z.strictObject({
   requestId: z.string().min(1).max(128),
   /** Owner conversation binding (single-use match, A-FR-06). */
   conversationId: z.string().min(1).max(128),
   username: z.string().min(1).max(256),
   password: z.string().min(1).max(1024),
-  save: z.boolean(),
-  cancelled: z.boolean().default(false),
-});
+    save: z.boolean(),
+    cancelled: z.boolean().default(false),
+  })
+);
 
 export type BrowserCredentialSubmitInput = z.infer<
-  typeof browserCredentialSubmitSchema
+  ReturnType<typeof browserCredentialSubmitSchema>
 >;

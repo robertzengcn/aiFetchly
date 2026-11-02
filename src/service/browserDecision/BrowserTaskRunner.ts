@@ -17,8 +17,15 @@ import type {
 } from "@/entityTypes/browserDecisionTypes";
 import { decisionInputSchema } from "@/schemas/api/browserDecision";
 import { validateDecisionActionStructure } from "@/schemas/api/browserDecision";
-import { buildTaskBudget, type MutableTaskBudget } from "@/service/browserDecision/BrowserTaskLimits";
-import { buildDecisionCandidates } from "@/service/browserDecision/BrowserCandidateBuilder";
+import {
+  buildTaskBudget,
+  limitsForRoute,
+  type MutableTaskBudget,
+} from "@/service/browserDecision/BrowserTaskLimits";
+import {
+  buildDecisionCandidates,
+  RUNNER_OPERATIONS,
+} from "@/service/browserDecision/BrowserCandidateBuilder";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 
 export interface CompletionCriterion {
@@ -97,6 +104,7 @@ export interface RunnerObservation {
 }
 
 export type RunnerAction =
+  | { type: "go_back" }
   | { type: "click"; ref: string; pageRevision: number; expectedRole: string; expectedName: string }
   | { type: "fill"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; value: string }
   | { type: "select"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; values: string[] }
@@ -114,7 +122,7 @@ export interface RunnerExecutionResult {
   }>;
 }
 
-const MAX_CONSECUTIVE_EQUIVALENT_FAILURES = 3;
+
 
 export class BrowserTaskRunner {
   private readonly deps: RunnerDeps;
@@ -125,12 +133,15 @@ export class BrowserTaskRunner {
   private recoveryCalls = 0;
   private lastFailureKey: string | null = null;
   private consecutiveEquivalentFailures = 0;
+  private readonly maxEquivalentFailures: number;
 
   constructor(
     private readonly input: BrowserTaskInput,
     deps: RunnerDeps
   ) {
     this.deps = deps;
+    this.maxEquivalentFailures =
+      limitsForRoute(deps.route).consecutiveEquivalentFailures;
     this.budget = buildTaskBudget(deps.route, input.budget);
   }
 
@@ -150,6 +161,10 @@ export class BrowserTaskRunner {
         }
         // C-FR-05: safe-point control gate.
         await gate.waitUntilOpen(signal);
+        // PRD §8 route budget: active runtime excludes user waits (D-21).
+        if (control.activeTimeMs(this.taskId) > this.budget.activeRuntimeMs) {
+          return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
+        }
         if (!observation) {
           observation = await this.deps.observe(this.input.sessionId);
           if (!observation) {
@@ -235,7 +250,7 @@ export class BrowserTaskRunner {
         if (action.operation === "GO_BACK") {
           this.leafSteps++;
           const result = await this.deps.runActions(this.input.sessionId, {
-            actions: [{ type: "press_key", key: "Escape" }],
+            actions: [{ type: "go_back" }],
           });
           void result;
           observation = await this.deps.observe(this.input.sessionId);
@@ -245,7 +260,7 @@ export class BrowserTaskRunner {
         const violation = validateDecisionActionStructure(decision, decisionInputSchema.parse(decisionInput));
         if (violation) {
           evidence.push(`invalid_decision:${violation}`);
-          if (++this.consecutiveEquivalentFailures >= MAX_CONSECUTIVE_EQUIVALENT_FAILURES) {
+          if (++this.consecutiveEquivalentFailures >= this.maxEquivalentFailures) {
             return this.terminal("failed", `repeated_invalid_decision:${violation}`, evidence, extracted, observation);
           }
           continue;
@@ -288,7 +303,7 @@ export class BrowserTaskRunner {
           this.consecutiveEquivalentFailures =
             failureKey === this.lastFailureKey ? this.consecutiveEquivalentFailures + 1 : 1;
           this.lastFailureKey = failureKey;
-          if (this.consecutiveEquivalentFailures >= MAX_CONSECUTIVE_EQUIVALENT_FAILURES) {
+          if (this.consecutiveEquivalentFailures >= this.maxEquivalentFailures) {
             return this.terminal(
               "failed",
               `three_equivalent_failures:${stepResult.errorCode}`,
@@ -337,21 +352,13 @@ export class BrowserTaskRunner {
       title: observation.title.slice(0, 512),
       candidates: candidates as BrowserDecisionInput["candidates"],
       recent_actions: [],
-      allowed_operations: [
-        "CLICK",
-        "FILL",
-        "SELECT",
-        "PRESS_KEY",
-        "NAVIGATE",
-        "GO_BACK",
-        "HOVER",
-        "SCROLL_UP",
-        "SCROLL_DOWN",
-        "WAIT",
-        "EXTRACT",
-        "DONE",
-        "ESCALATE",
-      ],
+      // D-FR-16: offer only operations the runner can actually execute.
+      // NAVIGATE (same-site policy plumbing) and EXTRACT (field schema
+      // executor) are not implemented yet and are excluded so the model
+      // never burns decisions on unsupported operations.
+      allowed_operations: RUNNER_OPERATIONS.filter(
+        (op) => op !== "NAVIGATE" && op !== "EXTRACT"
+      ),
       deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
     };
   }
