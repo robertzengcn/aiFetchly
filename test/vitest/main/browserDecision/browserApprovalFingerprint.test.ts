@@ -22,6 +22,32 @@ function descriptor(
   };
 }
 
+describe("BrowserApprovalFingerprint payload binding (T15)", () => {
+  it("changes when a SELECT option value changes", () => {
+    const base = {
+      actions: [descriptor({ operation: "select", optionId: "opt_a" })],
+      siteRegistrableDomain: "example.com",
+    };
+    const changed = {
+      ...base,
+      actions: [descriptor({ operation: "select", optionId: "opt_b" })],
+    };
+    expect(computeApprovalFingerprint(base)).not.toBe(computeApprovalFingerprint(changed));
+  });
+
+  it("changes when a navigation destination changes", () => {
+    const base = {
+      actions: [descriptor({ operation: "navigate", context: "https://example.com/a" })],
+      siteRegistrableDomain: "example.com",
+    };
+    const changed = {
+      ...base,
+      actions: [descriptor({ operation: "navigate", context: "https://example.com/b" })],
+    };
+    expect(computeApprovalFingerprint(base)).not.toBe(computeApprovalFingerprint(changed));
+  });
+});
+
 describe("BrowserApprovalFingerprint (D-FR-27)", () => {
   it("is stable across reobservations when the semantic action is unchanged", () => {
     // Same click resolved from two different observations: different refs,

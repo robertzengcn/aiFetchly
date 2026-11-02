@@ -1332,11 +1332,20 @@ export function buildSemanticActionDescriptors(
       operation: action.type,
       role: target?.role ?? null,
       name: target?.name ?? null,
-      context: null,
+      // T15: distinguishing context. Fill carries the form action; select
+      // carries the observed option values; navigate carries the URL — a
+      // changed payload re-requests approval instead of reusing one.
+      context:
+        action.type === "navigate"
+          ? action.url
+          : null,
       valueDigest:
         action.type === "fill" ? digestSecretValue(action.value) : null,
       key: action.type === "press_key" ? action.key : null,
-      optionId: null,
+      optionId:
+        action.type === "select" && action.values.length > 0
+          ? action.values.join(",")
+          : null,
     };
   };
   const walk = (nodes: readonly BrowserAction[]): SemanticActionDescriptor[] =>
