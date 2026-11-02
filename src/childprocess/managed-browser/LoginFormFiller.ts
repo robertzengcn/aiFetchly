@@ -5,21 +5,30 @@
  * FILL_LOGIN_FORM request and is wiped after use; results carry outcome +
  * field stamps, never values.
  *
+ * The page scripts below are REAL FUNCTIONS (not string-encoded function
+ * expressions): Puppeteer serializes a passed function and invokes it with
+ * the serializable argument, so the body always executes (T02).
+ *
  * Layer A (hard rules, evaluated in-page immediately before input):
+ *   - the page is HTTPS;
+ *   - EVERY frame that receives a value — including the top frame — is on
+ *     one of the site's allowed domains;
  *   - the password target is an HTMLInputElement with type === "password",
  *     enabled, visible, and hit-testable;
- *   - its frame is the top frame or a same-site frame on the allowed domains;
- *   - the page is HTTPS;
  *   - in login mode exactly ONE visible password input exists in the form.
- *   Any failure aborts with a reason code and NEVER types anything.
  *
- * Layer B (verify the input landed where intended):
+ * Layer B (verify the input landed where intended — T03/T04):
+ *   - the password target is REVALIDATED (type, enabled/readonly, visible,
+ *     hit-test, same-form identity) AFTER the username set, because page
+ *     input/change handlers can mutate or replace it synchronously;
  *   - values set via the native value setter + input/change events; read
- *     back LENGTH ONLY;
- *   - other inputs' value lengths snapshotted before/after — any unexpected
- *     change aborts and reports the tamper;
- *   - submit through the password field's own form (requestSubmit) or Enter
- *     in that field; never a button outside the form.
+ *     back LENGTH ONLY, per field;
+ *   - every OTHER input's length is compared independently (a prefilled
+ *     username cannot fail the fill, and equal-and-opposite changes cannot
+ *     evade detection); any unexpected change clears EVERY affected field;
+ *   - readback mismatch clears the touched fields before aborting;
+ *   - submit through the password field's own form (requestSubmit with
+ *     focus checks) — never a control outside the form.
  */
 
 export interface LoginFillTarget {
@@ -46,159 +55,265 @@ export interface LoginFillResult {
   readonly filledFieldStamps: readonly string[];
 }
 
-/** In-page evaluation contract (PuppeteerPageLike.evaluate). */
 export interface LoginFillPageLike {
   url(): string;
   evaluate<T>(script: unknown, ...args: unknown[]): Promise<T>;
 }
 
-const FILL_SCRIPT = `
-((input) => {
-  const { mode, allowedDomainSuffixes, username, password, recipe } = input;
-
-  const isVisible = (el) => {
+/**
+ * The fill body. Passed to page.evaluate as a FUNCTION with one
+ * serializable payload — never as a bare string expression (T02).
+ */
+export function fillLoginPageFunction(input: {
+  mode: "login" | "register";
+  allowedDomainSuffixes: string[];
+  username: string;
+  password: string;
+  submitVia: "form" | "enter";
+}): {
+  ok: boolean;
+  reasonCode?: string | null;
+  stamps?: string[];
+} {
+  const isVisible = (el: Element): boolean => {
     if (!(el instanceof Element)) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
     const style = window.getComputedStyle(el);
     return style.visibility !== "hidden" && style.display !== "none";
   };
-  const hitTestable = (el) => {
+  const hitTestable = (el: Element): boolean => {
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     const top = document.elementFromPoint(cx, cy);
     return top === el || (top instanceof Node && el.contains(top));
   };
-  // Layer A (A-FR-16): the password field's frame — INCLUDING the top
-  // frame — must be on one of the site's allowed domains. A navigation or
-  // redirect between the main-process site match and this fill must never
-  // receive the credential.
-  const frameAllowed = () => {
-    try {
-      return allowedDomainSuffixes.some((suffix) =>
+  const hostAllowed = (): boolean =>
+    input.allowedDomainSuffixes.some(
+      (suffix) =>
         location.hostname === suffix ||
-        location.hostname.endsWith("." + suffix));
-    } catch { return false; }
-  };
+        location.hostname.endsWith("." + suffix)
+    );
+  const passwordSafe = (pw: HTMLInputElement): boolean =>
+    pw instanceof HTMLInputElement &&
+    pw.type === "password" &&
+    !pw.disabled &&
+    !pw.readOnly &&
+    isVisible(pw) &&
+    hitTestable(pw);
 
+  // Layer A: page-level rules BEFORE anything is typed.
   if (location.protocol !== "https:") {
     return { ok: false, reasonCode: "insecure_page" };
   }
-  if (!frameAllowed()) {
+  // T03: the TOP frame is also an input frame — it must be on-domain.
+  if (!hostAllowed()) {
     return { ok: false, reasonCode: "origin_mismatch" };
   }
 
   const forms = Array.from(document.querySelectorAll("form"));
-  const candidates = [];
+  const candidates: Array<{
+    form: HTMLFormElement;
+    passwordInput: HTMLInputElement;
+    usernameInput: HTMLInputElement;
+  }> = [];
   for (const form of forms) {
-    const passwordInputs = Array.from(form.querySelectorAll('input[type="password"]'))
-      .filter((el) => isVisible(el));
+    const passwordInputs = Array.from(
+      form.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    ).filter((el) => isVisible(el));
     if (passwordInputs.length === 0) continue;
-    if (mode === "login" && passwordInputs.length !== 1) {
+    if (input.mode === "login" && passwordInputs.length !== 1) {
       return { ok: false, reasonCode: "ambiguous_password_field" };
     }
     const usernameInput = Array.from(
-      form.querySelectorAll('input[type="email"], input[type="text"], input[type="tel"]')
-    ).find((el) => isVisible(el) && !el.disabled && !el.readOnly);
+      form.querySelectorAll<HTMLInputElement>(
+        'input[type="email"], input[type="text"], input[type="tel"]'
+      )
+    ).find(
+      (el) => isVisible(el) && !el.disabled && !el.readOnly
+    );
     if (!usernameInput) continue;
-    candidates.push({ form, passwordInput: passwordInputs[0], usernameInput });
+    candidates.push({
+      form,
+      passwordInput: passwordInputs[0]!,
+      usernameInput,
+    });
   }
   if (candidates.length === 0) {
     return { ok: false, reasonCode: "form_not_found" };
   }
-  const chosen = candidates[0];
+  const chosen = candidates[0]!;
   const pw = chosen.passwordInput;
 
-  // Layer A: hard password-field rules.
-  if (
-    !(pw instanceof HTMLInputElement) ||
-    pw.type !== "password" ||
-    pw.disabled ||
-    pw.readOnly ||
-    !isVisible(pw) ||
-    !hitTestable(pw)
-  ) {
+  if (!passwordSafe(pw)) {
     return { ok: false, reasonCode: "password_field_unsafe" };
   }
 
-  // Layer B: snapshot other inputs' value lengths (tamper detection).
-  const snapshot = () =>
-    Array.from(document.querySelectorAll("input")).map((el) => el.value.length);
-  const before = snapshot();
+  const stampOf = (el: HTMLInputElement): string =>
+    el.getAttribute("data-mb-obs") || el.name || el.id || "unnamed";
+  const stamps: string[] = [];
 
-  const setNativeValue = (el, value) => {
+  const setNativeValue = (el: HTMLInputElement, value: string): void => {
     const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype, "value"
+      HTMLInputElement.prototype,
+      "value"
     )?.set;
     setter?.call(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
-  // Stamp identifiers for [credential] masking in later observations.
-  const stampOf = (el) =>
-    el.getAttribute("data-mb-obs") || el.name || el.id || "unnamed";
-  const stamps = [];
+  // T04: per-input length snapshot (NOT a sum) — prefilled usernames and
+  // equal-and-opposite foreign changes are both detected.
+  const allInputs = Array.from(document.querySelectorAll("input"));
+  const lengthsBefore = allInputs.map((el) => el.value.length);
 
-  setNativeValue(chosen.usernameInput, username);
+  const clearField = (el: HTMLInputElement): void => {
+    setNativeValue(el, "");
+  };
+  const clearTouched = (): void => {
+    clearField(chosen.usernameInput);
+    clearField(pw);
+  };
+
+  // --- Username -------------------------------------------------------------
+  setNativeValue(chosen.usernameInput, input.username);
   stamps.push(stampOf(chosen.usernameInput));
-  setNativeValue(pw, password);
-  stamps.push(stampOf(pw));
-
-  // Read back LENGTH ONLY.
-  if (pw.value.length !== password.length) {
+  if (chosen.usernameInput.value.length !== input.username.length) {
+    clearTouched();
     return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
   }
 
-  const after = snapshot();
-  const beforeTotal = before.reduce((a, b) => a + b, 0);
-  const afterTotal = after.reduce((a, b) => a + b, 0);
-  const expectedDelta = username.length + password.length;
-  if (Math.abs(afterTotal - beforeTotal - expectedDelta) > 0) {
-    // An unexpected change to another field: clear everything, abort.
-    chosen.usernameInput.value = "";
-    pw.value = "";
+  // --- T03: REVALIDATE the password target AFTER the username set -----------
+  const pwAfterUsername = chosen.form.querySelector<HTMLInputElement>(
+    'input[type="password"]'
+  );
+  const sameNode = pwAfterUsername === pw;
+  const revalidated = [
+    sameNode,
+    chosen.passwordInput.type === "password",
+    !chosen.passwordInput.disabled,
+    !chosen.passwordInput.readOnly,
+    isVisible(chosen.passwordInput),
+    hitTestable(chosen.passwordInput),
+    // Same-form identity via the input's own form association (more
+    // reliable across engines than Node.contains).
+    chosen.passwordInput.form === chosen.form,
+  ];
+  if (revalidated.some((check) => !check)) {
+    void revalidated;
+    // The page handler replaced/toggled the password field — the credential
+    // must never land in the mutated target. Clear and abort.
+    clearField(chosen.usernameInput);
+    if (pw instanceof HTMLInputElement) {
+      clearField(pw);
+    }
+    return { ok: false, reasonCode: "password_field_mutated", stamps };
+  }
+  // Login mode still requires exactly one visible password input.
+  if (
+    input.mode === "login" &&
+    Array.from(
+      chosen.form.querySelectorAll('input[type="password"]')
+    ).filter((el) => isVisible(el)).length !== 1
+  ) {
+    clearTouched();
+    return { ok: false, reasonCode: "ambiguous_password_field", stamps };
+  }
+
+  // --- Password ---------------------------------------------------------------
+  setNativeValue(pw, input.password);
+  stamps.push(stampOf(pw));
+
+  // --- Layer B: per-field readback + independent tamper detection ------------
+  if (pw.value.length !== input.password.length) {
+    clearTouched();
+    return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+  }
+  const lengthsAfter = Array.from(document.querySelectorAll("input")).map(
+    (el) => el.value.length
+  );
+  const tampered: HTMLInputElement[] = [];
+  for (let i = 0; i < allInputs.length; i++) {
+    const before = lengthsBefore[i] ?? -1;
+    const after = lengthsAfter[i] ?? -2;
+    if (before === after) continue;
+    const el = allInputs[i]!;
+    const isChosenUsername = el === chosen.usernameInput;
+    const isChosenPassword = el === pw;
+    if (isChosenUsername || isChosenPassword) continue;
+    // An input the filler never touched changed length: unexpected recipient
+    // or page mutation. Clear it too — no data stays behind.
+    if (el instanceof HTMLInputElement) {
+      tampered.push(el);
+    }
+  }
+  if (tampered.length > 0) {
+    clearTouched();
+    for (const el of tampered) {
+      clearField(el);
+    }
     return { ok: false, reasonCode: "unexpected_field_change", stamps };
   }
 
-  if (recipe && recipe.submitVia === "enter") {
-    pw.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  } else if (pw.form) {
-    pw.form.requestSubmit();
-  } else {
-    pw.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  // --- Submit through the password field's own form (A-FR-18) ----------------
+  const submit = (): void => {
+    if (input.submitVia === "enter" || !pw.form) {
+      // Focus checks around submission (A-FR-19); requestSubmit is the
+      // trusted-path equivalent of pressing Enter inside the field.
+      pw.focus();
+      if (document.activeElement !== pw) {
+        return; // focus stolen — refuse rather than submit blind
+      }
+    }
+    if (pw.form) {
+      pw.form.requestSubmit();
+    } else {
+      pw.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+      );
+    }
+  };
+  submit();
+  if (document.activeElement === pw) {
+    pw.blur();
   }
 
   return { ok: true, reasonCode: null, stamps };
-})
-`;
+}
 
-const OUTCOME_PROBE_SCRIPT = `
-(() => {
-  const visible = (el) => {
+/** Outcome probe — also a real function (T02). */
+export function loginOutcomeProbePageFunction(): {
+  passwordStillVisible: boolean;
+  onLoginPath: boolean;
+  errorText: string;
+  url: string;
+} {
+  const visible = (el: Element): boolean => {
     if (!(el instanceof Element)) return false;
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   };
-  const passwordStillVisible =
-    Array.from(document.querySelectorAll('input[type="password"]')).some(visible);
+  const passwordStillVisible = Array.from(
+    document.querySelectorAll('input[type="password"]')
+  ).some(visible);
   const path = location.pathname.toLowerCase();
   const onLoginPath = /login|signin|sign-in|auth|session/.test(path);
   const errorRegion = document.querySelector(
     '[class*="error" i], [role="alert"], [class*="alert" i]'
   );
-  const errorText = errorRegion && visible(errorRegion)
-    ? (errorRegion.textContent || "").trim().slice(0, 200)
-    : "";
+  const errorText =
+    errorRegion && visible(errorRegion)
+      ? (errorRegion.textContent || "").trim().slice(0, 200)
+      : "";
   return {
     passwordStillVisible,
     onLoginPath,
     errorText,
     url: location.href,
   };
-})
-`;
+}
 
 export class LoginFormFiller {
   /**
@@ -209,12 +324,14 @@ export class LoginFormFiller {
     page: LoginFillPageLike,
     target: LoginFillTarget
   ): Promise<LoginFillResult> {
-    const fillResult = await page.evaluate<FillScriptResult>(FILL_SCRIPT, {
+    const fillResult = await page.evaluate<
+      Awaited<ReturnType<typeof fillLoginPageFunction>>
+    >(fillLoginPageFunction, {
       mode: target.mode,
       allowedDomainSuffixes: [...target.allowedDomainSuffixes],
       username: target.username,
       password: target.password,
-      recipe: target.recipeStep,
+      submitVia: target.recipeStep?.submitVia ?? "form",
     });
 
     if (!fillResult.ok) {
@@ -229,7 +346,9 @@ export class LoginFormFiller {
     // AND off the login path with no error text; wrong credential stays on
     // the form with visible error; everything else hands off.
     const deadline = Date.now() + 5_000;
-    let probe = await page.evaluate<OutcomeProbe>(OUTCOME_PROBE_SCRIPT);
+    let probe = await page.evaluate<
+      ReturnType<typeof loginOutcomeProbePageFunction>
+    >(loginOutcomeProbePageFunction);
     while (Date.now() < deadline) {
       if (!probe.passwordStillVisible && !probe.onLoginPath && !probe.errorText) {
         return {
@@ -254,7 +373,9 @@ export class LoginFormFiller {
         };
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
-      probe = await page.evaluate<OutcomeProbe>(OUTCOME_PROBE_SCRIPT);
+      probe = await page.evaluate<
+        ReturnType<typeof loginOutcomeProbePageFunction>
+      >(loginOutcomeProbePageFunction);
     }
     return {
       outcome: "unknown",
@@ -262,17 +383,4 @@ export class LoginFormFiller {
       filledFieldStamps: fillResult.stamps ?? [],
     };
   }
-}
-
-interface FillScriptResult {
-  readonly ok: boolean;
-  readonly reasonCode?: string;
-  readonly stamps?: string[];
-}
-
-interface OutcomeProbe {
-  readonly passwordStillVisible: boolean;
-  readonly onLoginPath: boolean;
-  readonly errorText: string;
-  readonly url: string;
 }
