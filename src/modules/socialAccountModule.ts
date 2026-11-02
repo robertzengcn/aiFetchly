@@ -369,14 +369,11 @@ export class SocialAccountModule extends BaseModule {
     options?: { requireAiOptIn?: boolean; platformId?: number }
   ): Promise<Array<{ id: number; user: string; name: string; hasPassword: boolean }>> {
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
-    const rows = await repository
-      .createQueryBuilder("account")
-      .where("account.site_id = :siteId", { siteId })
-      .orWhere("account.social_type_id = :platformId", {
-        platformId: options?.platformId ?? siteId,
-      })
-      .getMany();
+    // T27: repository access lives in the Model layer.
+    const rows = await this.socialAccountModel.findRowsForSite(
+      siteId,
+      options?.platformId ?? siteId
+    );
     const result: Array<{
       id: number;
       user: string;
@@ -408,8 +405,8 @@ export class SocialAccountModule extends BaseModule {
     currentRegistrableDomain: string
   ): Promise<{ username: string; password: string } | null> {
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
-    const account = await repository.findOne({ where: { id: accountId } });
+    // T27: repository access lives in the Model layer.
+    const account = await this.socialAccountModel.findRowById(accountId);
     if (!account) {
       return null;
     }
@@ -446,8 +443,7 @@ export class SocialAccountModule extends BaseModule {
     now?: Date
   ): Promise<void> {
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
-    await repository.update(accountId, {
+    await this.socialAccountModel.updateLoginFailure(accountId, {
       last_login_failure_at: now ?? new Date(),
       last_login_failure_reason: reason.slice(0, 64),
     });
@@ -456,8 +452,7 @@ export class SocialAccountModule extends BaseModule {
   /** A-FR-10: clear a prior failure after a successful sign-in. */
   public async recordLoginFailureClear(accountId: number): Promise<void> {
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
-    await repository.update(accountId, {
+    await this.socialAccountModel.updateLoginFailure(accountId, {
       last_login_failure_at: null,
       last_login_failure_reason: null,
     });
@@ -470,8 +465,7 @@ export class SocialAccountModule extends BaseModule {
     now?: Date
   ): Promise<boolean> {
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
-    const account = await repository.findOne({ where: { id: accountId } });
+    const account = await this.socialAccountModel.findRowById(accountId);
     if (!account?.last_login_failure_at) {
       return false;
     }
@@ -491,7 +485,6 @@ export class SocialAccountModule extends BaseModule {
       throw new Error("save_not_requested");
     }
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
     const entity = new SocialAccountEntity();
     entity.user = input.username;
     entity.name = input.username;
@@ -500,7 +493,6 @@ export class SocialAccountModule extends BaseModule {
     entity.status = 1;
     entity.ai_use_enabled = false;
     entity.pass = await this.encryptPass(input.password);
-    const saved = await repository.save(entity);
-    return saved.id;
+    return await this.socialAccountModel.saveNewAccount(entity);
   }
 }
