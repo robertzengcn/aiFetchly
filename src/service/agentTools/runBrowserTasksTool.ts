@@ -124,6 +124,19 @@ export interface RunBrowserTasksDeps {
   readonly control?: ReturnType<typeof getDefaultAgentTaskControlService>;
 }
 
+/** T13: live batch abort trees — renderer Stop/Return-now abort children. */
+const liveBatches = new Map<string, AbortController>();
+
+/** Abort a batch's child tasks (C-FR-11 Return results now / M-FR-09 Stop). */
+export function abortBatch(batchId: string): number {
+  const controller = liveBatches.get(batchId);
+  if (!controller) {
+    return 0;
+  }
+  controller.abort();
+  return 1;
+}
+
 export async function runBrowserTasks(
   tasks: readonly BrowserBatchTaskInput[],
   concurrency: number,
@@ -132,6 +145,10 @@ export async function runBrowserTasks(
   deps: RunBrowserTasksDeps = {}
 ): Promise<{ batchId: string; results: BrowserBatchTaskResult[] }> {
   const batchId = `batch_${randomUUID().slice(0, 12)}`;
+  const batchAbort = new AbortController();
+  const onOuterAbort = (): void => batchAbort.abort();
+  signal.addEventListener("abort", onOuterAbort, { once: true });
+  liveBatches.set(batchId, batchAbort);
   const control = deps.control ?? getDefaultAgentTaskControlService();
 
   const results = await runWithConcurrency(
@@ -143,6 +160,9 @@ export async function runBrowserTasks(
       const childAbort = new AbortController();
       const onParentAbort = (): void => childAbort.abort();
       signal.addEventListener("abort", onParentAbort, { once: true });
+      batchAbort.signal.addEventListener("abort", onParentAbort, {
+        once: true,
+      });
       try {
         const prompt = buildTaskPrompt(task, index, tasks.length);
         const runtime = (deps.runAgent ?? AgentRuntimeRegistry.getRuntime)();
@@ -161,15 +181,27 @@ export async function runBrowserTasks(
         );
         // A late abort (user Stop) outranks a successful agent result.
         const aborted = childAbort.signal.aborted || signal.aborted;
-        const finalStatus = aborted
+        // T12: the AGENT completing is not the BROWSER task succeeding —
+        // honor the child's own output.status (failed / needs_user).
+        const childOutputStatus = (
+          result.output as { status?: string } | null
+        )?.status;
+        const finalStatus: BrowserBatchTaskResult["status"] = aborted
           ? "cancelled"
-          : result.status === "completed"
-            ? "completed"
-            : "failed";
-        control.setState(taskId, finalStatus);
+          : result.status !== "completed"
+            ? "failed"
+            : childOutputStatus === "failed"
+              ? "failed"
+              : childOutputStatus === "needs_user"
+                ? "partial"
+                : "completed";
+        control.setState(
+          taskId,
+          finalStatus === "completed" ? "completed" : "failed"
+        );
         return {
           task_index: index,
-          status: finalStatus as BrowserBatchTaskResult["status"],
+          status: finalStatus,
           summary: (result.output as { summary?: string } | null)?.summary ?? String(result.errorMessage ?? result.status),
           extracted: (result.output as { extracted?: unknown[] } | null)?.extracted ?? [],
           final_url: (result.output as { final_url?: string } | null)?.final_url ?? null,
@@ -198,6 +230,7 @@ export async function runBrowserTasks(
         };
       } finally {
         signal.removeEventListener("abort", onParentAbort);
+        batchAbort.signal.removeEventListener("abort", onParentAbort);
       }
     }
   );
@@ -227,6 +260,16 @@ function buildTaskPrompt(
   return [
     `Browser task ${index + 1}/${total}: ${task.goal}`,
     task.start_url ? `Start URL: ${task.start_url}` : "",
+    // T12: the caller's task inputs reach the child's OWN session start.
+    task.account_id
+      ? `Use saved account_id ${task.account_id} when starting your session.`
+      : "",
+    task.proxy_id
+      ? `Use proxy_id ${task.proxy_id} when starting your session.`
+      : "",
+    task.keep_open
+      ? "keep_open: true - do NOT stop your session at the end; return its session_id."
+      : "",
     "Rules: use ONE browser session you start yourself; stop the session at the end unless keep_open was requested;",
     "never use another session id; observe before acting; do NOT perform consequential actions (submit/send/publish/delete/upload) — return them as a needs_user proposal instead;",
     "return the strict output schema: status, summary (<=1000 chars), extracted, final_url, evidence, needs_user, user_interventions, session_id (only when keep_open).",

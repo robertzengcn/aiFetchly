@@ -1,4 +1,5 @@
 import { log } from "@/modules/Logger";
+import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
 import { IProxyApi } from "./interface/IProxyApi";
 import { ProxyModel } from "@/model/Proxy.model";
 import {
@@ -238,22 +239,18 @@ export class ProxyModule extends BaseModule implements IProxyApi {
    * remove-failed candidates) instead of one getProxyDetail round-trip per id.
    */
   async getProxiesByIds(ids: readonly number[]): Promise<ProxyEntityType[]> {
-    try {
-      const proxies = await this.proxyModel.findByIds(ids);
-      return proxies.map((proxy) => ({
-        id: proxy.id,
-        host: proxy.host,
-        port: proxy.port,
-        user: proxy.user,
-        pass: proxy.pass,
-        protocol: proxy.protocol,
-        country_code: proxy.country_code,
-        addtime: proxy.addtime,
-      }));
-    } catch (error) {
-      console.error("Failed to fetch proxies by ids:", error);
-      return [];
+    // T11: stored passes are FieldCipher ciphertext (P-FR-08) — the
+    // proxy_check path needs plaintext for upstream auth, decrypted in
+    // the main process only and never returned to the renderer/LLM.
+    const rows = await this.proxyModel.findByIds(ids);
+    const out: ProxyEntityType[] = [];
+    for (const row of rows) {
+      const decrypted = await ProxyCredentialCodec.decryptForUse(
+        row.pass ?? null
+      );
+      out.push({ ...row, pass: decrypted.password ?? "" });
     }
+    return out;
   }
 
   /**

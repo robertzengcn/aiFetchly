@@ -1180,6 +1180,7 @@ export class ManagedBrowserAiToolService {
       sessionId: parsed.data.session_id,
       conversationId: context.conversationId,
       ...(context.jobId ? { jobId: context.jobId } : {}),
+      ...(context.signal ? { signal: context.signal } : {}),
       intent: parsed.data.intent,
       ...(parsed.data.account_id !== undefined
         ? { accountId: parsed.data.account_id }

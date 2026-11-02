@@ -19,6 +19,8 @@ export interface BrowserSignInInput {
   readonly conversationId: string;
   /** C-FR-09: managed-async job id for the user-wait freeze. */
   readonly jobId?: string;
+  /** T16: Stop while the card is open resolves the wait as cancelled. */
+  readonly signal?: AbortSignal;
   readonly intent: "login" | "register";
   readonly accountId?: number;
   readonly usernameHint?: string;
@@ -207,7 +209,8 @@ export class BrowserCredentialLoginService {
       // request itself is delivered through MANAGED_BROWSER_CREDENTIAL_REQUEST.
       void request;
       // C-FR-09: the job is waiting for the user — freeze the parent's
-      // poll deadline for the duration of the card wait.
+      // poll deadline for the duration of the card wait. T16: Stop while
+      // the card is open resolves the wait immediately as cancelled.
       const { getDefaultToolJobRegistry } = await import(
         "@/service/ToolJobRegistry"
       );
@@ -215,6 +218,11 @@ export class BrowserCredentialLoginService {
       if (jobId) {
         getDefaultToolJobRegistry().setUserWait(jobId, true, "credential_card");
       }
+      const onAbort = (): void => {
+        registry.consume({ requestId: request.requestId, conversationId: input.conversationId })
+          ?.resolve({ username: "", password: "", save: false, cancelled: true });
+      };
+      input.signal?.addEventListener("abort", onAbort, { once: true });
       let submitted: {
         username: string;
         password: string;
@@ -224,11 +232,17 @@ export class BrowserCredentialLoginService {
       try {
         submitted = await promise;
       } finally {
+        input.signal?.removeEventListener("abort", onAbort);
         if (jobId) {
           getDefaultToolJobRegistry().setUserWait(jobId, false);
         }
       }
       if (submitted.cancelled) {
+        // T16: 'I'll sign in myself'/cancel opens the handoff dialog so
+        // the user can complete sign-in manually (C-FR-13).
+        await browserModule
+          .requestHandoff(input.sessionId, "user_requested")
+          .catch(() => undefined);
         return { status: "handoff_required", reasonCode: "user_cancelled", siteId: site.siteId };
       }
       if (!submitted.save) {
@@ -307,12 +321,50 @@ export class BrowserCredentialLoginService {
       registrableDomain
     );
     if (!credential) {
-      return {
-        status: "failed",
-        accountId: chosen.id,
+      // T16: a username-only account (saved without a password) asks for
+      // the password through the card instead of failing.
+      const { request, promise: cardPromise } = registry.create({
+        conversationId: input.conversationId,
+        sessionId: input.sessionId,
         siteId: site.siteId,
-        reasonCode: "origin_mismatch",
+        siteDomain: site.registrableDomain,
+        mode: "login",
+        prefillUsername: chosen.user,
+      });
+      void request;
+      const onCardAbort = (): void => {
+        registry
+          .consume({ requestId: request.requestId, conversationId: input.conversationId })
+          ?.resolve({ username: "", password: "", save: false, cancelled: true });
       };
+      input.signal?.addEventListener("abort", onCardAbort, { once: true });
+      const submitted = await cardPromise;
+      input.signal?.removeEventListener("abort", onCardAbort);
+      if (submitted.cancelled) {
+        await getDefaultManagedBrowserModule()
+          .requestHandoff(input.sessionId, "user_requested")
+          .catch(() => undefined);
+        return {
+          status: "handoff_required",
+          accountId: chosen.id,
+          siteId: site.siteId,
+          reasonCode: "user_cancelled",
+        };
+      }
+      if (submitted.save) {
+        await accountModule.saveSubmittedCredential({
+          siteId: site.siteId,
+          platformId: site.siteId,
+          username: submitted.username,
+          password: submitted.password,
+          save: true,
+        });
+      }
+      return this.fillAndAssess(input, site, {
+        username: submitted.username,
+        password: submitted.password,
+        accountId: chosen.id,
+      });
     }
     return this.fillAndAssess(input, site, {
       username: credential.username,

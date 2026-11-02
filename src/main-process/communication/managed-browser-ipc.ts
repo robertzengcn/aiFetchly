@@ -201,6 +201,13 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     browserTaskStopSchema,
     async (input) => {
       controlService.cancel(input.taskId, "user_stop");
+      // T13: a batch task id also aborts the whole batch's abort tree.
+      if (input.taskId.includes(":")) {
+        const { abortBatch } = await import(
+          "@/service/agentTools/runBrowserTasksTool"
+        );
+        abortBatch(input.taskId.split(":")[0]!);
+      }
       if (input.sessionId) {
         await getDefaultManagedBrowserModule()
           .stop(input.sessionId, "user_stop")
@@ -214,8 +221,13 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     browserBatchReturnNowSchema,
     async (input) => {
       // C-FR-11: finish unfinished tasks as partial — cancel every task
-      // of the batch; the batch collector returns what it has.
+      // of the batch (control records + live child abort trees); the
+      // batch collector returns what it has.
       controlService.cancelBatch(input.batchId);
+      const { abortBatch } = await import(
+        "@/service/agentTools/runBrowserTasksTool"
+      );
+      abortBatch(input.batchId);
       return { ok: true };
     }
   );

@@ -105,12 +105,18 @@ export class ProxyModel extends BaseDb {
   async saveProxy(proxyData: Partial<ProxyEntity>): Promise<ProxyEntity> {
     const repository = await this.getRepository();
     // P-FR-08: proxy passwords are encrypted at rest with FieldCipher.
-    const toPersist: Partial<ProxyEntity> = {
-      ...proxyData,
-      pass:
-        (await ProxyCredentialCodec.encryptForStorage(proxyData.pass ?? null)) ??
-        undefined,
-    };
+    const toPersist: Partial<ProxyEntity> = { ...proxyData };
+    if (proxyData.pass !== undefined) {
+      // T11: metadata-only updates (no pass field) must NOT overwrite the
+      // stored credential; an explicit pass (or empty string) is set.
+      if (proxyData.pass === "") {
+        toPersist.pass = null as unknown as string;
+      } else {
+        toPersist.pass =
+          (await ProxyCredentialCodec.encryptForStorage(proxyData.pass)) ??
+          undefined;
+      }
+    }
     if (proxyData.id) {
       // Update existing proxy
       await repository.update(proxyData.id, toPersist);
