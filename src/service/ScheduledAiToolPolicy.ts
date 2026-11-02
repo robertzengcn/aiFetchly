@@ -45,7 +45,20 @@ import { TOOL_CATALOG_SEARCH_TOOL_NAME } from "@/config/toolCatalogConfig";
  * Full message body access (`get_email_message`) remains high-impact.
  */
 export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
-  ["shell_execute", "mark_email_processed"]
+  [
+    "shell_execute",
+    "mark_email_processed",
+    // Email organization (forward/trash/restore): unattended mailbox
+    // mutations are hard-blocked BEFORE full-access evaluation (design §8.3,
+    // PRD FR-16). Draft creation also materializes content and writes state,
+    // so it is blocked in scheduled loops for this release.
+    "send_email_forward",
+    "move_email_to_trash",
+    "restore_email",
+    "create_email_forward_draft",
+    "update_email_forward_draft",
+    "cancel_email_operation",
+  ]
 );
 
 /**
@@ -56,6 +69,8 @@ export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
  * by injected content, in exchange for not having to approve each one.
  */
 export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "list_email_folders",
+  "get_email_operation",
   // Email inbox/service configuration (read-only listings + bounded unread sync)
   "list_email_inboxes",
   "list_email_services",

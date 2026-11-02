@@ -132,6 +132,22 @@ const CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Email organization tools (forward / trash / restore, design §7). Promoted
+ * when the user asks to forward an email, move/delete it to Trash, or undo a
+ * deletion, so the model uses the dedicated organization tools instead of
+ * improvising with reply or marketing tools.
+ */
+const CONTEXTUAL_EMAIL_ORGANIZATION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "list_email_folders",
+  "create_email_forward_draft",
+  "update_email_forward_draft",
+  "send_email_forward",
+  "move_email_to_trash",
+  "restore_email",
+  "get_email_operation",
+]);
+
+/**
  * Contact verification tool. Promoted when the user asks to verify, validate,
  * normalize, clean, check, or classify email/phone contacts (design §16.1).
  * Generic email questions ("how does email work?") must NOT promote it.
@@ -248,6 +264,15 @@ export function hasBatchImageEditIntent(message: string): boolean {
  */
 const EMAIL_INBOX_INTENT_RE =
   /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
+
+/**
+ * Email organization intent (forward/trash/restore). Matches explicit
+ * forward-to-recipient phrasing, trash/delete/move-to-trash mailbox verbs,
+ * and undo/restore deletion requests. Deliberately does NOT match generic
+ * "send an email" (outbound marketing) or inbox-check phrasing.
+ */
+const EMAIL_ORGANIZATION_INTENT_RE =
+  /\bforward\b[^.!?\n]{0,80}?\b(email|emails|message|mail|invoice|attachment|it|this|that|them)\b|\b(email|emails|message|mail|invoice|it|this|that)\b[^.!?\n]{0,40}?\bforward\b|\bmove\b[^.!?\n]{0,40}?\btrash\b|\bto\s+(?:the\s+)?trash\b|\btrash\s+(?:it|this|that|the\s+(?:email|message|mail))\b|\bdelete\b[^.!?\n]{0,60}?\b(email|emails|message|mail|newsletter|it|this|that|them)\b|\b(undo|restore)\b[^.!?\n]{0,40}?\b(deletion|delete|trash|removed)\b/i;
 
 /**
  * Contact verification intent (design §16.1).
@@ -430,6 +455,14 @@ export class ToolLoadPolicyService {
       return "contextual";
     }
     if (
+      CONTEXTUAL_EMAIL_ORGANIZATION_TOOL_NAMES.has(name) &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasEmailOrganizationIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
+    if (
       CONTEXTUAL_VERIFICATION_TOOL_NAMES.has(name) &&
       this.messageMatchesIntent(input.context, (msg) =>
         this.hasVerifyContactIntent(msg)
@@ -520,6 +553,10 @@ export class ToolLoadPolicyService {
 
   private hasEmailInboxIntent(message: string): boolean {
     return EMAIL_INBOX_INTENT_RE.test(message);
+  }
+
+  private hasEmailOrganizationIntent(message: string): boolean {
+    return EMAIL_ORGANIZATION_INTENT_RE.test(message);
   }
   private hasVerifyContactIntent(message: string): boolean {
     return (
