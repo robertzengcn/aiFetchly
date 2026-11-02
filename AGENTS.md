@@ -89,6 +89,9 @@ src/
 - Uses contextBridge for secure renderer-main communication
 - **AI feature requests:** When handling any AI function request from the frontend (e.g. keyword generation, chat, tools), **check AI enable first** in the IPC handler before doing work. Use `Token` and `USER_AI_ENABLED` from `@/config/usersetting`; if not enabled, return `{ status: false, msg: '...', data: null }` immediately.
 
+### Browser AI gate exception (provider-aware)
+Managed-browser channels and browser AI tools are the single product-authorized exception to the hosted-only AI rule. They use `BrowserAiAvailabilityService` (`src/service/browserDecision/BrowserAiAvailabilityService.ts`): hosted mode requires `USER_AI_ENABLED`; custom/local mode requires `USER_LOCAL_AI_ENABLED` plus a valid provider configuration. Do NOT use `registerAiValidatedHandler` for browser channels (it enforces hosted-only), and do NOT extend this exception to keyword, email, embedding, or other hosted-only features.
+
 #### Social Platform Integration
 - Platform-specific scrapers in `src/modules/`
 - Browser automation using Puppeteer with stealth plugins

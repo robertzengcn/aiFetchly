@@ -1,6 +1,9 @@
 import * as crypto from "node:crypto";
 import { log } from "@/modules/Logger";
-import { isAiEnabled } from "@/service/AiFeatureGate";
+import {
+  BrowserAiAvailabilityService,
+  getDefaultBrowserAiAvailabilityService,
+} from "@/service/browserDecision/BrowserAiAvailabilityService";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -47,8 +50,11 @@ export type ManagedBrowserActionResultMessage = Extract<
 /**
  * Managed-browser AI tool executors (technical design §15, §17).
  *
- * GATE ORDER (mandatory): USER_AI_ENABLED first (AiFeatureGate), then the
- * browser settings gate, then session existence, then risk classification.
+ * GATE ORDER (mandatory, provider-aware per PRD D-FR-01): browser AI
+ * availability first (hosted entitlement OR a valid custom provider), then
+ * the browser settings gate, then session existence, then risk
+ * classification. This is the product-authorized browser exception to the
+ * blanket hosted-only AI rule; unrelated hosted features stay gated.
  * Model-generated arguments are Zod-validated at every entry (strict — a
  * smuggled path/cookie field fails parsing).
  *
@@ -202,18 +208,32 @@ export class ManagedBrowserAiToolService {
       deps.classifier ?? getDefaultBrowserActionRiskClassifier();
     this.cacheModule =
       deps.cacheModule ?? getDefaultManagedBrowserCacheModule();
-    this.aiEnabled = deps.isAiEnabled ?? isAiEnabled;
+    this.aiEnabled =
+      deps.isAiEnabled ??
+      (() => new BrowserAiAvailabilityService().isAvailable());
   }
 
   // -----------------------------------------------------------------------
   // Gates
   // -----------------------------------------------------------------------
 
-  /** MANDATORY first gate: USER_AI_ENABLED before any work (FR-P0-012). */
+  /**
+   * MANDATORY first gate (FR-P0-012, provider-aware D-FR-01): browser AI
+   * availability before any work. In hosted mode this is USER_AI_ENABLED;
+   * in custom mode it is a valid local provider configuration.
+   */
   private ensureAiEnabled(): void {
-    if (!this.aiEnabled()) {
-      throw new ManagedBrowserAiToolError("ai_disabled");
+    if (this.aiEnabled()) {
+      return;
     }
+    let reasonCode: string | undefined;
+    try {
+      reasonCode =
+        getDefaultBrowserAiAvailabilityService().evaluate().reasonCode ?? undefined;
+    } catch {
+      reasonCode = undefined;
+    }
+    throw new ManagedBrowserAiToolError("ai_disabled", undefined, reasonCode);
   }
 
   /** Second gate: the managed browser must be enabled in settings. */

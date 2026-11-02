@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
 import {
   MANAGED_BROWSER_ACTION_LIMITS,
   MANAGED_BROWSER_PILOT_PLATFORM_IDS,
@@ -105,7 +104,10 @@ export interface StartManagedBrowserInput {
 }
 
 export interface StartManagedBrowserOptions {
-  /** AI entry points must pass USER_AI_ENABLED before any work (FR-P0-012). */
+  /**
+   * AI entry points must pass the provider-aware browser AI gate before any
+   * work (FR-P0-012, PRD D-FR-01).
+   */
   readonly aiEntryPoint?: boolean;
 }
 
@@ -1799,10 +1801,21 @@ async function resolveAccountProxy(
   }
 }
 
-/** Default AI entitlement check (Token + USER_AI_ENABLED). */
+/**
+ * Default AI entitlement check for AI-entry-point sessions (PRD D-FR-01):
+ * provider-aware — hosted entitlement OR a valid custom provider. This is the
+ * product-authorized browser exception to the blanket hosted-only rule.
+ */
 function defaultIsAiEnabled(): boolean {
   try {
-    return new Token().getValue(USER_AI_ENABLED) === "true";
+    // Lazy require avoids an import cycle through the browserDecision module.
+    const { getDefaultBrowserAiAvailabilityService } =
+      require("@/service/browserDecision/BrowserAiAvailabilityService") as {
+        getDefaultBrowserAiAvailabilityService: () => {
+          isAvailable(): boolean;
+        };
+      };
+    return getDefaultBrowserAiAvailabilityService().isAvailable();
   } catch {
     return false;
   }

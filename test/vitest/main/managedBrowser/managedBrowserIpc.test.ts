@@ -202,14 +202,21 @@ describe("managed-browser-ipc", () => {
     );
   });
 
-  it("blocks AI-facing channels FIRST when AI is disabled", async () => {
+  // PRD D-FR-01 / D-11: browser channels are the product-authorized
+  // provider-aware exception. The hosted-only IPC wrapper was removed; the
+  // gate lives in ManagedBrowserModule.start (covered there), so the channel
+  // itself delegates even when the hosted entitlement is off.
+  it("delegates START to the module, which enforces the provider-aware gate", async () => {
     isAiEnabledMock.mockReturnValue(false);
     const result = await invoke(MANAGED_BROWSER_START, {
       accountId: 101,
       purpose: "test",
     });
-    expect(result.status).toBe(false);
-    expect(browserModuleSpies.start).not.toHaveBeenCalled();
+    expect(result.status).toBe(true);
+    expect(browserModuleSpies.start).toHaveBeenCalledWith(
+      { accountId: 101, purpose: "test" },
+      { aiEntryPoint: true }
+    );
   });
 
   it("start delegates with the AI entry point flag", async () => {

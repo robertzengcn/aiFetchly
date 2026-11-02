@@ -24,7 +24,6 @@ import {
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
 import {
-  registerAiValidatedHandler,
   registerValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
@@ -56,10 +55,13 @@ import type { SafeBrowserChatNotice } from "@/entityTypes/managedBrowserTypes";
 /**
  * Managed-browser IPC (technical design §22).
  *
- * Session channels are AI-FACING: `registerAiValidatedHandler` checks
- * USER_AI_ENABLED FIRST (before parsing) — the AI-gate mandate. Settings and
- * cache channels are management-only (the settings page must work when AI is
- * disabled) and use the plain validated wrapper.
+ * Session channels are provider-aware (PRD D-FR-01, D-11): they deliberately
+ * do NOT use `registerAiValidatedHandler`, whose hosted-only entitlement would
+ * strand custom-provider users. Every browser action enforces the
+ * provider-aware browser gate inside ManagedBrowserModule /
+ * ManagedBrowserAiToolService (hosted entitlement OR a valid custom provider).
+ * Settings and cache channels are management-only and use the same validated
+ * wrapper.
  *
  * Events to the renderer (status-changed, chat-notice, cache-progress) are
  * wired here from the process singletons. No handler touches a Model,
@@ -111,7 +113,11 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     })
   );
 
-  // --- AI-facing session channels (USER_AI_ENABLED checked FIRST) -------
+  // --- Browser session channels (provider-aware gate, PRD D-FR-01) ------
+  // These channels deliberately do NOT use registerAiValidatedHandler:
+  // that wrapper enforces the hosted-only entitlement. Browser tools work
+  // for custom-provider users; the module and ManagedBrowserAiToolService
+  // enforce the provider-aware browser gate on every action.
   // Eligible-account listing is a management READ (also used by the
   // settings page) — not AI execution — so it stays ungated; the actual
   // START channel above carries the AI gate.
@@ -121,25 +127,25 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     async () => browserModule.listEligibleAccounts()
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_LIST_ACTIVE,
     noInputSchema,
     async () => browserModule.listActiveSessions()
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_START,
     managedBrowserStartInputSchema,
     async (input) => browserModule.start(input, { aiEntryPoint: true })
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_STATUS,
     managedBrowserStatusInputSchema,
     async (input) => browserModule.getStatus(input.sessionId)
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_HANDOFF,
     managedBrowserHandoffInputSchema,
     // Renderer-initiated handoff is always user_requested; AI-driven handoff
@@ -147,19 +153,19 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     async (input) => browserModule.requestHandoff(input.sessionId)
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_VERIFY_MANUAL_LOGIN,
     managedBrowserVerifyManualLoginInputSchema,
     async (input) => browserModule.verifyManualLogin(input.sessionId)
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_RESUME,
     managedBrowserResumeInputSchema,
     async (input) => browserModule.resumeAfterHandoff(input.sessionId)
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_STOP,
     managedBrowserStopInputSchema,
     async (input) =>
@@ -169,7 +175,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       )
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_APPROVE,
     managedBrowserApproveInputSchema,
     async (input) => {
@@ -188,14 +194,14 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_CAPTURE_SCREENSHOT,
     managedBrowserCaptureScreenshotInputSchema,
     async (input) =>
       browserModule.captureSessionScreenshot(input.session_id)
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_CANCEL_ACTIVE,
     managedBrowserCancelActiveInputSchema,
     async (input) => {
@@ -204,7 +210,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     MANAGED_BROWSER_EXTEND_HANDOFF,
     managedBrowserExtendHandoffInputSchema,
     async (input) =>
