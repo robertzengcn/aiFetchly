@@ -63,7 +63,7 @@ function makeRunnerDeps(
 function doneEntry() {
   return {
     status: "decided" as const,
-    action: { operation: "DONE" as const, target_id: null, option_id: null, key: null, url: null },
+    action: { operation: "DONE" as const, target_id: null, option_id: null, key: null, url: null, text: null },
     uncertainty: { source: "unavailable" as const, confidence: null },
   };
 }
@@ -84,17 +84,17 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
         [
           {
             status: "decided",
-            action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null },
+            action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: "supplier prices" },
             uncertainty: { source: "unavailable", confidence: null },
           },
           {
             status: "decided",
-            action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null },
+            action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
             uncertainty: { source: "unavailable", confidence: null },
           },
           {
             status: "decided",
-            action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null },
+            action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
             uncertainty: { source: "unavailable", confidence: null },
           },
         ],
@@ -107,6 +107,8 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     expect(result.reason).toBe("verified");
     expect(result.counts.leafSteps).toBe(2);
     expect(clicks.map((a) => a.type)).toEqual(["fill", "click"]);
+    // The decision's text channel reaches the fill — never an empty value.
+    expect(clicks[0]).toMatchObject({ type: "fill", value: "supplier prices" });
     // D-FR-10b: compact final observation for follow-up turns.
     expect(result.finalObservation?.url).toBe("https://example.test/search");
   });
@@ -139,7 +141,7 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     const deps = makeRunnerDeps([
       {
         status: "decided",
-        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null },
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
         uncertainty: { source: "unavailable", confidence: null },
       },
     ]);
@@ -163,7 +165,7 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     const deps = makeRunnerDeps(
       [0, 1, 2, 3].map(() => ({
         status: "decided" as const,
-        action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null },
+        action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
         uncertainty: { source: "unavailable" as const, confidence: null },
       }))
     );
@@ -193,6 +195,53 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     const result = await runner.run();
     expect(result.status).toBe("partial");
     expect(result.reason).toBe("escalated:escalated");
+  });
+});
+
+describe("BrowserTaskRunner policy stops (D-AC-05)", () => {
+  it("terminates partial on approval_required without retrying", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_stop1", conversationId: "conv-1", goal: "click go" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_required");
+  });
+
+  it("refuses a FILL decision without text instead of typing an empty value", async () => {
+    const seen: RunnerAction[] = [];
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ],
+      {},
+      (action) => seen.push(action)
+    );
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_stop2", conversationId: "conv-1", goal: "fill search" },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([]);
+    expect(result.status).toBe("partial");
   });
 });
 
@@ -345,12 +394,12 @@ describe("DecisionClients (D-FR-16..19)", () => {
     expect(
       normalizeWireResult({
         status: "decided",
-        action: { operation: "WAIT", target_id: null, option_id: null, key: null, url: null },
+        action: { operation: "WAIT", target_id: null, option_id: null, key: null, url: null, text: null },
         uncertainty: { source: "unavailable", confidence: 0.93 },
       })
     ).toEqual({
       status: "decided",
-      action: { operation: "WAIT", target_id: null, option_id: null, key: null, url: null },
+      action: { operation: "WAIT", target_id: null, option_id: null, key: null, url: null, text: null },
       uncertainty: { source: "unavailable", confidence: null },
     });
     expect(normalizeWireResult({ status: "garbage" })).toEqual({

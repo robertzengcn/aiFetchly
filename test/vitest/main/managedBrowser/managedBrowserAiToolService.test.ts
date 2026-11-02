@@ -203,6 +203,57 @@ describe("gate order", () => {
   });
 });
 
+describe("runAuthorizedForRunner (D-AC-05 runner seam)", () => {
+  it("stops a consequential action with approval_required and never reaches the module", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        sessionId: SESSION_ID,
+        pageRevision: 4,
+        url: "https://www.youtube.com/upload",
+        origin: "https://www.youtube.com",
+        title: "Upload",
+        state: "ready",
+        elements: [
+          { ref: "e_pub", role: "button", name: "Publish", disabled: false },
+        ],
+        visibleText: "",
+        notices: [],
+        truncated: false,
+      })
+    );
+    const service = makeService({ module });
+    const outcome = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [
+        {
+          type: "click",
+          ref: "e_pub",
+          pageRevision: 4,
+          expectedRole: "button",
+          expectedName: "Publish",
+        } as never,
+      ],
+      { conversationId: CTX.conversationId, toolCallId: "call-runner" }
+    );
+    expect(outcome).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    expect(module.notifyApprovalRequired).toHaveBeenCalled();
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
+
+  it("executes a read-only program through the authorized path", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    const outcome = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [{ type: "scroll", direction: "down", amount: 100 } as never],
+      { conversationId: CTX.conversationId, toolCallId: "call-runner" }
+    );
+    expect(outcome.kind).toBe("executed");
+    expect(module.runActions).toHaveBeenCalled();
+  });
+});
+
 describe("risk routing", () => {
   it("navigate to a credential URL triggers handoff and returns challenge_requires_handoff", async () => {
     const module = makeModule();

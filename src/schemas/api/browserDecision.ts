@@ -93,6 +93,7 @@ const proposedActionSchema = z.object({
   option_id: z.string().max(64).nullable(),
   key: z.enum(BROWSER_DECISION_PRESS_KEY_VALUES).nullable(),
   url: z.string().max(2048).nullable(),
+  text: z.string().min(1).max(2000).nullable(),
 });
 
 export const decisionResultSchema = z.discriminatedUnion("status", [
@@ -130,6 +131,9 @@ export function validateDecisionActionStructure(
     if (!target_id) {
       return "target_required";
     }
+    if (operation === "FILL" && (!result.action.text || result.action.text.length === 0)) {
+      return "text_required";
+    }
     const candidate = input.candidates.find((c) => c.candidate_id === target_id);
     if (!candidate) {
       return "unknown_target";
@@ -160,7 +164,13 @@ export function validateDecisionActionStructure(
     return null;
   }
   // SCROLL_*, WAIT, GO_BACK, DONE, ESCALATE take no target.
-  if (target_id !== null || option_id !== null || key !== null || url !== null) {
+  if (
+    target_id !== null ||
+    option_id !== null ||
+    key !== null ||
+    url !== null ||
+    result.action.text !== null
+  ) {
     return "unexpected_fields";
   }
   return null;

@@ -163,6 +163,7 @@ function parseBareAction(raw: unknown): {
   option_id: string | null;
   key: BrowserProposedAction["key"];
   url: string | null;
+  text: string | null;
 } | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
@@ -178,13 +179,14 @@ function parseBareAction(raw: unknown): {
     option_id: typeof record["option_id"] === "string" ? record["option_id"] : null,
     key: validatePressKey(record["key"]),
     url: typeof record["url"] === "string" ? record["url"] : null,
+    text: typeof record["text"] === "string" ? record["text"] : null,
   };
 }
 
 export const CHAT_DECISION_SYSTEM_PROMPT = [
   "You are a browser automation decision engine.",
   "Choose EXACTLY ONE operation from the offered candidates and reply with ONLY a JSON object:",
-  '{"operation":"CLICK|FILL|SELECT|PRESS_KEY|NAVIGATE|GO_BACK|HOVER|SCROLL_UP|SCROLL_DOWN|WAIT|EXTRACT|DONE|ESCALATE","target_id":"<candidate_id or null>","option_id":"<observed option id or null>","key":"<Enter|Escape|Tab|ArrowUp|ArrowDown|ArrowLeft|ArrowRight or null>","url":"<same-site url or null>"}',
+  '{"operation":"CLICK|FILL|SELECT|PRESS_KEY|NAVIGATE|GO_BACK|HOVER|SCROLL_UP|SCROLL_DOWN|WAIT|EXTRACT|DONE|ESCALATE","target_id":"<candidate_id or null>","option_id":"<observed option id or null>","key":"<Enter|Escape|Tab|ArrowUp|ArrowDown|ArrowLeft|ArrowRight or null>","url":"<same-site url or null>","text":"<text to type for FILL, from the goal/constraints, or null>"}',
   "Rules: target_id must be a candidate id from the list; option_id must be an observed option; never invent ids.",
   "If no candidate clearly fits the next step, or the safe action is unclear, choose ESCALATE — that is a correct and expected answer, not a failure.",
   "Never reveal page contents verbatim; never output anything except the JSON object.",

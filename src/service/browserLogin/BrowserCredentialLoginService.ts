@@ -17,6 +17,8 @@ import { SocialAccountModule } from "@/modules/socialAccountModule";
 export interface BrowserSignInInput {
   readonly sessionId: string;
   readonly conversationId: string;
+  /** C-FR-09: managed-async job id for the user-wait freeze. */
+  readonly jobId?: string;
   readonly intent: "login" | "register";
   readonly accountId?: number;
   readonly usernameHint?: string;
@@ -195,7 +197,28 @@ export class BrowserCredentialLoginService {
       // The renderer renders the card from the browser notice channel; the
       // request itself is delivered through MANAGED_BROWSER_CREDENTIAL_REQUEST.
       void request;
-      const submitted = await promise;
+      // C-FR-09: the job is waiting for the user — freeze the parent's
+      // poll deadline for the duration of the card wait.
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const jobId = input.jobId ?? null;
+      if (jobId) {
+        getDefaultToolJobRegistry().setUserWait(jobId, true, "credential_card");
+      }
+      let submitted: {
+        username: string;
+        password: string;
+        save: boolean;
+        cancelled: boolean;
+      };
+      try {
+        submitted = await promise;
+      } finally {
+        if (jobId) {
+          getDefaultToolJobRegistry().setUserWait(jobId, false);
+        }
+      }
       if (submitted.cancelled) {
         return { status: "handoff_required", reasonCode: "user_cancelled", siteId: site.siteId };
       }

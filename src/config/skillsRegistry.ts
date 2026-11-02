@@ -4874,6 +4874,7 @@ function managedBrowserToolWrapper(
   context: {
     conversationId: string;
     toolCallId: string;
+    jobId?: string;
     skipPermissionCheck?: boolean;
     signal?: AbortSignal;
     emitProgress?: (event: {
@@ -4892,6 +4893,7 @@ function managedBrowserToolWrapper(
     skipPermissionCheck: context.skipPermissionCheck,
     emitProgress: context.emitProgress,
     signal: context.signal,
+    jobId: context.jobId,
   })
     .then((result) => ({ success: true, result }))
     .catch((error: unknown) => {

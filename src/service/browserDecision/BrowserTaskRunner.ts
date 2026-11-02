@@ -120,6 +120,8 @@ export interface RunnerExecutionResult {
     readonly success: boolean;
     readonly errorCode: string | null;
   }>;
+  /** Policy stop from the authorized seam (never bypassed, never retried). */
+  readonly stopCode?: "approval_required" | "handoff_required";
 }
 
 
@@ -284,6 +286,18 @@ export class BrowserTaskRunner {
         const execution = await this.deps.runActions(this.input.sessionId, {
           actions: [programAction],
         });
+        if (execution.stopCode) {
+          // D-AC-05: the authorized seam stopped the action (approval
+          // required, or credential/challenge handoff). Terminal, honest,
+          // and NEVER retried or bypassed.
+          return this.terminal(
+            "partial",
+            execution.stopCode,
+            [...evidence, `${action.operation}:${target.name}:${execution.stopCode}`],
+            extracted,
+            observation
+          );
+        }
         evidence.push(`${action.operation}:${target.name}:${execution.effect}`);
 
         // D-FR-26: an unknown effect never triggers a retry; reconcile state.
@@ -381,12 +395,19 @@ export class BrowserTaskRunner {
           ...expected,
         };
       case "FILL":
+        // D-FR-20 guard: never type an uncontrolled or empty value. The
+        // decision's text channel is validated (<=2000 chars) by the
+        // adapters; a missing text is an unsupported decision, not a
+        // silent empty fill.
+        if (!action.text) {
+          return null;
+        }
         return {
           type: "fill",
           ref: target.candidate_id,
           pageRevision: observation.pageRevision,
           ...expected,
-          value: action.url ?? "",
+          value: action.text,
         };
       case "SELECT":
         return {

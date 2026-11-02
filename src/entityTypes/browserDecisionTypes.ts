@@ -126,6 +126,12 @@ export interface BrowserProposedAction {
   readonly key: BrowserDecisionPressKey | null;
   /** Required for NAVIGATE: observed link candidate or plan URL (same-site). */
   readonly url: string | null;
+  /**
+   * Text to type for FILL, validated and bounded (<=2000 chars) by the
+   * adapters; the runner refuses an empty/missing text rather than typing
+   * an uncontrolled value.
+   */
+  readonly text: string | null;
 }
 
 export interface BrowserDecisionDecided {

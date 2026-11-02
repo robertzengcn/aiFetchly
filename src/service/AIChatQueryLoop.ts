@@ -5828,6 +5828,8 @@ export class AIChatQueryLoop {
               // shutdown) reaches the actual underlying tool work instead of
               // only relabelling the registry entry (FR-36, design §17.2).
               signal: handle.signal,
+              // C-FR-09: lets the tool mark the job waiting_for_user.
+              jobId: handle.jobId,
               // Authoritative managed-async deadline (HOST-07). Epoch rides
               // the observable contract; the monotonic anchor drives clocks (H5).
               deadlineEpochMs,
@@ -5971,6 +5973,7 @@ export class AIChatQueryLoop {
         args: call.arguments,
         model: input.request.model,
         signal: handle.signal,
+        jobId: handle.jobId,
         deadlineEpochMs: meta.deadlineEpochMs,
         deadlinePerfMs: meta.deadlinePerfMs,
         executionId,

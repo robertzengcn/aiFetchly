@@ -5,7 +5,8 @@
     "target_id": "c1",
     "option_id": null,
     "key": null,
-    "url": null
+    "url": null,
+    "text": "supplier prices"
   },
   "uncertainty": {
     "source": "unavailable",

@@ -231,6 +231,14 @@ export interface SkillExecutionContext {
   /** Server-assigned tool call ID for correlating request/response. */
   readonly toolCallId: string;
 
+  /**
+   * C-FR-09: the ToolJobRegistry job id when this execution runs as a
+   * managed-async job. Tools that block waiting for the user (credential
+   * cards, handoffs) mark the job waiting_for_user so the parent's poll
+   * deadline excludes the wait.
+   */
+  readonly jobId?: string;
+
   /** Arguments from the LLM's tool_call event. */
   readonly args?: Record<string, unknown>;
 
