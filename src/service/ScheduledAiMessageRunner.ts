@@ -1431,7 +1431,7 @@ export class ScheduledAiMessageRunner {
         clearPermissionBackstop,
       });
       const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
-      const sink = new ScheduledLoopEventSink((event) => {
+      const innerSink = new ScheduledLoopEventSink((event) => {
         // Gated tool paused for permission: suspend the runtime timeout,
         // notify, broadcast, publish pending metadata, and start the
         // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
@@ -1500,7 +1500,7 @@ export class ScheduledAiMessageRunner {
         ) {
           clearResumeTimeout();
           resumeTimeoutHandle = setTimeout(() => {
-            sink.failOutstanding(
+            innerSink.failOutstanding(
               `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
             );
             try {
@@ -1514,22 +1514,32 @@ export class ScheduledAiMessageRunner {
           }, SCHEDULED_LOOP_RESUME_TIMEOUT_MS);
           return;
         }
-        if (event.type === "start") {
+        if (event.type === "start" || event.type === "token") {
+          // [sched-debug] TEMPORARY boundary instrumentation — remove after diagnosis.
+          console.log(
+            "[sched-debug] main emit (executeRunLoop)",
+            JSON.stringify({
+              kind: event.type,
+              conversationId,
+              runId,
+              messageId: assistantMessageId,
+              engineStatus: engine.getConversationRuntimeStatus(conversationId),
+            })
+          );
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
             messageId: assistantMessageId,
-            kind: "start",
-          });
-        } else if (event.type === "token") {
-          this.broadcaster.emitScheduledStream({
-            conversationId,
-            runId,
-            messageId: assistantMessageId,
-            kind: "token",
-            contentDelta: event.contentDelta,
+            kind: event.type === "start" ? "start" : "token",
+            ...(event.type === "token"
+              ? { contentDelta: event.contentDelta }
+              : {}),
           });
         } else if (event.type === "complete" || event.type === "error") {
+          console.log(
+            "[sched-debug] main emit terminal (executeRunLoop)",
+            JSON.stringify({ kind: event.type, conversationId, runId })
+          );
           this.broadcaster.emitScheduledStream({
             conversationId,
             runId,
@@ -1539,6 +1549,21 @@ export class ScheduledAiMessageRunner {
               event.type === "error" ? event.errorMessage : undefined,
           });
         }
+      });
+
+      // Workspace owner adapter (design §8.3, bugfix 2026-11-02): keep the
+      // shared run envelope durable and broadcast redacted summaries so
+      // background schedule runs (Run Now + cron, standalone ai_message
+      // tasks) surface in the left workspace sidebar — previously ONLY
+      // runChatScheduledLoop wrapped its sink, so Run Now waits never
+      // produced workspace-key events and the chosen workspace folder never
+      // appeared. The inner sink keeps its streaming contract; helpers used
+      // later must read the INNER sink directly.
+      const sink = await createOwnerAdapterSink(innerSink, {
+        conversationId,
+        owner: "scheduled",
+        sourceId: String(scheduleKey),
+        broadcaster: sharedSummaryBroadcaster,
       });
 
       // TODO-11 (FR-013/022): consume the typed segment outcome directly;
@@ -1610,9 +1635,9 @@ export class ScheduledAiMessageRunner {
       // classification is authoritative when the sink saw no terminal, and a
       // pause parks for the resumed terminal via the sink wait.
       outcome =
-        sink.getOutcome() ??
+        innerSink.getOutcome() ??
         mapSegment(segmentOutcome) ??
-        (await sink.waitForTerminalOutcome());
+        (await innerSink.waitForTerminalOutcome());
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
         const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;
