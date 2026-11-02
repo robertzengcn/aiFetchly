@@ -603,7 +603,7 @@ describe("ManagedBrowserModule.start happy path", () => {
     // Temporary profile under a fresh temp root; cache policy honored.
     // Path separators are normalized so the assertion holds on win32 too.
     expect(
-      startMessage.storagePolicy.temporaryProfilePath.replace(/\/g, "/")
+      startMessage.storagePolicy.temporaryProfilePath.split("\\").join("/")
     ).toContain("/tmp/mb-fake-root");
     expect(startMessage.storagePolicy.persistentCache).toEqual({
       enabled: false,
