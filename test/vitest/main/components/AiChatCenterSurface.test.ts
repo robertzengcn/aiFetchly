@@ -217,6 +217,8 @@ import {
   AI_CHAT_V2_GOAL_LOOP_START,
   AI_CHAT_V2_GOAL_LOOP_STOP,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+  AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+  AI_CHAT_WORKSPACE_SELECT,
   PROMPT_SKILL_INVOKE,
   SLASH_COMMAND_DISPATCH,
 } from "@/config/channellist";
@@ -6641,6 +6643,91 @@ describe("AiChatCenterSurface clear refused while parked (P1-1)", () => {
     await flushPromises();
 
     expect(clearChatV2Conversation).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
+
+/**
+ * Bugfix 2026-11-02: schedule-page AI message task runs present the
+ * composer Stop affordance through the scheduled-turn projection, and the
+ * view's active run id is the synthetic `scheduled-<runId>` namespace the
+ * coordinator never sees. The composer Stop must route those to the
+ * dedicated stop-occurrence IPC (never the coordinator cancel, which
+ * no-ops) and clear the running flag locally when the main process
+ * accepted the stop.
+ */
+describe("AiChatCenterSurface composer stop routes scheduled occurrences", () => {
+  beforeEach(() => {
+    (window.api.invoke as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it("stops the running occurrence through the scheduled-stop IPC and clears the flag", async () => {
+    (window.api.invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      (channel: string) => {
+        if (channel === AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN) {
+          return Promise.resolve({ status: true, data: { cancelled: true } });
+        }
+        return Promise.resolve(undefined);
+      }
+    );
+    vi.mocked(selectConversation).mockReset();
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus: "running",
+      activeRunId: "scheduled-42",
+      title: "sched",
+    } as never);
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-sched");
+    // The surface does not auto-load on setSelected — mirror the parked
+    // harness and drive the selection handshake explicitly.
+    await useSelectedConversationStore().loadSelection("conv-sched");
+    await flushPromises();
+    const store = useSelectedConversationStore();
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.isBusy).toBe(true);
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("stop");
+    await flushPromises();
+
+    const invoke = window.api.invoke as ReturnType<typeof vi.fn>;
+    const stopCall = invoke.mock.calls.find(
+      (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN
+    );
+    expect(stopCall).toBeDefined();
+    expect(JSON.parse(String(stopCall?.[1]))).toMatchObject({
+      conversationId: "conv-sched",
+    });
+    expect(store.runtimeStatus).toBe("idle");
+    expect(store.isBusy).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("an interactive-owned running view still cancels through the coordinator path", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("stop");
+    await flushPromises();
+
+    const invoke = window.api.invoke as ReturnType<typeof vi.fn>;
+    expect(
+      invoke.mock.calls.some(
+        (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN
+      )
+    ).toBe(false);
+    const { cancelChatRun } = await import("@/views/api/aiChatWorkspace");
+    expect(vi.mocked(cancelChatRun)).toHaveBeenCalled();
     wrapper.unmount();
   });
 });

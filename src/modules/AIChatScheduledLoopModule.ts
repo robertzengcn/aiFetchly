@@ -5,6 +5,7 @@ import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AiMessageTaskModel } from "@/model/AiMessageTask.model";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { ScheduledLoopRunRegistry } from "@/service/ScheduledLoopRunRegistry";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import {
   SCHEDULED_LOOP_MAX_ALLOWED_TOOLS,
   validateScheduledLoopAllowedTools,
@@ -362,6 +363,24 @@ export class AIChatScheduledLoopModule extends BaseModule {
   async stopCurrentRun(
     conversationId: string
   ): Promise<{ cancelled: boolean }> {
+    // Bugfix 2026-11-02: BOTH scheduled paths register their dedicated
+    // engine in the conversation-keyed registry while an occurrence
+    // executes — chat-bound `/loop` runs AND schedule-page AI message task
+    // runs. Abort the live occurrence through its run-registry controller
+    // BEFORE the chat-loop fallback so the workspace composer Stop
+    // affordance works for task-run conversations too (previously it
+    // silently no-opped for them). The entry also carries the parked-turn
+    // permission backstop — stopping a parked turn must clear that timer.
+    const engineEntry = ScheduledLoopEngineRegistry.getInstance().getByConversation(
+      conversationId
+    );
+    if (engineEntry) {
+      engineEntry.clearPermissionBackstop?.();
+      const aborted = ScheduledLoopRunRegistry.getInstance().abort(
+        engineEntry.runId
+      );
+      return { cancelled: aborted };
+    }
     const schedule = await this.scheduleModel.findLatestChatScheduledLoop(
       conversationId
     );

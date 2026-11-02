@@ -21,6 +21,7 @@ import type { ChatV2ScheduledStreamEvent } from "@/entityTypes/aiChatScheduledLo
  */
 
 const startChatRunMock = vi.fn();
+const stopScheduledLoopRunMock = vi.fn();
 
 type ScheduledStreamCallback = (event: ChatV2ScheduledStreamEvent) => void;
 let scheduledStreamHandler: ScheduledStreamCallback | null = null;
@@ -43,6 +44,10 @@ vi.mock("@/views/api/aiChatScheduledLoop", () => ({
       if (scheduledStreamHandler === handler) scheduledStreamHandler = null;
     };
   },
+  stopScheduledLoopRun: (
+    conversationId: string
+  ): Promise<{ cancelled: boolean } | null> =>
+    stopScheduledLoopRunMock(conversationId),
 }));
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
@@ -388,5 +393,76 @@ describe("scheduled-turn live presentation in the workspace transcript", () => {
         (m) => m.id === "scheduled-assistant-7-42"
       )
     ).toBe(false);
+  });
+});
+
+describe("composer Stop routes scheduled occurrences", () => {
+  beforeEach(() => {
+    stopScheduledLoopRunMock.mockReset();
+    stopScheduledLoopRunMock.mockResolvedValue({ cancelled: true });
+  });
+
+  it("a scheduled-owned running view stops the occurrence and clears the flag locally", async () => {
+    await selectSnapshot("v2-schedstop", {
+      runtimeStatus: "running",
+      activeRunId: "scheduled-42",
+    });
+    const store = useSelectedConversationStore();
+    expect(store.isBusy).toBe(true);
+
+    const handled = await store.stopScheduledActiveRun();
+
+    expect(stopScheduledLoopRunMock).toHaveBeenCalledWith("v2-schedstop");
+    expect(handled).toBe(true);
+    expect(store.runtimeStatus).toBe("idle");
+    expect(store.isBusy).toBe(false);
+  });
+
+  it("an interactive-owned run is not routed to the scheduled-stop IPC", async () => {
+    await selectSnapshot("v2-intstop", {
+      runtimeStatus: "running",
+      activeRunId: "run-abc",
+    });
+
+    const handled = await useSelectedConversationStore().stopScheduledActiveRun();
+
+    expect(handled).toBe(false);
+    expect(stopScheduledLoopRunMock).not.toHaveBeenCalled();
+    expect(useSelectedConversationStore().isBusy).toBe(true);
+  });
+
+  it("a stop IPC miss leaves the flag up for the terminal to clear", async () => {
+    await selectSnapshot("v2-missstop", {
+      runtimeStatus: "running",
+      activeRunId: "scheduled-42",
+    });
+    stopScheduledLoopRunMock.mockResolvedValueOnce({ cancelled: false });
+
+    const handled = await useSelectedConversationStore().stopScheduledActiveRun();
+
+    expect(handled).toBe(false);
+    expect(useSelectedConversationStore().isBusy).toBe(true);
+  });
+
+  it("a failed stop IPC falls through (flag stays until terminal)", async () => {
+    await selectSnapshot("v2-failstop", {
+      runtimeStatus: "running",
+      activeRunId: "scheduled-42",
+    });
+    stopScheduledLoopRunMock.mockRejectedValueOnce(new Error("ipc down"));
+
+    const handled = await useSelectedConversationStore().stopScheduledActiveRun();
+
+    expect(handled).toBe(false);
+    expect(useSelectedConversationStore().isBusy).toBe(true);
+  });
+
+  it("an idle view has nothing scheduled to stop", async () => {
+    await selectSnapshot("v2-idlestop");
+
+    const handled = await useSelectedConversationStore().stopScheduledActiveRun();
+
+    expect(handled).toBe(false);
+    expect(stopScheduledLoopRunMock).not.toHaveBeenCalled();
   });
 });

@@ -329,6 +329,41 @@ describe("AIChatScheduledLoopModule control operations", () => {
     expect(result.cancelled).toBe(false);
   });
 
+  it("stopCurrentRun aborts a live scheduled task-run through the engine registry (no chat-bound loop schedule required)", async () => {
+    const mod = new AIChatScheduledLoopModule();
+    await SqliteDb.ensureInitialized();
+    // A schedule-page AI message task run registers its dedicated engine in
+    // the conversation-keyed engine registry and its abort controller in the
+    // run registry — WITHOUT any chat-bound `/loop` schedule row. The stop
+    // must consult the engine registry FIRST so the composer Stop affordance
+    // works for these runs too (bugfix 2026-11-02).
+    const { ScheduledLoopEngineRegistry } = await import(
+      "@/service/ScheduledLoopEngineRegistry"
+    );
+    const { ScheduledLoopRunRegistry } = await import(
+      "@/service/ScheduledLoopRunRegistry"
+    );
+    const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
+    const runRegistry = ScheduledLoopRunRegistry.getInstance();
+    const runId = 91021;
+    const controller = new AbortController();
+    runRegistry.register(runId, controller);
+    engineRegistry.register({
+      conversationId: "v2-task-stop",
+      engine: {} as never,
+      runId,
+      scheduleId: 0,
+    });
+    try {
+      const result = await mod.stopCurrentRun("v2-task-stop");
+      expect(result.cancelled).toBe(true);
+      expect(controller.signal.aborted).toBe(true);
+    } finally {
+      engineRegistry.unregister("v2-task-stop");
+      runRegistry.unregister(runId);
+    }
+  });
+
   it("status returns null for a conversation with no loop", async () => {
     const mod = new AIChatScheduledLoopModule();
     await SqliteDb.ensureInitialized();

@@ -1045,6 +1045,13 @@ async function onPrimaryStop(): Promise<void> {
       // fall through to the run stop
     }
   }
+  // Scheduled occurrences (bugfix 2026-11-02): the view's active run is the
+  // synthetic `scheduled-<runId>` identity the coordinator never sees —
+  // stopActiveRun() no-ops for it. The store routes the dedicated
+  // stop-occurrence IPC and clears the local flag when it accepted.
+  if (await selectedStore.stopScheduledActiveRun()) {
+    return;
+  }
   await selectedStore.stopActiveRun();
 }
 

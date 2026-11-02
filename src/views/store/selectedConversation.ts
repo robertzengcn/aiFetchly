@@ -36,7 +36,10 @@ import {
   subscribeChatV2PendingEvents,
   type DenyToolPermissionResult,
 } from "@/views/api/aiChatV2";
-import { subscribeScheduledStream } from "@/views/api/aiChatScheduledLoop";
+import {
+  stopScheduledLoopRun,
+  subscribeScheduledStream,
+} from "@/views/api/aiChatScheduledLoop";
 import { windowInvoke } from "@/views/utils/apirequest";
 // G01 (design §18.2): renderer event-receipt → projected-UI timing.
 import {
@@ -1005,6 +1008,38 @@ export const useSelectedConversationStore = defineStore(
       });
     }
 
+    /**
+     * Composer Stop for scheduled occurrences (bugfix 2026-11-02): the
+     * view's active run is the synthetic `scheduled-<runId>` identity the
+     * coordinator never sees, so stopActiveRun() no-ops for it. Route to the
+     * dedicated stop-occurrence IPC and clear the presentational flag
+     * optimistically — the aborted run's own scheduled-stream terminal may
+     * lag and is then an idempotent no-op. Returns whether this action
+     * handled the stop; `false` lets the caller fall through to the legacy
+     * coordinator path (and keeps the flag until a terminal arrives).
+     */
+    async function stopScheduledActiveRun(): Promise<boolean> {
+      const conversationId = workspaceStore.selectedConversationId;
+      const activeId = activeRunId.value;
+      if (!conversationId || !activeId?.startsWith("scheduled-")) {
+        return false;
+      }
+      try {
+        const result = await stopScheduledLoopRun(conversationId);
+        if (result?.cancelled === true) {
+          presenter.hydrateRuntime({
+            runtimeStatus: "idle",
+            activeRunId: null,
+          });
+          syncFromPresenter();
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    }
+
     function recordTerminalRun(
       conversationId: string,
       runId: string,
@@ -1921,6 +1956,7 @@ export const useSelectedConversationStore = defineStore(
       errorMessage,
       runtimeStatus,
       activeRunId,
+      stopScheduledActiveRun,
       lastTerminalRun,
       lastResolvedReferenceRun,
       acceptedRunOrdinalFor,
