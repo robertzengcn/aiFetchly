@@ -1,0 +1,486 @@
+/**
+ * BrowserTaskRunner (PRD §6.2–6.6; technical design §6, §11–§12).
+ *
+ * One outer tool invocation (`browser_execute_task`) runs the full
+ * observe → candidates → decide → validate → execute → observe loop without
+ * re-entering the main chat loop. Provider proposals only — the desktop owns
+ * execution authority (D-01). Intermediate observations stay out of chat
+ * history; the final result carries a compact final observation (D-FR-10b).
+ */
+import { randomUUID } from "node:crypto";
+import type {
+  BrowserDecisionClient,
+  BrowserDecisionInput,
+  BrowserDecisionResult,
+  BrowserDecisionRouteKind,
+  BrowserProposedAction,
+} from "@/entityTypes/browserDecisionTypes";
+import { decisionInputSchema } from "@/schemas/api/browserDecision";
+import { validateDecisionActionStructure } from "@/schemas/api/browserDecision";
+import { buildTaskBudget, type MutableTaskBudget } from "@/service/browserDecision/BrowserTaskLimits";
+import { buildDecisionCandidates } from "@/service/browserDecision/BrowserCandidateBuilder";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+
+export interface CompletionCriterion {
+  readonly kind: "url_contains" | "element_present" | "extract_nonempty" | "text_contains";
+  readonly value: string;
+}
+
+export interface BrowserTaskInput {
+  readonly sessionId: string;
+  readonly conversationId: string;
+  readonly goal: string;
+  readonly constraints?: readonly string[];
+  readonly completionCriteria?: readonly CompletionCriterion[];
+  readonly budget?: Partial<MutableTaskBudget>;
+}
+
+export type BrowserTaskTerminalStatus =
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "partial"
+  | "interrupted";
+
+export interface BrowserTaskResult {
+  readonly taskId: string;
+  readonly sessionId: string;
+  readonly status: BrowserTaskTerminalStatus;
+  readonly reason: string;
+  readonly evidence: readonly string[];
+  readonly extracted: readonly unknown[];
+  readonly finalObservation: {
+    readonly url: string | null;
+    readonly title: string | null;
+    readonly elements: ReadonlyArray<{ ref: string; role: string; name: string }>;
+    readonly visibleText: string;
+  } | null;
+  readonly counts: {
+    readonly leafSteps: number;
+    readonly decisionRequests: number;
+    readonly recoveryCalls: number;
+  };
+  readonly userInterventions: ReadonlyArray<{
+    readonly reason: string;
+    readonly startedAt: number;
+    readonly durationMs: number | null;
+  }>;
+}
+
+export interface RunnerDeps {
+  /** Authorized execution seam: observe + runActions with risk/approval. */
+  readonly observe: (sessionId: string) => Promise<RunnerObservation | null>;
+  readonly runActions: (
+    sessionId: string,
+    program: { actions: RunnerAction[] },
+  ) => Promise<RunnerExecutionResult>;
+  readonly decisionClient: BrowserDecisionClient;
+  readonly route: BrowserDecisionRouteKind;
+  readonly signal?: AbortSignal;
+  readonly control?: ReturnType<typeof getDefaultAgentTaskControlService>;
+  readonly now?: () => number;
+}
+
+export interface RunnerObservation {
+  readonly observationId: string;
+  readonly pageRevision: number;
+  readonly url: string;
+  readonly title: string;
+  readonly elements: ReadonlyArray<{
+    ref: string;
+    role: string;
+    name: string;
+    valueSummary?: string | null;
+    disabled?: boolean | null;
+  }>;
+  readonly visibleText: string;
+}
+
+export type RunnerAction =
+  | { type: "click"; ref: string; pageRevision: number; expectedRole: string; expectedName: string }
+  | { type: "fill"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; value: string }
+  | { type: "select"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; values: string[] }
+  | { type: "press_key"; key: string }
+  | { type: "scroll"; direction: "up" | "down"; amount: number }
+  | { type: "hover"; ref: string; pageRevision: number; expectedRole: string; expectedName: string }
+  | { type: "wait_for"; condition: "text"; text: string; timeoutMs: number };
+
+export interface RunnerExecutionResult {
+  readonly effect: "known" | "unknown";
+  readonly pageRevision: number;
+  readonly results: ReadonlyArray<{
+    readonly success: boolean;
+    readonly errorCode: string | null;
+  }>;
+}
+
+const MAX_CONSECUTIVE_EQUIVALENT_FAILURES = 3;
+
+export class BrowserTaskRunner {
+  private readonly deps: RunnerDeps;
+  private readonly budget: MutableTaskBudget;
+  private readonly taskId = `task_${randomUUID().slice(0, 12)}`;
+  private leafSteps = 0;
+  private decisionRequests = 0;
+  private recoveryCalls = 0;
+  private lastFailureKey: string | null = null;
+  private consecutiveEquivalentFailures = 0;
+
+  constructor(
+    private readonly input: BrowserTaskInput,
+    deps: RunnerDeps
+  ) {
+    this.deps = deps;
+    this.budget = buildTaskBudget(deps.route, input.budget);
+  }
+
+  public async run(): Promise<BrowserTaskResult> {
+    const control = this.deps.control ?? getDefaultAgentTaskControlService();
+    control.register(this.taskId, this.input.conversationId);
+    const gate = control.getGate(this.taskId);
+    const signal = this.deps.signal ?? new AbortController().signal;
+    const evidence: string[] = [];
+    const extracted: unknown[] = [];
+    let observation = await this.deps.observe(this.input.sessionId);
+
+    try {
+      while (this.leafSteps < this.budget.leafSteps && this.decisionRequests < this.budget.decisionRequests) {
+        if (signal.aborted) {
+          return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+        }
+        // C-FR-05: safe-point control gate.
+        await gate.waitUntilOpen(signal);
+        if (!observation) {
+          observation = await this.deps.observe(this.input.sessionId);
+          if (!observation) {
+            return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
+          }
+        }
+
+        const candidates = buildDecisionCandidates({ elements: observation.elements });
+        const decisionInput = this.buildDecisionInput(observation, candidates);
+        let decision: BrowserDecisionResult;
+        try {
+          decision = await this.deps.decisionClient.decide(decisionInput, signal);
+          this.decisionRequests++;
+        } catch (error) {
+          return this.terminal(
+            "failed",
+            `decision_client_error:${error instanceof Error ? error.message : "unknown"}`,
+            evidence,
+            extracted,
+            observation
+          );
+        }
+
+        if (decision.status !== "decided") {
+          if (decision.status === "llm_required") {
+            return this.terminal(
+              "partial",
+              `escalated:${decision.reason_code}`,
+              evidence,
+              extracted,
+              observation
+            );
+          }
+          return this.terminal(
+            "failed",
+            `decision_${decision.status}:${decision.reason_code}`,
+            evidence,
+            extracted,
+            observation
+          );
+        }
+
+        const action = decision.action;
+        if (action.operation === "DONE") {
+          const verification = this.verifyCompletion(observation, extracted);
+          if (verification.verified) {
+            return this.terminal("completed", "verified", [...evidence, verification.evidence], extracted, observation);
+          }
+          // D-AC-09: a DONE without independent verification is not success.
+          if (this.recoveryCalls >= this.budget.recoveryCalls) {
+            return this.terminal("partial", "verification_failed_budget_exhausted", evidence, extracted, observation);
+          }
+          this.recoveryCalls++;
+          evidence.push("done_unverified:continuing");
+          continue;
+        }
+        if (action.operation === "ESCALATE") {
+          return this.terminal("partial", "escalated_by_decision", evidence, extracted, observation);
+        }
+        if (action.operation === "WAIT") {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          observation = await this.deps.observe(this.input.sessionId);
+          continue;
+        }
+        if (action.operation === "SCROLL_UP" || action.operation === "SCROLL_DOWN") {
+          this.leafSteps++;
+          const result = await this.deps.runActions(this.input.sessionId, {
+            actions: [
+              {
+                type: "scroll",
+                direction: action.operation === "SCROLL_UP" ? "up" : "down",
+                amount: 600,
+              },
+            ],
+          });
+          if (result.effect === "unknown") {
+            return this.terminal("failed", "unknown_effect_scroll", evidence, extracted, observation);
+          }
+          evidence.push(`scrolled:${action.operation}`);
+          observation = await this.deps.observe(this.input.sessionId);
+          continue;
+        }
+        if (action.operation === "GO_BACK") {
+          this.leafSteps++;
+          const result = await this.deps.runActions(this.input.sessionId, {
+            actions: [{ type: "press_key", key: "Escape" }],
+          });
+          void result;
+          observation = await this.deps.observe(this.input.sessionId);
+          continue;
+        }
+
+        const violation = validateDecisionActionStructure(decision, decisionInputSchema.parse(decisionInput));
+        if (violation) {
+          evidence.push(`invalid_decision:${violation}`);
+          if (++this.consecutiveEquivalentFailures >= MAX_CONSECUTIVE_EQUIVALENT_FAILURES) {
+            return this.terminal("failed", `repeated_invalid_decision:${violation}`, evidence, extracted, observation);
+          }
+          continue;
+        }
+
+        // Targeted operations execute one model-selected leaf action.
+        const target = candidates.find((c) => c.candidate_id === action.target_id);
+        if (!target) {
+          evidence.push("target_not_in_observation");
+          this.consecutiveEquivalentFailures++;
+          continue;
+        }
+
+        const programAction = this.toRunnerAction(action, target, observation);
+        if (!programAction) {
+          evidence.push(`unsupported_operation:${action.operation}`);
+          continue;
+        }
+
+        this.leafSteps++;
+        const execution = await this.deps.runActions(this.input.sessionId, {
+          actions: [programAction],
+        });
+        evidence.push(`${action.operation}:${target.name}:${execution.effect}`);
+
+        // D-FR-26: an unknown effect never triggers a retry; reconcile state.
+        if (execution.effect === "unknown") {
+          return this.terminal(
+            "partial",
+            "unknown_execution_effect",
+            evidence,
+            extracted,
+            await this.deps.observe(this.input.sessionId)
+          );
+        }
+
+        const stepResult = execution.results[execution.results.length - 1];
+        if (stepResult && !stepResult.success) {
+          const failureKey = `${action.operation}:${target.role}:${target.name}:${stepResult.errorCode}`;
+          this.consecutiveEquivalentFailures =
+            failureKey === this.lastFailureKey ? this.consecutiveEquivalentFailures + 1 : 1;
+          this.lastFailureKey = failureKey;
+          if (this.consecutiveEquivalentFailures >= MAX_CONSECUTIVE_EQUIVALENT_FAILURES) {
+            return this.terminal(
+              "failed",
+              `three_equivalent_failures:${stepResult.errorCode}`,
+              evidence,
+              extracted,
+              await this.deps.observe(this.input.sessionId)
+            );
+          }
+        } else {
+          this.consecutiveEquivalentFailures = 0;
+          this.lastFailureKey = null;
+        }
+
+        // D-FR-11: fresh observation after the action (already cached by the module).
+        observation = await this.deps.observe(this.input.sessionId);
+      }
+      return this.terminal(
+        "partial",
+        "budget_exhausted",
+        evidence,
+        extracted,
+        observation
+      );
+    } finally {
+      if (control.getState(this.taskId) === "running") {
+        control.setState(this.taskId, "completed");
+      }
+    }
+  }
+
+  private buildDecisionInput(
+    observation: RunnerObservation,
+    candidates: ReturnType<typeof buildDecisionCandidates>
+  ): BrowserDecisionInput {
+    return {
+      schema_version: 1,
+      request_id: `req_${randomUUID().slice(0, 8)}`,
+      task_id: this.taskId,
+      step_id: `step_${this.leafSteps}`,
+      observation_id: observation.observationId,
+      page_revision: observation.pageRevision,
+      goal: this.input.goal.slice(0, 2000),
+      subgoal: null,
+      constraints: [...(this.input.constraints ?? [])].slice(0, 16),
+      url: observation.url,
+      title: observation.title.slice(0, 512),
+      candidates: candidates as BrowserDecisionInput["candidates"],
+      recent_actions: [],
+      allowed_operations: [
+        "CLICK",
+        "FILL",
+        "SELECT",
+        "PRESS_KEY",
+        "NAVIGATE",
+        "GO_BACK",
+        "HOVER",
+        "SCROLL_UP",
+        "SCROLL_DOWN",
+        "WAIT",
+        "EXTRACT",
+        "DONE",
+        "ESCALATE",
+      ],
+      deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
+    };
+  }
+
+  private toRunnerAction(
+    action: BrowserProposedAction,
+    target: { role: string; name: string; candidate_id: string },
+    observation: RunnerObservation
+  ): RunnerAction | null {
+    const expected = {
+      expectedRole: target.role,
+      expectedName: target.name,
+    };
+    switch (action.operation) {
+      case "CLICK":
+        return {
+          type: "click",
+          ref: target.candidate_id,
+          pageRevision: observation.pageRevision,
+          ...expected,
+        };
+      case "FILL":
+        return {
+          type: "fill",
+          ref: target.candidate_id,
+          pageRevision: observation.pageRevision,
+          ...expected,
+          value: action.url ?? "",
+        };
+      case "SELECT":
+        return {
+          type: "select",
+          ref: target.candidate_id,
+          pageRevision: observation.pageRevision,
+          ...expected,
+          values: action.option_id ? [action.option_id] : [],
+        };
+      case "HOVER":
+        return {
+          type: "hover",
+          ref: target.candidate_id,
+          pageRevision: observation.pageRevision,
+          ...expected,
+        };
+      case "PRESS_KEY":
+        return { type: "press_key", key: action.key ?? "Enter" };
+      default:
+        return null;
+    }
+  }
+
+  /** D-FR-24/11.4: deterministic completion predicates on fresh state. */
+  private verifyCompletion(
+    observation: RunnerObservation,
+    extracted: readonly unknown[]
+  ): { verified: boolean; evidence: string } {
+    const criteria = this.input.completionCriteria ?? [];
+    if (criteria.length === 0) {
+      // No declared criteria: URL/title change vs the task start is weak
+      // evidence; report unverified so callers know.
+      return { verified: false, evidence: "no_completion_criteria" };
+    }
+    for (const criterion of criteria) {
+      switch (criterion.kind) {
+        case "url_contains":
+          if (!observation.url.includes(criterion.value)) {
+            return { verified: false, evidence: `url_miss:${criterion.value}` };
+          }
+          break;
+        case "text_contains":
+          if (!observation.visibleText.includes(criterion.value)) {
+            return { verified: false, evidence: `text_miss:${criterion.value}` };
+          }
+          break;
+        case "element_present":
+          if (
+            !observation.elements.some(
+              (element) => element.name.includes(criterion.value) || element.role === criterion.value
+            )
+          ) {
+            return { verified: false, evidence: `element_miss:${criterion.value}` };
+          }
+          break;
+        case "extract_nonempty":
+          if (extracted.length === 0) {
+            return { verified: false, evidence: "extract_empty" };
+          }
+          break;
+      }
+    }
+    return { verified: true, evidence: `verified:${criteria.length}_criteria` };
+  }
+
+  private terminal(
+    status: BrowserTaskTerminalStatus,
+    reason: string,
+    evidence: readonly string[],
+    extracted: readonly unknown[],
+    observation: RunnerObservation | null
+  ): BrowserTaskResult {
+    const control = this.deps.control ?? getDefaultAgentTaskControlService();
+    control.setState(
+      this.taskId,
+      status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed",
+      reason
+    );
+    return {
+      taskId: this.taskId,
+      sessionId: this.input.sessionId,
+      status,
+      reason,
+      evidence,
+      extracted,
+      finalObservation: observation
+        ? {
+            url: observation.url,
+            title: observation.title,
+            elements: observation.elements
+              .slice(0, 24)
+              .map((element) => ({ ref: element.ref, role: element.role, name: element.name })),
+            visibleText: observation.visibleText.slice(0, 2_000),
+          }
+        : null,
+      counts: {
+        leafSteps: this.leafSteps,
+        decisionRequests: this.decisionRequests,
+        recoveryCalls: this.recoveryCalls,
+      },
+      userInterventions: control.get(this.taskId)?.interventions ?? [],
+    };
+  }
+}

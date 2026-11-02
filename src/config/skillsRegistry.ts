@@ -5282,6 +5282,50 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
+      name: "browser_execute_task",
+      description:
+        "Run ONE focused multi-step browser task in the managed browser without extra chat rounds " +
+        "(PRD D-FR-05). The task runner observes, decides, and executes bounded steps itself and " +
+        "returns a verified result with a compact final observation. Supply a goal, optional " +
+        "constraints, and typed completion criteria (url_contains / element_present / " +
+        "extract_nonempty / text_contains). Use for eligible multi-step tasks on one page/site; " +
+        "single inspections or one-off actions stay on browser_observe/browser_run_actions.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id you own." },
+          goal: { type: "string", description: "1-2000 chars." },
+          constraints: { type: "array", items: { type: "string" } },
+          completion_criteria: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["url_contains", "element_present", "extract_nonempty", "text_contains"] },
+                value: { type: "string" },
+              },
+              required: ["kind", "value"],
+            },
+          },
+        },
+        required: ["session_id", "goal"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      async: true,
+      resolveTimeoutClass: () => "async",
+      resolveAsync: () => true,
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().executeTask(a, context),
+          args,
+          context
+        ),
+    },
+    {
       name: "run_browser_tasks",
       description:
         "Run up to 5 independent browser tasks in PARALLEL (PRD M-FR-03). Each task runs on its " +

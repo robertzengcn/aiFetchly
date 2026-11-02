@@ -16,6 +16,15 @@ import { browserSiteUpsertToolSchema } from "@/schemas/aiTools/browserSite";
 import { getDefaultBrowserSiteModule } from "@/modules/BrowserSiteModule";
 import { browserSignInToolSchema } from "@/schemas/aiTools/browserSignIn";
 import { getDefaultBrowserCredentialLoginService } from "@/service/browserLogin/BrowserCredentialLoginService";
+import { browserExecuteTaskToolSchema } from "@/schemas/aiTools/browserTask";
+import {
+  BrowserTaskRunner,
+  type CompletionCriterion,
+} from "@/service/browserDecision/BrowserTaskRunner";
+import {
+  ChatCompletionDecisionClient,
+  HostedDecisionClient,
+} from "@/service/browserDecision/DecisionClients";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -125,6 +134,12 @@ export interface ManagedBrowserAiToolServiceDeps {
     }): Promise<unknown>;
   };
 }
+
+type RunnerExecutionResultShape = {
+  effect: "known" | "unknown";
+  pageRevision: number;
+  results: Array<{ success: boolean; errorCode: string | null }>;
+};
 
 /** Structural slice of ManagedBrowserModule consumed by these tools. */
 export interface BrowserModuleLike {
@@ -881,6 +896,119 @@ export class ManagedBrowserAiToolService {
         context.conversationId
       );
       return { ...status, notice: null };
+    } catch (error) {
+      this.wrapModuleError(error);
+      throw error;
+    }
+  }
+
+  /**
+   * PRD D-FR-05..10c: the acceleration entry point. One outer tool call
+   * runs the whole bounded loop through BrowserTaskRunner; intermediate
+   * observations stay out of chat history and the result carries a
+   * compact final observation (D-FR-10b).
+   */
+  public async executeTask(
+    args: Record<string, unknown>,
+    context: BrowserToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    this.ensureAiEnabled();
+    const parsed = browserExecuteTaskToolSchema().safeParse(args);
+    if (!parsed.success) {
+      throw new ManagedBrowserAiToolError(
+        "invalid_tool_arguments",
+        undefined,
+        formatZodValidationError("browser_execute_task", parsed.error)
+      );
+    }
+    await this.ensureBrowserEnabled();
+    const sessionStatus = this.ensureSession(
+      parsed.data.session_id,
+      context.conversationId
+    );
+    // Freeze the route at admission (D-FR-02): provider mode decides the
+    // route kind. Hosted acceleration additionally requires the decision
+    // endpoint; an older hosted server leaves existing tools working while
+    // the hosted runner reports provider_error (D-AC-11).
+    const availability = new BrowserAiAvailabilityService().evaluate();
+    if (!availability.available) {
+      throw new ManagedBrowserAiToolError("ai_disabled", undefined, availability.reasonCode ?? undefined);
+    }
+    const { AIProviderSettingsService } = await import(
+      "@/service/aiProvider/AIProviderSettingsService"
+    );
+    const providerMode = new AIProviderSettingsService().getMode();
+    const route: "hosted" | "chat" = providerMode === "hosted" ? "hosted" : "chat";
+    void sessionStatus;
+    const decisionClient =
+      route === "hosted"
+        ? new HostedDecisionClient(async () => {
+            throw new Error("hosted decision endpoint unavailable");
+          })
+        : new ChatCompletionDecisionClient(
+            async (request, signal) => {
+              const { openAIChatCompletion } = await import("@/api/aiChatApi");
+              return openAIChatCompletion(
+                {
+                  messages: request.messages as never,
+                  ...(request.model ? { model: request.model } : {}),
+                  stream: false,
+                  temperature: request.temperature,
+                  response_format: request.response_format,
+                },
+                { signal }
+              );
+            }
+          );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: parsed.data.session_id,
+        conversationId: context.conversationId,
+        goal: parsed.data.goal,
+        constraints: parsed.data.constraints ?? [],
+        completionCriteria: (parsed.data.completion_criteria ?? []) as CompletionCriterion[],
+        budget: parsed.data.budget,
+      },
+      {
+        observe: async (sessionId) => {
+          try {
+            const observation = (await this.browserModule.observe(sessionId)) as {
+              observationId: string;
+              pageRevision: number;
+              url: string;
+              title: string;
+              elements: Array<{ ref: string; role: string; name: string; valueSummary?: string | null; disabled?: boolean | null }>;
+              visibleText: string;
+            };
+            return observation;
+          } catch {
+            return null;
+          }
+        },
+        runActions: (sessionId, program) =>
+          this.browserModule.runActions(sessionId, program as never).then(
+            (message): RunnerExecutionResultShape => {
+              if (message.type !== "ACTION_RESULT") {
+                return { effect: "unknown" as const, pageRevision: 0, results: [] };
+              }
+              return {
+                effect: message.effect,
+                pageRevision: message.pageRevision,
+                results: message.results.map((r) => ({
+                  success: r.success,
+                  errorCode: r.errorCode ?? null,
+                })),
+              };
+            }
+          ),
+        decisionClient,
+        route,
+        signal: context.signal,
+      }
+    );
+    try {
+      const result = await runner.run();
+      return { ...result };
     } catch (error) {
       this.wrapModuleError(error);
       throw error;
