@@ -17,6 +17,7 @@ import type {
   BrowserDecisionResult,
 } from "@/entityTypes/browserDecisionTypes";
 import { decisionResultSchema, type DecisionResultWire } from "@/schemas/api/browserDecision";
+import type { BrowserProposedAction } from "@/entityTypes/browserDecisionTypes";
 
 export class HostedDecisionClient implements BrowserDecisionClient {
   constructor(
@@ -47,7 +48,7 @@ export class HostedDecisionClient implements BrowserDecisionClient {
   ): Promise<BrowserDecisionResult> {
     try {
       const raw = await this.postDecision(
-        { schema_version: 1, ...input },
+        input,
         signal
       );
       return normalizeWireResult(raw);
@@ -62,7 +63,7 @@ export class HostedDecisionClient implements BrowserDecisionClient {
   }
 }
 
-interface ChatCompletionLike {
+export interface ChatCompletionLike {
   readonly choices?: ReadonlyArray<{
     readonly message?: { readonly content?: string | null };
   }>;
@@ -142,16 +143,26 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
   }
 }
 
+const BOUNDED_PRESS_KEYS: ReadonlySet<string> = new Set([
+  "Enter", "Escape", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+]);
+
+function validatePressKey(value: unknown): BrowserProposedAction["key"] {
+  return typeof value === "string" && BOUNDED_PRESS_KEYS.has(value)
+    ? (value as BrowserProposedAction["key"])
+    : null;
+}
+
 const BARE_OPERATIONS = new Set([
   "CLICK", "FILL", "SELECT", "PRESS_KEY", "NAVIGATE", "GO_BACK", "HOVER",
   "SCROLL_UP", "SCROLL_DOWN", "WAIT", "EXTRACT", "DONE", "ESCALATE",
 ]);
 
 function parseBareAction(raw: unknown): {
-  operation: string;
+  operation: BrowserProposedAction["operation"];
   target_id: string | null;
   option_id: string | null;
-  key: string | null;
+  key: BrowserProposedAction["key"];
   url: string | null;
 } | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -163,10 +174,10 @@ function parseBareAction(raw: unknown): {
     return null;
   }
   return {
-    operation,
+    operation: operation as BrowserProposedAction["operation"],
     target_id: typeof record["target_id"] === "string" ? record["target_id"] : null,
     option_id: typeof record["option_id"] === "string" ? record["option_id"] : null,
-    key: typeof record["key"] === "string" ? record["key"] : null,
+    key: validatePressKey(record["key"]),
     url: typeof record["url"] === "string" ? record["url"] : null,
   };
 }

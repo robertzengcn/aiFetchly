@@ -217,7 +217,7 @@ export class LoginFormFiller {
     if (!fillResult.ok) {
       return {
         outcome: "unknown",
-        reasonCode: fillResult.reasonCode,
+        reasonCode: fillResult.reasonCode ?? null,
         filledFieldStamps: fillResult.stamps ?? [],
       };
     }

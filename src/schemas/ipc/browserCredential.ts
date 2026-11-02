@@ -27,5 +27,5 @@ export const browserCredentialSubmitSchema = z.strictObject({
 });
 
 export type BrowserCredentialSubmitInput = z.infer<
-  ReturnType<typeof browserCredentialSubmitSchema>
+  typeof browserCredentialSubmitSchema
 >;

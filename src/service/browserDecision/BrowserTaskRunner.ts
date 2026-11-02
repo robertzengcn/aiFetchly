@@ -62,7 +62,7 @@ export interface BrowserTaskResult {
   };
   readonly userInterventions: ReadonlyArray<{
     readonly reason: string;
-    readonly startedAt: number;
+    readonly startedAtEpochMs: number;
     readonly durationMs: number | null;
   }>;
 }

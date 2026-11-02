@@ -1,4 +1,4 @@
-import { BaseModule } from "@/modules/BaseModule";
+import { BaseModule } from "@/modules/baseModule";
 import {
   BrowserSiteModel,
   BROWSER_SITE_AI_ID_BASE,

@@ -56,6 +56,12 @@ const PENDING_TTL_MS = 10 * 60_000;
 
 class CredentialCardWaitRegistry {
   private readonly pending = new Map<string, PendingCredentialRequest>();
+  private sink: ((request: PendingCredentialRequest) => void) | null = null;
+
+  /** Main-process wiring: push card requests to the renderer. */
+  public setSink(sink: (request: PendingCredentialRequest) => void): void {
+    this.sink = sink;
+  }
 
   public create(input: {
     readonly conversationId: string;
@@ -95,6 +101,7 @@ class CredentialCardWaitRegistry {
       createdAt: Date.now(),
     };
     this.pending.set(requestId, request);
+    this.sink?.(request);
     setTimeout(() => {
       const entry = this.pending.get(requestId);
       if (entry) {

@@ -12,7 +12,7 @@ function hostedResolution(canUse: boolean): ChatProviderResolution {
         canUse: false,
         reason: "hosted_subscription_required",
         message: "AI features are not enabled. Please upgrade your plan.",
-      } as ChatProviderResolution;
+      } as unknown as ChatProviderResolution;
 }
 
 function localResolution(canUse: boolean): ChatProviderResolution {
@@ -28,12 +28,12 @@ function localResolution(canUse: boolean): ChatProviderResolution {
           apiKeyConfigured: true,
         },
         apiKey: "sk-test",
-      } as ChatProviderResolution
+      } as unknown as ChatProviderResolution
     : {
         canUse: false,
         reason: "local_provider_not_configured",
         message: "No local provider configured.",
-      } as ChatProviderResolution;
+      } as unknown as ChatProviderResolution;
 }
 
 describe("BrowserAiAvailabilityService (PRD D-FR-01)", () => {

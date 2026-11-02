@@ -68,11 +68,7 @@ function doneEntry() {
   };
 }
 
-type BrowserDecisionResultWireLike = Parameters<
-  ReturnType<NonNullable<ConstructorParameters<typeof BrowserTaskRunner>[1]["decisionClient"]>>["decide"]
->[1] extends never ? never : Awaited<ReturnType<
-  ReturnType<NonNullable<ConstructorParameters<typeof BrowserTaskRunner>[1]["decisionClient"]>>["decide"]
->>;
+type BrowserDecisionResultWireLike = import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult;
 
 describe("BrowserTaskRunner (D-FR-05..25)", () => {
   it("completes a fill + click script and verifies with criteria", async () => {

@@ -712,7 +712,8 @@ export class ManagedBrowserModule {
       let startCookies: NormalizedCookie[] = allowedCookies;
       const effectiveProxy = explicitProxy ?? account.proxy ?? null;
       const sessionProxy =
-        effectiveProxy && effectiveProxy.mode !== "direct"
+        effectiveProxy &&
+        (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
           ? {
               mode: effectiveProxy.mode as "http" | "https",
               host: effectiveProxy.host,
@@ -1580,7 +1581,9 @@ export class ManagedBrowserModule {
   private async loadProxyRowById(proxyId: number): Promise<ProxyRow | null> {
     try {
       const { ProxyModel } = await import("@/model/Proxy.model");
-      const model = new ProxyModel(this.dbpath);
+      const { Token } = await import("@/modules/token");
+      const { USERSDBPATH } = await import("@/config/usersetting");
+      const model = new ProxyModel(new Token().getValue(USERSDBPATH));
       const row = await model.getProxyById(proxyId);
       if (!row) {
         return null;
@@ -1632,8 +1635,8 @@ export class ManagedBrowserModule {
       MANAGED_BROWSER_TIMEOUTS.initialVerificationMs,
       (m) => m.type === "LOGIN_FORM_RESULT" || m.type === "HANDOFF_REQUIRED"
     );
-    if (message.type === "HANDOFF_REQUIRED") {
-      return { outcome: "unknown", reasonCode: "handoff_required", filledFieldStamps: [] };
+    if (message.type !== "LOGIN_FORM_RESULT") {
+      return { outcome: "unknown" as const, reasonCode: "handoff_required", filledFieldStamps: [] };
     }
     return {
       outcome: message.outcome,

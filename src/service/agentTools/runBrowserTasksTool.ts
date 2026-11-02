@@ -155,7 +155,7 @@ export async function runBrowserTasks(
               constraints: { allowInteractivePermissionPrompts: false },
             },
             parentConversationId: conversationId,
-          },
+          } as unknown as Parameters<typeof runtime.runSync>[0],
           { ...getDefaultAgentRuntimeDeps(), signal: childAbort.signal }
         );
         // A late abort (user Stop) outranks a successful agent result.
@@ -174,7 +174,7 @@ export async function runBrowserTasks(
           final_url: (result.output as { final_url?: string } | null)?.final_url ?? null,
           evidence: (result.output as { evidence?: string[] } | null)?.evidence ?? [],
           needs_user: (result.output as { needs_user?: { type: string } } | null)?.needs_user ?? null,
-          user_interventions: control.get(taskId)?.interventions ?? [],
+          user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
           ...(task.keep_open
             ? { session_id: (result.output as { session_id?: string } | null)?.session_id }
             : {}),
@@ -193,7 +193,7 @@ export async function runBrowserTasks(
           final_url: null,
           evidence: [],
           needs_user: null,
-          user_interventions: control.get(taskId)?.interventions ?? [],
+          user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
         };
       } finally {
         signal.removeEventListener("abort", onParentAbort);
@@ -202,6 +202,20 @@ export async function runBrowserTasks(
   );
 
   return { batchId, results };
+}
+
+function mapInterventions(
+  interventions: ReadonlyArray<{
+    reason: string;
+    startedAtEpochMs: number;
+    durationMs: number | null;
+  }>
+): BrowserBatchTaskResult["user_interventions"] {
+  return interventions.map((intervention) => ({
+    reason: intervention.reason,
+    started_at: intervention.startedAtEpochMs,
+    duration_ms: intervention.durationMs,
+  }));
 }
 
 function buildTaskPrompt(

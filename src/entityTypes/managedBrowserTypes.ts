@@ -56,6 +56,13 @@ export type ManagedBrowserErrorCode =
   | "account_not_found"
   | "account_in_use"
   | "global_session_limit"
+  | "insufficient_memory"
+  | "site_limit_reached"
+  | "session_not_owned"
+  | "proxy_confirmation_required"
+  | "proxy_not_found"
+  | "proxy_no_usable_proxy"
+  | "proxy_switch_limit"
   | "session_cookie_missing"
   | "browser_dependency_missing"
   | "browser_incompatible"
@@ -109,7 +116,7 @@ export type ManagedBrowserHandoffReason =
   | "destructive_action_unclear"
   | "repeated_action_failure"
   | "user_requested"
-  | "challenge_unresolved";
+  | "challenge_unresolved" | "user_paused";
 
 // ---------------------------------------------------------------------------
 // Browser executable and fingerprint
@@ -328,6 +335,8 @@ export interface BrowserNotice {
 }
 
 export interface BrowserObservation {
+  /** Opaque per-snapshot identity (PRD D-FR-15a). */
+  observationId: string;
   readonly sessionId: string;
   readonly pageRevision: number;
   /** Sanitized URL: credentials stripped; query/fragment redacted. */

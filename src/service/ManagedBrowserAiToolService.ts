@@ -24,6 +24,7 @@ import {
 import {
   ChatCompletionDecisionClient,
   HostedDecisionClient,
+  type ChatCompletionLike,
 } from "@/service/browserDecision/DecisionClients";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
@@ -890,9 +891,16 @@ export class ManagedBrowserAiToolService {
       throw new ManagedBrowserAiToolError("internal_error");
     }
     try {
+      const requested = parsed.data.proxy;
+      const selection: BrowserProxySelection =
+        requested === "direct"
+          ? { kind: "direct" }
+          : "proxy_id" in requested
+            ? { kind: "proxy_id", proxyId: requested.proxy_id }
+            : { kind: "auto", countryCode: requested.country_code };
       const status = await this.browserModule.switchSessionProxy(
         parsed.data.session_id,
-        parsed.data.proxy,
+        selection,
         context.conversationId
       );
       return { ...status, notice: null };
@@ -947,8 +955,9 @@ export class ManagedBrowserAiToolService {
           })
         : new ChatCompletionDecisionClient(
             async (request, signal) => {
-              const { openAIChatCompletion } = await import("@/api/aiChatApi");
-              return openAIChatCompletion(
+              const { AiChatApi } = await import("@/api/aiChatApi");
+              const api = new AiChatApi();
+              return (await api.openAIChatCompletion(
                 {
                   messages: request.messages as never,
                   ...(request.model ? { model: request.model } : {}),
@@ -957,7 +966,7 @@ export class ManagedBrowserAiToolService {
                   response_format: request.response_format,
                 },
                 { signal }
-              );
+              )) as ChatCompletionLike;
             }
           );
     const runner = new BrowserTaskRunner(
@@ -1183,7 +1192,9 @@ export function buildSemanticActionDescriptors(
 ): SemanticActionDescriptor[] {
   const describe = (action: BrowserLeafAction): SemanticActionDescriptor => {
     const target =
-      "ref" in action ? descriptorFor(action.ref) : null;
+      "ref" in action && typeof action.ref === "string"
+        ? descriptorFor(action.ref)
+        : null;
     return {
       operation: action.type,
       role: target?.role ?? null,

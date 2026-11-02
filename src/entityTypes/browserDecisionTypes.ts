@@ -161,6 +161,15 @@ export type BrowserDecisionResult =
   | BrowserDecisionBudgetExceeded
   | BrowserDecisionProviderError;
 
+/** The shared adapter interface every decision route implements. */
+export interface BrowserDecisionClient {
+  getCapabilities(signal: AbortSignal): Promise<BrowserDecisionCapabilities>;
+  decide(
+    input: BrowserDecisionInput,
+    signal: AbortSignal
+  ): Promise<BrowserDecisionResult>;
+}
+
 /** Advertised capabilities of a decision route (advisory only). */
 export interface BrowserDecisionCapabilities {
   readonly operations: readonly BrowserDecisionOperation[];

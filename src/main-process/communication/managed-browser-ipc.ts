@@ -18,6 +18,7 @@ import {
   MANAGED_BROWSER_CLEAR_CACHE,
   MANAGED_BROWSER_UPDATE_SETTINGS,
   MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
+  MANAGED_BROWSER_CREDENTIAL_REQUEST,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_TAKE_CONTROL,
   BROWSER_TASK_RESUME,
@@ -102,6 +103,18 @@ function sendToRenderer(
 }
 
 export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
+  // PRD A-FR-05: credential-card requests reach the parent conversation as
+  // an event; the card submits through the single-use validated channel.
+  getCredentialCardWaitRegistry().setSink((request) =>
+    sendToRenderer(win, MANAGED_BROWSER_CREDENTIAL_REQUEST, {
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      siteDomain: request.siteDomain,
+      mode: request.mode,
+      prefillUsername: request.prefillUsername,
+    })
+  );
+
   // --- Event bridge: module singletons → renderer -----------------------
   const browserModule = getDefaultManagedBrowserModule();
   const cacheModule = getDefaultManagedBrowserCacheModule();

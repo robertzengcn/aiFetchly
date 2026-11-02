@@ -59,7 +59,7 @@ vi.mock("@/modules/socialAccountModule", () => {
       async getCredentialForLogin() {
         return null;
       }
-      async saveSubmittedCredential(input: { username: string }) {
+      async saveSubmittedCredential(input: { username: string; password: string }) {
         savedCredentials.push(input);
         return 777;
       }

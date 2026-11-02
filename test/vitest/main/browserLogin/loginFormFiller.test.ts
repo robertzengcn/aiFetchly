@@ -28,9 +28,9 @@ interface FakeDom {
   };
 }
 
-function makePage(dom: FakeDom): {
-  url: () => string;
-  evaluate: PageScript;
+function makePage(
+  dom: FakeDom
+): import("@/childprocess/managed-browser/LoginFormFiller").LoginFillPageLike & {
   calls: { submitted: boolean; filled: number };
 } {
   const calls = { submitted: false, filled: 0 };
@@ -71,6 +71,8 @@ function makePage(dom: FakeDom): {
     url: () => `${dom.protocol}://${dom.hostname}/login`,
     evaluate,
     calls,
+  } as unknown as import("@/childprocess/managed-browser/LoginFormFiller").LoginFillPageLike & {
+    calls: { submitted: boolean; filled: number };
   };
 }
 
