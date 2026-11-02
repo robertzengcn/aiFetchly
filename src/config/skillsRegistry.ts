@@ -5282,6 +5282,35 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         ),
     },
     {
+      name: "browser_site_upsert",
+      description:
+        "Register a NEW website with the browser site registry by homepage URL " +
+        "(PRD S-FR-03). Use when a task needs a site that is not yet registered. " +
+        "The site is restricted to its own registrable domain; adding extra " +
+        "login/SSO domains always requires user confirmation — you cannot and " +
+        "must not supply domain lists.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Display name of the site." },
+          url: { type: "string", description: "HTTPS homepage URL." },
+        },
+        required: ["name", "url"],
+      },
+      tier: "main",
+      requiresConfirmation: false,
+      permissionCategory: "automation",
+      source: "built-in",
+      timeoutClass: "network",
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().siteUpsert(a, context),
+          args,
+          context
+        ),
+    },
+    {
       name: "browser_clear_cache",
       description:
         "Clear the persistent browser cache for the session's account. REQUIRES a confirmation_id " +

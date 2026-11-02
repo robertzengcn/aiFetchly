@@ -12,6 +12,8 @@ import {
 import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
 import { browserSetProxyToolSchema } from "@/schemas/aiTools/browserProxy";
+import { browserSiteUpsertToolSchema } from "@/schemas/aiTools/browserSite";
+import { getDefaultBrowserSiteModule } from "@/modules/BrowserSiteModule";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -880,6 +882,46 @@ export class ManagedBrowserAiToolService {
     } catch (error) {
       this.wrapModuleError(error);
       throw error;
+    }
+  }
+
+  /**
+   * PRD S-FR-03: register a site by URL. Guardrails are enforced in the
+   * module (HTTPS, eTLD+1, dedupe); no caller-supplied domain lists.
+   */
+  public async siteUpsert(
+    args: Record<string, unknown>,
+    context: BrowserToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    this.ensureAiEnabled();
+    const parsed = browserSiteUpsertToolSchema().safeParse(args);
+    if (!parsed.success) {
+      throw new ManagedBrowserAiToolError(
+        "invalid_tool_arguments",
+        undefined,
+        formatZodValidationError("browser_site_upsert", parsed.error)
+      );
+    }
+    try {
+      const result = await getDefaultBrowserSiteModule().upsertSite({
+        name: parsed.data.name,
+        url: parsed.data.url,
+        source: "ai",
+        createdInConversationId: context.conversationId,
+      });
+      return {
+        site_id: result.siteId,
+        registrable_domain: result.registrableDomain,
+        status: result.status,
+        created: result.created,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ManagedBrowserAiToolError(
+        "internal_error",
+        undefined,
+        message === "https_required" ? "https_required" : "site_upsert_failed"
+      );
     }
   }
 
