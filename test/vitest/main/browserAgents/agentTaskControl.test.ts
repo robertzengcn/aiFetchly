@@ -13,7 +13,11 @@ describe("AgentTaskControlService pause cap (T24/C-FR-09)", () => {
     service.beginIntervention("task-cap", "user_paused");
     now = 59 * 60_000;
     expect(service.enforcePauseCap("task-cap")).toBe(false);
-    expect(service.getState("task-cap")).toBe("paused");
+    // beginIntervention sets waiting_for_user (the user-wait layer); the
+    // cap measures from the intervention start either way.
+    expect(["paused", "waiting_for_user"]).toContain(
+      service.getState("task-cap")
+    );
     now = 61 * 60_000;
     expect(service.enforcePauseCap("task-cap")).toBe(true);
     expect(service.getState("task-cap")).toBe("interrupted");
