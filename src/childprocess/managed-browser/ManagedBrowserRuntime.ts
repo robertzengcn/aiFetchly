@@ -28,6 +28,7 @@ export type ManagedBrowserCommandType =
   | "RESUME_HANDOFF"
   | "VERIFY_MANUAL_LOGIN"
   | "CANCEL_REQUEST"
+  | "FILL_LOGIN_FORM"
   | "STOP_SESSION";
 
 export type CommandGuardResult =
@@ -83,6 +84,18 @@ export function assertCommandAllowed(
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
     case "RUN_ACTIONS":
+      if (USER_CONTROL_STATES.has(state)) {
+        return { ok: false, errorCode: "user_has_control" };
+      }
+      if (CHALLENGE_STATES.has(state)) {
+        return { ok: false, errorCode: "challenge_in_progress" };
+      }
+      return ACTION_STATES.has(state)
+        ? { ok: true }
+        : { ok: false, errorCode: "action_not_allowed" };
+    case "FILL_LOGIN_FORM":
+      // R19/C-FR-05: credential typing is blocked when the user controls
+      // the browser or a challenge is in progress — same as RUN_ACTIONS.
       if (USER_CONTROL_STATES.has(state)) {
         return { ok: false, errorCode: "user_has_control" };
       }

@@ -1654,9 +1654,26 @@ export class ManagedBrowserModule {
     if (record.accountId === accountId) {
       return; // already account-backed
     }
-    // Public -> account upgrade: capture a fresh cookie snapshot for the
-    // account (existing worker refresh path) and swap the lease key so
-    // the account-lease exclusivity applies going forward.
+    // R08/M-FR-06: swap the lease from public:<sessionId> to
+    // account:<accountId> so account-lease exclusivity applies going
+    // forward — a different session can no longer acquire the same
+    // account while this session holds it.
+    const oldKey = record.leaseKey;
+    const newKey = accountLeaseKey(accountId);
+    const acquireResult = this.leaseService.acquire(newKey, {
+      sessionId,
+      ownerConversationId: record.conversationId,
+    });
+    if (acquireResult.status === "account_in_use") {
+      throw new ManagedBrowserError("account_in_use");
+    }
+    // Release the old public lease (token-based; use the stored token).
+    this.leaseService.release(oldKey, sessionId, record.leaseToken);
+    // Mutate the record: accountId, leaseToken, leaseKey.
+    if (acquireResult.status === "granted") {
+      (record as { leaseToken: string }).leaseToken = acquireResult.leaseToken;
+    }
+    (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
     (record as { accountId: number }).accountId = accountId;
     record.authenticated = true;
     this.pushStatus(record);
@@ -1703,6 +1720,10 @@ export class ManagedBrowserModule {
     recipe: { formAction: string | null; usernameField: string; passwordField: string } | null;
   }> {
     const record = this.requireSession(sessionId);
+    // R19/C-FR-05: guard() rejects commands when the session is in
+    // handoff/user_login_in_progress (user control) — the credential
+    // must never be typed while the user controls the browser.
+    this.guard(record, "FILL_LOGIN_FORM");
     const message = await this.requestWorker(
       record,
       {
