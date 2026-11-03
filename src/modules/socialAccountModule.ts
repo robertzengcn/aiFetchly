@@ -411,29 +411,45 @@ export class SocialAccountModule extends BaseModule {
       return null;
     }
     // The account's site must match the page domain (fail closed).
-    if (account.site_id !== null) {
-      const siteModule = (await import("@/modules/BrowserSiteModule"))
-        .getDefaultBrowserSiteModule();
-      const site = await siteModule.getSite(account.site_id);
-      if (!site) {
-        return null;
-      }
-      const { hostnameAllowedBySuffixes } =
-        await import("@/service/browserDecision/RegistrableDomain");
-      if (
-        !hostnameAllowedBySuffixes(
-          currentRegistrableDomain,
-          site.allowedDomainSuffixes
-        )
-      ) {
-        return null;
-      }
+    // R21: legacy rows with site_id = null CANNOT skip the domain check —
+    // they are resolved via social_type_id (which maps to a seeded site).
+    let siteToCheck = account.site_id;
+    if (siteToCheck === null) {
+      siteToCheck = account.social_type_id;
+    }
+    const siteModule = (await import("@/modules/BrowserSiteModule"))
+      .getDefaultBrowserSiteModule();
+    const site = await siteModule.getSite(siteToCheck);
+    if (!site) {
+      return null;
+    }
+    const { hostnameAllowedBySuffixes } =
+      await import("@/service/browserDecision/RegistrableDomain");
+    if (
+      !hostnameAllowedBySuffixes(
+        currentRegistrableDomain,
+        site.allowedDomainSuffixes
+      )
+    ) {
+      return null;
     }
     const password = await this.decryptPass(account.pass, account.id);
     if (!password || !account.user) {
       return null;
     }
     return { username: account.user, password };
+  }
+
+  /** R21/A-FR-06: update the password of an existing account (encrypted). */
+  public async updatePasswordForAccount(
+    accountId: number,
+    password: string
+  ): Promise<void> {
+    await this.ensureConnection();
+    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
+    await repository.update(accountId, {
+      pass: await this.encryptPass(password),
+    });
   }
 
   /** A-FR-10: record a failed automated sign-in (cooldown + UI reason). */
@@ -491,7 +507,9 @@ export class SocialAccountModule extends BaseModule {
     entity.social_type_id = input.platformId ?? (input.siteId ?? 0);
     entity.site_id = input.siteId;
     entity.status = 1;
-    entity.ai_use_enabled = false;
+    // R21/A-FR-06: the user checked "Save for future use" — enable the
+    // per-account AI-use opt-in so the credential is reusable.
+    entity.ai_use_enabled = true;
     entity.pass = await this.encryptPass(input.password);
     return await this.socialAccountModel.saveNewAccount(entity);
   }

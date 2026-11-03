@@ -352,13 +352,11 @@ export class BrowserCredentialLoginService {
         };
       }
       if (submitted.save) {
-        await accountModule.saveSubmittedCredential({
-          siteId: site.siteId,
-          platformId: site.siteId,
-          username: submitted.username,
-          password: submitted.password,
-          save: true,
-        });
+        // R21: update the EXISTING account's password, not a new row.
+        await accountModule.updatePasswordForAccount(
+          chosen.id,
+          submitted.password
+        );
       }
       return this.fillAndAssess(input, site, {
         username: submitted.username,
