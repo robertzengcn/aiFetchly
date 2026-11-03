@@ -87,6 +87,8 @@ import { userSafeError } from "@/service/AIChatErrorMapper";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
 import {
   getRunOwnerResumeRouter,
+  getSharedAIChatTitleService,
+  resetSharedAIChatTitleService,
 } from "@/service/aiChatWorkspaceRuntime";
 import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
@@ -337,6 +339,16 @@ export function resetAiChatV2RuntimeForDatabaseSwitch(): void {
   compactModelCatalog = null;
   resetSharedAutoDreamService();
   resetSharedWorkspaceAutoDreamService();
+  // Titles B09/B23: drop the title singleton and its queued/in-flight work
+  // so a previous scope's excerpt can never reach the new scope's provider.
+  resetSharedAIChatTitleService();
+  // Titles F17: the new scope must re-run schema readiness + interrupted-
+  // claim reconciliation (and a previously failed pass stays retryable).
+  void import("@/main-process/communication/ai-chat-workspace-ipc").then(
+    ({ resetWorkspaceBackfillForScopeChange }) => {
+      resetWorkspaceBackfillForScopeChange();
+    }
+  );
   // Clear the shared lightweight route cooldowns so one account/provider
   // cannot suppress another (tech-design §12).
   resetLightweightRuntime();
@@ -655,7 +667,7 @@ function createBroadcastEventSink(identity?: {
  * pending/waiting/terminal attention without private detail; the selected
  * conversation keeps full detail via the detail channel above.
  */
-function broadcastQueueSummary(input: {
+async function broadcastQueueSummary(input: {
   conversationId: string;
   runId: string | null;
   /** Audit R03: accepted append identity the fact's turn was scheduled from. */
@@ -668,7 +680,23 @@ function broadcastQueueSummary(input: {
     | "run_completed"
     | "run_failed"
     | "run_cancelled";
-}): void {
+}): Promise<void> {
+  // r3 G06: queue-owned turns publish the authoritative title + revision
+  // too, so a first send's provisional excerpt reaches every window without
+  // waiting for a coordinator summary or bootstrap.
+  let title: string | undefined;
+  let titleRevision: number | undefined;
+  try {
+    const projection = await new AIChatConversationModule().getConversationProjection(
+      input.conversationId
+    );
+    if (projection?.title !== null && projection?.title !== undefined) {
+      title = projection.title;
+      titleRevision = projection.titleRevision;
+    }
+  } catch {
+    // best effort — the summary still carries run state
+  }
   const runtimeStatus =
     input.reason === "permission_required"
       ? ("awaiting_permission" as const)
@@ -682,6 +710,9 @@ function broadcastQueueSummary(input: {
   sharedWorkspaceEventRouter.broadcastSummary({
     conversationId: input.conversationId,
     workspaceKey: null,
+    ...(title !== undefined
+      ? { title, ...(titleRevision !== undefined ? { titleRevision } : {}) }
+      : {}),
     runtimeStatus,
     attention:
       input.reason === "permission_required"
@@ -722,7 +753,7 @@ export function getQueueService(): AIChatTurnQueueService {
           AIChatV2EventBroadcaster.getInstance().emitPendingEvent(event),
       },
       streamSinkFactory: (identity) => createBroadcastEventSink(identity),
-      summarySink: (input) => broadcastQueueSummary(input),
+      summarySink: (input) => void broadcastQueueSummary(input),
       tryAcquireLease: ({ conversationId }) =>
         AIChatConversationTurnCoordinator.getInstance().tryAcquire({
           conversationId,
@@ -735,6 +766,11 @@ export function getQueueService(): AIChatTurnQueueService {
       // Audit R7-04: queue-drained turns project their durable user/assistant
       // moments into ai_chat_conversations (parity with the coordinator path).
       conversationModule: new AIChatConversationModule(),
+      // Chat-titles FR-02: drained interactive turns reach the common title
+      // trigger once, after durable completion.
+      onInteractiveTurnCompleted: (input) => {
+        getSharedAIChatTitleService().notifyInteractiveTurnCompleted(input);
+      },
     });
   }
   return queueService;
@@ -1725,6 +1761,40 @@ async function handleClearConversation(
     } catch (err) {
       log.error("[ai-chat-v2] pending clearConversation failed:", err);
     }
+    // r3 G05 (design §5.4/§11): FENCE TITLE WORK BEFORE THE TRANSCRIPT IS
+    // DELETED — cancel naming, advance the epoch (manual names survive,
+    // nonmanual restart pending), and publish the new state FIRST. A crash
+    // or deletion failure after this point leaves an EMPTY pending
+    // lifecycle (never the old epoch beside deleted history), and a late
+    // in-flight result cannot match the advanced epoch.
+    let cleared: Awaited<
+      ReturnType<AIChatConversationModule["clearTitleLifecycle"]>
+    > = null;
+    try {
+      getSharedAIChatTitleService().cancelConversation(conversationId);
+      cleared = await new AIChatConversationModule().clearTitleLifecycle(
+        conversationId
+      );
+      if (
+        cleared &&
+        (cleared.titleSource === "placeholder" ||
+          cleared.titleSource === "user")
+      ) {
+        sharedWorkspaceEventRouter.broadcastTitleUpdate({
+          conversationId,
+          title: cleared.title,
+          titleRevision: cleared.titleRevision,
+          titleSource: cleared.titleSource,
+        });
+      }
+    } catch (err) {
+      // The title fence failed BEFORE any destruction — report it instead
+      // of clearing history beside a stale title lifecycle.
+      log.error("[ai-chat-v2] title clear lifecycle failed:", err);
+      return denied(
+        "Could not reset the chat title before clearing. Nothing was deleted — try again."
+      );
+    }
     const module = new AIChatV2Module();
     const deleted = await module.clearConversation(conversationId);
     aiChatQueueCounters.incrementWorkspace("ai_chat_workspace_action_total", {
@@ -1758,6 +1828,40 @@ async function handleClearAll(): Promise<
     } catch (err) {
       log.error("[ai-chat-v2] pending clearAll failed:", err);
     }
+    // r3 G05: the SAME pre-deletion title fence for bulk clear — every
+    // conversation's naming work is cancelled and its epoch advanced BEFORE
+    // any transcript is deleted; failures abort the whole operation
+    // (nothing destroyed beside a stale lifecycle).
+    const conversationModule = new AIChatConversationModule();
+    let bulkClearedIds: string[] = [];
+    try {
+      const projections = await conversationModule.listAllConversations();
+      const titleService = getSharedAIChatTitleService();
+      for (const conversationId of projections) {
+        titleService.cancelConversation(conversationId);
+        const cleared =
+          await conversationModule.clearTitleLifecycle(conversationId);
+        if (
+          cleared &&
+          (cleared.titleSource === "placeholder" ||
+            cleared.titleSource === "user")
+        ) {
+          sharedWorkspaceEventRouter.broadcastTitleUpdate({
+            conversationId,
+            title: cleared.title,
+            titleRevision: cleared.titleRevision,
+            titleSource: cleared.titleSource,
+          });
+        }
+      }
+      bulkClearedIds = projections;
+    } catch (err) {
+      log.error("[ai-chat-v2] bulk title lifecycle clear failed:", err);
+      return denied(
+        "Could not reset chat titles before clearing. Nothing was deleted — try again."
+      );
+    }
+    void bulkClearedIds;
     const module = new AIChatV2Module();
     const deleted = await module.clearAllV2History();
     return ok({ deleted });

@@ -41,6 +41,7 @@ import {
   setQueueTurnDispatcher,
   setRunOwnerResumeRouter,
   sharedWorkspaceEventRouter,
+  getSharedAIChatTitleService,
 } from "@/service/aiChatWorkspaceRuntime";
 import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
 import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
@@ -114,6 +115,9 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
       // Cross-path terminal notification (shell / message-queue unification):
       // a coordinator-run terminal re-drains or holds durable rows queued
       // behind it. Failures must never break the coordinator path itself.
+      onInteractiveTurnCompleted: (input) => {
+        getSharedAIChatTitleService().notifyInteractiveTurnCompleted(input);
+      },
       onRunTerminal: (conversationId, status) => {
         if (
           status !== "completed" &&
@@ -227,6 +231,22 @@ export async function getConversationBusyReason(
 
 /** One-time-per-process projection backfill guard. */
 let backfillStarted = false;
+/**
+ * r3 G05: single-flight readiness — concurrent first bootstraps share ONE
+ * in-flight pass instead of racing duplicate reconciliation/backfill work.
+ */
+let backfillInFlight: Promise<void> | null = null;
+
+/**
+ * F17: authenticated DB-scope reset — a new scope must re-run schema
+ * readiness/title reconciliation; a FAILED first pass stays retryable
+ * because backfillStarted is only set after success. An in-flight pass from
+ * the previous scope is orphaned (its success cannot mark the new scope).
+ */
+export function resetWorkspaceBackfillForScopeChange(): void {
+  backfillStarted = false;
+  backfillInFlight = null;
+}
 
 function toMessageView(row: {
   messageId: string;
@@ -328,7 +348,40 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // Idempotent backfill once per process: inserts missing projection
       // rows and workspace keys for legacy conversations.
       if (!backfillStarted) {
-        backfillStarted = true;
+        if (backfillInFlight) {
+          // G05: another bootstrap is running this pass — join it and do
+          // not duplicate reconciliation work.
+          await backfillInFlight.catch(() => undefined);
+        } else {
+        // G05: publish the in-flight pass so joiners wait instead of racing.
+        let releaseInFlight!: () => void;
+        backfillInFlight = new Promise<void>((resolve) => {
+          releaseInFlight = resolve;
+        });
+        void releaseInFlight; // released at the end of this block
+        // F17: mark as started only AFTER the readiness work succeeds so a
+        // failed pass remains retryable for this scope.
+        let readinessOk = true;
+        // Chat-titles design §6/§11: interrupted title claims fall back
+        // permanently for their lifecycle; legacy user rows are repaired.
+        // Never enqueues naming work and never scans history for jobs.
+        try {
+          const titleReconcile =
+            await conversationModule.reconcileTitleStateOnStartup();
+          void titleReconcile;
+        } catch (err) {
+          readinessOk = false;
+          console.warn(
+            "[ai-chat-workspace] title startup reconciliation failed:",
+            err
+          );
+        }
+        if (readinessOk) {
+          backfillStarted = true;
+        }
+        releaseInFlight();
+        backfillInFlight = null;
+        }
         // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
         // bootstrap reports runtime state (design §19.4 / FR-036).
         try {
@@ -717,12 +770,40 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid rename request");
       }
+      // Titles B09: a manual rename invalidates any live naming work for
+      // this conversation synchronously with the ownership write.
+      getSharedAIChatTitleService().cancelConversation(
+        parsed.data.conversationId
+      );
       const conversationModule = new AIChatConversationModule();
-      const renamed = await conversationModule.rename(
+      // Chat-titles FR-06/§10.1: authoritative versioned metadata after an
+      // atomic manual write. A missing row is a stable failure — the
+      // renderer reports the chat as unavailable, never as a silent no-op.
+      const result = await conversationModule.applyManualRename(
         parsed.data.conversationId,
         parsed.data.title
       );
-      return ok({ renamed });
+      if (result.outcome === "missing") {
+        return denied("conversation_not_found");
+      }
+      if (result.outcome === "invalid") {
+        return denied("invalid_title");
+      }
+      // Persist before publishing (invariant 4): the title event carries the
+      // committed revision so every renderer converges to it.
+      eventRouter.broadcastTitleUpdate({
+        conversationId: parsed.data.conversationId,
+        title: result.title,
+        titleRevision: result.titleRevision,
+        titleSource: "user",
+      });
+      return ok({
+        renamed: true,
+        conversationId: parsed.data.conversationId,
+        title: result.title,
+        titleRevision: result.titleRevision,
+        titleSource: "user",
+      });
     } catch (err) {
       return denied(userSafeError(err));
     }
@@ -739,6 +820,12 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid delete request");
       }
+      // Chat-titles FR-09: deletion cancels outstanding naming work; a
+      // late result can never recreate the conversation (conditional writes
+      // remain the final protection).
+      getSharedAIChatTitleService().cancelConversation(
+        parsed.data.conversationId
+      );
       // B03: never delete under authoritative execution ownership. The old
       // guard checked only the coordinator's liveRuns map, but ordinary
       // sends now dispatch through the durable queue and never populate it —

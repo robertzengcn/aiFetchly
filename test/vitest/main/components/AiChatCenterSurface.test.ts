@@ -160,6 +160,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   }),
   subscribeDetailEvents: vi.fn().mockReturnValue(() => undefined),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   unsubscribeDetail: vi.fn(),
   loadHistoryPage: vi.fn(),
   markConversationRead: vi.fn().mockResolvedValue(undefined),

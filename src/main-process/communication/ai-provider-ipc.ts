@@ -22,6 +22,9 @@ import { invalidateEmailReplyModelCatalogs } from "@/service/emailReply/EmailRep
 import { AIProviderConnectionTester } from "@/service/aiProvider/AIProviderConnectionTester";
 import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
 import { validateLocalProviderConfig } from "@/service/aiProvider/AIProviderConfigValidator";
+import { setAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
+import { bumpProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
+import { bumpTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
 
 function ok<T>(data: T): CommonMessage<T> {
   return { status: true, msg: "", data };
@@ -69,13 +72,46 @@ export function registerAIProviderIpcHandlers(): void {
     async (_e, data: unknown): Promise<CommonMessage<AIProviderSettingsView>> => {
       try {
         const req = parseArg<SaveAIProviderSettingsRequest>(data);
-        if (!req || (req.mode !== "hosted" && req.mode !== "local")) {
+        if (
+          !req ||
+          (req.mode !== undefined &&
+            req.mode !== "hosted" &&
+            req.mode !== "local")
+        ) {
           return denied("mode must be 'hosted' or 'local'");
         }
         const svc = service();
-        const mode: AIProviderMode = req.mode;
+        // Titles B19: an absent mode is a metadata-only save — never switch
+        // the active provider from a possibly-stale cached mode.
+        const mode: AIProviderMode | undefined = req.mode;
 
-        if (mode === "local") {
+        // Titles B09: any settings change invalidates queued/in-flight
+        // naming work (source provider identity may no longer match).
+        try {
+          const { getSharedAIChatTitleService } = await import(
+            "@/service/aiChatWorkspaceRuntime"
+          );
+          getSharedAIChatTitleService().cancelAll();
+        } catch {
+          // Title cancellation is best-effort; the save itself proceeds.
+        }
+
+        // Chat-titles FR-08: the auto-titles toggle rides the same save
+        // path; changes invalidate in-flight title work via the config
+        // version bump inside setAutoChatTitlesEnabled's caller below.
+        if (typeof req.autoChatTitlesEnabled === "boolean") {
+          setAutoChatTitlesEnabled(req.autoChatTitlesEnabled);
+          bumpTitlePolicyEpoch();
+          bumpProviderConfigVersion();
+        }
+
+        if (mode === undefined) {
+          if (typeof req.autoChatTitlesEnabled !== "boolean") {
+            return denied(
+              "mode is required unless autoChatTitlesEnabled is provided"
+            );
+          }
+        } else if (mode === "local") {
           if (!req.localProvider) {
             return denied("localProvider is required when mode is 'local'");
           }
@@ -85,7 +121,9 @@ export function registerAIProviderIpcHandlers(): void {
           // local availability so the resolver does not treat local as usable.
           // (Provider config is retained for when the user switches back.)
         }
-        svc.setMode(mode);
+        if (mode !== undefined) {
+          svc.setMode(mode);
+        }
         // R04: provider identity may have changed (mode switch and/or new
         // local config) — drop the reply path's cached model caps so a
         // previous provider can never supply the current limits.

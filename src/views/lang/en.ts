@@ -2427,6 +2427,14 @@ export default {
     draft_label: "Draft — review required",
   },
   aiProvider: {
+    chatTitles: {
+      section: "Chat titles",
+      description: "Automatic naming uses a short excerpt of the conversation and may incur a small amount of provider usage.",
+      autoToggle: "Automatically name new chats",
+      hostedModelHint: "Hosted mode uses the service's lightweight model.",
+      customModelLabel: "Title model (optional)",
+      customModelHint: "Used to name new chats automatically. Uses your configured provider.",
+    },
     title: "AI Provider",
     description:
       "Custom providers can power AI Chat with your own model. Hosted aiFetchly AI features still require a subscription.",
@@ -3863,6 +3871,21 @@ export default {
       duplicate: "Duplicate conversation",
       deleteConfirm:
         "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
+    },
+    renameDialog: {
+      title: "Rename chat",
+      label: "Chat name",
+      save: "Save",
+      cancel: "Cancel",
+      limitHint: "Max 200 characters",
+      errorEmpty: "Enter a name for this chat",
+      errorTooLong: "Names must be 200 characters or fewer",
+      errorInvalid: "That name contains unsupported characters",
+      errorSaveFailed: "Couldn't rename this chat. Please try again.",
+      errorUnavailable: "This chat is no longer available",
+      saving: "Saving…",
+      renameAction: "Rename chat",
+      menuButtonLabel: "Conversation actions",
     },
     runStrip: {
       goal: "Goal: {objective}",

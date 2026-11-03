@@ -15,6 +15,8 @@ import type {
 import { AIProviderSecretService } from "./AIProviderSecretService";
 import { validateLocalProviderConfig } from "./AIProviderConfigValidator";
 import { bumpProviderConfigVersion } from "./AIProviderConfigVersion";
+import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
+import { bumpTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
 
 /**
  * Main-process service that owns provider settings persistence and the
@@ -43,6 +45,7 @@ export class AIProviderSettingsService {
   }
 
   setMode(mode: AIProviderMode): void {
+    bumpTitlePolicyEpoch();
     this.token.setValue(USER_AI_PROVIDER_MODE, mode);
     // N05: mode switches change provider identity — version capability caches.
     bumpProviderConfigVersion();
@@ -105,6 +108,7 @@ export class AIProviderSettingsService {
       hostedAIEnabled: this.isHostedAIEnabled(),
       localAIEnabled: this.isLocalAIEnabled(),
       localProvider: this.getLocalProviderConfig(),
+      autoChatTitlesEnabled: isAutoChatTitlesEnabled(),
     };
   }
 
@@ -116,6 +120,8 @@ export class AIProviderSettingsService {
    * @throws Error whose message joins all validation errors.
    */
   saveLocalProvider(input: LocalAIProviderConfigInput): LocalAIProviderConfig {
+    // Titles B08: serialize with an in-flight generated-title commit.
+    bumpTitlePolicyEpoch();
     const result = validateLocalProviderConfig(input, this.secrets.hasApiKey());
     if (!result.valid || !result.normalized) {
       throw new Error(result.errors.join("; "));
@@ -128,11 +134,32 @@ export class AIProviderSettingsService {
       this.secrets.setApiKey(normalized.apiKey);
     }
 
+    // Chat-titles design §8.1 binding rule: `titleModel` is bound to
+    // provider identity (normalized baseUrl + preset). An explicit value
+    // (including "" to clear) is saved as-is; an omitted value is cleared
+    // when the endpoint/preset changed and carried forward otherwise.
+    const previous = this.getLocalProviderConfig();
+    let titleModel: string | undefined;
+    if (normalized.titleModel !== undefined) {
+      titleModel = normalized.titleModel;
+    } else if (
+      previous &&
+      (previous.baseUrl !== normalized.baseUrl ||
+        previous.preset !== normalized.preset)
+    ) {
+      titleModel = "";
+    } else if (previous?.titleModel) {
+      titleModel = previous.titleModel;
+    }
+
     const stored: Omit<LocalAIProviderConfig, "apiKeyConfigured"> = {
       preset: normalized.preset,
       name: normalized.name,
       baseUrl: normalized.baseUrl,
       defaultModel: normalized.defaultModel,
+      ...(titleModel !== undefined && titleModel.length > 0
+        ? { titleModel }
+        : {}),
       ...(typeof normalized.contextSize === "number"
         ? { contextSize: normalized.contextSize }
         : {}),
@@ -165,6 +192,7 @@ export class AIProviderSettingsService {
    * availability. Provider mode itself is left to the caller (Save handler).
    */
   clearLocalProvider(): void {
+    bumpTitlePolicyEpoch();
     this.token.deleteValue(USER_LOCAL_AI_PROVIDER_CONFIG);
     this.secrets.clearApiKey();
     this.token.setValue(USER_LOCAL_AI_ENABLED, "false");
@@ -174,6 +202,7 @@ export class AIProviderSettingsService {
 
   /** Delete only the API key (config retained). */
   clearApiKey(): void {
+    bumpTitlePolicyEpoch();
     this.secrets.clearApiKey();
     // N05: credentials changed — version caches.
     bumpProviderConfigVersion();
