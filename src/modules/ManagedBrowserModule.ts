@@ -1713,9 +1713,7 @@ export class ManagedBrowserModule {
         proxyIds: [proxyId],
         mode: "basic",
       } as never);
-      const results =
-        (result as { results?: Array<{ basic?: "pass" | "failure" }> })
-          .results ?? [];
+      const results = result.results ?? [];
       return results.some((item) => item.basic === "pass");
     } catch (error) {
       log.warn(
