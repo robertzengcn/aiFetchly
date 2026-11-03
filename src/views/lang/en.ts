@@ -4492,6 +4492,15 @@ export default {
     signMyself: "I'll sign in myself",
     missingFields: "Enter a username and password.",
     expired: "This sign-in request expired. Try again.",
+    pickAccount: "Choose an account",
+    pickAccountHint: "Several saved accounts match {domain}.",
+    useAnother: "Use another account",
+  },
+  browserSite: {
+    confirmTitle: "Confirm additional login domains",
+    confirmHint: "The sign-in for {domain} visited additional domains. Credentials and cookies would be released to them — confirm each one.",
+    warning: "Prompt-injected requests cannot add domains — only domains the browser actually visited appear here.",
+    apply: "Confirm selected domains",
   },
   browserTasks: {
     batchTitle: "Parallel browser tasks",

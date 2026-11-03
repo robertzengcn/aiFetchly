@@ -4245,6 +4245,15 @@ export default {
     signMyself: "我自己登录",
     missingFields: "请输入用户名和密码。",
     expired: "该登录请求已过期，请重试。",
+    pickAccount: "选择一个账户",
+    pickAccountHint: "多个已保存的账户匹配 {domain}。",
+    useAnother: "使用其他账户",
+  },
+  browserSite: {
+    confirmTitle: "确认额外的登录域名",
+    confirmHint: "{domain} 的登录过程访问了额外域名。凭据和 Cookie 将释放给它们——请逐个确认。",
+    warning: "提示注入无法添加域名——此处仅显示浏览器实际访问过的域名。",
+    apply: "确认所选域名",
   },
   browserTasks: {
     batchTitle: "并行浏览器任务",

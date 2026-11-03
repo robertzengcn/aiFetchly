@@ -4522,6 +4522,15 @@ export default {
     signMyself: "Ich melde mich selbst an",
     missingFields: "Bitte Benutzername und Passwort eingeben.",
     expired: "Diese Anmeldeanfrage ist abgelaufen. Bitte erneut versuchen.",
+    pickAccount: "Konto auswählen",
+    pickAccountHint: "Mehrere gespeicherte Konten passen zu {domain}.",
+    useAnother: "Anderes Konto verwenden",
+  },
+  browserSite: {
+    confirmTitle: "Zusätzliche Anmelde-Domains bestätigen",
+    confirmHint: "Die Anmeldung für {domain} hat zusätzliche Domains besucht. Anmeldedaten und Cookies würden freigegeben – bitte jeden bestätigen.",
+    warning: "Eingeschleuste Anfragen können keine Domains hinzufügen – hier erscheinen nur Domains, die der Browser tatsächlich besucht hat.",
+    apply: "Ausgewählte Domains bestätigen",
   },
   browserTasks: {
     batchTitle: "Parallele Browser-Aufgaben",

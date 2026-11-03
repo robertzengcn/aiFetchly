@@ -4408,6 +4408,15 @@ export default {
     signMyself: "自分でログインする",
     missingFields: "ユーザー名とパスワードを入力してください。",
     expired: "このログイン要求は期限切れです。もう一度お試しください。",
+    pickAccount: "アカウントを選択",
+    pickAccountHint: "保存済みの複数のアカウントが {domain} に一致します。",
+    useAnother: "別のアカウントを使用",
+  },
+  browserSite: {
+    confirmTitle: "追加のログインドメインを確認",
+    confirmHint: "{domain} のログインで追加のドメインにアクセスしました。資格情報と Cookie がそれらに解放されます — 各ドメインを確認してください。",
+    warning: "プロンプトインジェクションではドメインを追加できません — ブラウザが実際に訪れたドメインのみ表示されます。",
+    apply: "選択したドメインを確認",
   },
   browserTasks: {
     batchTitle: "並列ブラウザタスク",

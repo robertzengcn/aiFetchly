@@ -4513,6 +4513,15 @@ export default {
     signMyself: "Iniciaré sesión yo mismo",
     missingFields: "Introduce usuario y contraseña.",
     expired: "Esta solicitud de inicio de sesión ha caducado. Inténtalo de nuevo.",
+    pickAccount: "Elige una cuenta",
+    pickAccountHint: "Varias cuentas guardadas coinciden con {domain}.",
+    useAnother: "Usar otra cuenta",
+  },
+  browserSite: {
+    confirmTitle: "Confirma dominios de inicio de sesión adicionales",
+    confirmHint: "El inicio de sesión de {domain} visitó dominios adicionales. Las credenciales y cookies se liberarían a ellos: confirma cada uno.",
+    warning: "Las solicitudes inyectadas no pueden añadir dominios: aquí solo aparecen los dominios que el navegador visitó realmente.",
+    apply: "Confirmar dominios seleccionados",
   },
   browserTasks: {
     batchTitle: "Tareas paralelas del navegador",

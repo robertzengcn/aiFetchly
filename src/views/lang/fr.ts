@@ -4498,6 +4498,15 @@ export default {
     signMyself: "Je vais me connecter moi-même",
     missingFields: "Saisissez un nom d'utilisateur et un mot de passe.",
     expired: "Cette demande de connexion a expiré. Réessayez.",
+    pickAccount: "Choisir un compte",
+    pickAccountHint: "Plusieurs comptes enregistrés correspondent à {domain}.",
+    useAnother: "Utiliser un autre compte",
+  },
+  browserSite: {
+    confirmTitle: "Confirmer des domaines de connexion supplémentaires",
+    confirmHint: "La connexion pour {domain} a visité des domaines supplémentaires. Les identifiants et cookies leur seraient accordés — confirmez chacun.",
+    warning: "Les requêtes injectées ne peuvent pas ajouter de domaines — seuls les domaines réellement visités par le navigateur apparaissent ici.",
+    apply: "Confirmer les domaines sélectionnés",
   },
   browserTasks: {
     batchTitle: "Tâches parallèles du navigateur",
