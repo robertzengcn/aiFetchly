@@ -2073,6 +2073,36 @@ async function handleAnswerQuestion(
   return ok(result);
 }
 
+// ---------------------------------------------------------------------------
+// Plan decision persistence (PRD §12.4)
+// ---------------------------------------------------------------------------
+// A committed decision produces a durable plan_lifecycle display row so the
+// workspace transcript keeps rendering the resolved receipt after any
+// selection re-seed (reload/reopen). The row id is derived from the plan
+// identity so retries upsert instead of duplicating.
+
+async function persistPlanDecisionRow(
+  eventType: "plan_approved" | "plan_rejected" | "plan_changes_requested",
+  conversationId: string,
+  planState: AIChatPlanStateView | null
+): Promise<void> {
+  if (!planState?.planId || !conversationId) return;
+  try {
+    await new AIChatV2Module().savePlanEventMessage({
+      conversationId,
+      eventType,
+      planState,
+    });
+  } catch (err) {
+    // The decision itself is durable in the plan tables; the display row is
+    // a presentation aid. Never fail the user's decision over it.
+    log.warn(
+      `[ai-chat-v2] plan decision display row (${eventType}) failed:`,
+      err
+    );
+  }
+}
+
 async function handleApprovePlan(
   data: string
 ): Promise<CommonMessage<AIChatPlanStateView | null>> {
@@ -2100,6 +2130,11 @@ async function handleApprovePlan(
       parsed.value.planId,
       parsed.value.version,
       "approve-plan"
+    );
+    await persistPlanDecisionRow(
+      "plan_approved",
+      parsed.value.conversationId,
+      planState
     );
     return ok(planState);
   } catch (err) {
@@ -2132,6 +2167,11 @@ async function handleRejectPlan(
       parsed.value.version,
       "reject-plan"
     );
+    await persistPlanDecisionRow(
+      "plan_rejected",
+      parsed.value.conversationId,
+      planState
+    );
     return ok(planState);
   } catch (err) {
     return denied(userSafeError(err));
@@ -2162,6 +2202,11 @@ async function handleRequestPlanChanges(
       parsed.value.planId,
       parsed.value.version,
       "request-plan-changes"
+    );
+    await persistPlanDecisionRow(
+      "plan_changes_requested",
+      parsed.value.conversationId,
+      planState
     );
     return ok(planState);
   } catch (err) {

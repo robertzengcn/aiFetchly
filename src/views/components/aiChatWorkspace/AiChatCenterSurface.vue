@@ -3588,16 +3588,26 @@ function onDismissPlanContinuation(): void {
 
 // --- Inspector bridge (design §12.3) -----------------------------------------
 // chatWorkspace keeps the persisted open/tab/width preferences; the typed
-// appInspector store owns target identity and route lifetime.
+// appInspector store owns target identity and route lifetime. The bridge
+// re-opens the target whenever the persisted OPEN state, the selected
+// conversation, or the SELECTED TAB changes (Review full plan → Activity):
+// the ChatInspectorAdapter already binds the tab preference reactively, but
+// re-issuing the typed open also refreshes appInspector.target so no stale
+// tab can ever sit behind an already-open inspector.
 watch(
-  [() => workspaceStore.inspectorOpen, conversationId],
+  [
+    () => workspaceStore.inspectorOpen,
+    () => workspaceStore.inspectorTab,
+    conversationId,
+  ],
   ([open]) => {
     if (open) {
       const target = inspector.target;
       const stale =
         !target ||
         target.kind !== "chat" ||
-        target.conversationId !== conversationId.value;
+        target.conversationId !== conversationId.value ||
+        target.tab !== workspaceStore.inspectorTab;
       if (stale) {
         inspector.open({
           kind: "chat",

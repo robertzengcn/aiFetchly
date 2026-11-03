@@ -141,8 +141,37 @@ import { openAIContentToString } from "@/api/aiChatApi";
 import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
 import type {
   AIChatPlanStateView,
+  AIChatPlanQuestionView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
+
+/**
+ * Loop events that publish a plan lifecycle transition (PRD §12.4). Each one
+ * carries the authoritative `planState` view, so the persisting event sink
+ * can write the matching durable display row (see `savePlanEventMessage`).
+ */
+const PLAN_LOOP_EVENT_TYPES = new Set<string>([
+  "plan_state",
+  "ask_user_question",
+  "plan_submitted",
+  "plan_approved",
+  "plan_rejected",
+  "plan_changes_requested",
+  "plan_blocked_tool",
+]);
+
+/**
+ * One queued event-save of the persisting sink. `strict` keeps the Stage A
+ * §3.3 contract for tool receipts (a failed save gates execution); plan
+ * lifecycle rows are presentation aids and never gate.
+ */
+type PersistedEventSave = {
+  readonly kind: "tool_call" | "tool_result" | "plan_event";
+  readonly strict?: boolean;
+  readonly toolCallId: string;
+  readonly promise: Promise<unknown>;
+};
+
 import type {
   ToolCatalog,
   ToolCatalogModeDecision,
@@ -758,11 +787,7 @@ export class AIChatQueryEngine {
   private readonly streamImplementation: AIChatStreamImplementationConfigProvider;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
-    Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }>
+    PersistedEventSave[]
   >();
   /** Tracks which conversations have already fired SessionStart. */
   private readonly startedConversations = new Set<string>();
@@ -6003,11 +6028,12 @@ export class AIChatQueryEngine {
     // STRICT — flush() rejects with AIChatRequiredPersistenceError so the
     // loop's persist-before-execute barrier blocks dependent work. The emit
     // path still forwards first so the UI stays responsive.
-    const saves: Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }> = [];
+    // Plan lifecycle rows (PRD §12.4) are PRESENTATION aids and therefore
+    // NON-strict: a failed plan-row write logs and continues — the durable
+    // plan tables remain authoritative for decisions, and a later transition
+    // persists a fresh row.
+    // Each save entry declares its own strictness; the flush reads it.
+    const saves: PersistedEventSave[] = [];
     // Track the latest server-reported usage so it can be attributed to
     // intermediate tool_call messages. Without this, every tool_call row
     // is persisted with null tokensUsed/model, losing per-round cost data.
@@ -6031,6 +6057,7 @@ export class AIChatQueryEngine {
         if (event.type === "tool_call") {
           saves.push({
             kind: "tool_call",
+            strict: true,
             toolCallId: event.toolCallId,
             promise: module.saveToolCallMessage({
               conversationId: event.conversationId,
@@ -6061,6 +6088,7 @@ export class AIChatQueryEngine {
           // AIChatRequiredPersistenceError so dependent execution blocks.
           saves.push({
             kind: "tool_result",
+            strict: true,
             toolCallId: event.toolCallId,
             promise: module.saveToolResultMessage({
               conversationId: event.conversationId,
@@ -6075,6 +6103,34 @@ export class AIChatQueryEngine {
             }),
           });
         }
+        if (PLAN_LOOP_EVENT_TYPES.has(event.type)) {
+          // FR-12 (PRD §12.4): the plan lifecycle surface is a projection of
+          // the transcript — persist the transition as a durable display row
+          // so a re-seeded snapshot (reload, reopen, notification click)
+          // keeps rendering the decision card / question / receipt. The
+          // deterministic row id upserts replays of the same transition.
+          const planState = (event as { planState?: AIChatPlanStateView })
+            .planState;
+          const question = (event as { question?: AIChatPlanQuestionView })
+            .question;
+          if (planState?.planId) {
+            saves.push({
+              kind: "plan_event",
+              strict: false,
+              toolCallId: "",
+              promise: module.savePlanEventMessage({
+                conversationId: event.conversationId,
+                eventType: event.type as Parameters<
+                  typeof module.savePlanEventMessage
+                >[0]["eventType"],
+                planState,
+                ...(event.type === "ask_user_question" && question
+                  ? { question }
+                  : {}),
+              }),
+            });
+          }
+        }
       },
       flush: async () => {
         await this.flushPendingEventSaves(saves);
@@ -6085,11 +6141,7 @@ export class AIChatQueryEngine {
   }
 
   private async flushPendingEventSaves(
-    saves: Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }>
+    saves: PersistedEventSave[]
   ): Promise<void> {
     if (saves.length === 0) {
       return;
@@ -6098,20 +6150,32 @@ export class AIChatQueryEngine {
     const settled = await Promise.allSettled(
       batch.map((save) => save.promise)
     );
-    const failedIndex = settled.findIndex((r) => r.status === "rejected");
-    if (failedIndex >= 0) {
-      const failed = settled[failedIndex];
+    // Plan lifecycle rows are non-strict presentation aids (PRD §12.4): a
+    // rejected write is logged and swallowed — the durable plan tables stay
+    // authoritative and the next transition writes a fresh row. Tool
+    // receipts keep the strict Stage A contract (first failure gates).
+    for (let i = 0; i < settled.length; i += 1) {
+      const entry = settled[i];
+      if (entry.status !== "rejected") continue;
+      const meta = batch[i];
+      if (meta.kind === "plan_event" || meta.strict === false) {
+        log.warn(
+          `[ai-chat-v2] non-required ${meta.kind} save failed:`,
+          entry.status === "rejected" ? entry.reason : undefined
+        );
+        continue;
+      }
       const reason =
-        failed.status === "rejected" ? failed.reason : undefined;
+        entry.status === "rejected" ? entry.reason : undefined;
       log.error(
-        `[ai-chat-v2] required ${batch[failedIndex].kind} save failed:`,
+        `[ai-chat-v2] required ${meta.kind} save failed:`,
         reason
       );
       throw new AIChatRequiredPersistenceError(
-        batch[failedIndex].kind === "tool_call"
+        meta.kind === "tool_call"
           ? "tool_call_persist_failed"
           : "tool_result_persist_failed",
-        batch[failedIndex].toolCallId,
+        meta.toolCallId,
         reason
       );
     }

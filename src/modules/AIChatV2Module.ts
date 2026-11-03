@@ -19,6 +19,10 @@ import type {
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
 } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatPlanQuestionView,
+  AIChatPlanStateView,
+} from "@/entityTypes/aiChatPlanTypes";
 
 const V2_CONVERSATION_PREFIX = "v2-";
 const V2_DEFAULT_SYSTEM_PROMPT =
@@ -316,6 +320,69 @@ export class AIChatV2Module extends BaseModule {
     patch: Record<string, unknown>
   ): Promise<void> {
     await this.chatModule.mergeMessageMetadata(messageId, patch);
+  }
+
+  /**
+   * Persist ONE durable plan-lifecycle display row (PRD §12.4: the plan
+   * decision card, question flow and receipts are pure projections of the
+   * transcript; streams alone would lose them on every renderer re-seed
+   * because the workspace selection handshake replaces the live buffer with
+   * the durable snapshot).
+   *
+   * The row carries the SAME metadata shape the workspace stream presenter
+   * uses for live rows (`planEventType` / `planId` / `questionView` /
+   * `planStateView`, plus `source: "chat-v2"`), so seeded history rows and
+   * live rows classify identically in `selectPlanPresentation` and
+   * `isAwaitingDecisionRow` — one contract, two producers.
+   *
+   * Idempotent by construction: the messageId is derived from the plan id +
+   * version + event type, so a replayed transition (restart, retry, loop
+   * re-emission) upserts the SAME row instead of duplicating it — matching
+   * tools' single-receipt contract.
+   */
+  async savePlanEventMessage(params: {
+    conversationId: string;
+    /** Loop/IPC transition that produced the row. Raw plan_state carries no planEventType. */
+    eventType:
+      | "plan_state"
+      | "ask_user_question"
+      | "plan_submitted"
+      | "plan_approved"
+      | "plan_rejected"
+      | "plan_changes_requested"
+      | "plan_blocked_tool";
+    /** Authoritative plan view persisted into the row's metadata. */
+    planState: AIChatPlanStateView;
+    /** ask_user_question rows additionally carry the pending question view. */
+    question?: AIChatPlanQuestionView;
+    timestamp?: Date;
+  }): Promise<void> {
+    const planId = params.planState?.planId;
+    const conversationId = params.conversationId;
+    if (!planId || !conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
+      return;
+    }
+    const version = params.planState.currentVersion ?? 0;
+    const planEventType =
+      params.eventType === "plan_state" ? undefined : params.eventType;
+    const metadata: ChatV2MessageMetadata = {
+      source: "chat-v2",
+      ...(planEventType ? { planEventType } : {}),
+      planId,
+      ...(params.question ? { questionView: params.question } : {}),
+      planStateView: params.planState,
+    };
+    const messageId = `plan-event-${planId}-v${version}-${params.eventType}`;
+    await this.chatModule.saveMessage({
+      messageId,
+      conversationId,
+      role: "assistant",
+      content: "",
+      timestamp: params.timestamp,
+      metadata,
+      messageType: MessageType.MESSAGE,
+    });
+    await this.coupleArchiveAppend(conversationId);
   }
 
   async getConversationMessages(
