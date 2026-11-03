@@ -13,6 +13,7 @@ import type {
  * resolves to the existing operation instead of creating a fresh attempt.
  */
 @Entity("email_organization_operation")
+@Index(["idempotencyKey"], { unique: true })
 @Index(["emailServiceId", "requestedAt"])
 @Index(["status"])
 export class EmailOrganizationOperationEntity extends AuditableEntity {

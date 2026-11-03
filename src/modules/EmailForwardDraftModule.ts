@@ -86,16 +86,6 @@ export class EmailForwardDraftModule extends BaseModule {
     }
   }
 
-  async readCurrentRevision(draftId: number): Promise<EmailForwardRevisionEntity | null> {
-    try {
-      await this.ensureConnection();
-      return await this.draftModel.readCurrentRevision(draftId);
-    } catch (error) {
-      log.error("Error reading current forward revision:", error);
-      throw error;
-    }
-  }
-
   async markSubmitted(draftId: number, revisionId: number): Promise<boolean> {
     try {
       await this.ensureConnection();

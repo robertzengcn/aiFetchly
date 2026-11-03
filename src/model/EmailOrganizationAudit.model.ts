@@ -49,18 +49,6 @@ export class EmailOrganizationAuditModel extends BaseDb {
     await this.repository.save(this.repository.create(stripped));
   }
 
-  async listByOperation(
-    operationId: string,
-    limit = 100
-  ): Promise<EmailOrganizationAuditEntity[]> {
-    return await this.repository
-      .createQueryBuilder("audit")
-      .where("audit.operationId = :operationId", { operationId })
-      .orderBy("audit.id", "ASC")
-      .take(limit)
-      .getMany();
-  }
-
   async listByMessage(
     messageId: number,
     limit = 50

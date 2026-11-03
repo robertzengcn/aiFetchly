@@ -2882,6 +2882,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
     tier: "main",
     requiresConfirmation: true,
     permissionCategory: "automation",
+    confirmationPolicy: "request_scoped_action",
     source: "built-in",
     execute: async (args) => {
       const result = await cancelEmailOperation(args);

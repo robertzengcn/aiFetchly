@@ -1,4 +1,5 @@
 import { log } from "@/modules/Logger";
+import { parseStringArrayJson } from "@/utils/jsonArray";
 import { BaseModule } from "@/modules/baseModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
@@ -242,16 +243,9 @@ export class EmailForwardDraftService extends BaseModule {
       );
     }
 
-    // Any edit invalidates prior authorizations (design §6.1).
-    await this.authorizationModule.revokeAllForDraft(
-      draft.id,
-      "draft edited; new revision created",
-      new Date()
-    );
-
-    const to = input.to ?? parseJsonArray(currentRevision.toRecipientsJson);
-    const cc = input.cc ?? parseJsonArray(currentRevision.ccRecipientsJson);
-    const bcc = input.bcc ?? parseJsonArray(currentRevision.bccRecipientsJson);
+    const to = input.to ?? parseStringArrayJson(currentRevision.toRecipientsJson);
+    const cc = input.cc ?? parseStringArrayJson(currentRevision.ccRecipientsJson);
+    const bcc = input.bcc ?? parseStringArrayJson(currentRevision.bccRecipientsJson);
     const normalized = this.normalizeAndValidateRecipients(to, cc, bcc);
     const subject = input.subject && input.subject.trim() !== ""
       ? input.subject.trim()
@@ -353,6 +347,14 @@ export class EmailForwardDraftService extends BaseModule {
         false
       );
     }
+    // Any committed edit invalidates prior authorizations (design §6.1) —
+    // only AFTER the new revision durably exists, so a failed edit (network
+    // blip during materialization) leaves existing approvals intact.
+    await this.authorizationModule.revokeAllForDraft(
+      draft.id,
+      "draft edited; new revision created",
+      new Date()
+    );
     const refreshedDraft = await this.draftModule.readDraft(draft.id);
     if (!refreshedDraft) {
       throw new EmailOrganizationActionError("SOURCE_NOT_FOUND", "Draft vanished.", false);
@@ -379,8 +381,33 @@ export class EmailForwardDraftService extends BaseModule {
     await this.ensureConnection();
     const draft = await this.draftModule.readDraft(draftId);
     if (!draft) return;
+    const revision = draft.currentRevisionId
+      ? await this.draftModule.readRevision(draft.currentRevisionId)
+      : null;
+    const discarded = await this.draftModule.markDiscarded(draftId);
+    if (!discarded) {
+      // A concurrent submit won the CAS; leaving approvals intact is correct.
+      throw new EmailOrganizationActionError(
+        "REVISION_CHANGED",
+        "The draft was submitted concurrently and can no longer be discarded.",
+        false
+      );
+    }
     await this.authorizationModule.revokeAllForDraft(draftId, "draft discarded", new Date());
-    await this.draftModule.markDiscarded(draftId);
+    // Retention hygiene: a discarded draft's encrypted artifacts are dead
+    // weight — purge them immediately (metadata rows remain for audit).
+    if (revision) {
+      const artifactIds = [
+        revision.bodyTextArtifactId,
+        revision.bodyHtmlArtifactId,
+        ...parseAttachmentArtifactIds(revision.attachmentsJson),
+      ].filter((id): id is string => id !== null);
+      for (const artifactId of artifactIds) {
+        await this.artifactStore.purge(artifactId).catch(() => {
+          // best-effort; the retention sweep is the backstop
+        });
+      }
+    }
   }
 
   private assertVerifiedLocation(
@@ -490,7 +517,7 @@ export class EmailForwardDraftService extends BaseModule {
     manifest: readonly EmailForwardAttachmentManifestEntry[]
   ): EmailForwardAttachmentSelection {
     const selected = manifest.filter((entry) => entry.selected).map((entry) => entry.partId);
-    if (selected.length === 0 && manifest.every((entry) => !entry.selected)) {
+    if (selected.length === 0) {
       return { mode: "none" };
     }
     return { mode: "parts", partIds: selected };
@@ -513,8 +540,8 @@ export class EmailForwardDraftService extends BaseModule {
       sendingAccountId: revision.sendingAccountId,
       fromName: revision.fromName,
       fromAddress: revision.fromAddress,
-      to: parseJsonArray(revision.toRecipientsJson),
-      cc: parseJsonArray(revision.ccRecipientsJson),
+      to: parseStringArrayJson(revision.toRecipientsJson),
+      cc: parseStringArrayJson(revision.ccRecipientsJson),
       subject: revision.subject,
       note: revision.note,
       attachmentManifest: manifest.map((entry) => ({ ...entry, artifactId: null })),
@@ -523,7 +550,7 @@ export class EmailForwardDraftService extends BaseModule {
         .filter((entry) => entry.selected)
         .reduce((sum, entry) => sum + entry.decodedSize, 0),
       bodyPreviewText: expired ? "" : bodyText.slice(0, 4000),
-      validationFindings: parseJsonArray(revision.validationFindingsJson ?? "[]"),
+      validationFindings: parseStringArrayJson(revision.validationFindingsJson),
       composedHash: revision.composedHash,
       composedMessageId: revision.composedMessageId,
       expiresAt: revision.expiresAt ? revision.expiresAt.toISOString() : "",
@@ -546,11 +573,10 @@ export class EmailForwardDraftService extends BaseModule {
   }
 }
 
-function parseJsonArray(json: string | null): string[] {
-  if (!json) return [];
+function parseAttachmentArtifactIds(attachmentsJson: string): Array<string | null> {
   try {
-    const parsed = JSON.parse(json) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+    const parsed = JSON.parse(attachmentsJson) as Array<{ artifactId: string | null }>;
+    return Array.isArray(parsed) ? parsed.map((entry) => entry.artifactId) : [];
   } catch {
     return [];
   }

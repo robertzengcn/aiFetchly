@@ -9,6 +9,7 @@ import type { EmailOrganizationItemStatus } from "@/entityTypes/emailOrganizatio
  * Unique (operationId, messageId) prevents duplicated items.
  */
 @Entity("email_organization_operation_item")
+@Index(["operationId", "messageId"], { unique: true })
 @Index(["operationId", "status"])
 @Index(["messageId"])
 export class EmailOrganizationOperationItemEntity extends AuditableEntity {

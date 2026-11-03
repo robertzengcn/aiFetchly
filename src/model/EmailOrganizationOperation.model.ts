@@ -1,6 +1,7 @@
 import { EntityManager, In, Repository } from "typeorm";
 import { BaseDb } from "@/model/Basedb";
 import { runReplyTxn } from "@/model/replyTxn";
+import { isUniqueConstraintError } from "@/model/dbConstraints";
 import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
 import { EmailOrganizationOperationItemEntity } from "@/entity/EmailOrganizationOperationItem.entity";
 import { EmailOrganizationAttemptEntity } from "@/entity/EmailOrganizationAttempt.entity";
@@ -20,6 +21,7 @@ import type {
   EmailOrganizationOperationStatus,
   EmailOrganizationOrigin,
 } from "@/entityTypes/emailOrganizationTypes";
+import { isTerminalOperationStatus } from "@/entityTypes/emailOrganizationTypes";
 
 /**
  * Data access + transaction orchestration for organization operations
@@ -302,7 +304,9 @@ export class EmailOrganizationOperationModel extends BaseDb {
       const resolvable: EmailOrganizationItemStatus[] =
         input.status === "outcome_unknown"
           ? ["claimed"]
-          : ["claimed", "outcome_unknown"];
+          // Definitive outcomes may fill a pending item too: pending items
+          // have no attempt row, so no dispatch evidence can be lost.
+          : ["pending", "claimed", "outcome_unknown"];
       const update = await itemRepo
         .createQueryBuilder()
         .update(EmailOrganizationOperationItemEntity)
@@ -351,6 +355,19 @@ export class EmailOrganizationOperationModel extends BaseDb {
 
       await this.recomputeAggregate(manager, input.operationId);
     });
+  }
+
+  /** Persist provider result evidence on a non-resolved attempt. */
+  async recordAttemptEvidence(attemptId: number, resultJson: string): Promise<void> {
+    await this.attemptRepository
+      .createQueryBuilder()
+      .update(EmailOrganizationAttemptEntity)
+      .set({ resultJson })
+      .where("id = :attemptId AND phase IN (:...phases)", {
+        attemptId,
+        phases: ["claimed", "dispatched"],
+      })
+      .execute();
   }
 
   /** Mark an attempt as dispatched (before/while network I/O is in flight). */
@@ -491,16 +508,10 @@ export class EmailOrganizationOperationModel extends BaseDb {
   }
 
   private isTerminal(status: EmailOrganizationOperationStatus): boolean {
-    return (
-      status === "succeeded" ||
-      status === "partially_succeeded" ||
-      status === "failed" ||
-      status === "cancelled"
-    );
+    return isTerminalOperationStatus(status);
   }
 
   private isUniqueViolation(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return /UNIQUE constraint failed/i.test(message);
+    return isUniqueConstraintError(error);
   }
 }

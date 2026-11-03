@@ -63,17 +63,18 @@ export class EmailOrganizationCapabilityService extends BaseModule {
     if (!canFetchFullSource) {
       reasonCodes.push("CAPABILITY_UNSUPPORTED_POP3");
     }
-    const canSendForward = canFetchFullSource && smtpConfigured;
     if (canFetchFullSource && !smtpConfigured) {
       reasonCodes.push("SMTP_NOT_CONFIGURED");
     }
 
     let moveCapability = false;
     let trashFolderPath: string | null = null;
+    let receiveConfigPresent = false;
     if (protocol === "imap") {
       const receiveConfig = await this.serviceModule.getEmailServiceReceiveConfig(
         emailServiceId
       );
+      receiveConfigPresent = receiveConfig !== null;
       if (receiveConfig) {
         const probe = await this.adapter.probeCapabilities(receiveConfig);
         moveCapability = probe.moveCapability;
@@ -92,6 +93,11 @@ export class EmailOrganizationCapabilityService extends BaseModule {
         reasonCodes.push("RECEIVE_NOT_ENABLED");
       }
     }
+
+    // Forwarding needs full source retrieval AND a usable send identity AND
+    // an enabled receive configuration (materialization fetches via IMAP).
+    const canSendForward =
+      canFetchFullSource && smtpConfigured && receiveConfigPresent;
 
     const dto: EmailOrganizationCapabilityDto = {
       emailServiceId,
@@ -129,19 +135,6 @@ export class EmailOrganizationCapabilityService extends BaseModule {
       specialUse: folder.specialUse,
       writable: folder.writable,
     }));
-  }
-
-  invalidateCache(emailServiceId?: number): void {
-    if (emailServiceId === undefined) {
-      this.cache.clear();
-    } else {
-      this.cache.delete(emailServiceId);
-    }
-  }
-
-  /** Adapter access for action services (revalidation before mutation). */
-  getAdapter(): EmailMailboxAdapter {
-    return this.adapter;
   }
 
   /** Exposed for action services: the resolved receive config of an account. */

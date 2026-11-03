@@ -38,7 +38,6 @@ import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOpe
 import { EmailOrganizationAuthorizationModule } from "@/modules/EmailOrganizationAuthorizationModule";
 import { projectOperation } from "@/service/EmailOrganizationAiTools";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
-import type { ForwardDraftPreview } from "@/service/emailOrganization/EmailForwardDraftService";
 
 /**
  * Email organization IPC surface (design §8.2).
@@ -73,8 +72,18 @@ function newUiActionId(): string {
   return `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+// Module-scoped so the 5-minute capability cache actually serves its TTL
+// across IPC calls instead of being re-created (and re-probed) per request.
+let capabilityServiceSingleton: EmailOrganizationCapabilityService | null = null;
+function getCapabilityService(): EmailOrganizationCapabilityService {
+  if (capabilityServiceSingleton === null) {
+    capabilityServiceSingleton = new EmailOrganizationCapabilityService();
+  }
+  return capabilityServiceSingleton;
+}
+
 export function registerEmailOrganizationIpcHandlers(): void {
-  const capabilityService = () => new EmailOrganizationCapabilityService();
+  const capabilityService = getCapabilityService;
 
   // ---- Read-only account introspection (manual controls) ----
   registerValidatedHandler(
@@ -316,5 +325,3 @@ export function registerEmailOrganizationIpcHandlers(): void {
     }
   );
 }
-
-export type { ForwardDraftPreview };

@@ -113,14 +113,6 @@ export class EmailForwardDraftModel extends BaseDb {
     return await this.revisionRepository.findOne({ where: { id } });
   }
 
-  async readCurrentRevision(
-    draftId: number
-  ): Promise<EmailForwardRevisionEntity | null> {
-    const draft = await this.readDraft(draftId);
-    if (!draft?.currentRevisionId) return null;
-    return await this.readRevision(draft.currentRevisionId);
-  }
-
   /** Conditional submit marker; fails when the revision changed meanwhile. */
   async markSubmitted(draftId: number, revisionId: number): Promise<boolean> {
     const result = await this.draftRepository

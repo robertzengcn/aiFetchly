@@ -26,7 +26,9 @@ export interface MailboxActionConnection {
   connect(): Promise<void>;
   logout(): Promise<void>;
   close(): void;
-  list(): Promise<Array<{ path: string; name?: string; specialUse?: string }>>;
+  list(): Promise<
+    Array<{ path: string; name?: string; specialUse?: string; flags?: Iterable<string> }>
+  >;
   mailboxOpen(path: string): Promise<{ uidValidity: bigint | number | string }>;
   fetchOne(
     seq: string | number,
@@ -193,6 +195,8 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
     if (!session.ok) {
       return { status: "failed", reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: session.error };
     }
+    // ---- Pre-dispatch phase: failures here prove nothing was sent. ----
+    let preDispatchFailure: MoveResult | null = null;
     try {
       const mailbox = await withTimeout(
         session.connection.mailboxOpen(location.folderPath),
@@ -201,20 +205,34 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
       );
       const observed = uidValidityToString(mailbox.uidValidity);
       if (observed !== location.uidValidity) {
-        return { status: "uid_validity_changed" };
+        preDispatchFailure = { status: "uid_validity_changed" };
+      } else if (!session.connection.capabilities.has("MOVE")) {
+        // Compatibility gate (design §5.1): never allow the library's
+        // COPY+EXPUNGE emulation to run.
+        preDispatchFailure = { status: "no_move_capability" };
+      } else {
+        const existing = await withTimeout(
+          session.connection.fetchOne(location.uid, { uid: true }, { uid: true }),
+          COMMAND_TIMEOUT_MS,
+          "message existence check"
+        );
+        if (!existing) preDispatchFailure = { status: "source_missing" };
       }
-      // Compatibility gate (design §5.1): never allow the library's
-      // COPY+EXPUNGE emulation to run.
-      if (!session.connection.capabilities.has("MOVE")) {
-        return { status: "no_move_capability" };
-      }
-      const existing = await withTimeout(
-        session.connection.fetchOne(location.uid, { uid: true }, { uid: true }),
-        COMMAND_TIMEOUT_MS,
-        "message existence check"
-      );
-      if (!existing) return { status: "source_missing" };
+    } catch (error) {
+      preDispatchFailure = {
+        status: "failed",
+        reasonCode: "NETWORK_BEFORE_DISPATCH",
+        sanitizedError: sanitizeMailboxError(error),
+      };
+    }
+    if (preDispatchFailure !== null) {
+      await closeSession(session.connection);
+      return preDispatchFailure;
+    }
 
+    try {
+      // ---- Dispatch phase: a transport failure here is conservatively
+      // unknown — the command may still have completed server-side. ----
       const result = await withTimeout(
         session.connection.messageMove(location.uid, destinationFolderPath, { uid: true }),
         COMMAND_TIMEOUT_MS,
@@ -233,8 +251,6 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
         destinationUid: destinationUid !== undefined ? String(destinationUid) : null,
       };
     } catch (error) {
-      // A transport-level failure after dispatch is conservatively unknown:
-      // the command may still have completed server-side.
       return { status: "failed", reasonCode: "OUTCOME_UNKNOWN", sanitizedError: sanitizeMailboxError(error) };
     } finally {
       await closeSession(session.connection);
@@ -275,24 +291,35 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
   private async connect(
     config: EmailReceiveConnectionConfig
   ): Promise<{ ok: true; connection: MailboxActionConnection } | { ok: false; error: string }> {
-    let connection: MailboxActionConnection;
+    const closeQuietly = (client: MailboxActionConnection | undefined): void => {
+      try {
+        client?.close();
+      } catch {
+        // best-effort
+      }
+    };
+    let connection: MailboxActionConnection | undefined;
     try {
       connection = this.connectionFactory(buildImapFlowOptions(config, "configured", "probe"));
       await withTimeout(connection.connect(), CONNECTION_TIMEOUT_MS, "IMAP connect");
     } catch (error) {
+      // A timed-out promise does not stop the socket: close the client we
+      // created so a hanging handshake cannot leak a connection.
+      closeQuietly(connection);
       // One implicit-TLS retry for handshake mismatch, mirroring the receive client.
       if (shouldRetryWithImplicitTls(error, config)) {
         try {
           connection = this.connectionFactory(buildImapFlowOptions(config, "implicitTls", "probe"));
           await withTimeout(connection.connect(), CONNECTION_TIMEOUT_MS, "IMAP connect (implicit TLS)");
         } catch (retryError) {
+          closeQuietly(connection);
           return { ok: false, error: sanitizeMailboxError(retryError) };
         }
-        return { ok: true, connection };
+        return { ok: true, connection: connection as MailboxActionConnection };
       }
       return { ok: false, error: sanitizeMailboxError(error) };
     }
-    return { ok: true, connection };
+    return { ok: true, connection: connection as MailboxActionConnection };
   }
 }
 
@@ -305,16 +332,17 @@ async function closeSession(connection: MailboxActionConnection): Promise<void> 
 }
 
 function foldersFromListResponse(
-  list: Array<{ path: string; name?: string; specialUse?: string }>
+  list: Array<{ path: string; name?: string; specialUse?: string; flags?: Iterable<string> }>
 ): MailboxFolderInfo[] {
   const folders: MailboxFolderInfo[] = [];
   for (const entry of list) {
     if (!entry || !entry.path) continue;
+    const flags = entry.flags ? new Set(Array.from(entry.flags, (flag) => String(flag).toLowerCase())) : null;
     folders.push({
       path: entry.path,
       name: entry.name ?? entry.path.split("/").pop() ?? entry.path,
       specialUse: typeof entry.specialUse === "string" ? entry.specialUse : null,
-      writable: true,
+      writable: flags === null ? true : !flags.has("\\noselect"),
     });
   }
   return folders;

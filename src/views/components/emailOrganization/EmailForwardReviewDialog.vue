@@ -138,7 +138,6 @@ import {
 const props = defineProps<{
   /** When non-null, the dialog is open for this received message. */
   messageId: number | null;
-  emailServiceId: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -267,7 +266,7 @@ async function send(): Promise<void> {
       authorizationId: authorization.authorizationId,
     });
     emit("sent", result);
-    close(false);
+    close();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -282,7 +281,7 @@ async function saveDraft(): Promise<void> {
   try {
     await refreshDraft();
     emit("draft-saved", draftId.value);
-    close(false);
+    close();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
   } finally {
@@ -298,11 +297,10 @@ async function cancel(): Promise<void> {
       // Discard is best-effort on cancel.
     }
   }
-  close(true);
+  close();
 }
 
-function close(discarded: boolean): void {
-  void discarded;
+function close(): void {
   preview.value = null;
   draftId.value = null;
   errorMessage.value = null;

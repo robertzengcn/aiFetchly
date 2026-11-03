@@ -252,7 +252,7 @@ async function syncNow() {
 const trashingRowId = ref<number | null>(null);
 const rowActionMessage = ref<string | null>(null);
 
-async function trashRow(id: number) {
+async function trashRow(id: number): Promise<void> {
   if (trashingRowId.value !== null) return;
   trashingRowId.value = id;
   try {

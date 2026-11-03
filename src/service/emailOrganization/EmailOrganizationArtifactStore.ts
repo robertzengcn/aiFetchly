@@ -36,6 +36,11 @@ export class EmailOrganizationArtifactStore implements EmailOrganizationArtifact
           await import("@/modules/fieldCipher/UserSecretKeyService");
         return await userSecretKeyService.getKey();
       })();
+      // A transient key failure must not poison the memo for the process
+      // lifetime: clear it so the next call retries acquisition.
+      this.keyPromise.catch(() => {
+        if (this.keyPromise !== null) this.keyPromise = null;
+      });
     }
     return await this.keyPromise;
   }
@@ -47,6 +52,12 @@ export class EmailOrganizationArtifactStore implements EmailOrganizationArtifact
   }
 
   private pathFor(artifactId: string): string {
+    // Enforce the "opaque and safe to expose" contract: only server-generated
+    // UUIDs may reach the filesystem path (blocks traversal if a future
+    // caller ever forwards an external id).
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(artifactId)) {
+      throw new Error("invalid artifact id");
+    }
     return path.join(this.rootDir, `${artifactId}.enc`);
   }
 

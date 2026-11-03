@@ -16,6 +16,7 @@ import type { EmailMessageLocationState, EmailOrganizationProtocol } from "@/ent
  *   never creates a second logical message.
  */
 @Entity("email_message_location")
+@Index(["messageId"], { unique: true })
 @Index(["emailServiceId", "folderPath", "uidValidity", "providerUid"], {
   unique: true,
 })

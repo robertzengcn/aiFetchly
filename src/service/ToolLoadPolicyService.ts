@@ -145,6 +145,7 @@ const CONTEXTUAL_EMAIL_ORGANIZATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   "move_email_to_trash",
   "restore_email",
   "get_email_operation",
+  "cancel_email_operation",
 ]);
 
 /**

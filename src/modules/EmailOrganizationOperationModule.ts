@@ -12,7 +12,6 @@ import { EmailOrganizationAuditModel, type RecordAuditInput } from "@/model/Emai
 import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
 import { EmailOrganizationOperationItemEntity } from "@/entity/EmailOrganizationOperationItem.entity";
 import { EmailOrganizationAttemptEntity } from "@/entity/EmailOrganizationAttempt.entity";
-import { EmailOrganizationAuditEntity } from "@/entity/EmailOrganizationAudit.entity";
 
 /**
  * Business facade for organization operations. IPC handlers and services
@@ -70,16 +69,6 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
-  async findItemById(itemId: number): Promise<EmailOrganizationOperationItemEntity | null> {
-    try {
-      await this.ensureConnection();
-      return await this.operationModel.findItemById(itemId);
-    } catch (error) {
-      log.error("Error finding organization operation item:", error);
-      throw error;
-    }
-  }
-
   async claimItem(input: ClaimItemInput): Promise<ClaimItemResult> {
     try {
       await this.ensureConnection();
@@ -96,6 +85,26 @@ export class EmailOrganizationOperationModule extends BaseModule {
       return await this.operationModel.finalizeItem(input);
     } catch (error) {
       log.error("Error finalizing organization operation item:", error);
+      throw error;
+    }
+  }
+
+  async listAttemptsForItem(itemId: number): Promise<EmailOrganizationAttemptEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.listAttemptsForItem(itemId);
+    } catch (error) {
+      log.error("Error listing attempts:", error);
+      throw error;
+    }
+  }
+
+  async recordAttemptEvidence(attemptId: number, resultJson: string): Promise<void> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.recordAttemptEvidence(attemptId, resultJson);
+    } catch (error) {
+      log.error("Error recording attempt evidence:", error);
       throw error;
     }
   }
@@ -120,26 +129,6 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
-  async refreshAggregate(operationId: string): Promise<void> {
-    try {
-      await this.ensureConnection();
-      return await this.operationModel.refreshAggregate(operationId);
-    } catch (error) {
-      log.error("Error refreshing operation aggregate:", error);
-      throw error;
-    }
-  }
-
-  async findNonTerminalOperations(): Promise<EmailOrganizationOperationEntity[]> {
-    try {
-      await this.ensureConnection();
-      return await this.operationModel.findNonTerminalOperations();
-    } catch (error) {
-      log.error("Error finding non-terminal operations:", error);
-      throw error;
-    }
-  }
-
   async findExpiredClaims(now: Date): Promise<
     Array<{ attempt: EmailOrganizationAttemptEntity; item: EmailOrganizationOperationItemEntity }>
   > {
@@ -152,32 +141,12 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
-  async listAttemptsForItem(itemId: number): Promise<EmailOrganizationAttemptEntity[]> {
-    try {
-      await this.ensureConnection();
-      return await this.operationModel.listAttemptsForItem(itemId);
-    } catch (error) {
-      log.error("Error listing attempts:", error);
-      throw error;
-    }
-  }
-
   async recordAudit(input: RecordAuditInput): Promise<void> {
     try {
       await this.ensureConnection();
       return await this.auditModel.record(input);
     } catch (error) {
       log.error("Error recording organization audit:", error);
-      throw error;
-    }
-  }
-
-  async listAudit(operationId: string): Promise<EmailOrganizationAuditEntity[]> {
-    try {
-      await this.ensureConnection();
-      return await this.auditModel.listByOperation(operationId);
-    } catch (error) {
-      log.error("Error listing organization audit:", error);
       throw error;
     }
   }

@@ -4,6 +4,7 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
 import type { LegacyBackfillEntry } from "@/model/EmailMessageLocation.model";
 import type { EmailOrganizationProtocol } from "@/entityTypes/emailOrganizationTypes";
+import { parseNamespacedProviderUid } from "@/service/emailReceive/EmailReplyIdentity";
 
 const BACKFILL_BATCH_SIZE = 500;
 
@@ -64,14 +65,22 @@ export class EmailOrganizationStartupService extends BaseModule {
           const missingSet = new Set(missingIds);
           const entries: LegacyBackfillEntry[] = batch
             .filter((row) => missingSet.has(row.id))
-            .map((row) => ({
-              messageId: row.id,
-              emailServiceId: row.emailServiceId,
-              protocol: deriveProtocolFromProviderUid(row.providerUid),
-              folderPath: row.providerFolder,
-              uidValidity: row.providerUidValidity,
-              providerUid: row.providerUid,
-            }));
+            .map((row) => {
+              const namespaced = parseNamespacedProviderUid(row.providerUid);
+              // Store the same identity representation the live sync writes
+              // (bare uid for namespaced rows) so the tuple index and later
+              // verification see one consistent form.
+              return {
+                messageId: row.id,
+                emailServiceId: row.emailServiceId,
+                protocol: deriveProtocolFromProviderUid(row.providerUid),
+                folderPath: row.providerFolder,
+                uidValidity: namespaced
+                  ? namespaced.uidValidity
+                  : row.providerUidValidity,
+                providerUid: namespaced ? namespaced.uid : row.providerUid,
+              };
+            });
           totalInserted += await this.locationModule.backfillLegacyLocations(
             entries
           );

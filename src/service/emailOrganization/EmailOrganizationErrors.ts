@@ -16,3 +16,13 @@ export class EmailOrganizationActionError extends Error {
     this.retryable = retryable;
   }
 }
+
+const RETRYABLE_ORGANIZATION_ERROR_CODES: ReadonlySet<string> = new Set([
+  "NETWORK_BEFORE_DISPATCH",
+  "AUTHENTICATION_FAILED",
+]);
+
+/** Stable predicate for the tool/IPC `retryable` flag. */
+export function isRetryableOrganizationErrorCode(code: string | null | undefined): boolean {
+  return code !== null && code !== undefined && RETRYABLE_ORGANIZATION_ERROR_CODES.has(code);
+}

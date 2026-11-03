@@ -1,5 +1,6 @@
 import { Repository } from "typeorm";
 import { BaseDb } from "@/model/Basedb";
+import { isUniqueConstraintError } from "@/model/dbConstraints";
 import { EmailMessageLocationEntity } from "@/entity/EmailMessageLocation.entity";
 import { emailMessageLocationWriteSchema } from "@/schemas/entity/emailMessageLocation";
 import { parseAndStrip } from "@/utils/parseAndStrip";
@@ -155,14 +156,6 @@ export class EmailMessageLocationModel extends BaseDb {
     return await this.repository.findOne({ where: { messageId } });
   }
 
-  async readByMessageIds(messageIds: readonly number[]): Promise<EmailMessageLocationEntity[]> {
-    if (messageIds.length === 0) return [];
-    return await this.repository
-      .createQueryBuilder("loc")
-      .where("loc.messageId IN (:...ids)", { ids: [...messageIds] })
-      .getMany();
-  }
-
   /**
    * Optimistic-concurrency location update after a verified move. Returns
    * false when the expected version no longer matches (another mutation won).
@@ -220,26 +213,33 @@ export class EmailMessageLocationModel extends BaseDb {
       const existingByMessageId = new Set(existing.map((row) => row.messageId));
       for (const entry of entries) {
         if (existingByMessageId.has(entry.messageId)) continue;
-        const stripped = parseAndStrip(
-          {
-            messageId: entry.messageId,
-            emailServiceId: entry.emailServiceId,
-            protocol: entry.protocol,
-            folderPath: entry.folderPath,
-            uidValidity: entry.uidValidity,
-            providerUid: entry.providerUid,
-            state: "legacy_unverified",
-            lastVerifiedAt: null,
-            lastOperationId: null,
-          },
-          emailMessageLocationWriteSchema()
-        ) as unknown as EmailMessageLocationEntity;
         try {
+          const stripped = parseAndStrip(
+            {
+              messageId: entry.messageId,
+              emailServiceId: entry.emailServiceId,
+              protocol: entry.protocol,
+              folderPath: entry.folderPath === "" ? null : entry.folderPath,
+              uidValidity: entry.uidValidity,
+              providerUid: entry.providerUid,
+              state: "legacy_unverified",
+              lastVerifiedAt: null,
+              lastOperationId: null,
+            },
+            emailMessageLocationWriteSchema()
+          ) as unknown as EmailMessageLocationEntity;
           await repo.save(repo.create(stripped));
           inserted += 1;
         } catch (error) {
-          // Unique violation = the message gained a row concurrently; skip.
-          if (!this.isUniqueViolation(error)) throw error;
+          // Skip-and-log: a unique violation means the message gained a row
+          // concurrently; any other per-row error (malformed legacy data)
+          // must not stall the whole migration batch.
+          if (!isUniqueConstraintError(error)) {
+            log.warn(
+              `[EmailMessageLocation] backfill skipped message ${entry.messageId}:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          }
         }
       }
     });
@@ -261,8 +261,6 @@ export class EmailMessageLocationModel extends BaseDb {
   }
 
   private isUniqueViolation(error: unknown): boolean {
-    const message =
-      error instanceof Error ? `${error.message}` : `${String(error)}`;
-    return /UNIQUE constraint failed/i.test(message) || error instanceof Error && "code" in error && (error as { code?: string }).code === "SQLITE_CONSTRAINT_UNIQUE";
+    return isUniqueConstraintError(error);
   }
 }

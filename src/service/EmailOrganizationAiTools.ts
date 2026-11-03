@@ -4,6 +4,7 @@ import { EmailForwardDeliveryService } from "@/service/emailOrganization/EmailFo
 import { EmailMailboxActionService } from "@/service/emailOrganization/EmailMailboxActionService";
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { isRetryableOrganizationErrorCode } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EmailOrganizationAuthorizationModule } from "@/modules/EmailOrganizationAuthorizationModule";
 import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
 import type { ForwardDraftPreview } from "@/service/emailOrganization/EmailForwardDraftService";
@@ -12,6 +13,7 @@ import type { EmailOrganizationItemStatus } from "@/entityTypes/emailOrganizatio
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { log } from "@/modules/Logger";
+import { parseStringArrayJson } from "@/utils/jsonArray";
 
 /**
  * AI-facing organization tool functions (technical design §7). Tool
@@ -111,12 +113,20 @@ function actionIdFor(context: SkillExecutionContext | undefined): string | null 
 
 // ---- Read-only tools ----
 
+let capabilityServiceSingleton: EmailOrganizationCapabilityService | null = null;
+function getCapabilityService(): EmailOrganizationCapabilityService {
+  if (capabilityServiceSingleton === null) {
+    capabilityServiceSingleton = new EmailOrganizationCapabilityService();
+  }
+  return capabilityServiceSingleton;
+}
+
 export async function listEmailFolders(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ email_service_id: number; folders: unknown[]; capabilities: unknown }>> {
   try {
     const input = listEmailFoldersSchema.parse(args);
-    const capabilityService = new EmailOrganizationCapabilityService();
+    const capabilityService = getCapabilityService();
     const [folders, capabilities] = await Promise.all([
       capabilityService.listFolders(input.email_service_id),
       capabilityService.getCapabilities(input.email_service_id),
@@ -228,9 +238,7 @@ export async function sendEmailForward(
       authorizationId: authorization.id,
     });
     log.info(
-      `[EmailOrganizationAiTools] send_email_forward outcome=${outcome.status} correlation=${
-        outcome.status === "failed" ? outcome.requestCorrelationId : outcome.requestCorrelationId
-      }`
+      `[EmailOrganizationAiTools] send_email_forward outcome=${outcome.status} correlation=${outcome.requestCorrelationId}`
     );
     return { success: true, result: { ...outcome } };
   } catch (error) {
@@ -338,15 +346,7 @@ export function projectOperation(
     unknownRecipientsJson: string | null;
   }>
 ): EmailOrganizationOperationDto {
-  const parse = (json: string | null): string[] => {
-    if (!json) return [];
-    try {
-      const parsed = JSON.parse(json) as unknown;
-      return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
-    } catch {
-      return [];
-    }
-  };
+
   return {
     operationId: operation.operationId,
     kind: operation.kind as EmailOrganizationOperationDto["kind"],
@@ -368,17 +368,15 @@ export function projectOperation(
       errorCode: item.errorCode,
       sanitizedError: item.sanitizedError,
       recipientOutcomes: [
-        ...parse(item.acceptedRecipientsJson).map((address) => ({ address, field: "to" as const, outcome: "accepted" as const })),
-        ...parse(item.rejectedRecipientsJson).map((address) => ({ address, field: "to" as const, outcome: "rejected" as const })),
-        ...parse(item.unknownRecipientsJson).map((address) => ({ address, field: "to" as const, outcome: "unknown" as const })),
+        ...parseStringArrayJson(item.acceptedRecipientsJson).map((address) => ({ address, outcome: "accepted" as const })),
+        ...parseStringArrayJson(item.rejectedRecipientsJson).map((address) => ({ address, outcome: "rejected" as const })),
+        ...parseStringArrayJson(item.unknownRecipientsJson).map((address) => ({ address, outcome: "unknown" as const })),
       ],
     })),
     createdAt: operation.requestedAt.toISOString(),
     completedAt: operation.completedAt ? operation.completedAt.toISOString() : null,
     cancelRequestedAt: operation.cancelRequestedAt ? operation.cancelRequestedAt.toISOString() : null,
     errorCode: operation.errorCode,
-    retryable:
-      operation.errorCode === "NETWORK_BEFORE_DISPATCH" ||
-      operation.errorCode === "AUTHENTICATION_FAILED",
+    retryable: isRetryableOrganizationErrorCode(operation.errorCode),
   };
 }

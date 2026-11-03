@@ -21,6 +21,7 @@ import { EmailMessageLocationModel } from "@/model/EmailMessageLocation.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailOrganizationAttemptEntity } from "@/entity/EmailOrganizationAttempt.entity";
+import { EmailOrganizationOperationModel } from "@/model/EmailOrganizationOperation.model";
 
 let dbpath = "";
 let actionService: EmailMailboxActionService;
@@ -380,12 +381,10 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     expect(reconciled).toBeGreaterThanOrEqual(1);
   });
 
-  it("reconciles an unknown trash to success when the source is empty and a destination was frozen", async () => {
+  it("keeps absence-without-mapping as unknown (design §10.3: never invent a destination)", async () => {
     await seedMessage(3008);
     let presenceCalls = 0;
     const adapter = new ActionFakeAdapter({
-      // 1st probe: pre-move verification (present). 2nd probe: the
-      // reconciliation sweep finds the source folder empty (dispatch landed).
       presence: () => {
         presenceCalls += 1;
         return presenceCalls === 1 ? { status: "present" } : { status: "absent" };
@@ -404,10 +403,55 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     const trashResult = await service.trashMessage({ messageId: 3008, origin: "ui_action" });
     expect(trashResult.status).toBe("needs_reconciliation");
 
+    // Source empty but NO destination mapping evidence → stays unknown.
+    const reconcile = await service.reconcileOperation(trashResult.operationId);
+    expect(reconcile.status).toBe("needs_reconciliation");
+    const location = await locationModel.readByMessageId(3008);
+    expect(location?.folderPath).toBe("INBOX");
+  });
+
+  it("reconciles to success when the attempt carries a verified destination mapping", async () => {
+    await seedMessage(3009);
+    let presenceCalls = 0;
+    const adapter = new ActionFakeAdapter({
+      // 1st probe: pre-move verification (present). 2nd probe: the
+      // reconciliation sweep finds the source folder empty.
+      presence: () => {
+        presenceCalls += 1;
+        return presenceCalls === 1 ? { status: "present" } : { status: "absent" };
+      },
+      moveResult: () => ({
+        status: "moved",
+        destinationUidValidity: "99",
+        destinationUid: "88",
+      }),
+      trashFolder: "Trash",
+    });
+    const service = new EmailMailboxActionService({
+      adapter,
+      capabilityService: new StubCapabilityService("Trash") as unknown as EmailOrganizationCapabilityService,
+    });
+    const trashResult = await service.trashMessage({ messageId: 3009, origin: "ui_action" });
+    // The move itself succeeded here (evidence is on the attempt row); to
+    // simulate the crash window, put the item back into unknown manually and
+    // then reconcile from the recorded evidence.
+    const opModel = new EmailOrganizationOperationModel(dbpath);
+    const items = await opModel.listItems(trashResult.operationId);
+    const attempt = (await opModel.listAttemptsForItem(items[0].id))[0];
+    await opModel.finalizeItem({
+      itemId: items[0].id,
+      operationId: trashResult.operationId,
+      status: "outcome_unknown",
+      errorCode: "OUTCOME_UNKNOWN",
+      attemptId: null,
+    });
+
     const reconcile = await service.reconcileOperation(trashResult.operationId);
     expect(reconcile.status).toBe("succeeded");
-    const location = await locationModel.readByMessageId(3008);
+    const location = await locationModel.readByMessageId(3009);
     expect(location?.folderPath).toBe("Trash");
-    expect(location?.state).toBe("stale");
+    expect(location?.providerUid).toBe("88");
+    expect(location?.state).toBe("verified");
+    expect(attempt).toBeDefined();
   });
 });

@@ -6,6 +6,7 @@ import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
+import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 import { ImapEmailMailboxAdapter as DefaultMailboxAdapter } from "@/service/emailOrganization/ImapEmailMailboxAdapter";
 import type {
   EmailMailboxAdapter,
@@ -16,7 +17,10 @@ import {
   hashClaimToken,
   generateClaimToken,
 } from "@/service/emailOrganization/EmailForwardEnvelopeHasher";
-import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
+import {
+  EmailOrganizationActionError,
+  isRetryableOrganizationErrorCode,
+} from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import type { EmailActionResult, EmailActionStatus } from "@/entityTypes/emailOrganizationTypes";
 import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
@@ -48,6 +52,8 @@ export interface RestoreFromOperationInput {
 
 export type MailboxActionOutcome = EmailActionResult & {
   readonly priorOperationId?: string;
+  /** Human-readable sanitized reason for deterministic pre-flight refusals. */
+  readonly error?: string;
 };
 
 export class EmailMailboxActionService extends BaseModule {
@@ -109,7 +115,6 @@ export class EmailMailboxActionService extends BaseModule {
     // Claims like any other path so the fenced finalization applies.
     if (location.folderPath === trashFolder) {
       const noopOperation = await this.createOperation(input, message.emailServiceId, [message.id], trashFolder, "trash");
-      const items = await this.operationModule.listItems(noopOperation.operationId);
       const claim = await this.operationModule.claimItem({
         operationId: noopOperation.operationId,
         messageId: message.id,
@@ -130,6 +135,14 @@ export class EmailMailboxActionService extends BaseModule {
           status: "noop",
           attemptId: claim.attemptId,
           resultJson: JSON.stringify({ reason: "already_in_trash", trashFolder }),
+        });
+      } else if (claim.status === "item_not_pending") {
+        await this.operationModule.finalizeItem({
+          itemId: (await this.operationModule.listItems(noopOperation.operationId))[0].id,
+          operationId: noopOperation.operationId,
+          status: "failed",
+          errorCode: "LOCAL_COMMIT_PENDING",
+          sanitizedError: `No-op item could not be claimed (${claim.status}).`,
         });
       }
       await this.operationModule.recordAudit({
@@ -234,7 +247,7 @@ export class EmailMailboxActionService extends BaseModule {
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
       trashFolder
     );
-    await this.persistMoveOutcome(operation.operationId, claim.itemId, message.id, message.emailServiceId, move, trashFolder, input.origin);
+    await this.persistMoveOutcome(operation.operationId, claim.itemId, message.id, message.emailServiceId, move, trashFolder, input.origin, undefined, claim.attemptId);
     return await this.projectResult(operation.operationId);
   }
 
@@ -358,7 +371,7 @@ export class EmailMailboxActionService extends BaseModule {
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
       destinationFolder as string
     );
-    await this.persistMoveOutcome(operationId, claim.itemId, messageId, location.emailServiceId, move, destinationFolder as string, origin, priorOperationId);
+    await this.persistMoveOutcome(operationId, claim.itemId, messageId, location.emailServiceId, move, destinationFolder as string, origin, priorOperationId, claim.attemptId);
   }
 
   /** Shared outcome persistence for trash + restore moves. */
@@ -370,9 +383,30 @@ export class EmailMailboxActionService extends BaseModule {
     move: MoveResult,
     destinationFolder: string,
     origin: TrashMessageInput["origin"],
-    priorOperationId?: string
+    priorOperationId?: string,
+    attemptId?: number
   ): Promise<void> {
     if (move.status === "moved") {
+      // Record the provider mapping on the attempt BEFORE local commits: if
+      // the process dies between remote success and local persistence, the
+      // reconcile path has durable evidence (design §6.2/§10.3).
+      if (attemptId !== undefined) {
+        await this.operationModule
+          .recordAttemptEvidence(
+            attemptId,
+            JSON.stringify({
+              destinationFolder,
+              destinationUid: move.destinationUid,
+              destinationUidValidity: move.destinationUidValidity,
+            })
+          )
+          .catch((error: unknown) => {
+            log.warn(
+              `[EmailMailboxActionService] attempt evidence write failed (item ${itemId}):`,
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+      }
       const destinationUid = move.destinationUid;
       const applyOk = await this.locationModule.applyMove({
         messageId,
@@ -540,18 +574,31 @@ export class EmailMailboxActionService extends BaseModule {
         uidValidity: item.beforeUidValidity,
         uid: item.beforeProviderUid,
       });
-      if (presence.status === "absent" && item.destinationFolderPath !== null) {
-        // Strong evidence: source empty + a frozen destination intent.
-        // Without a destination UID mapping we cannot claim a verified
-        // destination location; record remote completion with a stale
-        // local location for later re-discovery (design §5.1).
+      const attemptRows = await this.operationModule.listAttemptsForItem(item.id);
+      const mappingEvidence = attemptRows
+        .map((attempt) => attempt.resultJson)
+        .filter((json): json is string => json !== null)
+        .map((json) => {
+          try {
+            return JSON.parse(json) as { destinationUid?: string | null };
+          } catch {
+            return null;
+          }
+        })
+        .find((parsed) => parsed !== null && typeof parsed.destinationUid === "string");
+
+      if (presence.status === "absent" && mappingEvidence && item.destinationFolderPath !== null) {
+        // Design §10.3: source absent + a strongly verified destination
+        // mapping reconciles to success. Absence alone (destination unknown,
+        // e.g. the user deleted the message in another client) must NOT be
+        // recorded as a successful move.
         const applyOk = await this.locationModule.applyMove({
           messageId: item.messageId,
-          expectedVersion: (await this.locationModule.readByMessageId(item.messageId))?.version ?? 0,
+          expectedVersion: item.beforeLocationVersion ?? 0,
           folderPath: item.destinationFolderPath,
           uidValidity: null,
-          providerUid: item.beforeProviderUid,
-          state: "stale",
+          providerUid: mappingEvidence.destinationUid as string,
+          state: "verified",
           lastOperationId: operationId,
         });
         if (!applyOk) {
@@ -578,6 +625,16 @@ export class EmailMailboxActionService extends BaseModule {
           action: "reconciled_move",
           status: "succeeded",
           detail: { destinationFolder: item.destinationFolderPath },
+        });
+      } else if (presence.status === "absent") {
+        // Source empty, destination unknown or ambiguous → outcome unknown
+        // (design §10.3). Do not invent a destination.
+        await this.operationModule.finalizeItem({
+          itemId: item.id,
+          operationId,
+          status: "outcome_unknown",
+          errorCode: "OUTCOME_UNKNOWN",
+          sanitizedError: "Source folder is empty but no destination mapping exists; manual resolution required.",
         });
       } else if (presence.status === "present") {
         // Still at source: the move did not happen. Mark failed so the user
@@ -650,7 +707,7 @@ export class EmailMailboxActionService extends BaseModule {
 
   private async resolveReceiveConfig(
     emailServiceId: number
-  ) {
+  ): Promise<EmailReceiveConnectionConfig | null> {
     if (this.capabilityService) {
       return await this.capabilityService.getReceiveConfig(emailServiceId);
     }
@@ -684,9 +741,7 @@ export class EmailMailboxActionService extends BaseModule {
       pending: operation.pendingCount,
       cancelled: operation.cancelledCount,
       errorCode: operation.errorCode ?? undefined,
-      retryable:
-        operation.errorCode === "NETWORK_BEFORE_DISPATCH" ||
-        operation.errorCode === "AUTHENTICATION_FAILED",
+      retryable: isRetryableOrganizationErrorCode(operation.errorCode),
       ...(priorOperationId !== undefined ? { priorOperationId } : {}),
     };
   }
@@ -704,9 +759,7 @@ export class EmailMailboxActionService extends BaseModule {
       cancelled: 0,
       errorCode: code,
       retryable: false,
+      error: message,
     };
   }
 }
-
-// Re-export for tooling convenience.
-export { EmailOrganizationActionError };

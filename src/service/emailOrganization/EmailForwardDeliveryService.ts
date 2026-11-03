@@ -17,6 +17,7 @@ import {
   hashClaimToken,
   generateClaimToken,
 } from "@/service/emailOrganization/EmailForwardEnvelopeHasher";
+import type { EmailSentCopyStatus } from "@/entityTypes/emailOrganizationTypes";
 
 /**
  * Forward delivery (technical design §9.3): authorization → frozen payload
@@ -171,24 +172,20 @@ export class EmailForwardDeliveryService extends BaseModule {
     }
 
     // ---- Durable operation (duplicate-safe) ----
-    const idempotencyKey = buildForwardIdempotencyKey(draft.id, revision.id, revision.composedHash);
     const operationResult = await this.operationModule.createOperation({
       operationId: crypto.randomUUID(),
       kind: "forward",
       emailServiceId: draft.emailServiceId,
       origin: authorization.origin,
       payloadHash: revision.composedHash,
-      idempotencyKey,
+      idempotencyKey: replayKey,
       conversationId: draft.conversationId,
       sourceUserMessageId: authorization.userTurnId,
       draftId: draft.id,
       messageIds: [draft.messageId],
       policyVersion: "fwv1",
     });
-    const operation =
-      operationResult.status === "created"
-        ? operationResult.operation
-        : operationResult.operation;
+    const operation = operationResult.operation;
     if (operationResult.status === "existing") {
       return { status: "already_processed", operationId: operation.operationId, requestCorrelationId };
     }
@@ -212,41 +209,58 @@ export class EmailForwardDeliveryService extends BaseModule {
       return { status: "failed", operationId: operation.operationId, code: "ACTION_NOT_AUTHORIZED", error: "Authorization consumed by a concurrent execution.", requestCorrelationId };
     }
 
-    await this.operationModule.recordAudit({
-      operationId: operation.operationId,
-      itemId: item.id,
-      messageId: draft.messageId,
-      emailServiceId: draft.emailServiceId,
-      actor: authorization.origin === "tool_confirmation" ? "ai" : "user",
-      action: "forward_prepared",
-    });
+    // Everything between authorization consumption and the durable claim is
+    // fault-isolated: a throw here would otherwise leave a pending item, a
+    // consumed authorization, and a draft permanently blocked by the replay
+    // gate with no recovery path.
+    let claim: Awaited<ReturnType<EmailOrganizationOperationModule["claimItem"]>>;
+    try {
+      await this.operationModule.recordAudit({
+        operationId: operation.operationId,
+        itemId: item.id,
+        messageId: draft.messageId,
+        emailServiceId: draft.emailServiceId,
+        actor: authorization.origin === "tool_confirmation" ? "ai" : "user",
+        action: "forward_prepared",
+      });
 
-    // ---- Claim BEFORE network I/O ----
-    const locationSnapshot = JSON.parse(revision.sourceLocationSnapshotJson) as {
-      folderPath: string;
-      uidValidity: string;
-      uid: string;
-    };
-    const currentLocation = await this.locationModule.readByMessageId(draft.messageId);
-    const claim = await this.operationModule.claimItem({
-      operationId: operation.operationId,
-      messageId: draft.messageId,
-      claimTokenHash: hashClaimToken(generateClaimToken()),
-      leaseExpiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.attemptLeaseMs),
-      location: {
-        version: currentLocation?.version ?? null,
-        folderPath: currentLocation?.folderPath ?? locationSnapshot.folderPath,
-        uidValidity: currentLocation?.uidValidity ?? locationSnapshot.uidValidity,
-        providerUid: currentLocation?.providerUid ?? locationSnapshot.uid,
-      },
-      destinationFolderPath: null,
-    });
+      // ---- Claim BEFORE network I/O ----
+      const locationSnapshot = JSON.parse(revision.sourceLocationSnapshotJson) as {
+        folderPath: string;
+        uidValidity: string;
+        uid: string;
+      };
+      const currentLocation = await this.locationModule.readByMessageId(draft.messageId);
+      claim = await this.operationModule.claimItem({
+        operationId: operation.operationId,
+        messageId: draft.messageId,
+        claimTokenHash: hashClaimToken(generateClaimToken()),
+        leaseExpiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.attemptLeaseMs),
+        location: {
+          version: currentLocation?.version ?? null,
+          folderPath: currentLocation?.folderPath ?? locationSnapshot.folderPath,
+          uidValidity: currentLocation?.uidValidity ?? locationSnapshot.uidValidity,
+          providerUid: currentLocation?.providerUid ?? locationSnapshot.uid,
+        },
+        destinationFolderPath: null,
+      });
+    } catch (error) {
+      const sanitized = error instanceof Error ? error.message.slice(0, 240) : String(error);
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId: operation.operationId,
+        status: "failed",
+        errorCode: "LOCAL_COMMIT_PENDING",
+        sanitizedError: `Failed before claim: ${sanitized}`,
+      });
+      return { status: "failed", operationId: operation.operationId, code: "LOCAL_COMMIT_PENDING", error: sanitized, requestCorrelationId };
+    }
     if (claim.status !== "claimed") {
       await this.operationModule.finalizeItem({
         itemId: item.id,
         operationId: operation.operationId,
         status: "failed",
-        errorCode: "OPERATION_NOT_CANCELLABLE",
+        errorCode: "LOCAL_COMMIT_PENDING",
         sanitizedError: `Item could not be claimed (${claim.status}).`,
       });
       return { status: "failed", operationId: operation.operationId, code: "LOCAL_COMMIT_PENDING", error: "Item could not be claimed.", requestCorrelationId };
@@ -362,7 +376,7 @@ export class EmailForwardDeliveryService extends BaseModule {
                 : null,
         attemptId: claim.attemptId,
         resultJson: JSON.stringify({
-          sentCopyStatus: "not_requested",
+          sentCopyStatus: "not_requested" as EmailSentCopyStatus,
           response: (info.response ?? "").slice(0, 200),
         }),
       });

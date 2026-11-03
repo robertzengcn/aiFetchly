@@ -94,7 +94,6 @@
 
     <EmailForwardReviewDialog
       :message-id="forwardDialogMessageId"
-      :email-service-id="message?.emailServiceId ?? null"
       @closed="forwardDialogMessageId = null"
       @sent="onForwardSent"
       @draft-saved="onDraftSaved"
