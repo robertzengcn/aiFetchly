@@ -1639,6 +1639,26 @@ export class ManagedBrowserModule {
   }
 
   /**
+   * T24/C-FR-05: user Pause — aborts the in-flight program between
+   * actions (executed results preserved), moves the session to user
+   * control (AI commands rejected), and pins the latest observation so
+   * refs stay resolvable while paused.
+   */
+  public async pauseSession(sessionId: string): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    await record.client
+      .request(
+        { type: "PAUSE_REQUEST" },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED" || m.type === "ACTION_RESULT"
+      )
+      .catch(() => undefined);
+    // Session moves to user control via the handoff state.
+    await this.requestHandoff(sessionId, "user_paused").catch(() => undefined);
+    return this.toSafeStatus(this.requireSession(sessionId));
+  }
+
+  /**
    * PRD A-FR-08: send the privileged FILL_LOGIN_FORM request. The
    * credential payload is passed through verbatim to the worker and
    * NEVER logged here; the result carries outcome + stamps only.

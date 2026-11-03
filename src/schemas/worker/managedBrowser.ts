@@ -531,6 +531,15 @@ const cancelRequestMessageSchema = z.strictObject({
  * PRD D-FR-15a: pin/unpin an observation epoch so its element refs stay
  * resolvable across pending approvals, decisions, and handoffs.
  */
+/**
+ * T24/C-FR-05: user Pause — aborts the in-flight program between actions
+ * with executed results preserved; the session moves to user control.
+ */
+const pauseRequestMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("PAUSE_REQUEST"),
+});
+
 const pinObservationMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("PIN_OBSERVATION"),
@@ -596,6 +605,7 @@ export const managedBrowserInboundSchema = lazySchema(() =>
     resumeHandoffMessageSchema,
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
+    pauseRequestMessageSchema,
     pinObservationMessageSchema,
     fillLoginFormMessageSchema,
     stopSessionMessageSchema,

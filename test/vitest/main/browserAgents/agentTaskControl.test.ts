@@ -3,6 +3,23 @@ import { AgentTaskControlService } from "@/service/browserAgents/AgentTaskContro
 
 /** PRD §6.12 / C-FR-01..09: two-layer control, gate, and time accounting. */
 
+describe("AgentTaskControlService pause cap (T24/C-FR-09)", () => {
+  it("marks a task interrupted after the 60-minute pause cap", () => {
+    let now = 0;
+    const service = new AgentTaskControlService(() => now);
+    service.register("task-cap", "conv-1");
+    service.setState("task-cap", "paused", "user_paused");
+    now = 59 * 60_000;
+    expect(service.enforcePauseCap("task-cap")).toBe(false);
+    expect(service.getState("task-cap")).toBe("paused");
+    now = 61 * 60_000;
+    expect(service.enforcePauseCap("task-cap")).toBe(true);
+    expect(service.getState("task-cap")).toBe("interrupted");
+    // Idempotent afterwards.
+    expect(service.enforcePauseCap("task-cap")).toBe(false);
+  });
+});
+
 describe("AgentTaskControlService", () => {
   it("runs the control gate: closed while paused, reopened only on resume", async () => {
     let now = 0;

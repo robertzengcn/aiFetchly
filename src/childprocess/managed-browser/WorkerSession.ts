@@ -778,6 +778,17 @@ export class WorkerSession {
     this.currentRunActionsAbort?.abort();
   }
 
+  /**
+   * T24/C-FR-05: user Pause. Same safe-point abort as cancel (the program
+   * stops BETWEEN actions with results of executed actions preserved), but
+   * the reason travels so the module can move the session to user control
+   * without ending it. Executed-but-unreported actions keep their
+   * results; an action in flight when the abort lands follows D-FR-26.
+   */
+  public pauseCurrent(): void {
+    this.currentRunActionsAbort?.abort();
+  }
+
   public async stop(requestId: string, reason: string): Promise<void> {
     // Stop is idempotent in every state.
     this.runtime.transition("stopping", reason);

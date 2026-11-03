@@ -204,6 +204,20 @@ parentPort.on("message", async (event: { data: unknown }) => {
       case "VERIFY_MANUAL_LOGIN":
         await session.verifyManualLogin(message.requestId);
         return;
+      case "PAUSE_REQUEST":
+        // T24/C-FR-05: same safe-point abort as cancel; executed results
+        // ride the ACTION_RESULT, and the module moves the session to
+        // user control afterwards.
+        session.pauseCurrent();
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+            reasonCode: "user_paused",
+          })
+        );
+        return;
       case "CANCEL_REQUEST":
         session.cancelCurrent();
         parentPort.postMessage(

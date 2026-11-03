@@ -219,6 +219,29 @@ export class AgentTaskControlService {
     this.resolveAllWaiters(taskId);
   }
 
+  /**
+   * T24/C-FR-09: the 60-minute pause cap. A paused task past the cap is
+   * marked interrupted (partial results; no automatic resume).
+   */
+  public enforcePauseCap(
+    taskId: string,
+    capMs = 60 * 60_000,
+    now: () => number = Date.now
+  ): boolean {
+    const record = this.tasks.get(taskId);
+    if (!record || record.state !== "paused" || record.openIntervention === null) {
+      return false;
+    }
+    const pausedFor = now() - record.openIntervention.startedAtEpochMs;
+    if (pausedFor >= capMs) {
+      this.setState(taskId, "interrupted", "pause_cap_expired");
+      this.endIntervention(taskId);
+      this.resolveAllWaiters(taskId);
+      return true;
+    }
+    return false;
+  }
+
   /** C-FR-11: return results now — cancel all tasks of a batch. */
   public cancelBatch(batchId: string, reason = "batch_return_now"): number {
     let cancelled = 0;

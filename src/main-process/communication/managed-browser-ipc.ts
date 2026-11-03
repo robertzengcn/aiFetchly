@@ -177,8 +177,11 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   }): Promise<{ ok: boolean }> => {
     controlService.setState(input.taskId, "paused", "user_paused");
     if (input.sessionId) {
+      // T24/C-FR-05: PAUSE_REQUEST stops the in-flight program between
+      // actions (executed results preserved), then the session moves to
+      // user control.
       await getDefaultManagedBrowserModule()
-        .requestHandoff(input.sessionId, "user_paused")
+        .pauseSession(input.sessionId)
         .catch(() => undefined);
     }
     return { ok: true };
