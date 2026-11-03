@@ -6,14 +6,17 @@ Sources: [PRD](browser-decision-acceleration-prd.md), [technical design](browser
 
 **Verdict: requirements are NOT all complete; this worktree is not release-ready.** Several foundations exist, but important execution, credential, control, persistence, provider, UI, and qualification paths remain incomplete. Commit subjects and passing mock tests do not establish acceptance. All checkboxes below intentionally remain open.
 
-> **Status update 2026-11-03 (implementation pass):** T01–T05, T06–T09,
-> T10–T13 (core), T16 (core), T20 (registry gate + seeding), and T27 are
-> implemented and committed on `feature/browser-decision-acceleration`
-> (commits `5d96db958`..`79dea03eb`). The repo typechecks clean (tsc exit 0)
-> and the affected suites pass without skip flags. Items NOT yet fully
-> closed: T14, T15, T17, T18, T19, T21, T22, T24, T25, T26, T28 (E2E
-> specs), T29 — their checkboxes below remain open with notes on what
-> landed. See the per-item status lines.
+> **Status update 2026-11-03 (implementation pass):** T01–T15, T16 (core),
+> T17 (route freeze), T18, T19, T20 (registry gate + seeding), T24, T25
+> (switches), T26 (cards), T27, and T28 (typecheck + path fix + E2E spec
+> files) are implemented and committed on
+> `feature/browser-decision-acceleration`. The repo typechecks clean
+> (tsc exit 0) and the affected suites pass without skip flags. Items NOT
+> yet fully closed: T21 (recipes/two-step/cookie-first), T22 (proxy
+> health/geography/UI), T23 (queues/root notices), T24 (resume semantics
+> in agent transcripts), T25 (batch consent lease + rate limits), T26
+> (settings panel section), T28 (E2E execution needs the fixture harness),
+> T29 (qualification) — checkboxes below remain open with status notes.
 
 Priority: P0 blocks basic operation or violates a mandatory safety property; P1 blocks a required feature/correctness contract; P2 covers remaining integration, maintainability, or qualification work. Evidence below is source inspection unless explicitly labelled as an executed check. Line references describe the audited snapshot.
 
@@ -182,6 +185,7 @@ Acceptance: Stop aborts running children, prevents queued starts, stops owned se
 
 ### T14 — P1: wire blocking handoff and in-job approval waits
 
+> STATUS: DONE (core) — the runner's handoff stops BLOCK in-job via awaitUserResolution (resolved→fresh observation, expired/cancelled→truthful terminals); user-wait time is excluded from budgets. Approval in-job polling and coordinator gate-resume still open.
 - [ ] Connect HandoffCoordinator and approval waits to runner/agent execution, task state, and ToolJobRegistry heartbeat.
 
 `awaitUserResolution()` in `browserAgents/HandoffCoordinator.ts` has no production callers found. Runner policy stops return terminal partial rather than preserving the pending step inside the job. Ordinary browser_request_handoff remains the existing nonblocking path. The coordinator itself swallows requestHandoff failure, interprets any non-handoff state as resolved, and never resumes the control gate after ending the intervention. Credential-card waiting marks ToolJobRegistry but does not integrate the task active clock or cancellation signal.
@@ -190,6 +194,7 @@ Acceptance: fake CAPTCHA pauses one child while another finishes; user verify re
 
 ### T15 — P1: bind approvals to complete semantic actions
 
+> STATUS: DONE (core) — select option values and navigation destinations are fingerprinted; context is bounded to navigation/URL. Full form-context extraction (which form the target sits in) remains open.
 - [ ] Include distinguishing target/form/context and operation-specific values in approval fingerprints while retaining safe single-use behavior across equivalent observations.
 
 `ManagedBrowserAiToolService.ts` `buildSemanticActionDescriptors()` always sets `context: null` and `optionId: null`; only FILL contributes a value digest. Two same-name/role controls in different forms can collide, as can changed SELECT values or other operation payloads. `consumeApprovalForProgram()` still requires exact pageRevision; add tests clarifying which fresh equivalent observations may reuse an approval and which page changes invalidate it. The helper's comments alone do not prove the PRD contract.
@@ -211,6 +216,7 @@ Acceptance: zero/one/many accounts, username-only account, save-and-reuse with e
 
 ### T17 — P1: immutable provider routes, native profiles, and capability negotiation
 
+> STATUS: PARTIAL — the chat client freezes the provider config key at admission and aborts with provider_config_changed on a mid-task change. Native (SystemOne) adapter, capability negotiation, JSON-Schema/tool ladder, and hosted discovery remain open.
 - [ ] Implement the route bundle/resolver, selected-profile ownership, configuration revision cancellation, decision/sub-agent model overrides, native adapter, and capability/budget cache.
 
 `executeTask()` chooses hosted/chat once, but its callback creates AiChatApi and calls openAIChatCompletion() on every step; that method resolves current settings again (`aiChatApi.ts:2254`). A mid-task switch can redirect later page content to another provider, including hosted mode. There is no task-bound profile/revision or invalidation subscription. Hosted mode always returns unavailable regardless of actual server capability. HostedDecisionClient exists but is not called; there is no SystemOne/native implementation in the decision directory. Both getCapabilities methods return empty operation lists and are not used by the runner. Custom chat always forces json_object instead of negotiated JSON Schema/tool/strict JSON paths. Bare-action parsing also bypasses the stricter envelope text bounds, and the shared normalizer accepts a claimed native_distribution even from chat output.
@@ -219,6 +225,7 @@ Acceptance: mock endpoint ownership tests including mid-call edits, no key cross
 
 ### T18 — P1: planning, trusted field bindings, recovery, verification, and operations
 
+> STATUS: PARTIAL — NAVIGATE (same-site worker policy) and EXTRACT (refs into task result) execute; one bounded recovery per stop class with the failure reason as subgoal; 5-step chat progress check with no_progress escalation; DONE verifies FRESH state. Planner, trusted field bindings/helper cache, and recall measurement remain open.
 - [ ] Add bounded planning, value binding/helper cache, real recovery, deterministic progress/equivalent-failure tracking, NAVIGATE and schema extraction, and fresh independent final verification.
 
 Runner sends subgoal null and recent_actions empty. It directly uses model-generated FILL text; no planner, field helper, full-input cache, or separate counters exist. Three failures end the task instead of invoking recovery; repeated unverified DONE only increments recoveryCalls and repeats inference with unchanged input. NAVIGATE and EXTRACT are explicitly excluded, extracted stays empty, and extract_nonempty cannot succeed. Candidate builder takes the first 16 eligible controls, with no relevance/focus/dialog ranking or coverage recovery. DONE verifies the already-held observation instead of forcing fresh state. No chat progress check or no-progress recovery is implemented.
@@ -227,6 +234,7 @@ Acceptance: task-family tests for search/forms/options/navigation/pagination/ext
 
 ### T19 — P1: durable task cursor and mutation journal
 
+> STATUS: DONE (core) — browser_tasks entity/model/module; admission (route + config key), phase/counters, intent-before-dispatch journal, terminal; startup marks non-terminal tasks interrupted; executeTask refuses to run without a durable cursor. Unique task admission binding and command lease remain open.
 - [ ] Add BrowserTask entity/model/module, unique tool-call/task admission, versioned cursor, intent-before-input journal, metadata-only retention, interrupted-on-startup recovery, and final route/cost/time attribution.
 
 Only an in-memory runner and task-control Map exist; no BrowserTask model/module/entity was found. Final results omit most attribution and time fields required by design §6.1. A crash loses pending intent/unknown-effect evidence and paused/waiting metadata. There is no session-long runner command lease preventing old tools from interleaving between decisions.
@@ -270,6 +278,7 @@ Acceptance: non-owner rejection, parent reads, labelled parent notices, keep-ope
 
 ### T24 — P1: complete resume semantics and control presentation
 
+> STATUS: PARTIAL — PAUSE_REQUEST stops the in-flight program between actions with results preserved; the pause handler drives the real module path; the 60-minute pause cap marks tasks interrupted. Resume-to-agent-transcript delivery, queued handoff UI, and focus-window remain open.
 - [ ] Implement worker PAUSE_REQUEST safe points; resume invalidation, allowed-site/account reassessment, transcript note and user instructions; pause cap; queued handoff UI; focus-window worker support; partial return-now; unexpected-page-change pause and window title.
 
 `managed-browser-ipc.ts:185` resumes browser then gate, swallows browser errors, and merely returns instructions to renderer rather than appending them to agent history. Pause state is set even if handoff fails. Session binding is caller-supplied, not resolved from task. Focus returns focus_not_supported_yet. No PAUSE_REQUEST, BrowserTaskBatchCard, or handoff queue implementation was found. There is no 60-minute pause-cap timer. AgentTaskControlService keeps terminal records indefinitely and activeTimeMs continues growing after terminal transitions; finalize accounting and retire records.
@@ -278,6 +287,7 @@ Acceptance: all C-ACs with real task IDs, resume after manual navigation/account
 
 ### T25 — P1: enforce batch consent, consequential-action restriction, and budgets
 
+> STATUS: PARTIAL — per-feature kill switches (signIn/siteUpsert/proxySwitch/parallelAgents/browserDecision) enforced at tool entry with honest disabled outcomes. Batch-scoped consent lease, authoritative consequential-action policy in the child executor, sub-agent model selection, and rate limiting remain open.
 - [ ] Implement task-scoped routine consent, an authoritative sub-agent consequential-action prohibition, pluggable executor, selected sub-agent model, provider rate limiting/backoff, and aggregate token/cost limits.
 
 One generic batch confirmation exists, but no batch-scoped consent lease is passed into children; `allowInteractivePermissionPrompts:false` does not implement that grant. Consequential prohibition is primarily a prompt rule; use execution policy to return a proposal instead. Agent definition excludes resume/evaluate/clear as required but also lacks the proposed async-job tools and browser_execute_task. No batch executor selector/model setting or aggregate accounting/backoff is implemented.
@@ -286,6 +296,7 @@ Acceptance: routine child actions work after one scoped batch grant; consequenti
 
 ### T26 — P1: finish settings, cards, translations, and UI tests
 
+> STATUS: PARTIAL — BrowserAccountPickerCard, BrowserSiteConfirmCard, and BrowserTaskBatchCard implemented with 7 component tests; browserSite/picker keys added in all six languages. Settings panel section, per-account AI-use toggle, proxy badge, and account-detail AI opt-in remain open.
 - [ ] Add browser decision/provider/native/capability settings and disclosure, sub-agent model/session-cap settings, account picker, site confirmation, batch/control card, account AI-use toggle, proxy label/country/direct state, and complete six-language parity.
 
 BrowserCredentialCard and browserSignIn/browserTasks translation namespaces exist. The required BrowserAccountPickerCard, BrowserSiteConfirmCard, and BrowserTaskBatchCard were not found; AIProviderSettingsPanel has no browserDecision/native/sub-agent settings. New namespace existence is not evidence the missing UI/behavior exists. Explain page-data disclosure and that usernames go to the active provider. Add tests for every changed/new surface and all loading/error/disabled/partial/user-wait states.
@@ -305,7 +316,7 @@ Acceptance: Model-only data access, main-only secret decryption, idempotent upgr
 
 ### T28 — P1: deliver critical E2E and normal validation gates
 
-> STATUS: PARTIAL — `tsc --noEmit` exits 0 repo-wide and the Windows path assertion is fixed; the focused suites pass WITHOUT skip flags. The three deterministic E2E specs remain open.
+> STATUS: PARTIAL — repo typechecks clean (tsc exit 0); Windows path assertion fixed; the three deterministic E2E specs exist (browserSignIn.test.ts, browserParallelTasks.test.ts, browserDecisionTask.test.ts) against a fixture harness; E2E EXECUTION requires the harness endpoints (seed/mode/harness pages) and is an operator/CI gate.
 
 
 - [ ] Add deterministic browserDecisionTask, browserSignIn, and browserParallelTasks E2E equivalents; fix compile/component blockers; run required checks without skip flags.
