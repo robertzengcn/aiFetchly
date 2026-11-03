@@ -852,6 +852,17 @@ export interface StreamRecoveryInfo {
 const STREAM_RETRY_BASE_DELAY_MS = 1000;
 const MODEL_LIST_RETRY_MAX_ATTEMPTS = 3;
 const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
+/**
+ * Bounded auto-retry for the hosted NON-streaming completion on pure
+ * connection failures (no response was ever received — e.g. "fetch failed",
+ * ECONNREFUSED). Without this, a transiently unreachable AI server surfaces
+ * "Could not connect to the AI server." to the user on the first attempt,
+ * while the streaming path already auto-retries the same condition
+ * (openAIChatCompletionStreamEventsHosted). Initial attempt plus 2 retries.
+ */
+const COMPLETION_CONNECT_RETRY_MAX_ATTEMPTS = 3;
+const COMPLETION_CONNECT_RETRY_BASE_DELAY_MS = 1000;
+const COMPLETION_CONNECT_RETRY_MAX_DELAY_MS = 8000;
 
 /**
  * True when `err` is an HTTP 404 surfaced by `HttpClient` (`postJson`
@@ -873,6 +884,31 @@ function isHttpNotFoundError(err: unknown): boolean {
     }
   }
   return false;
+}
+
+/**
+ * True when `err` is a pure CONNECTION failure on the hosted path — the
+ * request never received a response (DNS/connect/socket failure). Uses the
+ * shared recovery classifier so the definition matches the streaming retry
+ * layer exactly, and never retries HTTP status envelopes (they carry a
+ * numeric `status`, which the classifier mounts as server_error /
+ * rate_limit / model_unavailable / ...), auth, quota, aborts, or timeouts.
+ */
+function isRetryableConnectFailure(err: unknown): boolean {
+  const classifier = new AIChatRecoveryClassifier();
+  try {
+    return classifier.classifyThrown(err).reason === "network";
+  } catch {
+    // Never let classification errors change the failure semantics.
+    return false;
+  }
+}
+
+/** Backoff before the next hosted-completion connect retry (1s, 2s, capped). */
+function computeCompletionConnectRetryDelayMs(attempt: number): number {
+  const raw =
+    COMPLETION_CONNECT_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+  return Math.min(raw, COMPLETION_CONNECT_RETRY_MAX_DELAY_MS);
 }
 
 export class AiChatApi {
@@ -2357,9 +2393,13 @@ export class AiChatApi {
       }
       const timer = setTimeout(() => controller.abort(), request.callBudgetMs);
       try {
-        return await this.postHostedCompletionWithSmallModelRetry(
-          request,
-          data,
+        return await this.withCompletionConnectRetry(
+          () =>
+            this.postHostedCompletionWithSmallModelRetry(
+              request,
+              data,
+              controller.signal
+            ),
           controller.signal
         );
       } finally {
@@ -2371,11 +2411,56 @@ export class AiChatApi {
     }
     // No per-call budget: the caller signal threads through to postJson
     // directly so an external abort still cancels the in-flight fetch (T04).
-    return await this.postHostedCompletionWithSmallModelRetry(
-      request,
-      data,
+    return await this.withCompletionConnectRetry(
+      () =>
+        this.postHostedCompletionWithSmallModelRetry(
+          request,
+          data,
+          options?.signal
+        ),
       options?.signal
     );
+  }
+
+  /**
+   * Bounded auto-retry wrapper for the hosted NON-streaming completion:
+   * re-runs `operation` a few times when it fails with a pure CONNECTION
+   * failure (no response ever received), so a transiently unreachable AI
+   * server recovers automatically instead of surfacing "Could not connect
+   * to the AI server." on the first attempt. The streaming path already
+   * retries the identical condition via
+   * {@link openAIChatCompletionStreamEventsHosted}; HTTP status envelopes,
+   * auth/quota/cancellation, and timeouts are NOT retried here — they keep
+   * their existing handling (401-refresh inside HttpClient, small-model 404
+   * fallback, lightweight-service same-route retry) to avoid stacking
+   * retry layers. The caller's abort signal cancels the in-flight fetch and
+   * the backoff sleeps immediately.
+   */
+  private async withCompletionConnectRetry<T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    let attempt = 1;
+    for (;;) {
+      try {
+        return await operation();
+      } catch (err) {
+        if (
+          !isRetryableConnectFailure(err) ||
+          attempt >= COMPLETION_CONNECT_RETRY_MAX_ATTEMPTS
+        ) {
+          throw err;
+        }
+        const delayMs = computeCompletionConnectRetryDelayMs(attempt);
+        console.warn(
+          `[ai-chat-v2] hosted completion connection failure (${describeErrorDetail(
+            err
+          )}); retrying ${attempt}/${COMPLETION_CONNECT_RETRY_MAX_ATTEMPTS - 1} in ${delayMs}ms`
+        );
+        await this.sleepWithAbort(delayMs, signal);
+        attempt += 1;
+      }
+    }
   }
 
   /**
