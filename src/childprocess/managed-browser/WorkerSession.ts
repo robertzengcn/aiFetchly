@@ -49,6 +49,7 @@ import type {
 import { BrowserActionExecutor } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/YouTubeBrowserAdapter";
 import { PublicBrowserAdapter } from "@/childprocess/managed-browser/adapters/PublicBrowserAdapter";
+import { GenericSignInAdapter } from "@/childprocess/managed-browser/adapters/GenericSignInAdapter";
 import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
   redactSecrets,
@@ -222,7 +223,20 @@ export class WorkerSession {
       return;
     }
     this.platformDefinition = payload.platform;
-    if (payload.platform.platformId === 0) this.adapter = new PublicBrowserAdapter();
+    // R09/S-FR-05: generic adapter for non-YouTube registered sites;
+    // YouTube keeps its dedicated adapter, public browsing uses the
+    // public adapter, and anything else gets the generic sign-in adapter.
+    if (payload.platform.platformId === 0) {
+      this.adapter = new PublicBrowserAdapter();
+    } else if (payload.platform.platformId !== 2) {
+      this.adapter = new GenericSignInAdapter({
+        platformId: payload.platform.platformId,
+        key: payload.platform.platformName,
+        allowedOrigins: payload.platform.allowedDomainSuffixes,
+        loginUrl: payload.platform.loginUrl,
+        verificationUrl: payload.platform.verificationUrl,
+      });
+    }
     this.storagePolicy = payload.storagePolicy;
     this.executableVersion = payload.executable.version;
     try {
