@@ -318,8 +318,7 @@ describe("two-step login + credential stamping (T21/A-AC-04)", () => {
       submitVia: "form",
       usernameFilled: true,
     });
-    // Debug: assert the reasonCode to see what failed.
-    expect(result2).toMatchObject({ ok: true, __debug: result2.reasonCode });
+    expect(result2.ok).toBe(true);
     expect(result2.usernameOnlySubmitted).toBeUndefined();
     expect(p2.value.length).toBe("sentinel-password-123".length);
   });
