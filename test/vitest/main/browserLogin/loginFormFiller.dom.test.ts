@@ -250,3 +250,104 @@ describe("fillLoginPageFunction against a live DOM (T02/T03/T04)", () => {
     expect(result.reasonCode).toBe("ambiguous_password_field");
   });
 });
+
+describe("two-step login + credential stamping (T21/A-AC-04)", () => {
+  beforeEach(() => {
+    try {
+      Object.defineProperty(window.location, "protocol", {
+        value: "https:",
+        configurable: true,
+      });
+      Object.defineProperty(window.location, "hostname", {
+        value: "www.example.test",
+        configurable: true,
+      });
+    } catch {
+      // fall through to setURL
+    }
+    const happyDom = (window as unknown as {
+      happyDOM?: { setURL: (url: string) => Promise<void> };
+    }).happyDOM;
+    if (happyDom) {
+      void happyDom.setURL("https://www.example.test/login");
+    }
+  });
+
+  it("submits the username round, then fills the password page", () => {
+    // Step 1 page: username input, no password input.
+    const form1 = document.createElement("form");
+    const u1 = document.createElement("input");
+    u1.type = "email";
+    u1.name = "username";
+    form1.append(u1);
+    document.body.append(form1);
+    for (const el of [u1]) {
+      el.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    }
+
+    const result1 = fillLoginPageFunction({
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      username: "user@example.test",
+      password: "sentinel-password-123",
+      submitVia: "form",
+      usernameFilled: false,
+    });
+    expect(result1.ok).toBe(true);
+    expect(result1.usernameOnlySubmitted).toBe(true);
+    expect(u1.value).toBe("user@example.test");
+  });
+
+  it("fills a password-only page when usernameFilled is set (step 2)", () => {
+    const form2 = document.createElement("form");
+    const p2 = document.createElement("input");
+    p2.type = "password";
+    p2.name = "password";
+    form2.append(p2);
+    document.body.append(form2);
+    p2.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+
+    document.elementFromPoint = () => p2;
+    const result2 = fillLoginPageFunction({
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      username: "user@example.test",
+      password: "sentinel-password-123",
+      submitVia: "form",
+      usernameFilled: true,
+    });
+    // Debug: assert the reasonCode to see what failed.
+    expect(result2).toMatchObject({ ok: true, __debug: result2.reasonCode });
+    expect(result2.usernameOnlySubmitted).toBeUndefined();
+    expect(p2.value.length).toBe("sentinel-password-123".length);
+  });
+
+  it("marks filled inputs with data-mb-cred for observation masking", () => {
+    const form = document.createElement("form");
+    const u = document.createElement("input");
+    u.type = "text";
+    u.name = "username";
+    const p = document.createElement("input");
+    p.type = "password";
+    p.name = "password";
+    form.append(u, p);
+    document.body.append(form);
+    for (const el of [u, p]) {
+      el.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    }
+    document.elementFromPoint = () => p;
+    fillLoginPageFunction({
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      username: "user@example.test",
+      password: "sentinel-password-123",
+      submitVia: "form",
+      usernameFilled: false,
+    });
+    expect(u.getAttribute("data-mb-cred")).toBe("1");
+    expect(p.getAttribute("data-mb-cred")).toBe("1");
+  });
+});

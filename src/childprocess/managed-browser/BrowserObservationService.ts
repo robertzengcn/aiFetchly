@@ -57,7 +57,8 @@ export interface CollectedElementRecord {
   readonly selected: boolean | null;
   readonly hrefOrigin: string | null;
   readonly visible: boolean;
-}
+  /** T21/A-AC-04: filled by the privileged login filler. */
+  isCredential?: boolean;}
 
 /**
  * In-page collector: runs inside the page context; returns JSON records.
@@ -101,6 +102,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       || htmlEl.getAttribute('value')
       || '';
     name = name.replace(/\\s+/g, ' ').trim().slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxAccessibleNameChars});
+    const isCredential = htmlEl.getAttribute('data-mb-cred') === '1';
     const inputTypeRaw = htmlEl.getAttribute('type');
     const inputType = htmlEl.tagName === 'INPUT' || htmlEl.tagName === 'TEXTAREA' ? (inputTypeRaw || 'text') : null;
     let hrefOrigin = null;
@@ -119,6 +121,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       selected: htmlEl.tagName === 'SELECT' ? htmlEl.selectedIndex >= 0 : null,
       hrefOrigin,
       visible,
+      isCredential,
     });
   }
   return out;
@@ -188,11 +191,14 @@ export function shapeElementRecord(
     ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
     ...(record.value != null && record.value !== ""
       ? {
-          valueSummary:
-            summarizeInputValue(record.value, record.inputType ?? undefined) ??
-            undefined,
+          valueSummary: record.isCredential
+            ? "[credential]"
+            : (summarizeInputValue(record.value, record.inputType ?? undefined) ??
+               undefined),
         }
-      : {}),
+      : record.isCredential
+        ? { valueSummary: "[credential]" }
+        : {}),
     inputType: record.inputType,
   };
 }

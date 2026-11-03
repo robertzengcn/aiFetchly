@@ -82,6 +82,8 @@ export function fillLoginPageFunction(input: {
   /** T21: saved recipe field fingerprints (name/id/autocomplete). */
   usernameField?: string | null;
   passwordField?: string | null;
+  /** T21: the username round already submitted (two-step login step 2). */
+  usernameFilled?: boolean;
 }): {
   ok: boolean;
   reasonCode?: string | null;
@@ -89,6 +91,7 @@ export function fillLoginPageFunction(input: {
   /** T21: form action for recipe learning. */
   formAction?: string | null;
   filledFields?: { username: string; password: string };
+  usernameOnlySubmitted?: boolean;
 } {
   const isVisible = (el: Element): boolean => {
     if (!(el instanceof Element)) return false;
@@ -127,11 +130,25 @@ export function fillLoginPageFunction(input: {
     return { ok: false, reasonCode: "origin_mismatch" };
   }
 
+  const stampOf = (el: HTMLInputElement): string =>
+    el.getAttribute("data-mb-obs") || el.name || el.id || "unnamed";
+  const setNativeValue = (el: HTMLInputElement, value: string): void => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    setter?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const stamps: string[] = [];
+
   const forms = Array.from(document.querySelectorAll("form"));
   const candidates: Array<{
     form: HTMLFormElement;
     passwordInput: HTMLInputElement;
     usernameInput: HTMLInputElement;
+    passwordOnly?: boolean;
   }> = [];
   for (const form of forms) {
     const passwordInputs = Array.from(
@@ -173,6 +190,17 @@ export function fillLoginPageFunction(input: {
       ).find(
         (el) => isVisible(el) && !el.disabled && !el.readOnly
       );
+    // T21: two-step login — step 2 (password-only) pages are valid when
+    // the username was already submitted in a previous round.
+    if (!usernameInput && input.usernameFilled) {
+      candidates.push({
+        form,
+        passwordInput: passwordInputs[0]!,
+        usernameInput: null as unknown as HTMLInputElement,
+        passwordOnly: true,
+      });
+      continue;
+    }
     if (!usernameInput) continue;
     const passwordInput =
       passwordInputs.find((el) =>
@@ -185,6 +213,33 @@ export function fillLoginPageFunction(input: {
     });
   }
   if (candidates.length === 0) {
+    // T21: two-step login step 1 — a visible username input with NO
+    // password input: fill + submit, report so the orchestrator can run
+    // the password round on the next page (bounded, max 3 pages).
+    for (const form of forms) {
+      const hasPassword =
+        Array.from(form.querySelectorAll('input[type="password"]')).filter(
+          (el) => isVisible(el)
+        ).length > 0;
+      if (hasPassword) continue;
+      const usernameInput = Array.from(
+        form.querySelectorAll<HTMLInputElement>(
+          'input[type="email"], input[type="text"], input[type="tel"]'
+        )
+      ).find(
+        (el) => isVisible(el) && !el.disabled && !el.readOnly
+      );
+      if (!usernameInput) continue;
+      setNativeValue(usernameInput, input.username);
+      form.requestSubmit();
+      return {
+        ok: true,
+        reasonCode: null,
+        stamps: [stampOf(usernameInput)],
+        usernameOnlySubmitted: true,
+        formAction: form.getAttribute("action"),
+      };
+    }
     return { ok: false, reasonCode: "form_not_found" };
   }
   const chosen = candidates[0]!;
@@ -193,20 +248,6 @@ export function fillLoginPageFunction(input: {
   if (!passwordSafe(pw)) {
     return { ok: false, reasonCode: "password_field_unsafe" };
   }
-
-  const stampOf = (el: HTMLInputElement): string =>
-    el.getAttribute("data-mb-obs") || el.name || el.id || "unnamed";
-  const stamps: string[] = [];
-
-  const setNativeValue = (el: HTMLInputElement, value: string): void => {
-    const setter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value"
-    )?.set;
-    setter?.call(el, value);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-  };
 
   // T04: per-input length snapshot (NOT a sum) — prefilled usernames and
   // equal-and-opposite foreign changes are both detected.
@@ -217,16 +258,20 @@ export function fillLoginPageFunction(input: {
     setNativeValue(el, "");
   };
   const clearTouched = (): void => {
-    clearField(chosen.usernameInput);
+    if (chosen.usernameInput) {
+      clearField(chosen.usernameInput);
+    }
     clearField(pw);
-  };
+  }
 
-  // --- Username -------------------------------------------------------------
-  setNativeValue(chosen.usernameInput, input.username);
-  stamps.push(stampOf(chosen.usernameInput));
-  if (chosen.usernameInput.value.length !== input.username.length) {
-    clearTouched();
-    return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+  // --- Username (skipped on a two-step password-only page) -------------------
+  if (!chosen.passwordOnly) {
+    setNativeValue(chosen.usernameInput, input.username);
+    stamps.push(stampOf(chosen.usernameInput));
+    if (chosen.usernameInput.value.length !== input.username.length) {
+      clearTouched();
+      return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+    }
   }
 
   // --- T03: REVALIDATE the password target AFTER the username set -----------
@@ -249,15 +294,16 @@ export function fillLoginPageFunction(input: {
     void revalidated;
     // The page handler replaced/toggled the password field — the credential
     // must never land in the mutated target. Clear and abort.
-    clearField(chosen.usernameInput);
-    if (pw instanceof HTMLInputElement) {
-      clearField(pw);
+    if (chosen.usernameInput) {
+      clearField(chosen.usernameInput);
     }
+    clearField(pw);
     return { ok: false, reasonCode: "password_field_mutated", stamps };
   }
   // Login mode still requires exactly one visible password input.
   if (
     input.mode === "login" &&
+    !chosen.passwordOnly &&
     Array.from(
       chosen.form.querySelectorAll('input[type="password"]')
     ).filter((el) => isVisible(el)).length !== 1
@@ -301,6 +347,14 @@ export function fillLoginPageFunction(input: {
     return { ok: false, reasonCode: "unexpected_field_change", stamps };
   }
 
+  // T21/A-AC-04: mark the credential fields so later observations report
+  // [credential] for their values — including show-password-toggled
+  // (type=text) fields the sanitizer alone would not mask.
+  if (chosen.usernameInput) {
+    chosen.usernameInput.setAttribute("data-mb-cred", "1");
+  }
+  pw.setAttribute("data-mb-cred", "1");
+
   // --- Submit through the password field's own form (A-FR-18) ----------------
   const submit = (): void => {
     if (input.submitVia === "enter" || !pw.form) {
@@ -332,7 +386,9 @@ export function fillLoginPageFunction(input: {
     // saved and reused next time.
     formAction: chosen.form.getAttribute("action"),
     filledFields: {
-      username: stampOf(chosen.usernameInput),
+      username: chosen.usernameInput
+        ? stampOf(chosen.usernameInput)
+        : (input.usernameField ?? "username"),
       password: stampOf(pw),
     },
   };
@@ -379,20 +435,45 @@ export class LoginFormFiller {
     page: LoginFillPageLike,
     target: LoginFillTarget
   ): Promise<LoginFillResult> {
-    const fillResult = await page.evaluate<
-      Awaited<ReturnType<typeof fillLoginPageFunction>>
-    >(fillLoginPageFunction, {
-      mode: target.mode,
-      allowedDomainSuffixes: [...target.allowedDomainSuffixes],
-      username: target.username,
-      password: target.password,
-      submitVia: target.recipeStep?.submitVia ?? "form",
-    });
-
-    if (!fillResult.ok) {
+    // T21/A-FR-21: bounded two-step login loop (max 3 pages). A
+    // username-only page is submitted, then the password round runs on
+    // the page that follows.
+    let fillResult: Awaited<ReturnType<typeof fillLoginPageFunction>> = {
+      ok: false,
+      reasonCode: "form_not_found",
+    };
+    let usernameFilled = false;
+    for (let round = 0; round < 3; round++) {
+      fillResult = await page.evaluate<
+        Awaited<ReturnType<typeof fillLoginPageFunction>>
+      >(fillLoginPageFunction, {
+        mode: target.mode,
+        allowedDomainSuffixes: [...target.allowedDomainSuffixes],
+        username: target.username,
+        password: target.password,
+        submitVia: target.recipeStep?.submitVia ?? "form",
+        usernameFilled,
+      });
+      if (!fillResult.ok) {
+        return {
+          outcome: "unknown",
+          reasonCode: fillResult.reasonCode ?? null,
+          filledFieldStamps: fillResult.stamps ?? [],
+        };
+      }
+      if (fillResult.usernameOnlySubmitted) {
+        usernameFilled = true;
+        // Wait for the password page to load before the next round.
+        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        continue;
+      }
+      break; // full fill succeeded — proceed to outcome detection
+    }
+    if (fillResult.usernameOnlySubmitted) {
+      // All rounds were username-only: treat as challenge (2FA/flow change).
       return {
-        outcome: "unknown",
-        reasonCode: fillResult.reasonCode ?? null,
+        outcome: "challenge",
+        reasonCode: "two_step_flow_incomplete",
         filledFieldStamps: fillResult.stamps ?? [],
       };
     }
