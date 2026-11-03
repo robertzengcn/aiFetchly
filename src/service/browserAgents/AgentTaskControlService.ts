@@ -223,16 +223,13 @@ export class AgentTaskControlService {
    * T24/C-FR-09: the 60-minute pause cap. A paused task past the cap is
    * marked interrupted (partial results; no automatic resume).
    */
-  public enforcePauseCap(
-    taskId: string,
-    capMs = 60 * 60_000,
-    now: () => number = Date.now
-  ): boolean {
+  public enforcePauseCap(taskId: string, capMs = 60 * 60_000): boolean {
     const record = this.tasks.get(taskId);
     if (!record || record.state !== "paused" || record.openIntervention === null) {
       return false;
     }
-    const pausedFor = now() - record.openIntervention.startedAtEpochMs;
+    // Uses the service's (injectable) clock so tests and real timers agree.
+    const pausedFor = this.now() - record.openIntervention.startedAtEpochMs;
     if (pausedFor >= capMs) {
       this.setState(taskId, "interrupted", "pause_cap_expired");
       this.endIntervention(taskId);
