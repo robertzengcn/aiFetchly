@@ -313,6 +313,7 @@ describe("AiChatConversationHeader report conversation entry", () => {
     });
     const item = wrapper.get('[data-testid="workspace-overflow-report"]');
     expect(item.attributes("disabled")).toBeDefined();
+    expect(item.attributes("aria-disabled")).toBe("true");
     expect(item.attributes("subtitle")).toBe(REPORT_UNAVAILABLE);
   });
 
@@ -330,6 +331,7 @@ describe("AiChatConversationHeader report conversation entry", () => {
     const item = wrapper.get('[data-testid="workspace-overflow-report"]');
     // Unstubbed custom element renders :disabled="false" as disabled="false".
     expect(item.attributes("disabled")).toBe("false");
+    expect(item.attributes("aria-disabled")).toBe("false");
     expect(item.attributes("subtitle")).toBeUndefined();
   });
 });

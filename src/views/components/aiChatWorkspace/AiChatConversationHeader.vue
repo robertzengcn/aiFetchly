@@ -94,6 +94,7 @@
             prepend-icon="mdi-flag-outline"
             data-testid="workspace-overflow-report"
             :disabled="!reportEnabled || reportLoading"
+            :aria-disabled="!reportEnabled || reportLoading"
             @click="emit('report')"
           />
           <v-divider role="separator" />
