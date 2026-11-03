@@ -113,6 +113,8 @@ export class ManagedBrowserError extends Error {
 export interface StartManagedBrowserInput {
   readonly accountId?: number;
   readonly purpose: string;
+  /** T23/M-FR-07: owning agent task id for sub-agent driven sessions. */
+  readonly agentTaskId?: string;
   /**
    * PRD P-FR-01: optional proxy choice at session start. Account
    * sessions default to their linked proxy; `direct`/different-proxy
@@ -605,6 +607,7 @@ export class ManagedBrowserModule {
     const lease = this.leaseService.acquire(leaseKey, {
       sessionId,
       ownerConversationId: input.conversationId ?? null,
+      ownerAgentTaskId: input.agentTaskId ?? null,
     });
     if (lease.status === "already_active") {
       const existing = this.sessions.get(lease.sessionId);

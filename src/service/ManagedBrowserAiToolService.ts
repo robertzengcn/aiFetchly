@@ -108,6 +108,8 @@ export interface BrowserToolExecutionContext {
   readonly toolCallId: string;
   /** C-FR-09: managed-async job id (when run as a background job). */
   readonly jobId?: string;
+  /** T23/M-FR-07: owning agent id when the call comes from a sub-agent. */
+  readonly ownerAgentId?: string;
   /**
    * Accepted for interface compatibility but DELIBERATELY IGNORED by the
    * managed-browser tools: consequential actions are ALWAYS-CONFIRM
@@ -406,6 +408,9 @@ export class ManagedBrowserAiToolService {
           purpose: parsed.data.purpose,
           requestedStartUrl: parsed.data.requested_start_url,
           conversationId: context.conversationId,
+          ...(context.ownerAgentId
+            ? { agentTaskId: context.ownerAgentId }
+            : {}),
           ...(parsed.data.proxy ? { proxy: parsed.data.proxy } : {}),
         },
         { aiEntryPoint: true }
