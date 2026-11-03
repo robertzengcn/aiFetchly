@@ -68,12 +68,12 @@ function makeStubModule(): AnyModule {
       arch: "x64",
     })),
     prepareInstall: vi.fn(async (runtimeId: string) => ({
-      operationId: "11111111-2222-3333-4444-555555555555",
+      operationId: "11111111-2222-4333-8444-555555555555",
       runtimeId,
       runtimeVersion: "1.0.0",
       archiveSizeBytes: 1,
       installedSizeBytes: 2,
-      consentToken: "22222222-3333-4444-5555-666666666666",
+      consentToken: "22222222-3333-4444-8555-666666666666",
       expiresAt: "2026-07-30T00:00:00Z",
     })),
     install: vi.fn(async (input: { operationId: string }) => ({
@@ -85,7 +85,7 @@ function makeStubModule(): AnyModule {
     cancelInstall: vi.fn(() => true),
     checkForUpdate: vi.fn(async () => null),
     repair: vi.fn(async (runtimeId: string) => ({
-      operationId: "33333333-3333-4444-5555-666666666666",
+      operationId: "33333333-3333-4444-8555-666666666666",
       runtimeId,
       runtimeVersion: "1.0.0",
       activated: true,
@@ -170,10 +170,10 @@ describe("local-ai-runtime IPC registration", () => {
 
   it("routes install with full consent payload", async () => {
     const payload = {
-      operationId: "11111111-2222-3333-4444-555555555555",
+      operationId: "11111111-2222-4333-8444-555555555555",
       runtimeId: "voice-sherpa",
       expectedRuntimeVersion: "1.0.0",
-      consentToken: "22222222-3333-4444-5555-666666666666",
+      consentToken: "22222222-3333-4444-8555-666666666666",
     };
     const res = await invoke(LOCAL_AI_RUNTIME_INSTALL, payload);
     expect(res.status).toBe(true);
@@ -182,7 +182,7 @@ describe("local-ai-runtime IPC registration", () => {
 
   it("cancel wraps the boolean in { cancelled }", async () => {
     const res = await invoke(LOCAL_AI_RUNTIME_CANCEL_INSTALL, {
-      operationId: "11111111-2222-3333-4444-555555555555",
+      operationId: "11111111-2222-4333-8444-555555555555",
     });
     expect(res.status).toBe(true);
     expect(res.data).toEqual({ cancelled: true });

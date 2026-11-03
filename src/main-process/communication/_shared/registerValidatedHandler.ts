@@ -1,6 +1,6 @@
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
-import type { ZodType, ZodTypeDef } from "zod";
+import type { ZodType } from "zod";
 import { log } from "@/modules/Logger";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { formatZodValidationError } from "@/utils/zodErrors";
@@ -17,7 +17,7 @@ import type { CommonMessage } from "@/entityTypes/commonType";
  */
 async function dispatchValidated<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  schema: () => ZodType<TInput, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
   event: IpcMainInvokeEvent,
   raw: unknown
@@ -154,7 +154,7 @@ function extractStructuredFailure(err: unknown): {
  */
 export function registerValidatedHandler<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  schema: () => ZodType<TInput, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
@@ -174,7 +174,7 @@ export function registerValidatedHandler<TInput, TOutput>(
  */
 export function registerAiValidatedHandler<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  schema: () => ZodType<TInput, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {

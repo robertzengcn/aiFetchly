@@ -55,7 +55,7 @@ import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
  * can return per-row invalid details (AC-6) instead of rejecting wholesale.
  */
 const proxyImportWrapperSchema = z.object({
-  proxies: z.array(z.record(z.unknown())).min(1).max(500),
+  proxies: z.array(z.record(z.string(), z.unknown())).min(1).max(500),
   duplicatePolicy: z.enum(["skip", "fail"]).default("skip"),
 });
 

@@ -142,8 +142,12 @@ export type AccountSessionMetadata = z.infer<
  * Result of a cookie import / capture operation. Success variants carry a
  * count + safe reject breakdown + a verification URL. Failure variants carry
  * only a state code and counts. No cookie values, names, or paths anywhere.
+ *
+ * zod v4: z.record(<enum>, V) became an exhaustive map (every enum key
+ * required). The wire contract here is a partial tally (absent reason = 0),
+ * so use z.partialRecord — the v4 equivalent of the v3 enum-key record.
  */
-export const safeCookieRejectCountsSchema = z.record(
+export const safeCookieRejectCountsSchema = z.partialRecord(
   safeCookieRejectReasonSchema,
   z.number().int().nonnegative()
 );
