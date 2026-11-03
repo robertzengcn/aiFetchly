@@ -16,6 +16,10 @@
       @open-agent-tasks="onOpenAgentTasks"
       @clear="onClear"
       @delete="onDelete"
+      :report-enabled="conversationReportEnabled"
+      :report-loading="reportCapabilitiesLoading"
+      :report-disabled-reason="conversationReportDisabledReason"
+      @report="onOpenConversationReport"
       :goal-objective="
         sharedOrchestrationEnabled ? activeGoalObjective : null
       "
@@ -143,13 +147,6 @@
         @request-remove-workspace="onRequestWorkspaceRemove"
       />
       <template v-if="conversationId">
-        <AIConversationReportButton
-          :enabled="conversationReportEnabled"
-          :loading="reportCapabilitiesLoading"
-          :disabled-reason="conversationReportDisabledReason"
-          compact
-          @open="onOpenConversationReport"
-        />
         <!-- FR-HIS-001/005 (history rollout flag): archive search entry and
              compaction progress/retry/cancel, reachable while the inspector
              is closed. -->
@@ -742,7 +739,6 @@ import {
 } from "@/views/store/composerDrafts";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
-import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
 import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
