@@ -8,7 +8,9 @@ describe("AgentTaskControlService pause cap (T24/C-FR-09)", () => {
     let now = 0;
     const service = new AgentTaskControlService(() => now);
     service.register("task-cap", "conv-1");
-    service.setState("task-cap", "paused", "user_paused");
+    // The real pause flow opens an intervention (C-FR-05), which the cap
+    // measures.
+    service.beginIntervention("task-cap", "user_paused");
     now = 59 * 60_000;
     expect(service.enforcePauseCap("task-cap")).toBe(false);
     expect(service.getState("task-cap")).toBe("paused");
