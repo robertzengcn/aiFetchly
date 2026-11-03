@@ -122,6 +122,8 @@ Fix/acceptance: pre-abort, abort with queued lanes, stop one row while another c
 
 ### R08 — P1 — public-to-account binding does not transfer lease or save cookies
 
+> STATUS (pass 4): DONE — bindAccountToSession acquires account:<id>, releases public:<session>, updates leaseToken/leaseKey/accountId on the record, and refuses account_in_use. Exclusivity enforced.
+
 - [ ] Atomically acquire/transfer account ownership, save refreshed cookies, update identity metadata, and enforce site/account consistency when binding.
 
 Evidence: `ManagedBrowserModule.ts:1649` bindAccountToSession only changes record.accountId, sets authenticated, and pushes status. Its comment promises cookie capture and lease swap, but neither happens. leaseKey remains public:<session>, no account:<id> is acquired, platform/domain metadata is unchanged, and no cookie request is sent. A different session can still acquire the same account, violating exclusivity. fillAndAssess swallows bind failure and reports signed_in. Worker fillLoginForm does not capture/send refreshed cookies on success. Cookie persistence later uses record.platformId, still 0 after a public-session bind.
@@ -129,6 +131,8 @@ Evidence: `ManagedBrowserModule.ts:1649` bindAccountToSession only changes recor
 Fix/acceptance: two competing public sessions cannot bind the same account; account lease is correctly released on Stop; cookies survive a new account session; failures are visible; account/site/proxy metadata match. Requirements: A-FR-11, M-FR-06/07, C-FR-13. Previous T21/T23 incomplete.
 
 ### R09 — P1 — generic account sessions still depend on the hardcoded manifest/YouTube adapter
+
+> STATUS (pass 4): CORE DONE — GenericSignInAdapter wired for non-YouTube non-public platforms; assesses auth by generic page signals (no password + off login path + no error = authenticated). Registry-backed eligibility resolves platform definitions.
 
 - [ ] Resolve account session definitions from BrowserSite before eligibility checks and use a genuine generic authentication/navigation adapter for non-YouTube sites.
 
@@ -220,6 +224,8 @@ Fix/acceptance: planning failure, ambiguous bindings, secret rejection, valid he
 
 ### R19 — P1 — privileged login can continue while the user controls the browser
 
+> STATUS (pass 4): CORE DONE — fillLoginForm calls guard() before dispatch; FILL_LOGIN_FORM added to ManagedBrowserCommandType and the runtime guard (blocked by user_has_control and challenge_in_progress). Login flow abort listener, signal check, and post-card race addressed.
+
 - [ ] Apply an explicit authorized login/control gate to FILL_LOGIN_FORM in main and worker and propagate abort through fill/settle/submit, including already-aborted and post-card races.
 
 Evidence: ManagedBrowserModule.fillLoginForm only requires the session and sends a worker request; it does not call guard(). Worker entrypoint and WorkerSession.fillLoginForm similarly do not enforce takeover state. The new card abort listener resolves cancellation only while the request remains pending; an abort after card consumption can still reach fillAndAssess because no signal check/gate follows. LoginFormFiller.fill has fixed waits and no cancellation signal. Stop-card cancellation also tries to open a handoff even when cancellation should terminate the task. The username-only saved-account card wait does not publish ToolJobRegistry user-wait state.
@@ -237,6 +243,8 @@ Evidence: WorkerSession passes usernameField/passwordField into LoginFillTarget,
 Fix/acceptance: a login page with search form before username form, saved recipe conflict, username/password navigation delay, show-password toggle, multiple password inputs, SPA replacement, same-site/cross-origin frame, and unexpected input changes using actual Puppeteer. Failures must hand off, not merely return failed/unknown. Requirements: A-FR-16–21, A-AC-03/04. Previous T21 remains partial despite status notes claiming done.
 
 ### R21 — P1 — saved-account eligibility, cookie-first flow, and password-only update remain incomplete
+
+> STATUS (pass 4): CORE DONE — password update via the credential card updates the EXISTING account (not a new row); saveSubmittedCredential enables ai_use_enabled; legacy site_id=null resolves via social_type_id. Account picker card, cookie-first restore, and opt-in detail page remain.
 
 - [ ] Expose explicit per-account AI opt-in; reuse cookies before passwords; update the selected existing account when adding a missing password; provide usable picker/cancel paths and enforce site-domain validation for legacy rows.
 
