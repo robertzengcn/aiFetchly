@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import ManagedBrowserSettingsPanel from "@/views/components/settings/ManagedBrowserSettingsPanel.vue";
@@ -22,6 +22,11 @@ const baseSettings: EffectiveManagedBrowserSettings = {
   disabledReasonCode: null,
       maxConcurrentSessions: 3,
       maxSessionsPerSite: 2,
+      signInEnabled: true,
+      siteUpsertEnabled: true,
+      proxySwitchEnabled: true,
+      parallelAgentsEnabled: true,
+      browserDecisionEnabled: true,
       signInEnabled: true,
       siteUpsertEnabled: true,
       proxySwitchEnabled: true,
@@ -492,6 +497,23 @@ describe("TODO-MSB-005 selected-account clear", () => {
         accountId: 101,
         activeSessionDecision: "stop_and_clear",
         confirmationId: "conf-acct-002",
+      })
+    );
+  });
+});
+
+describe("ManagedBrowserSettingsPanel feature switches (T25/T29)", () => {
+  it("persists a feature switch through the preferences patch (T25/T29)", async () => {
+    const wrapper = mountPanel();
+    await vi.waitFor(() =>
+      expect(apiMocks.getEffectiveBrowserSettings).toHaveBeenCalled()
+    );
+    await wrapper
+      .find("[data-testid='mb-toggle-browser-decision']")
+      .setValue(false as never);
+    await vi.waitFor(() =>
+      expect(apiMocks.updateBrowserPreferences).toHaveBeenCalledWith({
+        browserDecisionEnabled: false,
       })
     );
   });

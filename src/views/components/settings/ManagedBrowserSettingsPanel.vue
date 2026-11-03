@@ -57,6 +57,57 @@
       data-testid="mb-toggle-clear-exit"
       @update:model-value="onToggleClearOnExit"
     />
+    <!-- T25/T29: per-feature kill switches (PRD section 10). -->
+    <v-switch
+      v-model="signInEnabled"
+      color="primary"
+      hide-details
+      density="compact"
+      :label="t('managedBrowser.settings.sign_in_enabled')"
+      :loading="loading"
+      data-testid="mb-toggle-sign-in"
+      @update:model-value="onToggleFeature('signInEnabled', $event)"
+    />
+    <v-switch
+      v-model="siteUpsertEnabled"
+      color="primary"
+      hide-details
+      density="compact"
+      :label="t('managedBrowser.settings.site_upsert_enabled')"
+      :loading="loading"
+      data-testid="mb-toggle-site-upsert"
+      @update:model-value="onToggleFeature('siteUpsertEnabled', $event)"
+    />
+    <v-switch
+      v-model="proxySwitchEnabled"
+      color="primary"
+      hide-details
+      density="compact"
+      :label="t('managedBrowser.settings.proxy_switch_enabled')"
+      :loading="loading"
+      data-testid="mb-toggle-proxy-switch"
+      @update:model-value="onToggleFeature('proxySwitchEnabled', $event)"
+    />
+    <v-switch
+      v-model="parallelAgentsEnabled"
+      color="primary"
+      hide-details
+      density="compact"
+      :label="t('managedBrowser.settings.parallel_agents_enabled')"
+      :loading="loading"
+      data-testid="mb-toggle-parallel-agents"
+      @update:model-value="onToggleFeature('parallelAgentsEnabled', $event)"
+    />
+    <v-switch
+      v-model="browserDecisionEnabled"
+      color="primary"
+      hide-details
+      density="compact"
+      :label="t('managedBrowser.settings.browser_decision_enabled')"
+      :loading="loading"
+      data-testid="mb-toggle-browser-decision"
+      @update:model-value="onToggleFeature('browserDecisionEnabled', $event)"
+    />
 
     <div class="d-flex align-center ga-3 flex-wrap mt-2">
       <span class="text-body-2">
@@ -290,6 +341,12 @@ const settings = ref<EffectiveManagedBrowserSettings | null>(null);
 const cacheStatus = ref<SafeManagedBrowserCacheStatus | null>(null);
 const browserEnabled = ref(true);
 const cacheEnabled = ref(true);
+// T25/T29: per-feature kill switches.
+const signInEnabled = ref(true);
+const siteUpsertEnabled = ref(true);
+const proxySwitchEnabled = ref(true);
+const parallelAgentsEnabled = ref(true);
+const browserDecisionEnabled = ref(true);
 const clearCacheOnExit = ref(false);
 const loading = ref(false);
 const clearInProgress = ref(false);
@@ -363,6 +420,11 @@ async function reload(): Promise<void> {
     browserEnabled.value = effective.browserEnabled;
     cacheEnabled.value = effective.cacheEnabled;
     clearCacheOnExit.value = effective.clearCacheOnExit;
+    signInEnabled.value = effective.signInEnabled;
+    siteUpsertEnabled.value = effective.siteUpsertEnabled;
+    proxySwitchEnabled.value = effective.proxySwitchEnabled;
+    parallelAgentsEnabled.value = effective.parallelAgentsEnabled;
+    browserDecisionEnabled.value = effective.browserDecisionEnabled;
     cacheMaxMb.value = Math.round(effective.cacheMaxBytes / (1024 * 1024));
     cacheStatus.value = cache;
     // GAP-10: eligible accounts for per-account clearing (ungated read).
@@ -505,6 +567,16 @@ async function onDisableDecision(
     activeSessionDialog.value = false;
   }
 }
+
+  /** T25/T29: generic per-feature switch handler. */
+  function onToggleFeature(
+    feature: "signInEnabled" | "siteUpsertEnabled" | "proxySwitchEnabled" | "parallelAgentsEnabled" | "browserDecisionEnabled",
+    value: boolean | null
+  ): void {
+    if (value !== null) {
+      void persist({ [feature]: value } as Parameters<typeof persist>[0]);
+    }
+  }
 
 function onToggleCache(value: boolean | null): void {
   if (value !== null) {

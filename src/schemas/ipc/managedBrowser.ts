@@ -148,6 +148,11 @@ export const managedBrowserUpdateSettingsInputSchema = lazySchema(() =>
         .max(MANAGED_BROWSER_CACHE_DEFAULTS.maxMaxSizeMb)
         .optional(),
       clearCacheOnExit: z.boolean().optional(),
+      signInEnabled: z.boolean().optional(),
+      siteUpsertEnabled: z.boolean().optional(),
+      proxySwitchEnabled: z.boolean().optional(),
+      parallelAgentsEnabled: z.boolean().optional(),
+      browserDecisionEnabled: z.boolean().optional(),
     })
     .refine((v) => Object.keys(v).length > 0, {
       message: "at least one preference is required",

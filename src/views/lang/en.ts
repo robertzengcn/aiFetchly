@@ -4270,6 +4270,11 @@ export default {
       },
     },
     settings: {
+      sign_in_enabled: "Saved-account sign-in (AI)",
+      site_upsert_enabled: "AI site registration",
+      proxy_switch_enabled: "AI proxy switching",
+      parallel_agents_enabled: "Parallel browser tasks",
+      browser_decision_enabled: "Fast browser decisions",
       title: "Managed Browser",
       description:
         "Control the built-in social browser the AI uses for logged-in tasks, and manage its cache.",

@@ -53,6 +53,16 @@ export interface ManagedBrowserPreferencePatch {
   readonly cacheEnabled?: boolean;
   readonly cacheMaxSizeMb?: number;
   readonly clearCacheOnExit?: boolean;
+  /** M-FR-06: concurrent-session cap (clamped 1..5). */
+  readonly maxConcurrentSessions?: number;
+  /** M-FR-06: per-site session cap (clamped 1..10). */
+  readonly maxSessionsPerSite?: number;
+  /** T25/T29: per-feature kill switches. */
+  readonly signInEnabled?: boolean;
+  readonly siteUpsertEnabled?: boolean;
+  readonly proxySwitchEnabled?: boolean;
+  readonly parallelAgentsEnabled?: boolean;
+  readonly browserDecisionEnabled?: boolean;
 }
 
 export class ManagedBrowserSettingsModule {
@@ -184,6 +194,25 @@ export class ManagedBrowserSettingsModule {
           patch.browserEnabled ? "1" : "0"
         )
       );
+    }
+    // M-FR-06 caps + T25/T29 switches.
+    for (const [key, value] of [
+      [MANAGED_BROWSER_SETTING_KEYS.maxConcurrentSessions, patch.maxConcurrentSessions],
+      [MANAGED_BROWSER_SETTING_KEYS.maxSessionsPerSite, patch.maxSessionsPerSite],
+      [MANAGED_BROWSER_SETTING_KEYS.signInEnabled, patch.signInEnabled],
+      [MANAGED_BROWSER_SETTING_KEYS.siteUpsertEnabled, patch.siteUpsertEnabled],
+      [MANAGED_BROWSER_SETTING_KEYS.proxySwitchEnabled, patch.proxySwitchEnabled],
+      [MANAGED_BROWSER_SETTING_KEYS.parallelAgentsEnabled, patch.parallelAgentsEnabled],
+      [MANAGED_BROWSER_SETTING_KEYS.browserDecisionEnabled, patch.browserDecisionEnabled],
+    ] as const) {
+      if (value !== undefined) {
+        writes.push(
+          this.writeStoredValue(
+            key,
+            typeof value === "boolean" ? (value ? "1" : "0") : String(value)
+          )
+        );
+      }
     }
     if (patch.cacheEnabled !== undefined) {
       writes.push(

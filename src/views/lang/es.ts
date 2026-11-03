@@ -4290,6 +4290,11 @@ export default {
       },
     },
     settings: {
+      sign_in_enabled: "Inicio de sesión con cuentas guardadas (IA)",
+      site_upsert_enabled: "Registro de sitios por IA",
+      proxy_switch_enabled: "Cambio de proxy por IA",
+      parallel_agents_enabled: "Tareas paralelas del navegador",
+      browser_decision_enabled: "Decisiones rápidas del navegador",
       title: "Navegador gestionado",
       description:
         "Controla el navegador social integrado que la IA usa para tareas con sesión iniciada y gestiona su caché.",

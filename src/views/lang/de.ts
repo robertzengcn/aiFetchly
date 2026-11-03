@@ -4294,6 +4294,11 @@ export default {
       },
     },
     settings: {
+      sign_in_enabled: "Anmeldung mit gespeicherten Konten (KI)",
+      site_upsert_enabled: "KI-Sitenregistrierung",
+      proxy_switch_enabled: "KI-Proxy-Wechsel",
+      parallel_agents_enabled: "Parallele Browser-Aufgaben",
+      browser_decision_enabled: "Schnelle Browser-Entscheidungen",
       title: "Verwalteter Browser",
       description:
         "Steuern Sie den integrierten Social-Browser, den die KI für angemeldete Aufgaben nutzt, und verwalten Sie dessen Cache.",

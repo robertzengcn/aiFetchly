@@ -4192,6 +4192,11 @@ export default {
       },
     },
     settings: {
+      sign_in_enabled: "保存済みアカウントでのログイン（AI）",
+      site_upsert_enabled: "AI サイト登録",
+      proxy_switch_enabled: "AI プロキシ切替",
+      parallel_agents_enabled: "並列ブラウザタスク",
+      browser_decision_enabled: "高速ブラウザ判定",
       title: "管理ブラウザ",
       description:
         "AIがログイン済みタスクで使用する内蔵ソーシャルブラウザとキャッシュを管理します。",

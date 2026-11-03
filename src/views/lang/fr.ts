@@ -4273,6 +4273,11 @@ export default {
       },
     },
     settings: {
+      sign_in_enabled: "Connexion avec comptes enregistrés (IA)",
+      site_upsert_enabled: "Enregistrement de sites par IA",
+      proxy_switch_enabled: "Changement de proxy par IA",
+      parallel_agents_enabled: "Tâches parallèles du navigateur",
+      browser_decision_enabled: "Décisions rapides du navigateur",
       title: "Navigateur géré",
       description:
         "Contrôlez le navigateur social intégré utilisé par l'IA pour les tâches connectées et gérez son cache.",

@@ -4042,6 +4042,11 @@ export default {
       },
     },
     settings: {
+      sign_in_enabled: "AI 使用已保存账户登录",
+      site_upsert_enabled: "AI 站点注册",
+      proxy_switch_enabled: "AI 代理切换",
+      parallel_agents_enabled: "并行浏览器任务",
+      browser_decision_enabled: "快速浏览器决策",
       title: "托管浏览器",
       description:
         "控制 AI 执行已登录任务时使用的内置社交浏览器，并管理其缓存。",
