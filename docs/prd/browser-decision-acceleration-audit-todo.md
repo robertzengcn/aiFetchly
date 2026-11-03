@@ -254,7 +254,13 @@ Acceptance: a newly registered generic site can own an account session; legacy I
 
 ### T21 — P1: finish sign-in lifecycle, recipes, cookies, and safety evidence
 
-> STATUS (pass 2): CORE DONE — recipe field fingerprints match inputs by name/id/autocomplete before deterministic detection; the page function returns form action + field fingerprints and the service saves the learned recipe on verified success; the account binds to the live session (A-FR-11). Remaining: two-step login loops in the filler, cookie-first restore on an existing session, observation-sanitizer stamp registration for show-password persistence.
+> STATUS (pass 3): MOSTLY DONE — recipe field fingerprints match by
+> name/id/autocomplete; two-step login (username-only page → password
+> page) supported in the page function with a bounded 3-page
+> orchestrator loop; credential stamps persist via data-mb-cred for
+> observation masking including show-password toggles; learned recipe
+> saved on verified success; account binds to the live session.
+> Remaining: cookie-first restore on an existing session.
 - [ ] Implement cookie-first assessment, two-step login, recipe matching/learning/fallback, generic authentication assessment, successful account binding/cookie save, cooldown across applicable paths, and sentinel non-disclosure.
 
 Filler requires username and password together in one form and ignores recipe field names/action; WorkerSession passes only recipe.steps[0]. `BrowserSiteModule.saveLoginRecipe()` has no sign-in caller. The sign-in success branch only marks the site verified/clears failure; it does not bind the account to a public session or invoke cookie persistence for that account. Filled stamps are returned but not registered with observation sanitization for persistent `[credential]` masking (including show-password changes). Generic success detection can confuse intermediate password-free pages with authentication and does not use full challenge assessment. The dedicated credential read skips site-domain enforcement when account.site_id is null; implement migration/domain fallback rather than treating legacy null as permission.
