@@ -75,7 +75,19 @@ export class ManagedBrowserSettingsModule {
    *   application release flag AND user managed-browser setting
    */
   public async getEffectiveSettings(): Promise<EffectiveManagedBrowserSettings> {
-    const [browserRaw, cacheRaw, cacheMaxRaw, clearOnExitRaw, maxSessionsRaw, perSiteRaw] =
+    const [
+      browserRaw,
+      cacheRaw,
+      cacheMaxRaw,
+      clearOnExitRaw,
+      maxSessionsRaw,
+      perSiteRaw,
+      signInRaw,
+      siteUpsertRaw,
+      proxySwitchRaw,
+      parallelRaw,
+      decisionRaw,
+    ] =
       await Promise.all([
         this.reader.getSettingValue(
           MANAGED_BROWSER_SETTING_KEYS.browserEnabled
@@ -92,6 +104,21 @@ export class ManagedBrowserSettingsModule {
         ),
         this.reader.getSettingValue(
           MANAGED_BROWSER_SETTING_KEYS.maxSessionsPerSite
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.signInEnabled
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.siteUpsertEnabled
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.proxySwitchEnabled
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.parallelAgentsEnabled
+        ),
+        this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.browserDecisionEnabled
         ),
       ]);
 
@@ -121,6 +148,12 @@ export class ManagedBrowserSettingsModule {
           MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_MAX
         ) ?? MANAGED_BROWSER_MAX_CONCURRENT_SESSIONS_DEFAULT,
       maxSessionsPerSite: parseBoundedInt(perSiteRaw, 1, 10) ?? 2,
+      // T25/T29: per-feature switches default ON; "0" turns a feature off.
+      signInEnabled: parseStoredToggle(signInRaw, true),
+      siteUpsertEnabled: parseStoredToggle(siteUpsertRaw, true),
+      proxySwitchEnabled: parseStoredToggle(proxySwitchRaw, true),
+      parallelAgentsEnabled: parseStoredToggle(parallelRaw, true),
+      browserDecisionEnabled: parseStoredToggle(decisionRaw, true),
     };
   }
 

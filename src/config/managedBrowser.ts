@@ -240,6 +240,12 @@ export const MANAGED_BROWSER_SETTING_KEYS = {
   cacheClearOnExit: "managed-browser-cache-clear-on-exit",
   maxConcurrentSessions: "managed-browser-max-concurrent-sessions",
   maxSessionsPerSite: "managed-browser-max-sessions-per-site",
+  // T25/T29: per-feature kill switches (PRD §10).
+  signInEnabled: "managed-browser-sign-in-enabled",
+  siteUpsertEnabled: "managed-browser-site-upsert-enabled",
+  proxySwitchEnabled: "managed-browser-proxy-switch-enabled",
+  parallelAgentsEnabled: "managed-browser-parallel-agents-enabled",
+  browserDecisionEnabled: "managed-browser-decision-enabled",
 } as const;
 
 // ---------------------------------------------------------------------------

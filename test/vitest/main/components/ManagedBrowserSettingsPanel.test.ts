@@ -22,6 +22,11 @@ const baseSettings: EffectiveManagedBrowserSettings = {
   disabledReasonCode: null,
       maxConcurrentSessions: 3,
       maxSessionsPerSite: 2,
+      signInEnabled: true,
+      siteUpsertEnabled: true,
+      proxySwitchEnabled: true,
+      parallelAgentsEnabled: true,
+      browserDecisionEnabled: true,
 };
 
 const apiMocks = vi.hoisted(() => ({

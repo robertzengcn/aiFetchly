@@ -908,6 +908,14 @@ export class ManagedBrowserAiToolService {
       );
     }
     await this.ensureBrowserEnabled();
+    // T25/T29: per-feature kill switch.
+    if (!(await this.settings.getEffectiveSettings()).proxySwitchEnabled) {
+      throw new ManagedBrowserAiToolError(
+        "managed_browser_disabled",
+        undefined,
+        "proxy_switch_disabled"
+      );
+    }
     this.ensureSession(parsed.data.session_id, context.conversationId);
     if (!this.browserModule.switchSessionProxy) {
       throw new ManagedBrowserAiToolError("internal_error");
@@ -1010,6 +1018,15 @@ export class ManagedBrowserAiToolService {
       );
     }
     await this.ensureBrowserEnabled();
+    // T25/T29: acceleration kill switch — disabling returns future tasks
+    // to the existing browser tools.
+    if (!(await this.settings.getEffectiveSettings()).browserDecisionEnabled) {
+      throw new ManagedBrowserAiToolError(
+        "managed_browser_disabled",
+        undefined,
+        "browser_decision_disabled"
+      );
+    }
     const sessionStatus = this.ensureSession(
       parsed.data.session_id,
       context.conversationId
@@ -1041,6 +1058,9 @@ export class ManagedBrowserAiToolService {
     // Hosted mode returned unavailable above; the runner runs on the
     // user's chat route only (no custom-to-hosted fallback, D-03).
     void route;
+    const { providerConfigKey: currentProviderConfigKey } = await import(
+      "@/service/aiProvider/AIProviderConfigVersion"
+    );
     const decisionClient = new ChatCompletionDecisionClient(
       async (request, signal) => {
         const { AiChatApi } = await import("@/api/aiChatApi");
@@ -1086,7 +1106,9 @@ export class ManagedBrowserAiToolService {
         undefined,
         "task_cursor_unavailable"
       );
-    }    const runner = new BrowserTaskRunner(
+    }    // T17/D-FR-02: freeze the provider route at admission.
+    decisionClient.freezeRoute(currentProviderConfigKey());
+    const runner = new BrowserTaskRunner(
       {
         sessionId: parsed.data.session_id,
         conversationId: context.conversationId,
@@ -1274,6 +1296,14 @@ export class ManagedBrowserAiToolService {
       );
     }
     await this.ensureBrowserEnabled();
+    // T25/T29: per-feature kill switch.
+    if (!(await this.settings.getEffectiveSettings()).signInEnabled) {
+      throw new ManagedBrowserAiToolError(
+        "managed_browser_disabled",
+        undefined,
+        "sign_in_disabled"
+      );
+    }
     this.ensureSession(parsed.data.session_id, context.conversationId);
     const result = await getDefaultBrowserCredentialLoginService().signIn({
       sessionId: parsed.data.session_id,
@@ -1308,6 +1338,14 @@ export class ManagedBrowserAiToolService {
         "invalid_tool_arguments",
         undefined,
         formatZodValidationError("browser_site_upsert", parsed.error)
+      );
+    }
+    // T25/T29: per-feature kill switch.
+    if (!(await this.settings.getEffectiveSettings()).siteUpsertEnabled) {
+      throw new ManagedBrowserAiToolError(
+        "managed_browser_disabled",
+        undefined,
+        "site_upsert_disabled"
       );
     }
     try {

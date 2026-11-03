@@ -74,6 +74,13 @@ export interface ChatCompletionLike {
 }
 
 export class ChatCompletionDecisionClient implements BrowserDecisionClient {
+  /**
+   * T17/D-FR-02: the provider config key frozen at task admission. Each
+   * decision call re-checks it; a mid-task provider change aborts the
+   * task instead of silently redirecting page data to another provider.
+   */
+  private frozenConfigKey: string | null = null;
+
   constructor(
     private readonly complete: (
       request: {
@@ -84,8 +91,14 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
       },
       signal: AbortSignal
     ) => Promise<ChatCompletionLike>,
-    private readonly model?: string
+    private readonly model?: string,
+    private readonly getConfigKey?: () => string | null
   ) {}
+
+  /** Freeze the route at admission (call once before the loop). */
+  public freezeRoute(configKey: string | null): void {
+    this.frozenConfigKey = configKey;
+  }
 
   public async getCapabilities(signal: AbortSignal): Promise<BrowserDecisionCapabilities> {
     void signal;
@@ -109,6 +122,15 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
     // D-FR-18: at most 2 actual provider attempts per logical decision —
     // one retry for a parse failure, never an open repair loop.
     for (let attempt = 0; attempt < 2; attempt++) {
+      // D-FR-02: a mid-task provider configuration change aborts the
+      // task — page data is never silently redirected to another provider.
+      if (
+        this.getConfigKey &&
+        this.frozenConfigKey !== null &&
+        this.getConfigKey() !== this.frozenConfigKey
+      ) {
+        return { status: "provider_error", reason_code: "provider_config_changed" };
+      }
       try {
         const response = await this.complete(
           {

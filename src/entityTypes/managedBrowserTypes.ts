@@ -288,6 +288,12 @@ export interface EffectiveManagedBrowserSettings {
   readonly maxConcurrentSessions: number;
   /** PRD M-FR-06: per-registrable-domain session cap. */
   readonly maxSessionsPerSite: number;
+  /** T25/T29: per-feature kill switches (all default ON). */
+  readonly signInEnabled: boolean;
+  readonly siteUpsertEnabled: boolean;
+  readonly proxySwitchEnabled: boolean;
+  readonly parallelAgentsEnabled: boolean;
+  readonly browserDecisionEnabled: boolean;
 }
 
 /** Renderer-safe cache status (approximate sizes only, no paths/URLs). */

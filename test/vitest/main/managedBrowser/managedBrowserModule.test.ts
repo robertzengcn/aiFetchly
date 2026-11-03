@@ -411,6 +411,11 @@ function makeHarness(
     disabledReasonCode: null,
     maxConcurrentSessions: 3,
     maxSessionsPerSite: 2,
+    signInEnabled: true,
+    siteUpsertEnabled: true,
+    proxySwitchEnabled: true,
+    parallelAgentsEnabled: true,
+    browserDecisionEnabled: true,
     ...overrides.settings,
   };
   const module = new ManagedBrowserModule({
