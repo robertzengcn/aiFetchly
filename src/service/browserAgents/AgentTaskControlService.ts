@@ -225,7 +225,13 @@ export class AgentTaskControlService {
    */
   public enforcePauseCap(taskId: string, capMs = 60 * 60_000): boolean {
     const record = this.tasks.get(taskId);
-    if (!record || record.state !== "paused" || record.openIntervention === null) {
+    if (
+      !record ||
+      // The cap covers both user-wait layers (C-FR-09): a user pause AND
+      // an agent-requested handoff/waiting state share the same ceiling.
+      (record.state !== "paused" && record.state !== "waiting_for_user") ||
+      record.openIntervention === null
+    ) {
       return false;
     }
     // Uses the service's (injectable) clock so tests and real timers agree.
