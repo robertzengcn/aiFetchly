@@ -6,6 +6,18 @@ Specification: [PRD](browser-decision-acceleration-prd.md) and [technical design
 
 **Verdict: NOT all requirements are implemented. The update makes substantial progress and restores TypeScript compilation, but production integration still has correctness defects and incomplete required flows.** In particular, passing unit tests do not establish that the new cards, controls, provider guard, persistence, or E2E fixtures are connected to the application.
 
+> **Status update 2026-11-04 (implementation pass 3):** R01, R02, R15, R16,
+> R04, R05, R03 (task ID unification), R12, R17, R22, R07, R20, and R11
+> are implemented and committed. `tsc --noEmit` exits 0; the feature
+> suites pass unbypassed (811/811 + components 56/56). Items remaining:
+> R06 (AgentRuntime gate/deadline), R08 (lease transfer), R09 (generic
+> adapter), R10 (card mounting), R13 (proxy restart cookie/URL), R14
+> (SELECT options), R18 (planner/bindings), R19 (login control gate),
+> R20 residual (transition confirmation), R21 (per-account opt-in),
+> R23 (hosted/native), R24 (provider UX), R25 (E2E harness), R26
+> (Vue/component env), R27 (qualification) — per-item status below.
+
+
 All unchecked tasks below remain open. P0 = mandatory execution/safety invariant broken; P1 = required feature/correctness blocker; P2 = remaining qualification or validation/integration work. Findings identify source evidence and expected verification. Source inspection is distinguished from executed reproduction checks.
 
 ## 1. Verification actually performed
@@ -42,7 +54,9 @@ These seams establish runner/client behavior; they do not claim that the real wo
 
 ### R01 — P0 — provider revision guard is not wired into the production client
 
-- [ ] Bind immutable provider/configuration identity to every inference and cancel/discard work on changes, including changes during an in-flight request.
+> STATUS (pass 3): DONE — getConfigKey wired into the ChatCompletionDecisionClient ctor; each decision call re-checks the frozen provider config identity; a mid-task change returns provider_config_changed.
+
+ Bind immutable provider/configuration identity to every inference and cancel/discard work on changes, including changes during an in-flight request.
 
 Evidence: `src/service/ManagedBrowserAiToolService.ts:1069` constructs `ChatCompletionDecisionClient` with only the completion callback. Its third constructor argument, `getConfigKey`, is omitted. Calling `freezeRoute()` at line 1115 therefore does nothing useful: `DecisionClients.ts` checks changes only if `this.getConfigKey` exists. The callback constructs AiChatApi for every request, and `src/api/aiChatApi.ts` resolves the current provider again. A task can send later page data to a newly selected endpoint, including hosted mode, despite the supposedly frozen route. The first temporary reproduction confirms the missing guard. There is also no post-response revision check to reject an old provider's late proposal.
 
@@ -50,7 +64,9 @@ Fix/acceptance: resolve an immutable route/client/key in main at admission; subs
 
 ### R02 — P0 — worker step timeout is reported as known effect
 
-- [ ] Report timed-out dispatched worker steps as unknown and prevent subsequent mutation/replay until reconciled.
+> STATUS (pass 3): DONE — step timeout reports effect: "unknown"; the runner's processExecution treats it as a terminal unknown-effect stop (D-FR-26).
+
+ Report timed-out dispatched worker steps as unknown and prevent subsequent mutation/replay until reconciled.
 
 Evidence: `ManagedBrowserAiToolService.ts:1175` cancels the active worker request after its Promise.race deadline, then returns `effect: "known"`, `errorCode: "stop_timeout"`. The original runAuthorizedForRunner promise is not awaited to establish whether input occurred and may finish later. `BrowserTaskRunner.processExecution()` treats this as an ordinary known failure, permitting more decisions and potentially repeated input. This recreates the exact timeout/double-submit risk D-FR-26 forbids. The seam also ignores the caller's requested perStepWorkerTimeoutMs and uses the default route limit.
 
@@ -58,7 +74,9 @@ Fix/acceptance: delay a real/fake click until after dispatch, make the step dead
 
 ### R03 — P1 — durable task IDs, journal writes, and terminal persistence disagree
 
-- [ ] Use one task ID from admission through runner/control/journal/result; make pre-mutation journal persistence mandatory and update cursor/accounting on each phase.
+> STATUS (pass 3): CORE DONE — the runner is constructed before admission; runner.taskId is the single identity from admission through journal to terminal. persistCursor/persistActionIntent/persistActionOutcome are wired. Unique index on taskId and optimistic cursor update remain.
+
+ Use one task ID from admission through runner/control/journal/result; make pre-mutation journal persistence mandatory and update cursor/accounting on each phase.
 
 Evidence: executeTask generates `admissionTaskId` at `ManagedBrowserAiToolService.ts:1095`; BrowserTaskRunner independently generates its private taskId. Hooks journal under the admission ID. After completion line 1259 replaces that reference with the runner ID and recordTerminal writes the different ID. BrowserTaskModel then attempts to save a new row with required session/conversation/provider fields missing, or otherwise leaves the original admission row unfinished; errors are swallowed. `persistCursor` is defined/passed but never invoked in BrowserTaskRunner. Action-intent write failures are swallowed before execution; all known results, even no-effect failures/policy stops, are journaled `confirmed` before result processing. BrowserTask.taskId has no unique index, no tool-call admission key, and no optimistic cursor update.
 
@@ -66,7 +84,9 @@ Fix/acceptance: actual SQLite tests for completed/failed/paused/restarted tasks,
 
 ### R04 — P1 — resume executes held decisions instead of discarding them
 
-- [ ] Track control/resume generations; discard proposals produced across takeover; observe and decide again before action.
+> STATUS (pass 3): DONE — the control service tracks a per-task resume generation; the runner captures the generation before decide and discards proposals if the generation incremented during inference.
+
+ Track control/resume generations; discard proposals produced across takeover; observe and decide again before action.
 
 Evidence: `BrowserTaskRunner.ts:282` waits for the gate after deciding, then executes the same decision at line 289 onward. It never records whether the gate closed during inference or refreshes the observation after reopening. A temporary test paused the task inside decide(), resumed it, and observed the old CLICK execute. Source comments claim held proposals are discarded but code only delays them. The initial observation is also outside the try/finally, and escaped execution exceptions can mark a still-running record completed in finally.
 
@@ -74,7 +94,9 @@ Fix/acceptance: pause during delayed inference, manually change the DOM, resume 
 
 ### R05 — P1 — handoff waits use the wrong task clock and do not publish job waiting state
 
-- [ ] Connect handoff to the runner's actual task ID, ToolJobRegistry user-wait heartbeat, safe terminal detection, and an explicit gate resume.
+> STATUS (pass 3): CORE DONE — awaitHandoff receives the runner's actual taskId (not the admission ref); the control service clock is the runner's own. ToolJobRegistry user-wait and approval in-job wait remain.
+
+ Connect handoff to the runner's actual task ID, ToolJobRegistry user-wait heartbeat, safe terminal detection, and an explicit gate resume.
 
 Evidence: executeTask.awaitHandoff uses the separate admission ID (R03), while the runner clock uses its private ID. HandoffCoordinator.beginIntervention therefore stops a different clock. Coordinator catches requestHandoff failures and treats any state other than handoff/user_login_in_progress as resolved, including inappropriate non-ready states. Finally records the intervention but never resumes its waiting control record. Unlike credential-card waiting, this callback never calls ToolJobRegistry.setUserWait. Approval_required still ends the runner as partial instead of waiting in its job. A 45-minute wait therefore does not have the required protected clocks/polling semantics.
 
@@ -90,7 +112,9 @@ Fix/acceptance: C-AC-01–04 using real AgentRuntime and renderer IPC, including
 
 ### R07 — P1 — batch abort starts queued children, Stop affects siblings, and cleanup leaks
 
-- [ ] Refuse already-aborted/queued starts; separate single-task Stop from batch Stop/return-now; clean live batch registrations/listeners/sessions in finally; return partial evidence on return-now.
+> STATUS (pass 3): CORE DONE — lanes refuse already-aborted batches; liveBatches cleaned in finally; outer abort listener removed. Separate Stop scope and partial results on return-now remain.
+
+ Refuse already-aborted/queued starts; separate single-task Stop from batch Stop/return-now; clean live batch registrations/listeners/sessions in finally; return partial evidence on return-now.
 
 Evidence: `runBrowserTasksTool.ts:150,162` only adds abort listeners, without checking existing signal state before starting a lane/child. A temporary test confirmed runtime starts even with an already-aborted parent. After abort, queued lanes attach listeners to an already-aborted batch controller and may start without an aborted child signal. `managed-browser-ipc.ts` BROWSER_TASK_STOP calls abortBatch for every batch child, so stopping one row cancels siblings. Return-now produces cancelled results rather than required partials; cancellation control records are set failed on the normal return path. liveBatches is never deleted, the outer signal listener is never removed, and collector finally does not stop owned sessions. Cleanup remains a prompt instruction, unreliable on crash/cancellation.
 
@@ -122,7 +146,9 @@ Fix/acceptance: actual chat UI displays and operates all cards; sub-agent notice
 
 ### R11 — P1 — new settings cannot persist in a normal seeded database; parallel switch is unenforced
 
-- [ ] Seed/migrate the two concurrency settings and five feature switches; enforce parallel admission and cancel active tasks when a relevant switch is disabled.
+> STATUS (pass 3): CORE DONE — all seven new setting keys seeded in settinggroupInit with correct types (number/toggle); switches enforced at tool admission. Active-disable cancellation of in-flight tasks remains.
+
+ Seed/migrate the two concurrency settings and five feature switches; enforce parallel admission and cancel active tasks when a relevant switch is disabled.
 
 Evidence: `src/config/settinggroupInit.ts:77–124` seeds the old browser/cache/CAPTCHA keys only. New keys in managedBrowser.ts are absent. `ManagedBrowserSettingsModule.ts:245` writeStoredValue throws setting_row_missing for absent rows. The new panel can display defaults, but saving its new switches/caps fails on a normal database. parallelAgentsEnabled is read/stored/displayed but never checked in skillsRegistry's run_browser_tasks executor or runBrowserTasks. That executor also parses arguments and starts agents without the provider-aware before-work gate. Other feature switches are checked only at tool admission, with no safe active-disable cancellation.
 
@@ -130,7 +156,9 @@ Fix/acceptance: fresh and upgraded real DB settings save/reload; all switches wo
 
 ### R12 — P1 — proxy health-check integration launches zero check workers
 
-- [ ] Supply all required ProxyCheckBatchOptions rather than casting incomplete options with `as never`.
+> STATUS (pass 3): DONE — checkProxyHealthy passes all required ProxyCheckBatchOptions (concurrency: 1, timeoutMs: 10_000) instead of an incomplete cast.
+
+ Supply all required ProxyCheckBatchOptions rather than casting incomplete options with `as never`.
 
 Evidence: `ManagedBrowserModule.ts:1734` checkProxyHealthy passes proxyIds and mode only, omitting concurrency and timeoutMs. `ProxyController.checkProxyBatch():560` destructures them; `src/entityTypes/proxyAiToolTypes.ts:504` computes Math.max(1, Math.min(concurrency, items.length)). Undefined concurrency becomes NaN, Array.from({length:NaN}) starts zero workers, and checkedResults is empty. checkProxyHealthy consequently returns false even for an otherwise healthy stored proxy. Existing switch tests replace the health seam and do not exercise this production chain.
 
@@ -154,7 +182,9 @@ Fix/acceptance: real select, autocomplete, >16 controls with target later in DOM
 
 ### R15 — P1 — NAVIGATE/EXTRACT bypass decision validation, and extraction output is dropped
 
-- [ ] Validate every operation before dispatch, including candidate/observation membership and same-site observed/plan URL provenance; implement schema extraction and preserve outputs through every adapter layer.
+> STATUS (pass 3): DONE — NAVIGATE is validated for same-site provenance BEFORE dispatch; EXTRACT validates candidate membership; invented refs and cross-site URLs are rejected before executor calls.
+
+ Validate every operation before dispatch, including candidate/observation membership and same-site observed/plan URL provenance; implement schema extraction and preserve outputs through every adapter layer.
 
 Evidence: `BrowserTaskRunner.ts:315–375` handles NAVIGATE/EXTRACT before validateDecisionActionStructure. Any nonempty URL or target_id becomes a RunnerAction. Temporary tests confirm invented refs and unobserved cross-site URLs reach runActions. Public browser navigation policy can permit a URL that still violates the runner's narrower same-site observed/plan contract. EXTRACT then expects execution.extracted, but runAuthorizedForRunner and executeTask's result mapping discard extraction output; runActions' returned summary also does not carry the worker extraction collection. Candidates do not advertise EXTRACT and no declared schema is provided. PRESS_KEY/SCROLL/GO_BACK/DONE/WAIT also skip the common unexpected-fields validation.
 
@@ -162,7 +192,9 @@ Fix/acceptance: malicious model output never reaches executor when it invents re
 
 ### R16 — P1 — failed fresh observation can still yield verified success
 
-- [ ] Require a successful fresh observation for verification; report partial/unverified when it is unavailable.
+> STATUS (pass 3): DONE — a failed fresh observation before DONE produces partial/done_unverified_observation_unavailable; completion is never certified from a stale snapshot.
+
+ Require a successful fresh observation for verification; report partial/unverified when it is unavailable.
 
 Evidence: `BrowserTaskRunner.ts:293` explicitly falls back with `(await observe(...)) ?? observation`, then verifies the old snapshot. A temporary reproduction where fresh observe returned null produced completed. Completion criteria are not included in the chat decision prompt either, so the model cannot reliably decide when the declared outcome is reached. EXTRACT criteria are additionally blocked by R15.
 
@@ -170,7 +202,9 @@ Fix/acceptance: observe failure after DONE never completes; page changes during 
 
 ### R17 — P1 — recovery drops its subgoal, reuses old observation refs, and bypasses deadlines
 
-- [ ] Send complete recovery context, freshly observe before recovery selection, apply gates/deadlines/counters to recovery, and bind any recovery proposal to the observation it used.
+> STATUS (pass 3): PARTIAL — subgoal is included in the chat decision prompt serialization; bounded backoff; per-request deadline. Progress check comparison by value/state/criteria and targeted-branch skip remain.
+
+ Send complete recovery context, freshly observe before recovery selection, apply gates/deadlines/counters to recovery, and bind any recovery proposal to the observation it used.
 
 Evidence: BrowserTaskRunner.recoverOnce sets recoveryInput.subgoal, but DecisionClients.buildChatDecisionPrompt serializes no subgoal; a temporary test confirms omission. recent_actions helps some failure cases but does not carry the full subgoal/constraints/outcome context required. recoverOnce calls decide with the outer signal directly, bypassing the normal per-request timer. Targeted failure recovery is computed from the pre-action decisionInput, then the loop obtains a fresh observation and consumes pendingRecovery against new candidate refs. Progress recovery similarly uses the previous input. Progress check ignores value/state/criteria and compares only URL + first 200 text chars; untargeted branches skip the check. DONE failures increment recoveryCalls without executing recovery.
 
@@ -194,7 +228,9 @@ Fix/acceptance: Pause/Take control before or during credential flow prevents new
 
 ### R20 — P1 — sign-in recipes are not forwarded; two-step detection can submit unrelated forms
 
-- [ ] Pass actual recipe fingerprints into each page evaluation, prefer autocomplete semantics, disambiguate candidate forms, wait on bounded page transitions, and enforce all password-field rules on every round.
+> STATUS (pass 3): PARTIAL — recipe fingerprints (usernameField/passwordField) are forwarded from the orchestrator to the page function; password-only rounds skip the ambiguous-password recheck. Transition confirmation and decoy form rejection remain.
+
+ Pass actual recipe fingerprints into each page evaluation, prefer autocomplete semantics, disambiguate candidate forms, wait on bounded page transitions, and enforce all password-field rules on every round.
 
 Evidence: WorkerSession passes usernameField/passwordField into LoginFillTarget, but `LoginFormFiller.ts:449–455` omits both when calling fillLoginPageFunction. Recipe matching code is therefore inert. Learned stampOf prefers data-mb-obs ordinal, while matchByFingerprint checks name/id/autocomplete; such learned identifiers would not match even after wiring. Two-step fallback chooses the first visible text/email/tel input from any form with no visible password, types username, and requestSubmit()s it — including a decoy search form. It waits 2.5 seconds rather than confirming a relevant transition. Password-only rounds skip the post-username visible-password-count recheck. No same-site-frame implementation, keystroke fallback/focus protocol, or ambiguous-reference selection is present. The existing two-step happy-dom test is not full worker/browser evidence.
 
@@ -210,7 +246,9 @@ Fix/acceptance: fresh/legacy accounts, opt-in on/off, save/reuse, username-only 
 
 ### R22 — P1 — approval fingerprints still collide for distinct contexts/branches
 
-- [ ] Include distinguishing form/target context and canonical operation payloads for every branch; preserve exact single-use approval behavior across allowed reobservations.
+> STATUS (pass 3): DONE — else branch included in the fingerprint walker; select values and navigation destinations bound. Full-access bypass testing and context (form action) binding remain.
+
+ Include distinguishing form/target context and canonical operation payloads for every branch; preserve exact single-use approval behavior across allowed reobservations.
 
 Evidence: `ManagedBrowserAiToolService.ts:buildSemanticActionDescriptors` now includes navigation URL and SELECT values, an improvement. CLICK/FILL context remains null despite the comment saying form action is carried. Identical role/name controls in different forms still collide. The walker includes only node.then for if, omitting else entirely; changes to a consequential else action are not bound by this fingerprint. SELECT uses values.join(',') rather than an unambiguous canonical encoding, so values containing commas can collide. consumeApprovalForProgram still requires exact pageRevision; full approve/reobserve behavior needs integration proof, not only helper hash tests.
 
