@@ -226,3 +226,24 @@ async function statusStateOf(
   const resp = await ipc(app, "managed-browser:status", { sessionId });
   return (resp?.data as { state?: string } | undefined)?.state;
 }
+
+test.describe("public managed browser (real Chrome)", () => {
+  test.skip(!GUARDED, "set AIFETCHLY_MB_E2E=1 on a machine with a display");
+
+  test("public browser starts without a saved account and stops cleanly", async ({ aiApp }) => {
+    test.setTimeout(120_000);
+    // No account seeding and no live external website dependency.
+    const started = await ipc(aiApp, "managed-browser:start", { purpose: "public browser smoke" });
+    expect(started.status, started.msg).toBe(true);
+    const active = started.data as { sessionId: string; accountId: number; state: string; authenticated: boolean | null };
+    expect(active).toMatchObject({ accountId: 0, state: "ready", authenticated: null });
+    expect(active.sessionId).toMatch(/^mb_/);
+    try {
+      expect(await statusStateOf(aiApp, active.sessionId)).toBe("ready");
+    } finally {
+      const stopped = await ipc(aiApp, "managed-browser:stop", { sessionId: active.sessionId, reason: "user_stop" });
+      expect(stopped.status, stopped.msg).toBe(true);
+    }
+    await assertCleanTeardown(aiApp);
+  });
+});

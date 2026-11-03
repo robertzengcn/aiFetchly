@@ -90,6 +90,10 @@ import { ref, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import {
+  enqueueRoutePush,
+  enqueueRouteWork,
+} from "@/views/utils/enqueueRoutePush";
+import {
   listPlugins,
   togglePlugin,
   uninstallPlugin,
@@ -188,7 +192,7 @@ async function selectTab(value: unknown): Promise<void> {
   if (!isPluginManagerTab(value)) return;
   tab.value = value;
   if (parsePluginManagerTab(route.query.tab) === value) return;
-  await router.push({
+  await enqueueRoutePush(router, {
     name: "PluginsManagement",
     query: withPluginManagerTab(route.query, value),
   });
@@ -229,17 +233,24 @@ async function onImported(): Promise<void> {
   ]);
 }
 
-onMounted(async (): Promise<void> => {
-  await loadInstalledPlugins();
-  // Canonicalize a missing/invalid tab to Discover without adding history.
-  if (
-    route.query.tab !== "discover" &&
-    !isPluginManagerTab(route.query.tab)
-  ) {
+onMounted(() => {
+  void loadInstalledPlugins();
+  // Missing or invalid `tab` becomes Discover on the shell navigation queue,
+  // behind any New chat click already waiting on the Plugins chunk
+  // (FR-SHELL-010). The route is read when this task runs, so a chat route
+  // that won the queue is left in place.
+  void enqueueRouteWork(async () => {
+    if (route.name !== "PluginsManagement") return;
+    if (
+      route.query.tab === "discover" ||
+      isPluginManagerTab(route.query.tab)
+    ) {
+      return;
+    }
     await router.replace({
       name: "PluginsManagement",
       query: withPluginManagerTab(route.query, "discover"),
     });
-  }
+  });
 });
 </script>

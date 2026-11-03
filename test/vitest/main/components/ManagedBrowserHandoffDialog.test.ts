@@ -47,6 +47,7 @@ const i18n = createI18n({
           verify_login: "I've finished logging in",
           extend: "Extend time (10 min)",
           cancel_task: "Cancel task",
+          close: "Close",
           reasons: {
             login_required: "The site requires a login to continue.",
             user_requested: "You asked to take over this step.",
@@ -79,7 +80,10 @@ const VBtn = defineComponent({
 const VIcon = { template: "<i><slot /></i>" };
 const VSpacer = { template: "<span />" };
 
-function mountDialog(props: { status: SafeManagedBrowserStatus | null }) {
+function mountDialog(props: {
+  status: SafeManagedBrowserStatus | null;
+  busy?: boolean;
+}) {
   return mount(ManagedBrowserHandoffDialog, {
     props: { modelValue: true, ...props },
     global: {
@@ -136,5 +140,26 @@ describe("ManagedBrowserHandoffDialog", () => {
   it("falls back to the unknown-account label without a status", () => {
     const wrapper = mountDialog({ status: null });
     expect(wrapper.text()).toContain("Unknown account");
+  });
+
+  it("FR-HANDOFF-CLOSE: the close control only hides the dialog", async () => {
+    const wrapper = mountDialog({ status: status() });
+    const close = wrapper.find("[data-testid='mb-handoff-close']");
+    expect(close.exists()).toBe(true);
+    // Icon-only control must be reachable by screen readers.
+    expect(close.attributes("aria-label")).toBe("Close");
+
+    await close.trigger("click");
+    expect(wrapper.emitted("update:modelValue")).toEqual([[false]]);
+    // The flow actions must NOT fire from the close control.
+    expect(wrapper.emitted("verify")).toBeUndefined();
+    expect(wrapper.emitted("extend")).toBeUndefined();
+    expect(wrapper.emitted("cancel")).toBeUndefined();
+  });
+
+  it("keeps the close control enabled while a session action is busy", () => {
+    const wrapper = mountDialog({ status: status(), busy: true });
+    const close = wrapper.find("[data-testid='mb-handoff-close']");
+    expect(close.attributes("disabled")).toBeUndefined();
   });
 });

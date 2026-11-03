@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type { AIChatPendingMessageEvent } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2ScheduledStreamEvent } from "@/entityTypes/aiChatScheduledLoopTypes";
 import type {
   ChatRunDetailEvent,
   ChatRunOwner,
@@ -35,6 +36,10 @@ import {
   subscribeChatV2PendingEvents,
   type DenyToolPermissionResult,
 } from "@/views/api/aiChatV2";
+import {
+  stopScheduledLoopRun,
+  subscribeScheduledStream,
+} from "@/views/api/aiChatScheduledLoop";
 import { windowInvoke } from "@/views/utils/apirequest";
 // G01 (design §18.2): renderer event-receipt → projected-UI timing.
 import {
@@ -903,6 +908,138 @@ export const useSelectedConversationStore = defineStore(
       });
     }
 
+    /**
+     * Scheduled-occurrence liveness + live transcript presentation (bugfix
+     * 2026-11-02). A scheduled turn bypasses the interactive coordinator
+     * entirely, so the selected view learned nothing about it through the
+     * detail channel — a chat opened mid-occurrence presented idle, and the
+     * transcript never showed the scheduled assistant turn at all.
+     *
+     * The scheduled stream broadcast is the selected view's liveness source:
+     * each fact is mapped onto the audited presenter path — start
+     * materializes the pending assistant row ("Generating…"), tokens append
+     * buffered deltas on the normal 50ms flush window, done/error finalize
+     * the turn exactly like an interactive terminal.
+     */
+    function handleScheduledStreamFact(event: ChatV2ScheduledStreamEvent): void {
+      if (event.conversationId !== workspaceStore.selectedConversationId) {
+        return;
+      }
+      const status = runtimeStatus.value;
+      // Ownership guard — never repaint between executors. A queued send or
+      // a parked decision (permission/plan-question/user prompt) owns the
+      // presentation; scheduled liveness must not stomp it.
+      if (
+        status === "queued" ||
+        status === "awaiting_permission" ||
+        status === "awaiting_user"
+      ) {
+        return;
+      }
+      if (status === "running") {
+        const activeId = activeRunId.value;
+        // A LIVE run owned by another executor (the interactive coordinator,
+        // `run-…`) owns the view. Guarding on `streamStatus === "streaming"`
+        // alone would trip the scheduled turn's OWN hydration — the
+        // presenter maps a running run to streaming — and drop every
+        // subsequent scheduled fact (the same self-suppression trap the
+        // legacy surface's routing rule documents). Our own scheduled turn
+        // is namespaced `scheduled-<runId>`; an unowned running view (no
+        // active id) is fair game for scheduled facts.
+        if (activeId !== null && !activeId.startsWith("scheduled-")) {
+          return;
+        }
+      }
+      // Buffered token deltas mirror the interactive detail path: open the
+      // projection window whose flush closes it (audit R2 G01 timing).
+      if (event.kind === "token") {
+        beginRendererProjectionWindow();
+      }
+      presenter.applyEvent(mapScheduledFactToDetailEvent(event));
+    }
+
+    /**
+     * Monotonic synthetic sequence — the presenter dedupes by
+     * `(runId, sequence)`; scheduled broadcasts carry no sequence so the
+     * store assigns broadcast order.
+     */
+    let scheduledFactSequence = 0;
+    function mapScheduledFactToDetailEvent(
+      event: ChatV2ScheduledStreamEvent
+    ): ChatRunDetailEvent {
+      scheduledFactSequence += 1;
+      const eventType: ChatRunDetailEvent["eventType"] =
+        event.kind === "done"
+          ? "complete"
+          : event.kind === "error"
+          ? "error"
+          : event.kind;
+      return {
+        conversationId: event.conversationId,
+        runId: `scheduled-${event.runId}`,
+        sequence: scheduledFactSequence,
+        emittedAt: new Date().toISOString(),
+        eventType,
+        payload: {
+          eventType,
+          // The ack fan-out resolves the submission identity of the acked
+          // conversation; scheduled starts carry none of the history
+          // selection fields, so no chip reconciliation fires.
+          messageId: event.messageId,
+          ...(event.kind === "token"
+            ? { contentDelta: event.contentDelta ?? "" }
+            : {}),
+          ...(event.kind === "error"
+            ? { errorMessage: event.errorMessage }
+            : {}),
+          ...(event.kind === "start"
+            ? { conversationId: event.conversationId }
+            : {}),
+        },
+      };
+    }
+
+    /** Ensure exactly one scheduled-stream subscription exists per renderer. */
+    let scheduledStreamUnsubscribe: (() => void) | null = null;
+    function ensureScheduledStreamSubscription(): void {
+      if (scheduledStreamUnsubscribe) return;
+      scheduledStreamUnsubscribe = subscribeScheduledStream((event) => {
+        handleScheduledStreamFact(event);
+      });
+    }
+
+    /**
+     * Composer Stop for scheduled occurrences (bugfix 2026-11-02): the
+     * view's active run is the synthetic `scheduled-<runId>` identity the
+     * coordinator never sees, so stopActiveRun() no-ops for it. Route to the
+     * dedicated stop-occurrence IPC and clear the presentational flag
+     * optimistically — the aborted run's own scheduled-stream terminal may
+     * lag and is then an idempotent no-op. Returns whether this action
+     * handled the stop; `false` lets the caller fall through to the legacy
+     * coordinator path (and keeps the flag until a terminal arrives).
+     */
+    async function stopScheduledActiveRun(): Promise<boolean> {
+      const conversationId = workspaceStore.selectedConversationId;
+      const activeId = activeRunId.value;
+      if (!conversationId || !activeId?.startsWith("scheduled-")) {
+        return false;
+      }
+      try {
+        const result = await stopScheduledLoopRun(conversationId);
+        if (result?.cancelled === true) {
+          presenter.hydrateRuntime({
+            runtimeStatus: "idle",
+            activeRunId: null,
+          });
+          syncFromPresenter();
+          return true;
+        }
+        return false;
+      } catch {
+        return false;
+      }
+    }
+
     function recordTerminalRun(
       conversationId: string,
       runId: string,
@@ -1081,6 +1218,10 @@ export const useSelectedConversationStore = defineStore(
       // Audit D01: the pending lifecycle retirement rides the same app-
       // scoped lifetime as the ledger it protects.
       ensurePendingEventSubscription();
+      // Bugfix 2026-11-02: scheduled occurrences bypass the interactive
+      // coordinator, so the selected view needs the scheduled stream
+      // broadcast as its liveness source (running flag + terminal clear).
+      ensureScheduledStreamSubscription();
       try {
         const snapshot = await selectConversation(conversationId, generation);
         // Apply only if this handshake is still the latest selection.
@@ -1815,6 +1956,7 @@ export const useSelectedConversationStore = defineStore(
       errorMessage,
       runtimeStatus,
       activeRunId,
+      stopScheduledActiveRun,
       lastTerminalRun,
       lastResolvedReferenceRun,
       acceptedRunOrdinalFor,

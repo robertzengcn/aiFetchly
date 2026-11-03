@@ -13,6 +13,8 @@ import {
 import { WorkspaceModule } from "@/modules/WorkspaceModule";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { byIdInputSchema, noInputSchema } from "@/schemas/ipc/_shared/common";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { sharedWorkspaceEventRouter } from "@/service/aiChatWorkspaceRuntime";
 
 // WS-1 R1.5: input schemas (replacing the manual safeParse + typeof checks).
 const workspaceSetSchema = lazySchema(() =>
@@ -45,11 +47,39 @@ export function registerAIWorkspaceIpcHandlers(_win: BrowserWindow): void {
 
   registerValidatedHandler(AI_WORKSPACE_SET, workspaceSetSchema, async (payload) => {
     const module = new WorkspaceModule();
-    return await module.setWorkspace({
+    const record = await module.setWorkspace({
       conversationId: payload.conversationId,
       rootPath: payload.rootPath,
       label: payload.label ?? null,
     });
+    // BUGFIX 2026-11-02 (left menu never shows the new chat's workspace
+    // folder): workspace assignment must reach the live sidebar. Ensure the
+    // conversation projection row exists first (a brand-new chat has no
+    // messages yet — without the row the next sidebar projection would drop
+    // the chat entirely), then broadcast a REDACTED conversation_updated
+    // summary so every live window refreshes its grouping. Failures here
+    // are a display hint — never fail the binding itself.
+    try {
+      await new AIChatConversationModule().ensureConversationProjection(
+        payload.conversationId,
+        record?.workspaceKey ?? null
+      );
+      sharedWorkspaceEventRouter.broadcastSummary({
+        conversationId: payload.conversationId,
+        workspaceKey: record?.workspaceKey ?? null,
+        runtimeStatus: "idle",
+        attention: "none",
+        unread: false,
+        lastActivityAt: new Date().toISOString(),
+        reason: "conversation_updated",
+      });
+    } catch (err) {
+      console.warn(
+        "[ai-workspace-ipc] sidebar assignment broadcast failed:",
+        err
+      );
+    }
+    return record;
   });
 
   registerValidatedHandler(AI_WORKSPACE_GET, conversationIdSchema, async (payload) => {

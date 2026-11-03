@@ -213,7 +213,7 @@
       :model-value="handoffDialogOpen"
       :status="status"
       :busy="busy"
-      @update:model-value="handoffDialogOpen = $event"
+      @update:model-value="onHandoffDialogVisibility"
       @verify="onVerifyLogin"
       @extend="onExtend"
       @cancel="onCancelTask"
@@ -265,6 +265,14 @@ const { t } = useI18n();
 const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
+/**
+ * Sticky dismiss (FR-HANDOFF-CLOSE): when the user closes the handoff dialog
+ * while the session stays in a handoff/login state, the periodic handoff
+ * status refreshes must not reopen it — the session card keeps all of the
+ * receipt controls (verify / resume / extend / stop). The flag resets as
+ * soon as the session leaves the handoff states or ends.
+ */
+const handoffDismissed = ref(false);
 /**
  * R8 P2-6: sessions this card has seen go away — terminal status events and
  * local stop clicks both land here. A late non-terminal status for one of
@@ -385,6 +393,7 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
     }
     status.value = null;
     handoffDialogOpen.value = false;
+    handoffDismissed.value = false;
     approvalRequest.value = null;
     progressLine.value = null;
     firstSeenAt.value = null;
@@ -401,11 +410,14 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
     return;
   }
   status.value = next;
-  // The handoff dialog auto-opens in handoff/login states (FR-P0-013).
-  handoffDialogOpen.value = stateIsHandoffLike.value || handoffDialogOpen.value;
+  // The handoff dialog auto-opens in handoff/login states (FR-P0-013) unless
+  // the user already dismissed it for this handoff (sticky dismiss, reset
+  // once the session leaves the handoff states).
   if (!stateIsHandoffLike.value) {
+    handoffDismissed.value = false;
     handoffDialogOpen.value = false;
   } else {
+    handoffDialogOpen.value = !handoffDismissed.value;
     // Nothing identifiable stays visible while the user handles a login
     // or challenge — the thumbnail is cleared entering sensitive states.
     clearScreenshot();
@@ -457,6 +469,18 @@ function onTakeOver(): void {
   void run(async () => {
     applyStatus(await requestHandoff(current.sessionId));
   });
+}
+
+/**
+ * Handoff dialog visibility (FR-HANDOFF-CLOSE): a close while the session
+ * remains in a handoff/login state is sticky — the periodic handoff status
+ * events must not reopen the dialog the user just closed.
+ */
+function onHandoffDialogVisibility(value: boolean): void {
+  handoffDialogOpen.value = value;
+  if (!value && stateIsHandoffLike.value) {
+    handoffDismissed.value = true;
+  }
 }
 
 function onVerifyLogin(): void {

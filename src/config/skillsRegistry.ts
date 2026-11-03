@@ -64,7 +64,6 @@ import {
   getEmailMessage,
   markEmailProcessed,
   createEmailReplyDraft,
-  sendEmailReply,
   checkEmailReplied,
 } from "@/service/EmailReceiveAiTools";
 import { resolveInlineOutboundBody } from "@/service/outboundEmail/plainTextEmailBody";
@@ -2499,8 +2498,14 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       "retrieval, or confidence in the body. Include a URL when the user " +
       "supplied one. A URL in the body is allowed and is not a safety finding, " +
       "a block, or a reason to ask for extra confirmation. AI must be enabled. " +
-      "Returns the persisted draft for human review. send_email_reply still " +
-      "checks reply state before sending.",
+      "Returns the persisted draft for the chat review card. STOP after drafting; do not repeat the body in chat. Ask the user to click Approve and send on the card. send_email_reply still " +
+      "checks reply state before sending. Set reviewed=true ONLY when the user " +
+      "has already reviewed the message and explicitly asked you to draft the " +
+      "reply in this conversation — messages then classified as needing human " +
+      "review or unknown can still get a human-assisted draft (automated " +
+      "no-reply/bounce/unsubscribe senders still refuse). NEVER set reviewed " +
+      "in scheduled or otherwise unattended execution: no human reviewed the " +
+      "message there.",
     parameters: {
       type: "object",
       properties: {
@@ -2527,6 +2532,17 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
             "Whether to ground the reply in knowledge-library context.",
           default: true,
         },
+        reviewed: {
+          type: "boolean",
+          description:
+            "Set true ONLY when the user has already reviewed this message " +
+            "and explicitly asked you to draft the reply; messages classified " +
+            "as needing human review or unknown then allow human-assisted " +
+            "drafting. Do not use it to mass-reply or for scheduled bulk " +
+            "requests. NEVER set it in scheduled or otherwise unattended " +
+            "execution — no human has reviewed anything there, so the claim " +
+            "would be false.",
+        },
       },
       required: ["message_id"],
     },
@@ -2545,15 +2561,9 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
   {
     name: "send_email_reply",
     description:
-      "Send a persisted reply draft as an INBOUND email reply (threading headers). " +
-      "Call this after the user confirms the draft (for example \"yes, send it\"). " +
-      "That confirmation is the send authorization. Do not refuse, and do not ask for a " +
-      "second confirmation, because the body contains a URL. A URL is allowed. " +
-      "Do not refuse because the inbound classification is \"unknown\"; that verdict is " +
-      "inconclusive and does not block a confirmed send. " +
-      "Do NOT use this to send new marketing/outbound emails " +
-      "to external contacts — use start_email_send_task instead. Verifies the draft and " +
-      "outbound service, preserves In-Reply-To/References, and writes a send audit record.",
+      "Email replies in interactive chat require the user to click Approve and send " +
+      "on the persisted draft review card. Do not call this tool or ask for text " +
+      "confirmation. Create the draft, then stop and direct the user to its card.",
     parameters: {
       type: "object",
       properties: {
@@ -2570,21 +2580,20 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
       required: ["draft_id"],
     },
     tier: "main",
-    requiresConfirmation: true,
-    // Request-scoped action, mirroring the outbound send tools: this sends
-    // REAL email to an external recipient, so a chat approval mode alone
-    // (approve_for_me / full_access) must never auto-approve it. The user's
-    // in-chat confirmation is the request-scoped authorization the tool gate
-    // resolves (§14.1) — without this policy the auto-approve path could send
-    // advisory-tier content (links, payment references) with no human review.
-    confirmationPolicy: "request_scoped_action",
+    // This compatibility tool only redirects to the review card; delivery is
+    // authorized by the renderer approval-token IPC path.
+    requiresConfirmation: false,
     permissionCategory: "automation",
     source: "built-in",
     execute: async (args) => {
-      const result = await sendEmailReply(args);
       return {
-        success: result.success,
-        result: result as unknown as Record<string, unknown>,
+        success: false,
+        result: {
+          success: false,
+          code: "email_reply_card_approval_required",
+          draft_id: args.draft_id,
+          error: "Use the persisted email review card. Only its Approve and send action authorizes delivery.",
+        },
       };
     },
   },
@@ -4911,16 +4920,21 @@ function managedBrowserToolEntries(): SkillDefinition[] {
     {
       name: "browser_start_session",
       description:
-        "Start the managed social browser for a logged-in social account (YouTube pilot). " +
-        "Opens a real visible Chrome window under an isolated profile with the account's saved " +
-        "login session applied. Returns a session_id used by every other browser_* tool. " +
+        "Open a website in the built-in managed browser, a real visible Chrome window. " +
+        "For ANY website, including social networks and sites requiring login, omit account_id by default: " +
+        "no saved AiFetchly account is required to open the browser. " +
+        "Only supply a real existing account_id when the user needs its saved login (YouTube pilot). " +
+        "Never refuse browser use because accounts are missing or the site needs login. " +
+        "Open the site first and hand control to the user for sign-in when needed. " +
+        "Never invent an account id. Preserve the requested hostname. " +
+        "Returns a session_id used by every other browser_* tool. " +
         "Requires the managed browser to be enabled in System Settings.",
       parameters: {
         type: "object",
         properties: {
           account_id: {
             type: "number",
-            description: "Social account id to open the browser for.",
+            description: "Optional existing social account id ONLY to reuse saved login. Omit for any website, including social sites, when no saved account is available.",
           },
           purpose: {
             type: "string",
@@ -4931,7 +4945,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             description: "Optional http(s) start URL.",
           },
         },
-        required: ["account_id", "purpose"],
+        required: ["purpose"],
       },
       tier: "main",
       requiresConfirmation: true,

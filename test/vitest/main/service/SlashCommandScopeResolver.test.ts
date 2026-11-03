@@ -21,6 +21,7 @@ function workspaceRecord(id: number, rootPath = `/tmp/ws-${id}`): WorkspaceRecor
     rootPath,
     label: null,
     approvalState: "approved",
+    workspaceKey: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     approvedAt: "2026-01-01T00:00:00.000Z",
     revokedAt: null,

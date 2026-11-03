@@ -285,11 +285,14 @@ describe("ManagedBrowserRuntime state guards", () => {
     }
   });
 
-  it("manual-login verification is only valid from user_login_in_progress", () => {
+  it("manual-login verification is valid from user_login_in_progress and handoff", () => {
     expect(
       assertCommandAllowed("user_login_in_progress", "VERIFY_MANUAL_LOGIN").ok
     ).toBe(true);
     expect(assertCommandAllowed("handoff", "VERIFY_MANUAL_LOGIN").ok).toBe(
+      true
+    );
+    expect(assertCommandAllowed("ready", "VERIFY_MANUAL_LOGIN").ok).toBe(
       false
     );
   });
@@ -317,6 +320,14 @@ describe("ManagedBrowserRuntime transitions", () => {
     expect(runtime.transition("verifying_manual_login")).toBe(true);
     // verification failed -> back to user control
     expect(runtime.transition("user_login_in_progress")).toBe(true);
+    expect(runtime.transition("verifying_manual_login")).toBe(true);
+    expect(runtime.transition("ready")).toBe(true);
+  });
+
+  it("verifies a finished login from handoff and returns there on failure", () => {
+    const runtime = new ManagedBrowserRuntime("handoff");
+    expect(runtime.transition("verifying_manual_login")).toBe(true);
+    expect(runtime.transition("handoff")).toBe(true);
     expect(runtime.transition("verifying_manual_login")).toBe(true);
     expect(runtime.transition("ready")).toBe(true);
   });

@@ -186,6 +186,7 @@ import AiChatCenterSurface from "@/views/components/aiChatWorkspace/AiChatCenter
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { useComposerDraftStore } from "@/views/store/composerDrafts";
+import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
 import { useAppInspectorStore } from "@/views/store/appInspector";
 import {
@@ -217,6 +218,8 @@ import {
   AI_CHAT_V2_GOAL_LOOP_START,
   AI_CHAT_V2_GOAL_LOOP_STOP,
   AI_CHAT_V2_SCHEDULED_LOOP_CREATE,
+  AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN,
+  AI_CHAT_WORKSPACE_SELECT,
   PROMPT_SKILL_INVOKE,
   SLASH_COMMAND_DISPATCH,
 } from "@/config/channellist";
@@ -378,7 +381,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         WorkspaceBadge: defineComponent({
           name: "WorkspaceBadge",
-          props: ["workspace", "memoryCount", "loading", "busy"],
+          props: [
+            "workspace",
+            "memoryCount",
+            "loading",
+            "busy",
+            "showMemory",
+          ],
           template:
             '<div data-testid="workspace-badge-stub">{{ workspace ? workspace.rootPath || "unset" : "none" }}</div>',
         }),
@@ -578,6 +587,39 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(
       strip.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it("pins queued messages above the composer and outside the transcript", async () => {
+    const wrapper = mountSurface();
+    useChatWorkspaceStore().setSelected("conv-1");
+    await flushPromises();
+    usePendingMessagesStore().upsert({
+      pendingMessageId: "pm-1",
+      conversationId: "conv-1",
+      clientRequestId: "cr-1",
+      sequence: 1,
+      content: "Queued follow-up",
+      status: "queued",
+      createdAt: "2026-10-30T00:00:00.000Z",
+      updatedAt: "2026-10-30T00:00:00.000Z",
+      canSteer: true,
+    });
+    await wrapper.vm.$nextTick();
+
+    const queued = wrapper.get('[data-testid="ai-chat-queued-messages"]').element;
+    const transcript = wrapper.get('[data-testid="transcript-stub"]').element;
+    const composer = wrapper.get('[data-testid="composer-stub"]').element;
+    expect(transcript.contains(queued)).toBe(false);
+    expect(
+      transcript.compareDocumentPosition(queued) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      queued.compareDocumentPosition(composer) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(queued.textContent).toContain("Queued follow-up");
+    wrapper.unmount();
   });
 
   it("shows the empty new-chat state when no conversation is selected", async () => {
@@ -3571,6 +3613,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(badge.text()).toBe("/tmp/project");
   });
 
+  it("never shows the memory entry in the composer-strip workspace badge", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    // Product decision: the bottom-of-chat-area workspace strip shows no
+    // memory icon button. Workspace memory stays reachable through the
+    // Context-inspector entry (same store-owned overlay), so the badge is
+    // pinned to showMemory=false regardless of the adapter answer.
+    const badge = wrapper.findComponent({ name: "WorkspaceBadge" });
+    expect(badge.props("showMemory")).toBe(false);
+  });
+
   it("removes the approved workspace through the canonical revoke channel then refreshes (FR-WSP-002)", async () => {
     getWorkspaceMock.mockResolvedValue({
       id: 7,
@@ -5671,10 +5734,8 @@ describe("AiChatCenterSurface queued image sends survive steer and cancel (audit
     await acceptImageSend(wrapper);
 
     // The steer click hits the module guard (no claimation happens).
-    const transcript = wrapper.findComponent({
-      name: "AiChatWorkspaceTranscript",
-    });
-    transcript.vm.$emit("steer-pending", "p1");
+    const queued = wrapper.findComponent({ name: "AiChatV2QueuedMessages" });
+    queued.vm.$emit("steer", "p1");
     await flushPromises();
     expect(steerChatV2PendingMessage).toHaveBeenCalledWith(
       "conv-1",
@@ -6610,6 +6671,91 @@ describe("AiChatCenterSurface clear refused while parked (P1-1)", () => {
     await flushPromises();
 
     expect(clearChatV2Conversation).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
+
+/**
+ * Bugfix 2026-11-02: schedule-page AI message task runs present the
+ * composer Stop affordance through the scheduled-turn projection, and the
+ * view's active run id is the synthetic `scheduled-<runId>` namespace the
+ * coordinator never sees. The composer Stop must route those to the
+ * dedicated stop-occurrence IPC (never the coordinator cancel, which
+ * no-ops) and clear the running flag locally when the main process
+ * accepted the stop.
+ */
+describe("AiChatCenterSurface composer stop routes scheduled occurrences", () => {
+  beforeEach(() => {
+    (window.api.invoke as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it("stops the running occurrence through the scheduled-stop IPC and clears the flag", async () => {
+    (window.api.invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      (channel: string) => {
+        if (channel === AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN) {
+          return Promise.resolve({ status: true, data: { cancelled: true } });
+        }
+        return Promise.resolve(undefined);
+      }
+    );
+    vi.mocked(selectConversation).mockReset();
+    vi.mocked(selectConversation).mockResolvedValue({
+      acceptedGeneration: 1,
+      messages: [],
+      nextBefore: null,
+      hasOlder: false,
+      runtimeStatus: "running",
+      activeRunId: "scheduled-42",
+      title: "sched",
+    } as never);
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-sched");
+    // The surface does not auto-load on setSelected — mirror the parked
+    // harness and drive the selection handshake explicitly.
+    await useSelectedConversationStore().loadSelection("conv-sched");
+    await flushPromises();
+    const store = useSelectedConversationStore();
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.isBusy).toBe(true);
+
+    wrapper
+      .findComponent({ name: "AiChatV2Composer" })
+      .vm.$emit("stop");
+    await flushPromises();
+
+    const invoke = window.api.invoke as ReturnType<typeof vi.fn>;
+    const stopCall = invoke.mock.calls.find(
+      (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN
+    );
+    expect(stopCall).toBeDefined();
+    expect(JSON.parse(String(stopCall?.[1]))).toMatchObject({
+      conversationId: "conv-sched",
+    });
+    expect(store.runtimeStatus).toBe("idle");
+    expect(store.isBusy).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("an interactive-owned running view still cancels through the coordinator path", async () => {
+    const wrapper = mountSurface();
+    await flushPromises();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-a");
+    await flushPromises();
+
+    wrapper.findComponent({ name: "AiChatV2Composer" }).vm.$emit("stop");
+    await flushPromises();
+
+    const invoke = window.api.invoke as ReturnType<typeof vi.fn>;
+    expect(
+      invoke.mock.calls.some(
+        (call) => call[0] === AI_CHAT_V2_SCHEDULED_LOOP_STOP_RUN
+      )
+    ).toBe(false);
+    const { cancelChatRun } = await import("@/views/api/aiChatWorkspace");
+    expect(vi.mocked(cancelChatRun)).toHaveBeenCalled();
     wrapper.unmount();
   });
 });

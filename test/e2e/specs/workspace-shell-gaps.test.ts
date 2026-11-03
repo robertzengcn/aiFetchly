@@ -38,9 +38,7 @@ function composerTextarea(
 }
 
 test.describe("workspace chooser (acceptance criteria 9/10/12, FR-WS-004)", () => {
-  test("choosing and approving a workspace updates the badge state", async ({
-    page: _page,
-  }, testInfo) => {
+  test("choosing and approving a workspace updates the badge state", async ({}, testInfo) => {
     test.setTimeout(150_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");
@@ -230,9 +228,7 @@ test.describe("browser history navigation (criterion 7)", () => {
 });
 
 test.describe("window restoration (FR-WIN-007, criterion 35)", () => {
-  test("deterministic maximized startup keeps valid normal bounds", async ({
-    page: _page,
-  }, testInfo) => {
+  test("deterministic maximized startup keeps valid normal bounds", async ({}, testInfo) => {
     test.setTimeout(150_000);
     const fakeAi = await startFakeOpenAiServer();
     await fakeAi.setScenario("stream-text");

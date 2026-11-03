@@ -3,6 +3,7 @@ import alias from "@rollup/plugin-alias";
 import * as path from "path";
 
 import ClosePlugin from "./vite-plugin-close.js";
+import { ZOD_SSR_NO_EXTERNAL } from "./vite.workerSsrNoExternal.mjs";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
 import sourcemaps from "rollup-plugin-sourcemaps";
 
@@ -15,6 +16,12 @@ export default ({ mode }) => {
         "@": path.resolve(__dirname, "./src"),
       },
       conditions: ["node"],
+    },
+    // SSR builds externalize node_modules by default, but the packaged
+    // worker lives under app.asar.unpacked where modules that only live
+    // inside app.asar cannot be resolved; bundle zod (pure JS) instead.
+    ssr: {
+      noExternal: ZOD_SSR_NO_EXTERNAL,
     },
     build: {
       rollupOptions: {

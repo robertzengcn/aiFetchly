@@ -136,8 +136,12 @@ describe("A11Y-010 hidden reasoning excluded from output", () => {
       const wrapper = mountMessage(REASONING, true);
       const details = wrapper.find('[data-testid="reasoning"]');
       expect(details.exists()).toBe(true);
-      // The user explicitly opted into reasoning display: the content is
-      // inside a <details> element (expandable, not broadcast).
+      // Collapsed by default (A11Y-010: reasoning is never broadcast), but
+      // fully expandable through the summary control.
+      expect((details.element as HTMLDetailsElement).open).toBe(false);
+      await wrapper
+        .find('[data-testid="reasoning"] summary')
+        .trigger("click");
       expect((details.element as HTMLDetailsElement).open).toBe(true);
     });
 });

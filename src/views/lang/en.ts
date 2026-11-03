@@ -1173,6 +1173,13 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "Review email reply",
+    chatLoading: "Loading email…",
+    chatApproveSend: "Approve and send",
+    chatSending: "Sending…",
+    chatSent: "Email sent",
+    chatError: "Unable to complete this action. Reload the conversation to check the email status.",
+
     drafts_title: "Reply Drafts",
     generate_draft: "Generate Draft",
     regenerate: "Regenerate",
@@ -1627,6 +1634,21 @@ export default {
       "Select the embedding model used for vector search and similarity matching.",
     language_preference: "Language",
     "language-preference-description": "UI language preference.",
+    ui_font_scale: "Layout font size",
+    "ui-font-scale-description":
+      "Increase or decrease the size of menus, pages, and other layout text.",
+    ui_font_scale_decrease: "Decrease layout font size",
+    ui_font_scale_increase: "Increase layout font size",
+    ui_font_scale_reset: "Reset",
+    ui_font_scale_smaller: "Smaller",
+    ui_font_scale_default: "Default",
+    ui_font_scale_larger: "Larger",
+    ui_font_scale_large: "Large",
+    ui_font_scale_largest: "Largest",
+    ui_chat_font_size: "Chat font size",
+    "ui-chat-font-size-description":
+      "Font size for chat messages and the message box, in pixels (10–32).",
+    ui_chat_font_size_invalid: "Enter a whole number from 10 to 32.",
     ai_website_analysis_business_info: "Business Info",
     "ai-website-analysis-business-info-description":
       "Business information used during website AI analysis.",
@@ -2518,6 +2540,7 @@ export default {
     cancel: "Cancel",
     queue: {
       queued: "Queued",
+      region: "Queued messages",
       steering: "Steering…",
       applied: "Applied",
       dispatching: "Sending…",
@@ -3806,6 +3829,10 @@ export default {
       loadError: "Failed to load workspaces",
       empty: "No conversations yet",
       unassigned: "Other chats",
+      projects: "Project",
+      refresh: "Refresh projects",
+      collapse: "Collapse projects",
+      expand: "Expand projects",
       workspace: "Workspace",
       needsAttentionCount: "{count} conversations need attention",
     },
@@ -4235,6 +4262,7 @@ export default {
       verify_login: "I've finished logging in",
       extend: "Extend time (10 min)",
       cancel_task: "Cancel task",
+      close: "Close",
       reasons: {
         login_required: "The site requires a login to continue.",
         login_expired: "The saved login session has expired.",

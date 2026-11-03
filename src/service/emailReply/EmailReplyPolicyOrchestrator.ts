@@ -77,6 +77,16 @@ export class EmailReplyPolicyOrchestrator {
     messageId: number;
     draftId?: number;
     revisionId?: number;
+    /**
+     * Reviewed flag (docs/superpowers/specs/2026-10-29-email-reply-reviewed-flag-design.md):
+     * pass true ONLY for a human-confirmed draft request in conversation
+     * (`reviewed` on the AI tool / `humanReviewed` on the UI IPC). It exempts
+     * ONLY the classification-family blocks (needs_human_review / unknown) at
+     * the pre_draft stage — never machine-safety blocks. Pre-send paths do not
+     * use it: their confirmed-send exemption lives in
+     * {@link classificationForConfirmedSend}.
+     */
+    humanConfirmed?: boolean;
   }): Promise<EmailReplyPolicyDecision> {
     try {
       const message = await this.messageModule.read(input.messageId);
@@ -98,7 +108,7 @@ export class EmailReplyPolicyOrchestrator {
       }
 
       if (input.stage === "pre_draft") {
-        return this.evaluatePreDraft(message);
+        return this.evaluatePreDraft(message, input.humanConfirmed === true);
       }
       return this.evaluatePreSend(message, input.draftId, input.revisionId);
     } catch (error) {
@@ -282,13 +292,16 @@ export class EmailReplyPolicyOrchestrator {
     return null;
   }
 
-  private async evaluatePreDraft(message: {
-    emailServiceId: number;
-    fromAddress: string;
-    bodyText: string | null;
-    classification: string | null;
-    classificationConfidence: number | null;
-  }): Promise<EmailReplyPolicyDecision> {
+  private async evaluatePreDraft(
+    message: {
+      emailServiceId: number;
+      fromAddress: string;
+      bodyText: string | null;
+      classification: string | null;
+      classificationConfidence: number | null;
+    },
+    humanConfirmed = false
+  ): Promise<EmailReplyPolicyDecision> {
     const rule = await this.ruleModule
       .getEffectiveRule(message.emailServiceId)
       .catch(() => null);
@@ -314,6 +327,10 @@ export class EmailReplyPolicyOrchestrator {
         : message.classificationConfidence,
       rule,
       sendCounts: { todayForService: 0, threadCount: 0 },
+      // Reviewed flag: a human-confirmed request exempts the "unsure or
+      // sensitive" classification blocks (needs_human_review / unknown) —
+      // machine-safety checks stay enforced by the evaluator itself.
+      humanConfirmed,
     });
     return mapLegacyDecision(
       decision.status,

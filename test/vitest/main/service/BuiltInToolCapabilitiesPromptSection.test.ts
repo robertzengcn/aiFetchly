@@ -138,3 +138,11 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s.toLowerCase()).toContain("never html");
   });
 });
+
+
+it("opens any website before asking the user to sign in, regardless of saved accounts", () => {
+  const section = buildBuiltInToolCapabilitiesSection();
+  expect(section).toContain("ANY website, including social networks and login-required sites");
+  expect(section).toContain("Never refuse browser use because no saved account exists");
+  expect(section).toContain("Open the site first, then hand off sign-in");
+});

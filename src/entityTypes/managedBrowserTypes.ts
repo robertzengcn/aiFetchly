@@ -213,6 +213,7 @@ export interface WorkerPlatformDefinition {
 /** Renderer-safe session status. No cookies, paths, or secrets. */
 export interface SafeManagedBrowserStatus {
   readonly sessionId: string;
+  /** Zero denotes an ephemeral public session with no account. */
   readonly accountId: number;
   readonly platformId: number;
   /** Safe display labels (never emails when a name exists, §8.4). */

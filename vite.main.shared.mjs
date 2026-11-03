@@ -225,7 +225,14 @@ export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
         console.error("Failed to copy pdf.worker.mjs:", error);
       }
 
-      // Copy platform-specific icons
+      // Tray + window icon (icon.png) is needed on EVERY platform: the tray
+      // controller resolves only PNG candidates first, so a platform-specific
+      // .ico/.icns alone leaves background mode unavailable.
+      if (fs.existsSync(`${iconSourceDir}/icon.png`)) {
+        fs.copyFileSync(`${iconSourceDir}/icon.png`, `${iconDestDir}/icon.png`);
+        console.log("Copied tray/window icon (icon.png)");
+      }
+      // Platform-specific icons for the packager / native image decoding.
       if (process.platform === "win32") {
         if (fs.existsSync(`${iconSourceDir}/icon.ico`)) {
           fs.copyFileSync(`${iconSourceDir}/icon.ico`, `${iconDestDir}/icon.ico`);
@@ -235,11 +242,6 @@ export function platformCopyPlugin({ outDir = ".vite/build" } = {}) {
         if (fs.existsSync(`${iconSourceDir}/icon.icns`)) {
           fs.copyFileSync(`${iconSourceDir}/icon.icns`, `${iconDestDir}/icon.icns`);
           console.log("Copied macOS icon (icon.icns)");
-        }
-      } else if (process.platform === "linux") {
-        if (fs.existsSync(`${iconSourceDir}/icon.png`)) {
-          fs.copyFileSync(`${iconSourceDir}/icon.png`, `${iconDestDir}/icon.png`);
-          console.log("Copied Linux icon (icon.png)");
         }
       }
 

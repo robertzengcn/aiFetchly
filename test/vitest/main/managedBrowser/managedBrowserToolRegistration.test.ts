@@ -95,3 +95,12 @@ describe("managed-browser tool registration", () => {
     expect(outcome?.result.error).toBe("ai_disabled");
   });
 });
+
+
+it("advertises account-free browser startup to the model", () => {
+  const tool = SkillRegistry.getSkill("browser_start_session");
+  expect(tool?.parameters.required).toEqual(["purpose"]);
+  expect(tool?.description).toContain("omit account_id");
+  expect(tool?.description).toContain("ANY website");
+  expect(tool?.description).toContain("Never refuse browser use");
+});

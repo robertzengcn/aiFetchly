@@ -1,3 +1,4 @@
+import { emailReplyDraftId } from "@/views/components/aiChatWorkspace/emailReplyCardModel";
 import { describe, expect, it, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -1224,4 +1225,91 @@ describe("AiChatWorkspaceTranscript scroll-to-bottom button", () => {
       wrapper.find('[data-testid="scroll-to-bottom"]').exists()
     ).toBe(true);
   });
+
+  it("auto-scrolls to the bottom when an approval card appears so the user sees it", async () => {
+    const assistant = msg(MessageType.MESSAGE, {}, "assistant", "Reading the file.");
+    const wrapper = mountTranscript([assistant]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    // The user scrolled away from the bottom while the output streamed.
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+
+    // A gated tool result parks on the approval card (design §15.5).
+    await wrapper.setProps({
+      messages: [
+        assistant,
+        msg(MessageType.TOOL_RESULT, {
+          toolResult: {
+            needsPermissionPrompt: true,
+            permissionCategory: "filesystem",
+            success: true,
+          },
+        }),
+      ],
+    });
+    await flushPromises();
+
+    // The card is blocking and actionable at the very bottom of the
+    // transcript, so the chat jumps to it even though the user had scrolled
+    // away — and the affordance hides because we are back at the bottom.
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+    expect(
+      wrapper.findAll('[data-testid="ai-chat-permission-card"]').length
+    ).toBe(1);
+  });
+
+  it("jumps to the bottom on mount when loaded history already has a parked approval card", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "Working…"),
+      msg(MessageType.TOOL_RESULT, {
+        toolResult: {
+          needsPermissionPrompt: true,
+          permissionCategory: "filesystem",
+          success: true,
+        },
+      }),
+    ]);
+    // The stub lands after mount but BEFORE the component's nextTick settles,
+    // mirroring a real viewport that exists by the time the scroll is applied.
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    await flushPromises();
+
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
+});
+
+it.each([true, false])('shows the email reply review card outside tool groups (paired=%s)', async (paired) => {
+  const metadata = { toolCallId: 'reply-card', toolName: 'create_email_reply_draft' };
+  const messages = [
+    ...(paired ? [msg(MessageType.TOOL_CALL, metadata)] : []),
+    msg(MessageType.TOOL_RESULT, { ...metadata, toolResult: { success: true, draftId: 42 } }),
+  ];
+  const wrapper = mount(AiChatWorkspaceTranscript, {
+    props: { messages, activeAssistantMessageId: null, streamStatus: 'idle' },
+    global: { plugins: [i18n], stubs: { AiChatEmailReplyReviewCard: { props: ['draftId'], template: '<article data-testid="reply-review">{{ draftId }}</article>' } } },
+  });
+  await flushPromises();
+  expect(wrapper.findAll('[data-testid="reply-review"]')).toHaveLength(1);
+  expect(wrapper.get('[data-testid="reply-review"]').text()).toBe('42');
+});
+
+it('recognizes sent reply results and rejects failed or invalid draft results', () => {
+  expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'send_email_reply', toolResult: { success: true, draft_id: 42 } }))).toBe(42);
+  for (const toolResult of [{ success: false, draftId: 42 }, { draftId: -1 }, { draftId: '42' }, {}]) {
+    expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'create_email_reply_draft', toolResult }))).toBeNull();
+  }
 });

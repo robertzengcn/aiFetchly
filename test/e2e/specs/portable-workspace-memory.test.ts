@@ -122,9 +122,7 @@ async function portableInvoke(
   );
 }
 
-test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file + projection", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file + projection", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -226,9 +224,7 @@ test("AC-001/AC-006/AC-009: enable portable memory, create a record, verify file
   }
 });
 
-test("AC-008: no Git mutation on enable/create", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-008: no Git mutation on enable/create", async ({}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -291,9 +287,7 @@ test("AC-008: no Git mutation on enable/create", async ({
   }
 });
 
-test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -351,9 +345,7 @@ test("AC-010: AGENTS.md bridge preserves unrelated user content", async ({
   }
 });
 
-test("AC-002/AC-003: external edit is imported; invalid edit retains last valid", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-002/AC-003: external edit is imported; invalid edit retains last valid", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -461,9 +453,7 @@ test("AC-002/AC-003: external edit is imported; invalid edit retains last valid"
   }
 });
 
-test("AC-007: concurrent edit protection — save does not overwrite external bytes", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-007: concurrent edit protection — save does not overwrite external bytes", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -558,9 +548,7 @@ test("AC-007: concurrent edit protection — save does not overwrite external by
   }
 });
 
-test("AC-005/AC-011: isolation — second workspace sees no portable memory from the first", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-005/AC-011: isolation — second workspace sees no portable memory from the first", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -676,9 +664,7 @@ test("AC-005/AC-011: isolation — second workspace sees no portable memory from
   }
 });
 
-test("AC-007: conflict resolution — use-file resolves the conflict", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-007: conflict resolution — use-file resolves the conflict", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -792,9 +778,7 @@ test("AC-007: conflict resolution — use-file resolves the conflict", async ({
   }
 });
 
-test("AC-010: CLAUDE.md bridge preserves unrelated content", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-010: CLAUDE.md bridge preserves unrelated content", async ({}, testInfo) => {
   test.setTimeout(180_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");
@@ -851,9 +835,7 @@ test("AC-010: CLAUDE.md bridge preserves unrelated content", async ({
   }
 });
 
-test("AC-006/AC-009: crash recovery — reopen app and verify file-ahead-of-DB reconciliation", async ({
-  page: _page,
-}, testInfo) => {
+test("AC-006/AC-009: crash recovery — reopen app and verify file-ahead-of-DB reconciliation", async ({}, testInfo) => {
   test.setTimeout(240_000);
   const fakeAi = await startFakeOpenAiServer();
   await fakeAi.setScenario("stream-text");

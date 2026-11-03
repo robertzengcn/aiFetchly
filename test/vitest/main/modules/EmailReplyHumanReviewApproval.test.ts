@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
+import { EmailReplyPolicyOrchestrator } from "@/service/emailReply/EmailReplyPolicyOrchestrator";
 import { EmailReplyDraftGenerationService } from "@/service/emailReply/EmailReplyDraftGenerationService";
 import { materializeRevision1 } from "@/service/emailReply/EmailReplyRevisionMaterializer";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
+import type { EmailMessageClassification } from "@/entityTypes/emailReceiveTypes";
 
 // createDraft is AI-gated; pass the gate so reuse-guidance tests reach the
 // service instead of short-circuiting on the enable check.
@@ -168,6 +170,143 @@ describe("G02 human-review gate on approval", () => {
         approvedByType: "user",
       })
     ).rejects.toThrow(/human review/);
+  });
+});
+
+/**
+ * Reviewed flag (spec docs/superpowers/specs/2026-10-29-email-reply-reviewed-flag-design.md):
+ * confirmed-send proof. `classificationForConfirmedSend` strips a stored
+ * `needs_human_review` (a confirmed send IS the human review completing), so
+ * approval resolves and the pre-send gate allows. Bounce still refuses both:
+ * machine-safety blocks are never overridable by a human gesture.
+ */
+describe("reviewed flag — confirmed-send accepts needs_human_review", () => {
+  async function seedConfirmedSendDraft(
+    classification: EmailMessageClassification,
+    classificationConfidence: number
+  ): Promise<{
+    draftId: number;
+    revisionId: number;
+    messageId: number;
+  }> {
+    const messageModule = new EmailReceivedMessageModule();
+    const draftModule = new EmailReplyDraftModule();
+
+    const msg = new EmailReceivedMessageEntity();
+    msg.emailServiceId = 7;
+    msg.providerUid = `reviewed-send-${Math.random()}`;
+    msg.messageId = `<reviewed-send-${Math.random()}@x>`;
+    msg.threadKey = msg.messageId;
+    msg.fromAddress = "prospect@example.com";
+    msg.fromName = "Prospect";
+    msg.replyToAddress = null;
+    msg.toAddressesJson = JSON.stringify(["owner@svc.com"]);
+    msg.ccAddressesJson = null;
+    msg.subject = "Pricing";
+    msg.bodyText = "Hi";
+    msg.bodyHtmlSanitized = null;
+    msg.snippet = null;
+    msg.receivedAt = new Date();
+    msg.isUnread = 1;
+    msg.classification = classification;
+    msg.classificationConfidence = classificationConfidence;
+    msg.replyStatus = "not_started";
+    msg.processedAt = null;
+    const savedMsg = await messageModule.upsertByProviderUid(msg);
+    await messageModule.updateClassificationProvenance(
+      savedMsg.id,
+      classification === "needs_human_review" ? "review" : "deterministic",
+      classification === "needs_human_review"
+        ? "model-constrained-v1"
+        : "deterministic-v1"
+    );
+
+    const draft = new EmailReplyDraftEntity();
+    draft.messageId = savedMsg.id;
+    draft.emailServiceId = 7;
+    draft.subject = "Re: Pricing";
+    draft.bodyText = CLEAN_BODY;
+    draft.bodyHtml = null;
+    draft.status = "draft";
+    draft.generationSource = "ai";
+    const savedDraft = await draftModule.create(draft);
+
+    const rev = await materializeRevision1(draftModule, {
+      draftId: savedDraft.id,
+      actor: "ai",
+      subject: "Re: Pricing",
+      bodyText: CLEAN_BODY,
+      bodyHtml: null,
+      senderAddress: "owner@svc.com",
+      recipientAddress: "prospect@example.com",
+      emailServiceId: 7,
+      originalMessageId: savedMsg.id,
+    });
+    return {
+      draftId: savedDraft.id,
+      revisionId: rev.revisionId,
+      messageId: savedMsg.id,
+    };
+  }
+
+  it("approval resolves for a needs_human_review-classified message (human gesture)", async () => {
+    const { draftId } = await seedConfirmedSendDraft(
+      "needs_human_review",
+      0.8
+    );
+    const approval = await new EmailReplyApprovalService().approveDraft({
+      draftId,
+      approvedByType: "user",
+    });
+    expect(approval.token).toBeTruthy();
+  });
+
+  it("pre-send policy allows the confirmed needs_human_review draft", async () => {
+    const { draftId, messageId, revisionId } =
+      await seedConfirmedSendDraft("needs_human_review", 0.8);
+    await new EmailReplyApprovalService().approveDraft({
+      draftId,
+      approvedByType: "user",
+    });
+    const decision = await new EmailReplyPolicyOrchestrator().evaluate({
+      stage: "pre_send",
+      messageId,
+      draftId,
+      revisionId,
+    });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("approval still rejects a bounce-classified message even with the human gesture", async () => {
+    const { draftId } = await seedConfirmedSendDraft("bounce", 0.97);
+    await expect(
+      new EmailReplyApprovalService().approveDraft({
+        draftId,
+        approvedByType: "user",
+      })
+    ).rejects.toThrow(/Cannot approve/i);
+  });
+
+  it("pre-send policy still refuses a bounce-classified message", async () => {
+    const { draftId, messageId, revisionId } =
+      await seedConfirmedSendDraft("bounce", 0.97);
+    await expect(
+      new EmailReplyApprovalService().approveDraft({
+        draftId,
+        approvedByType: "user",
+      })
+    ).rejects.toThrow(/Cannot approve/i);
+    const decision = await new EmailReplyPolicyOrchestrator().evaluate({
+      stage: "pre_send",
+      messageId,
+      draftId,
+      revisionId,
+    });
+    expect(decision.allowed).toBe(false);
+    // The unapproved draft is refused at the approval-bound state machine
+    // (draft_not_approved) — the bounce classification hard block only ever
+    // fires for an APPROVED draft. Either way the send is refused.
+    expect(decision.code).toBe("draft_not_approved");
   });
 });
 

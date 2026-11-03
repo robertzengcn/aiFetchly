@@ -249,6 +249,13 @@ export class ScheduledAiMessageRunner {
         conversationId,
         scheduleId
       );
+      // BUGFIX 2026-11-02: mirror the loop path's post-turn result bump so
+      // the sidebar preview/result timestamps advance for standalone runs.
+      await this.recordProjection({
+        conversationId,
+        isResult: result.status === "completed",
+        previewText: result.assistantFinalMessage || task.message,
+      });
       return result;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -1430,8 +1437,22 @@ export class ScheduledAiMessageRunner {
         scheduleId: scheduleKey,
         clearPermissionBackstop,
       });
+      // BUGFIX 2026-11-02: standalone scheduled runs never advanced the
+      // workspace sidebar projection — a brand-new task conversation had no
+      // ai_chat_conversations row at all, so Run Now's workspace folder
+      // could not render (manual or event-driven refresh had nothing to
+      // show) until an app restart ran the once-per-process backfill.
+      // Mirror the interactive submit-time bump: an idempotent
+      // recordMessagePersisted that creates the row stamped with the
+      // binding's workspace key BEFORE any event-driven sidebar refresh
+      // races it.
+      await this.recordProjection({
+        conversationId,
+        isResult: false,
+        previewText: task.message,
+      });
       const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
-      const sink = new ScheduledLoopEventSink((event) => {
+      const innerSink = new ScheduledLoopEventSink((event) => {
         // Gated tool paused for permission: suspend the runtime timeout,
         // notify, broadcast, publish pending metadata, and start the
         // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
@@ -1500,7 +1521,7 @@ export class ScheduledAiMessageRunner {
         ) {
           clearResumeTimeout();
           resumeTimeoutHandle = setTimeout(() => {
-            sink.failOutstanding(
+            innerSink.failOutstanding(
               `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
             );
             try {
@@ -1539,6 +1560,21 @@ export class ScheduledAiMessageRunner {
               event.type === "error" ? event.errorMessage : undefined,
           });
         }
+      });
+
+      // Workspace owner adapter (design §8.3, bugfix 2026-11-02): keep the
+      // shared run envelope durable and broadcast redacted summaries so
+      // background schedule runs (Run Now + cron, standalone ai_message
+      // tasks) surface in the left workspace sidebar — previously ONLY
+      // runChatScheduledLoop wrapped its sink, so Run Now waits never
+      // produced workspace-key events and the chosen workspace folder never
+      // appeared. The inner sink keeps its streaming contract; helpers used
+      // later must read the INNER sink directly.
+      const sink = await createOwnerAdapterSink(innerSink, {
+        conversationId,
+        owner: "scheduled",
+        sourceId: String(scheduleKey),
+        broadcaster: sharedSummaryBroadcaster,
       });
 
       // TODO-11 (FR-013/022): consume the typed segment outcome directly;
@@ -1610,9 +1646,9 @@ export class ScheduledAiMessageRunner {
       // classification is authoritative when the sink saw no terminal, and a
       // pause parks for the resumed terminal via the sink wait.
       outcome =
-        sink.getOutcome() ??
+        innerSink.getOutcome() ??
         mapSegment(segmentOutcome) ??
-        (await sink.waitForTerminalOutcome());
+        (await innerSink.waitForTerminalOutcome());
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
         const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;

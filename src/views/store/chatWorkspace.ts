@@ -150,6 +150,49 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
   let bootstrapGeneration = 0;
   let activeBootstrapGeneration: number | null = null;
 
+  // ---------------------------------------------------------------------------
+  // BUGFIX 2026-11-02 (left menu never shows the new chat's workspace folder):
+  // the sidebar projection only regroups at bootstrap. Summary events carry a
+  // `workspaceKey` — when one introduces or changes a NON-NULL key for a row,
+  // the row belongs in a workspace folder it is not placed in yet. Debounce a
+  // re-bootstrap so the authoritative main-process projection rebuilds the
+  // folder set (display names, trust state, ordering) instead of duplicating
+  // grouping rules renderer-side. Bursts collapse into a single fetch.
+  // ---------------------------------------------------------------------------
+  const GROUPING_REFRESH_DEBOUNCE_MS = 500;
+  let groupingRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let groupingRefreshInFlight = false;
+  let groupingRefreshQueued = false;
+
+  function scheduleGroupingRefresh(): void {
+    if (groupingRefreshTimer !== null) {
+      clearTimeout(groupingRefreshTimer);
+    }
+    groupingRefreshTimer = setTimeout(() => {
+      groupingRefreshTimer = null;
+      void runGroupingRefresh();
+    }, GROUPING_REFRESH_DEBOUNCE_MS);
+  }
+
+  async function runGroupingRefresh(): Promise<void> {
+    if (groupingRefreshInFlight) {
+      // A refresh is already reading: events may have landed after that
+      // fetch snapshot — queue exactly one more pass when it completes.
+      groupingRefreshQueued = true;
+      return;
+    }
+    groupingRefreshInFlight = true;
+    try {
+      await bootstrap();
+    } finally {
+      groupingRefreshInFlight = false;
+      if (groupingRefreshQueued) {
+        groupingRefreshQueued = false;
+        scheduleGroupingRefresh();
+      }
+    }
+  }
+
   function rebuildConversationIndex(): void {
     const index = new Map<string, WorkspaceConversationSummary>();
     for (const group of workspaces.value) {
@@ -290,6 +333,14 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       runtimeStatus: event.runtimeStatus,
       activeRunId: event.runId ?? null,
     };
+    // BUGFIX 2026-11-02: a non-null workspaceKey that is NOT the row's
+    // current placement (first sight of an assigned conversation, or a key
+    // change) requires the folder set to be rebuilt from the authoritative
+    // projection; schedule exactly one debounced refresh.
+    const needsGroupingRefresh =
+      bootstrapped.value &&
+      updated.workspaceKey !== null &&
+      (!existing || existing.workspaceKey !== updated.workspaceKey);
     if (!existing) {
       // A conversation first seen via an event (e.g. a brand-new chat)
       // appears under Unassigned until the next bootstrap refresh.
@@ -320,6 +371,9 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       );
     }
     rebuildConversationIndex();
+    if (needsGroupingRefresh) {
+      scheduleGroupingRefresh();
+    }
   }
 
   /**
@@ -552,6 +606,12 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       // re-subscription on the next mount.
       titleUnsubscribe();
       titleUnsubscribe = null;
+    }
+    // BUGFIX 2026-11-02: drop any pending grouping refresh with the
+    // subscription it would have been triggered by.
+    if (groupingRefreshTimer !== null) {
+      clearTimeout(groupingRefreshTimer);
+      groupingRefreshTimer = null;
     }
   }
 

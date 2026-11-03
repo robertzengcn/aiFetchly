@@ -4,6 +4,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AppInspectorHost from "@/views/components/appShell/AppInspectorHost.vue";
 import { useAppInspectorStore } from "@/views/store/appInspector";
+import { useAppShellStore } from "@/views/store/appShell";
 
 /**
  * Inspector-host topology (2026-10-26 docked-column design §constraint):
@@ -35,6 +36,18 @@ vi.mock("@/views/api/aiChatWorkspace", async (importOriginal) => {
     })),
   };
 });
+
+// Schedule inspector detail loader — mocked so the component test stays
+// renderer-only (no Electron IPC bridge).
+const getScheduleById = vi.fn(async (id: number) => ({
+  schedule:
+    id === 5
+      ? { id: 5, name: "Nightly backup", enabled: true }
+      : null,
+}));
+vi.mock("@/views/api/schedule", () => ({
+  getScheduleById: (id: number) => getScheduleById(id),
+}));
 
 const i18n = createI18n({
   legacy: false,
@@ -90,5 +103,36 @@ describe("AppInspectorHost — inline topology (no body teleport)", () => {
     expect(
       wrapper.find('[data-testid="workspace-inspector"]').exists()
     ).toBe(false);
+  });
+});
+
+describe("AppInspectorHost — schedule target lifecycle", () => {
+  it("loads the schedule detail ONCE per open — mount-time loads must not re-key the host child", async () => {
+    getScheduleById.mockClear();
+    const store = useAppInspectorStore();
+    useAppShellStore().setInspectorOpen(true);
+    const wrapper = mountHost();
+
+    store.open({
+      kind: "schedule",
+      ownerRoute: "/schedule",
+      scheduleId: 5,
+    });
+    await flushPromises();
+    await flushPromises();
+
+    // The inspector panel is up and shows the loaded record.
+    expect(
+      wrapper.find('[data-testid="app-inspector-schedule"]').exists()
+    ).toBe(true);
+    expect(wrapper.text()).toContain("Nightly backup");
+
+    // Every child remount fires another detail load: a wait for no
+    // additional loads proves the host did not self-remount (the
+    // "Maximum recursive updates exceeded in <AppInspectorHost>" crash
+    // re-queued the host update >100 times per flush).
+    await flushPromises();
+    await flushPromises();
+    expect(getScheduleById).toHaveBeenCalledTimes(1);
   });
 });

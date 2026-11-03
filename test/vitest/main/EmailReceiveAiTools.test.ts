@@ -146,6 +146,8 @@ import {
   fetchUnreadEmails,
   getEmailMessage,
 } from "@/service/EmailReceiveAiTools";
+import { createEmailReplyDraftSchema } from "@/entityTypes/emailReceiveAiTypes";
+import { emailReplyDraftCreateInputSchema } from "@/schemas/ipc/emailReply";
 import {
   SendPolicyRejection,
   SendBindingError,
@@ -214,13 +216,45 @@ describe("Email reply draft/send AI tools", () => {
     expect(skill!.description).toContain("does not probe");
   });
 
-  it("send_email_reply REQUIRES confirmation (it sends email)", () => {
+  it("create_email_reply_draft accepts reviewed=true in its schema and registry", () => {
+    const parsed = createEmailReplyDraftSchema.parse({
+      message_id: 3,
+      reviewed: true,
+    });
+    expect(parsed.reviewed).toBe(true);
+    const skill = SkillRegistry.getSkill("create_email_reply_draft");
+    expect(skill).not.toBeNull();
+    const props = skill!.parameters.properties as Record<
+      string,
+      { type: string; description?: string }
+    >;
+    expect(props.reviewed?.type).toBe("boolean");
+    // Usage restriction is stated where the model can read it.
+    expect(skill!.description).toMatch(/reviewed/i);
+    expect(props.reviewed?.description).toMatch(/ONLY/i);
+    // I-1 mitigation (final review): unattended scheduled execution has no
+    // human reviewing the message, so the flag must never be claimed there.
+    expect(props.reviewed?.description).toMatch(/scheduled|unattended/i);
+    expect(skill!.description).toMatch(/scheduled|unattended/i);
+  });
+
+  it("IPC draft-create schema accepts humanReviewed", () => {
+    // lazySchema exports a THUNK (first call caches + returns the schema).
+    const parsed = emailReplyDraftCreateInputSchema().parse({
+      messageId: 3,
+      humanReviewed: true,
+    });
+    expect(parsed.humanReviewed).toBe(true);
+  });
+
+  it("send_email_reply directs the user to card approval without sending", async () => {
     const skill = SkillRegistry.getSkill("send_email_reply");
     expect(skill).not.toBeNull();
-    expect(skill!.source).toBe("built-in");
-    expect(skill!.permissionCategory).toBe("automation");
-    expect(skill!.requiresConfirmation).toBe(true);
-    expect(skill!.parameters.required).toContain("draft_id");
+    expect(skill!.requiresConfirmation).toBe(false);
+    expect(skill!.description).toContain("Approve and send");
+    const result = await skill!.execute({ draft_id: 3 }, { conversationId: "chat", toolCallId: "reply" });
+    expect(result.success).toBe(false);
+    expect(result.result.code).toBe("email_reply_card_approval_required");
   });
 });
 

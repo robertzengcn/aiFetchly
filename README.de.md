@@ -30,6 +30,7 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 - **Einem KI-Agenten Arbeit geben**: Recherche, Dateianalyse, Datenauszug, Nachrichtenentwürfe, Zusammenfassungen und Tool-Nutzung aus einer Chat-Oberfläche.
 - **Eigenes Geschäftswissen nutzen**: Dokumente in eine lokale Wissensbibliothek hochladen und Antworten oder Entwürfe auf Basis eigener Dateien erzeugen.
 - **Browser- und Datenaufgaben automatisieren**: Informationen von Websites sammeln, strukturierte Daten erfassen, URL-Listen verarbeiten und Ergebnisse exportieren.
+- **Den Agenten einen echten Browser steuern lassen**: Öffnen Sie ein sichtbares Chrome-Fenster, das die KI beobachtet und bedient. Sie sehen jeden Schritt, geben wichtige Aktionen frei und übernehmen selbst, wenn eine Anmeldung oder Prüfung nötig ist. Siehe [Automatisierung mit verwaltetem Browser](#automatisierung-mit-verwaltetem-browser).
 - **An spezialisierte Subagenten delegieren**: Hintergrundagenten mit eigenem Prompt, Tool-Rechten, Ressourcenlimits und strukturierten Ausgaben starten.
 - **Arbeitsbereich erweitern**: Skills und Plugins installieren, um Tools, Geschäftsworkflows und Integrationen hinzuzufügen.
 - **Kontrolle behalten**: Daten lokal in SQLite speichern, Tool-Aktivität prüfen, Berechtigungen steuern und auf dem eigenen Desktop ausführen.
@@ -88,6 +89,7 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 
 | Funktion | Beschreibung |
 |----------|--------------|
+| **KI-gesteuerter verwalteter Browser** | Übergeben Sie dem Agenten ein echtes, sichtbares Chrome-Fenster: Seiten öffnen, lesen, klicken, tippen, navigieren, Daten extrahieren und für menschliche Übernahme pausieren. Funktioniert auf öffentlichen Websites ohne gespeichertes Konto und nutzt bei Bedarf die Anmeldung eines Tool Accounts. |
 | **Automatisierte Web-Recherche** | Suchen Sie über Suchmaschinen, sammeln Sie Geschäftsinformationen, verarbeiten Sie URL-Listen und erholen Sie sich von Task-Fehlern. |
 | **Strukturierte Datenextraktion** | Extrahieren Sie E-Mails, Telefonnummern, Adressen, Social-Profile, Firmendaten und Verzeichniseinträge. |
 | **Aufgabenplanung** | Planen Sie Tasks mit cron, verketten Sie abhängige Jobs, erstellen Sie wiederkehrende Workflows und überwachen Sie Historie. |
@@ -166,9 +168,71 @@ Worker in `src/childprocess/` führen rechenintensive Aufgaben wie Scraping und 
 
 AI Chat kann die gehostete aiFetchly-KI oder einen vom Nutzer konfigurierten OpenAI-kompatiblen Provider verwenden. Öffnen Sie **System Settings -> AI Provider**, um den Modus zu wechseln und einen lokalen oder eigenen Provider zu speichern.
 
+## Automatisierung mit verwaltetem Browser
+
+aiFetchly enthält einen Browser, den der KI-Agent tatsächlich steuern kann. Der Agent öffnet ein normales, sichtbares Chrome-/Chromium-Fenster auf Ihrem Desktop, beobachtet die Seite und führt die gewünschten Schritte aus, während die Anwendung Sitzungsstatus, Freigaben, Fortschritt und Ergebnisse anzeigt.
+
+Die Funktion ist für Websites und Konten gedacht, die Ihnen gehören oder die Sie betreiben dürfen. Sie umgeht weder MFA noch Anmelde- oder Sicherheitsprüfungen, Plattform-Sicherheitskontrollen oder Zugriffsbeschränkungen.
+
+### Sitzung starten
+
+- **AI Chat**: Beschreiben Sie eine Aufgabe, die einen Browser braucht – der Agent lädt die Browser-Tools selbst.
+- **Tool Account → Open managed browser**: Nutzt die gespeicherte Anmeldung eines Kontos für seine Plattform.
+- **Sitzungskarte im Arbeitsbereich**: Laufenden Browser ansehen, steuern oder stoppen.
+
+Öffentliches Surfen braucht kein Konto. Jede Website – auch soziale Netzwerke und Seiten mit Anmeldepflicht – lässt sich ohne gespeicherten Tool Account öffnen; ist eine Anmeldung nötig, übergibt aiFetchly dasselbe Fenster an Sie, statt das Öffnen zu verweigern oder auf einen HTTP-Abruf auszuweichen. Mit einem gespeicherten Konto wird stattdessen die verschlüsselte Cookie-Sitzung wiederverwendet.
+
+### Verfügbare Browser-Tools
+
+| Tool | Zweck |
+|------|-------|
+| `browser_start_session` | Sitzung für eine URL oder einen gespeicherten Tool Account starten |
+| `browser_get_status` | Sitzungsstatus und bereinigte aktuelle URL lesen |
+| `browser_observe` | Begrenzten semantischen Snapshot der Seite und ihrer Elemente holen |
+| `browser_navigate` | Zu einer erlaubten `http(s)`-URL navigieren |
+| `browser_run_actions` | Begrenztes strukturiertes Programm ausführen (Klick, Eingabe, Scrollen, Warten, Extrahieren, Schleife) |
+| `browser_screenshot` | Vorschaubild der Seite für die Unterhaltung aufnehmen |
+| `browser_request_handoff` | Pausieren und Sie um Übernahme bitten |
+| `browser_resume_after_handoff` | Nach Ihrer Bestätigung fortsetzen |
+| `browser_evaluate_script` | Geprüftes JavaScript im Seitenkontext ausführen (mit Freigabe) |
+| `browser_clear_cache` | Cache des aktuellen Kontos nach Bestätigung leeren |
+| `browser_stop_session` | Browser stoppen und schließen |
+
+`browser_observe` liefert Referenzen wie `@e1 [button] "Search"` zusammen mit einer Seitenrevision; veraltete Referenzen werden nach Navigation oder Neuladen abgelehnt, damit nicht das falsche Element angeklickt wird.
+
+### Freigaben und Sicherheit
+
+| Risiko | Beispiele | Verhalten |
+|--------|-----------|-----------|
+| Beobachten | Text lesen, Elemente prüfen, Screenshot | Freigabe auf Sitzungsebene |
+| Umkehrbare Interaktion | Suchen, Filtern, Blättern, Entwerfen | Freigabe auf Sitzungsebene |
+| Sensible Eingabe | E-Mail, Telefon, private Nachricht, Upload | Vorschau und ausdrückliche Freigabe |
+| Folgenreich | Senden, Veröffentlichen, Kommentieren, Folgen, Hochladen, Löschen, Kaufen, Einstellungen ändern | Freigabe im Einzelfall mit Konto, Ziel und Wirkung |
+| Privilegiertes Skript | Jedes JavaScript in der Seite | Skript, Origin, Zweck, Timeout und erwartete Ausgabe vor der Freigabe |
+| Authentifizierung | Passwort, MFA, Passkey, Sicherheits-CAPTCHA | Immer manuell durch Sie |
+
+Seiteninhalte gelten als nicht vertrauenswürdige Daten: Eine Website kann den Agenten nicht zu einer übersprungenen Freigabe überreden, das Modell kann seine eigene Aktion nicht als sicher markieren, und eine ausdrückliche Ablehnung bleibt bestehen. Cookies gelangen nie in Renderer, Modell, Tool-Ergebnisse, Logs oder Analytics – nur der Hauptprozess entschlüsselt sie, nur der Browser-Worker wendet sie an. Nach erfolgreicher Anmeldung wird die erneuerte Sitzung wieder verschlüsselt gespeichert.
+
+### Einstellungen und Cache
+
+**System Settings → Managed Browser** bietet:
+
+| Einstellung | Standard | Wirkung |
+|-------------|----------|---------|
+| **Use built-in managed browser** | An | Erlaubt neue KI-gesteuerte Browsersitzungen |
+| **Use managed browser cache** | An | Wiederverwendet kontoisolierte statische Ressourcen |
+| **Maximum managed-browser cache** | 500 MB | Begrenzt den Speicherplatz (100–2048 MB) |
+| **Clear cache when aiFetchly closes** | Aus | Leert den Browser-Cache beim Beenden |
+
+Das Panel zeigt außerdem die ungefähre Cache-Größe, die letzte Löschung sowie Aktionen zum Leeren des Caches eines Kontos oder aller verwalteten Browser. Das Leeren entfernt nie verschlüsselte Cookies, gespeicherte Anmeldungen, Konten oder Downloads.
+
+Vollständige Anforderungen, Sicherheitsmodell, Fingerprint-Richtlinie und Rollout-Plan stehen in [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md).
+
 ## Dokumentation
 
 Die vollständige Dokumentation finden Sie unter [docs.aifetchly.com](https://docs.aifetchly.com).
+
+KI-gesteuerter verwalteter Browser (sichtbare Chrome-Sitzungen, Browser-Tools, Freigaben, manuelle Übernahme, Fingerprint, Cache): [Produktanforderungen](docs/prd/puppeteer-managed-social-browser-prd.md).
 
 Die offizielle Website der Anwendung ist [aifetchly.com](https://www.aifetchly.com).
 

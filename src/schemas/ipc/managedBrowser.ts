@@ -31,7 +31,7 @@ export const listEligibleAccountsInputSchema = lazySchema(() =>
 
 export const managedBrowserStartInputSchema = lazySchema(() =>
   z.strictObject({
-    accountId: z.number().int().positive(),
+    accountId: z.number().int().positive().optional(),
     purpose: z.string().min(1).max(300),
     requestedStartUrl: z.string().url().max(2048).optional(),
     conversationId: z.string().min(1).max(96).optional(),
@@ -179,8 +179,8 @@ const sessionStateSchema = z.enum([
 
 const safeStatusSchema = z.strictObject({
   sessionId: sessionIdSchema,
-  accountId: z.number().int().positive(),
-  platformId: z.number().int().positive(),
+  accountId: z.number().int().nonnegative(),
+  platformId: z.number().int().nonnegative(),
   accountLabel: z.string().max(255),
   platformLabel: z.string().max(255),
   proxyActive: z.boolean(),

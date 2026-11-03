@@ -8,6 +8,11 @@
 // ---------------------------------------------------------------------------
 
 :root {
+  // User Preferences font stepper. 1 = 16px root. index.html and
+  // fontScale.ts write this variable; the html rule below consumes it.
+  --app-font-scale: 1;
+  --app-chat-font-size: 14px;
+
   --app-canvas: rgb(var(--v-theme-background));
   --app-shell: rgb(var(--v-theme-surface));
   --app-surface: rgb(var(--v-theme-surface));
@@ -50,6 +55,12 @@
   --app-width-form: 700px;
   --app-width-reading: 720px;
   --app-width-wide: 1080px;
+}
+
+// Beat Vuetify's later `html { font-size: 1rem }` so the preference scales
+// rem-based controls. Inline --app-font-scale is set before first paint.
+html {
+  font-size: calc(16px * var(--app-font-scale, 1)) !important;
 }
 
 // Reduced motion: disable nonessential animation, keep state communication

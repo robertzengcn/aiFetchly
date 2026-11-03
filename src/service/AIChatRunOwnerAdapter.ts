@@ -3,6 +3,7 @@ import type {
   AIChatQueryEventSink,
 } from "@/service/AIChatQueryEvents";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import type {
   ChatRunOwner,
   ChatRunStatus,
@@ -45,6 +46,27 @@ export async function createOwnerAdapterSink(
   // Serialize durable transitions in emission order.
   let chain: Promise<unknown> = Promise.resolve();
 
+  // BUGFIX 2026-11-02 (left menu folder refresh): resolve the conversation's
+  // bound workspace key once per run so every summary broadcast carries the
+  // REAL grouping identity. Scheduled runs bypass the coordinator, and the
+  // previous hardcoded null advertised "Unassigned" for conversations whose
+  // workspace the schedule had just bound — the workspace folder never
+  // materialized in the left menu until an app restart. One lookup per run
+  // (the binding is created before the run starts); a lookup failure keeps
+  // null so the row degrades to Unassigned instead of guessing.
+  let workspaceKey: string | null = null;
+  try {
+    workspaceKey = await new AIChatConversationModule().getWorkspaceKeyForConversation(
+      deps.conversationId
+    );
+  } catch (err) {
+    console.warn(
+      "[ai-chat-workspace] owner adapter workspace key lookup failed:",
+      err
+    );
+    workspaceKey = null;
+  }
+
   // FR-024: derive unread from the terminal status — a completed run
   // produces an unread result unless the conversation is actively selected.
   const isUnreadFor = (s: ChatRunStatus): boolean => s === "completed";
@@ -52,7 +74,7 @@ export async function createOwnerAdapterSink(
   const broadcast = (reason: ConversationSummaryEvent["reason"]): void => {
     deps.broadcaster?.broadcastSummary({
       conversationId: deps.conversationId,
-      workspaceKey: null,
+      workspaceKey,
       runtimeStatus: status,
       attention:
         status === "awaiting_permission"

@@ -45,6 +45,15 @@ const STATIC_PAGE_KEYS: readonly string[] = [
   "manage_hooks",
   "manage_subagents",
   "ai-custom-context-directive-placeholder",
+  "ui_font_scale_decrease",
+  "ui_font_scale_increase",
+  "ui_font_scale_reset",
+  "ui_font_scale_smaller",
+  "ui_font_scale_default",
+  "ui_font_scale_larger",
+  "ui_font_scale_large",
+  "ui_font_scale_largest",
+  "ui_chat_font_size_invalid",
 ];
 
 /** Every group/item label key the settings page resolves through t(). */

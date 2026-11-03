@@ -30,6 +30,7 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 - **让 AI Agent 执行业务工作**：通过聊天界面完成调研、文件分析、数据提取、消息草拟、文档总结和工具操作。
 - **使用你的业务知识**：把文档上传到本地知识库，生成基于你自己文件的答案、草稿和方案。
 - **自动化浏览器和数据任务**：从网站收集信息、采集结构化数据、处理 URL 列表并导出结果。
+- **让 AI 操控真实浏览器**：启动一个可见的 Chrome 窗口，AI 可以观察并操作它；你能看到每一步、批准关键操作，并在登录或验证码出现时亲自接管。详见[受管浏览器自动化](#受管浏览器自动化)。
 - **委派给专业子 Agent**：运行带有独立提示词、工具权限、资源限制和结构化输出的后台 Agent。
 - **扩展工作空间**：安装技能和插件，加入新的工具、业务流程和集成能力。
 - **保持控制权**：数据存储在本地 SQLite 数据库中，可以审查工具活动、设置权限并在自己的桌面运行。
@@ -88,6 +89,7 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 
 | 能力 | 说明 |
 |------|------|
+| **AI 操控的受管浏览器** | 把真实可见的 Chrome 窗口交给 AI Agent：打开网站、读取页面、点击、输入、跳转、提取数据，并在需要人工介入时暂停。公开网站无需保存账号即可打开，需要时也可复用已保存 Tool Account 的登录状态。 |
 | **网页调研自动化** | 跨搜索引擎检索，收集业务信息，处理 URL 列表，并在任务出错时实时恢复。 |
 | **结构化数据提取** | 提取邮箱、电话、地址、社交主页、公司详情、目录记录和其他业务数据。 |
 | **任务调度** | 使用 cron 时间表达式安排任务，串联依赖任务，设置周期工作流并查看执行历史。 |
@@ -168,9 +170,71 @@ AI Chat 可以使用托管的 aiFetchly AI，也可以使用用户配置的 Open
 
 支持的预设包括 Ollama、LM Studio、OpenAI、OpenRouter、vLLM、LocalAI 和 Custom。Provider 配置需要 base URL 和默认模型，本地 Provider 的 API key 可选，第三方托管 Provider 建议配置 API key。
 
+## 受管浏览器自动化
+
+aiFetchly 内置一个真正由 AI 驱动的浏览器。Agent 会打开一个你能在桌面上看到的、正常的有头 Chrome/Chromium 窗口，观察当前页面，并按你的要求完成操作，同时应用界面展示会话状态、审批、进度和结果。
+
+该功能用于操作你拥有或被授权运营的网站与账号，不会绕过 MFA、登录/安全验证、平台安全策略或访问限制。
+
+### 启动会话
+
+- **AI Chat**：直接描述需要浏览器的任务，Agent 会自行加载浏览器工具。
+- **Tool Account → Open managed browser**：复用已保存账号的登录状态连接对应平台。
+- **AI 工作区的会话卡片**：查看、控制或停止正在运行的浏览器。
+
+公开浏览不需要任何账号。任何网站（包括社交网络和必须登录的站点）都可以在没有保存 Tool Account 的情况下打开；需要登录时，aiFetchly 会把同一个窗口交给你处理，而不是拒绝打开或改用 HTTP 抓取。使用已保存账号打开时，则复用加密存储的 Cookie 会话。
+
+### Agent 可用的浏览器工具
+
+| 工具 | 用途 |
+|------|------|
+| `browser_start_session` | 为某个 URL 或已保存的 Tool Account 启动会话 |
+| `browser_get_status` | 读取会话状态和当前已脱敏 URL |
+| `browser_observe` | 获取有界的页面语义快照与可交互元素 |
+| `browser_navigate` | 跳转到允许的 `http(s)` 地址 |
+| `browser_run_actions` | 执行有界的结构化动作程序（点击、输入、滚动、等待、提取、循环） |
+| `browser_screenshot` | 为当前对话截取页面缩略图 |
+| `browser_request_handoff` | 暂停并请你接管 |
+| `browser_resume_after_handoff` | 你确认后恢复 |
+| `browser_evaluate_script` | 在页面上下文中执行经审核的 JavaScript（需审批） |
+| `browser_clear_cache` | 确认后清理当前账号的浏览器缓存 |
+| `browser_stop_session` | 停止并关闭浏览器 |
+
+`browser_observe` 返回形如 `@e1 [button] "Search"` 的引用，并附带页面版本号；页面版本变化后旧引用会被拒绝，避免点错元素。结构化动作无法表达的 DOM 逻辑可以用 `browser_evaluate_script` 完成，脚本只在网页上下文运行，不会以 Node.js、Electron、Shell 或文件系统权限执行。
+
+### 审批与安全
+
+| 风险等级 | 示例 | 行为 |
+|----------|------|------|
+| 观察 | 读取文本、检查元素、截图 | 会话级审批 |
+| 可逆交互 | 搜索、筛选、翻页、草拟文本 | 会话级审批 |
+| 敏感输入 | 邮箱、电话、私信、上传 | 预览并明确审批 |
+| 关键操作 | 发送、发布、评论、关注、上传、删除、购买、修改设置 | 逐次即时审批，展示账号、目标和影响 |
+| 特权脚本 | 任意页面内 JavaScript | 展示脚本、域名、用途、超时和预期输出后审批 |
+| 身份验证 | 密码、MFA、通行密钥、安全验证码 | 始终交由你手动完成 |
+
+网页内容被视为不可信数据，因此页面无法说服 Agent 跳过审批；模型不能自行把操作标记为安全；目标或页面版本在审批后发生变化时，审批会失效。Cookie 不会进入渲染进程、模型上下文、工具结果、日志或分析数据，只有主进程负责解密、浏览器 Worker 负责应用；登录成功后新的会话会被重新加密保存。
+
+### 设置与缓存
+
+**System Settings → Managed Browser** 提供：
+
+| 设置 | 默认 | 作用 |
+|------|------|------|
+| **Use built-in managed browser** | 开启 | 允许 AI 发起新的受管浏览器会话 |
+| **Use managed browser cache** | 开启 | 在账号隔离前提下复用静态资源 |
+| **Maximum managed-browser cache** | 500 MB | 限制磁盘占用（100–2048 MB） |
+| **Clear cache when aiFetchly closes** | 关闭 | 退出时清理浏览器缓存 |
+
+面板还显示缓存大小、上次清理时间，以及清理单个账号或全部受管浏览器缓存的入口。清理缓存不会删除加密 Cookie、已保存登录、账号记录或下载文件。
+
+完整需求、安全模型、指纹策略和上线计划见 [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md)。
+
 ## 文档
 
 完整文档请访问 [docs.aifetchly.com](https://docs.aifetchly.com)。
+
+AI 操控受管浏览器（可见 Chrome 会话、浏览器工具、审批、人工接管、指纹策略、缓存）：[产品需求](docs/prd/puppeteer-managed-social-browser-prd.md)。
 
 应用官方网站是 [aifetchly.com](https://www.aifetchly.com)。
 
