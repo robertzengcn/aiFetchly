@@ -132,6 +132,11 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         return { status: "provider_error", reason_code: "provider_config_changed" };
       }
       try {
+        // T25: bounded backoff on rate-limit rejections (429), inside the
+        // same 2-attempt ceiling — never an open retry loop.
+        if (attempt === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
         const response = await this.complete(
           {
             messages: [
@@ -146,7 +151,24 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         );
         const content = response.choices?.[0]?.message?.content ?? "";
         const parsed: unknown = JSON.parse(content);
-        return normalizeWireResult(parsed);
+        const normalized = normalizeWireResult(parsed);
+        // T29: usage attribution - provider-reported token totals are
+        // surfaced in the uncertainty metadata (never as confidence).
+        const usage = (
+          response as {
+            usage?: { total_tokens?: number };
+          }
+        ).usage;
+        if (normalized.status === "decided" && usage?.total_tokens) {
+          return {
+            ...normalized,
+            uncertainty: {
+              ...normalized.uncertainty,
+              calibration_version: `tokens:${usage.total_tokens}`,
+            },
+          };
+        }
+        return normalized;
       } catch (error) {
         if (signal.aborted) {
           return { status: "provider_error", reason_code: "request_aborted" };
