@@ -68,6 +68,9 @@ class ActionFakeAdapter implements EmailMailboxAdapter {
   async checkMessagePresent(_config: unknown, location: MailboxLocation): Promise<PresenceResult> {
     return this.state.presence(location);
   }
+  async searchUids() {
+    return { status: "listed" as const, candidates: [], capped: false };
+  }
 }
 
 class StubCapabilityService {

@@ -8,6 +8,10 @@ import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 import { ImapEmailMailboxAdapter as DefaultMailboxAdapter } from "@/service/emailOrganization/ImapEmailMailboxAdapter";
+import {
+  EmailOrganizationSelectionService,
+} from "@/service/emailOrganization/EmailOrganizationSelectionService";
+import type { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSelection.entity";
 import type {
   EmailMailboxAdapter,
   MoveResult,
@@ -260,6 +264,208 @@ export class EmailMailboxActionService extends BaseModule {
     );
     await this.persistMoveOutcome(operation.operationId, claim.itemId, message.id, message.emailServiceId, move, trashFolder, input.origin, undefined, claim.attemptId, location.version);
     return await this.projectResult(operation.operationId);
+  }
+
+  /**
+   * Bulk Trash over a frozen selection (PRD FR-19, design §11): one account,
+   * at most 100 items, executed strictly one move at a time with a
+   * cancellation check before every claim (FR-20). Stale-version targets are
+   * revalidated and individually reported (AC-14); partial completion is
+   * never an aggregate success.
+   */
+  async trashSelection(input: {
+    selectionId: string;
+    origin: TrashMessageInput["origin"];
+    actionId?: string | null;
+  }): Promise<MailboxActionOutcome> {
+    await this.ensureConnection();
+    const selectionService = new EmailOrganizationSelectionService();
+    const selection = await selectionService.readValidSelection(input.selectionId);
+    const parsed = selectionService.parseSelection(selection);
+    const destinations: Record<number, string> = {};
+    for (const messageId of parsed.messageIds) {
+      const destination = parsed.destinations?.[messageId];
+      if (typeof destination !== "string") {
+        return this.failedResult(
+          "DESTINATION_INVALID",
+          `Selection item ${messageId} has no recorded destination.`
+        );
+      }
+      destinations[messageId] = destination;
+    }
+    return await this.executeBulk(selection, parsed.messageIds, destinations, input.origin, input.actionId ?? null, "trash");
+  }
+
+  /**
+   * Bulk restore over a frozen restore selection: destinations are the
+   * recorded original folders shown at freeze time (design §11).
+   */
+  async restoreSelection(input: {
+    selectionId: string;
+    origin: TrashMessageInput["origin"];
+    actionId?: string | null;
+  }): Promise<MailboxActionOutcome> {
+    await this.ensureConnection();
+    const selectionService = new EmailOrganizationSelectionService();
+    const selection = await selectionService.readValidSelection(input.selectionId);
+    const parsed = selectionService.parseSelection(selection);
+    if (parsed.destinations === null) {
+      return this.failedResult(
+        "DESTINATION_INVALID",
+        "The selection does not record restore destinations."
+      );
+    }
+    return await this.executeBulk(selection, parsed.messageIds, parsed.destinations, input.origin, input.actionId ?? null, "restore");
+  }
+
+  /** Shared sequential bulk executor with per-item cancel checks (FR-20). */
+  private async executeBulk(
+    selection: EmailOrganizationSelectionEntity,
+    messageIds: number[],
+    destinations: Record<number, string>,
+    origin: TrashMessageInput["origin"],
+    actionId: string | null,
+    kind: "trash" | "restore"
+  ): Promise<MailboxActionOutcome> {
+    const actionKey = actionId ?? `fresh-${crypto.randomUUID()}`;
+    const payloadHash = crypto
+      .createHash("sha256")
+      .update(`bulk-${kind}|${selection.payloadHash}|${actionKey}`)
+      .digest("hex");
+    const operationResult = await this.operationModule.createOperation({
+      operationId: crypto.randomUUID(),
+      kind,
+      emailServiceId: selection.emailServiceId,
+      origin,
+      payloadHash,
+      idempotencyKey: `bulk${kind}v1:${selection.selectionId}:${actionKey}`,
+      sourceUserMessageId: actionId,
+      messageIds,
+      destinations,
+      policyVersion: "fwv1",
+    });
+    if (operationResult.status === "existing") {
+      return await this.projectResult(operationResult.operation.operationId);
+    }
+    const operationId = operationResult.operation.operationId;
+
+    for (const messageId of messageIds) {
+      // FR-20: check the durable cancel flag before the NEXT claim; already
+      // completed items stay completed, in-flight items keep reconciling.
+      const operation = await this.operationModule.readOperation(operationId);
+      if (operation?.cancelRequestedAt !== null && operation?.cancelRequestedAt !== undefined) {
+        await this.operationModule.cancelPending(operationId);
+        break;
+      }
+      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, selection, kind, origin);
+    }
+    return await this.projectResult(operationId);
+  }
+
+  /** One preflighted, claimed, moved bulk item with individual reporting. */
+  private async bulkOne(
+    operationId: string,
+    messageId: number,
+    destinationFolder: string | null,
+    selection: EmailOrganizationSelectionEntity,
+    kind: "trash" | "restore",
+    origin: TrashMessageInput["origin"]
+  ): Promise<void> {
+    const items = await this.operationModule.listItems(operationId);
+    const item = items.find((entry) => entry.messageId === messageId);
+    if (!item) return;
+
+    const location = await this.locationModule.readByMessageId(messageId);
+    const frozenVersion = await this.selectionFrozenVersion(selection, messageId);
+    if (!location || location.state !== "verified" || location.folderPath === null || location.uidValidity === null) {
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId,
+        status: "failed",
+        errorCode: "LOCATION_STALE",
+        sanitizedError: "Message location is not verified at execution time.",
+      });
+      return;
+    }
+    if (frozenVersion !== null && location.version !== frozenVersion) {
+      // AC-14: a moved/changed target is revalidated and reported alone.
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId,
+        status: "failed",
+        errorCode: "LOCATION_STALE",
+        sanitizedError: `Location changed since the selection was frozen (v${frozenVersion} → v${location.version}).`,
+      });
+      return;
+    }
+    if (destinationFolder === null) {
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId,
+        status: "failed",
+        errorCode: "DESTINATION_INVALID",
+        sanitizedError: "No destination folder recorded for this item.",
+      });
+      return;
+    }
+
+    const claim = await this.operationModule.claimItem({
+      operationId,
+      messageId,
+      claimTokenHash: hashClaimToken(generateClaimToken()),
+      leaseExpiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.attemptLeaseMs),
+      location: {
+        version: location.version,
+        folderPath: location.folderPath,
+        uidValidity: location.uidValidity,
+        providerUid: location.providerUid,
+      },
+      destinationFolderPath: destinationFolder,
+    });
+    if (claim.status !== "claimed") {
+      const current = await this.operationModule.findItemById(item.id);
+      if (current?.status !== "claimed") {
+        await this.operationModule.finalizeItem({
+          itemId: item.id,
+          operationId,
+          status: "failed",
+          errorCode: "LOCAL_COMMIT_PENDING",
+          sanitizedError: `Item could not be claimed (${claim.status}).`,
+        });
+      }
+      return;
+    }
+
+    const receiveConfig = await this.resolveReceiveConfig(location.emailServiceId);
+    if (!receiveConfig) {
+      await this.operationModule.finalizeItem({
+        itemId: claim.itemId,
+        operationId,
+        status: "failed",
+        errorCode: "ACCOUNT_NOT_AVAILABLE",
+        sanitizedError: "Account receive configuration unavailable.",
+      });
+      return;
+    }
+    const move = await this.adapter.moveMessage(
+      receiveConfig,
+      { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
+      destinationFolder
+    );
+    await this.persistMoveOutcome(operationId, claim.itemId, messageId, location.emailServiceId, move, destinationFolder, origin, undefined, claim.attemptId, location.version);
+  }
+
+  private async selectionFrozenVersion(
+    selection: EmailOrganizationSelectionEntity,
+    messageId: number
+  ): Promise<number | null> {
+    try {
+      const versions = JSON.parse(selection.locationVersionsJson) as Record<string, number>;
+      const version = versions[String(messageId)];
+      return typeof version === "number" ? version : null;
+    } catch {
+      return null;
+    }
   }
 
   async restoreFromOperation(input: RestoreFromOperationInput): Promise<MailboxActionOutcome> {

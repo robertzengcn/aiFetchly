@@ -79,12 +79,49 @@ export interface EmailMailboxAdapter {
     location: MailboxLocation,
     destinationFolderPath: string
   ): Promise<MoveResult>;
+  /**
+   * Bounded IMAP SEARCH per folder returning envelope metadata only (FR-17
+   * server mode). Unsupported exact filters must not silently broaden:
+   * attachment presence is never server-filtered.
+   */
+  searchUids(
+    config: EmailReceiveConnectionConfig,
+    folderPath: string,
+    input: ServerSearchInput
+  ): Promise<ServerSearchResult>;
   /** Cheap existence+validity probe used by reconciliation. */
   checkMessagePresent(
     config: EmailReceiveConnectionConfig,
     location: MailboxLocation
   ): Promise<PresenceResult>;
 }
+
+/** One matched server candidate (envelope-derived metadata only). */
+export interface SearchCandidate {
+  readonly uid: string;
+  readonly fromAddress: string | null;
+  readonly subject: string | null;
+  readonly date: string | null;
+  readonly seen: boolean | null;
+}
+
+export interface ServerSearchInput {
+  readonly fromAddress?: string;
+  readonly subject?: string;
+  readonly since?: Date;
+  readonly before?: Date;
+  readonly unreadOnly?: boolean;
+  /** Maximum candidates to accept from this folder's SEARCH. */
+  readonly cap: number;
+}
+
+export type ServerSearchResult =
+  | {
+      readonly status: "listed";
+      readonly candidates: readonly SearchCandidate[];
+      readonly capped: boolean;
+    }
+  | { readonly status: "failed"; readonly reasonCode: string; readonly sanitizedError: string };
 
 /** Shared error sanitizer: no credentials, no server dumps. */
 export function sanitizeMailboxError(error: unknown): string {

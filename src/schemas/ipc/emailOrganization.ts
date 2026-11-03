@@ -96,3 +96,27 @@ export const emailOrgOperationInputSchema = lazySchema(() =>
     operationId: z.string().min(8).max(64),
   })
 );
+
+export const emailOrgSearchInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: positiveInt,
+    source: z.enum(["local", "server"]).default("local"),
+    folderPaths: z.array(z.string().min(1).max(255)).max(20).optional(),
+    fromAddress: z.string().max(320).optional(),
+    subject: z.string().max(200).optional(),
+    receivedFrom: z.string().max(40).optional(),
+    receivedTo: z.string().max(40).optional(),
+    unreadOnly: z.boolean().optional(),
+    hasAttachments: z.boolean().optional(),
+    pageSize: z.number().int().min(1).max(100).optional(),
+  })
+);
+
+export const emailOrgSelectionPrepareInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: positiveInt,
+    kind: z.enum(["trash", "restore"]),
+    messageIds: z.array(positiveInt).min(1).max(100),
+    filtersSummary: z.record(z.string(), z.unknown()).optional(),
+  })
+);

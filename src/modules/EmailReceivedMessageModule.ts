@@ -120,6 +120,17 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /** Organization search over stored rows (PRD FR-17 local mode). */
+  async searchForOrganization(input: Parameters<EmailReceivedMessageModel["searchForOrganization"]>[0]) {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.searchForOrganization(input);
+    } catch (error) {
+      console.error("Error searching messages for organization:", error);
+      throw error;
+    }
+  }
+
   /** Loads stored messages by exact ids, preserving the requested order. */
   async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
     try {

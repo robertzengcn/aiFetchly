@@ -15,6 +15,9 @@ import {
   type MailboxLocation,
   type MoveResult,
   type PresenceResult,
+  type SearchCandidate,
+  type ServerSearchInput,
+  type ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 
 /**
@@ -30,6 +33,10 @@ export interface MailboxActionConnection {
     Array<{ path: string; name?: string; specialUse?: string; flags?: Iterable<string> }>
   >;
   mailboxOpen(path: string): Promise<{ uidValidity: bigint | number | string }>;
+  search(
+    query: Record<string, unknown>,
+    options?: { uid?: boolean }
+  ): Promise<number[] | false>;
   fetchOne(
     seq: string | number,
     query: Record<string, unknown>,
@@ -252,6 +259,59 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
       };
     } catch (error) {
       return { status: "failed", reasonCode: "OUTCOME_UNKNOWN", sanitizedError: sanitizeMailboxError(error) };
+    } finally {
+      await closeSession(session.connection);
+    }
+  }
+
+  async searchUids(
+    config: EmailReceiveConnectionConfig,
+    folderPath: string,
+    input: ServerSearchInput
+  ): Promise<ServerSearchResult> {
+    const session = await this.connect(config);
+    if (!session.ok) {
+      return { status: "failed", reasonCode: "ACCOUNT_NOT_AVAILABLE", sanitizedError: session.error };
+    }
+    try {
+      await withTimeout(session.connection.mailboxOpen(folderPath), COMMAND_TIMEOUT_MS, "mailbox open");
+      const query: Record<string, unknown> = {};
+      if (input.since) query["since"] = input.since;
+      if (input.before) query["before"] = input.before;
+      if (input.unreadOnly) query["seen"] = false;
+      if (input.subject && input.subject.trim() !== "") query["subject"] = input.subject.trim();
+      if (input.fromAddress && input.fromAddress.trim() !== "") query["from"] = input.fromAddress.trim();
+      const uids = await withTimeout(
+        session.connection.search(query, { uid: true }),
+        COMMAND_TIMEOUT_MS,
+        "server search"
+      );
+      if (uids === false) {
+        return { status: "failed", reasonCode: "PROVIDER_REJECTED", sanitizedError: "search unsupported" };
+      }
+      const capped = uids.length >= input.cap;
+      const page = uids.slice(0, input.cap);
+      const candidates: SearchCandidate[] = [];
+      for (const uid of page) {
+        const message = await withTimeout(
+          session.connection.fetchOne(uid, { uid: true, envelope: true, flags: true }, { uid: true }),
+          COMMAND_TIMEOUT_MS,
+          "search metadata fetch"
+        );
+        if (!message) continue;
+        const envelope = (message as { envelope?: { from?: Array<{ address?: string }>; subject?: string; date?: Date | null } }).envelope;
+        const flags = (message as { flags?: Set<string> }).flags;
+        candidates.push({
+          uid: String(uid),
+          fromAddress: envelope?.from?.[0]?.address ?? null,
+          subject: envelope?.subject ?? null,
+          date: envelope?.date ? new Date(envelope.date).toISOString() : null,
+          seen: flags ? flags.has("\\seen") : null,
+        });
+      }
+      return { status: "listed", candidates, capped };
+    } catch (error) {
+      return { status: "failed", reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: sanitizeMailboxError(error) };
     } finally {
       await closeSession(session.connection);
     }

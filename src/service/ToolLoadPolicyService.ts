@@ -146,6 +146,8 @@ const CONTEXTUAL_EMAIL_ORGANIZATION_TOOL_NAMES: ReadonlySet<string> = new Set([
   "restore_email",
   "get_email_operation",
   "cancel_email_operation",
+  "search_emails",
+  "prepare_email_selection",
 ]);
 
 /**

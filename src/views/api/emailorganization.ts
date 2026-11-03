@@ -13,6 +13,8 @@ import {
   EMAIL_ORG_OPERATION_GET,
   EMAIL_ORG_OPERATION_CANCEL,
   EMAIL_ORG_OPERATION_RECONCILE,
+  EMAIL_ORG_SEARCH,
+  EMAIL_ORG_SELECTION_PREPARE,
 } from "@/config/channellist";
 import type {
   EmailOrganizationCapabilityDto,
@@ -184,4 +186,59 @@ export async function reconcileEmailOrganizationOperation(
   operationId: string
 ): Promise<MailboxActionResultDto> {
   return await windowInvoke(EMAIL_ORG_OPERATION_RECONCILE, { operationId });
+}
+
+export interface OrganizationSearchResultDto {
+  source: "local" | "server";
+  emailServiceId: number;
+  searchedFolders: string[];
+  rows: Array<{
+    messageId: number | null;
+    providerUid: string | null;
+    folderPath: string | null;
+    fromAddress: string;
+    subject: string;
+    receivedAt: string;
+    isUnread: boolean;
+    hasAttachments: boolean;
+  }>;
+  totalMatched: number;
+  complete: boolean;
+  truncated: boolean;
+  lastSyncAt: string | null;
+  limitation: string | null;
+}
+
+export async function searchEmailsOrganization(input: {
+  emailServiceId: number;
+  source: "local" | "server";
+  folderPaths?: string[];
+  fromAddress?: string;
+  subject?: string;
+  receivedFrom?: string;
+  receivedTo?: string;
+  unreadOnly?: boolean;
+  hasAttachments?: boolean;
+  pageSize?: number;
+}): Promise<OrganizationSearchResultDto> {
+  return await windowInvoke(EMAIL_ORG_SEARCH, input);
+}
+
+export interface SelectionPreviewDto {
+  selectionId: string;
+  kind: "trash" | "restore";
+  emailServiceId: number;
+  count: number;
+  payloadHash: string;
+  expiresAt: string;
+  filtersSummary: Record<string, unknown> | null;
+}
+
+export async function prepareEmailSelection(input: {
+  emailServiceId: number;
+  kind: "trash" | "restore";
+  messageIds: number[];
+  filtersSummary?: Record<string, unknown>;
+}): Promise<SelectionPreviewDto> {
+  return await windowInvoke(EMAIL_ORG_SELECTION_PREPARE, input);
 }

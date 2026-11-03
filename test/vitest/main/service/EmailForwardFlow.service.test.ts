@@ -99,6 +99,9 @@ class FakeAdapter implements EmailMailboxAdapter {
   async checkMessagePresent(): Promise<PresenceResult> {
     return { status: "present" };
   }
+  async searchUids() {
+    return { status: "listed" as const, candidates: [], capped: false };
+  }
 }
 
 class MemoryArtifacts implements EmailOrganizationArtifactBackend {

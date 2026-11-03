@@ -17,6 +17,8 @@ import {
   EMAIL_ORG_OPERATION_GET,
   EMAIL_ORG_OPERATION_CANCEL,
   EMAIL_ORG_OPERATION_RECONCILE,
+  EMAIL_ORG_SEARCH,
+  EMAIL_ORG_SELECTION_PREPARE,
 } from "@/config/channellist";
 import {
   emailOrgAccountInputSchema,
@@ -28,8 +30,12 @@ import {
   emailOrgTrashInputSchema,
   emailOrgRestoreInputSchema,
   emailOrgOperationInputSchema,
+  emailOrgSearchInputSchema,
+  emailOrgSelectionPrepareInputSchema,
 } from "@/schemas/ipc/emailOrganization";
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
+import { EmailOrganizationSearchService } from "@/service/emailOrganization/EmailOrganizationSearchService";
+import { EmailOrganizationSelectionService } from "@/service/emailOrganization/EmailOrganizationSelectionService";
 import { EmailForwardDraftService } from "@/service/emailOrganization/EmailForwardDraftService";
 import { EmailForwardDeliveryService } from "@/service/emailOrganization/EmailForwardDeliveryService";
 import { EmailMailboxActionService } from "@/service/emailOrganization/EmailMailboxActionService";
@@ -271,6 +277,47 @@ export function registerEmailOrganizationIpcHandlers(): void {
       throw toStructuredError(error);
     }
   });
+
+  // ---- Stage C: search + frozen selections (manual controls) ----
+  registerValidatedHandler(EMAIL_ORG_SEARCH, emailOrgSearchInputSchema, async (input) => {
+    try {
+      const service = new EmailOrganizationSearchService();
+      return await service.search({
+        emailServiceId: input.emailServiceId,
+        source: input.source,
+        folderPaths: input.folderPaths,
+        fromAddress: input.fromAddress,
+        subject: input.subject,
+        receivedFrom: input.receivedFrom,
+        receivedTo: input.receivedTo,
+        unreadOnly: input.unreadOnly,
+        hasAttachments: input.hasAttachments,
+        pageSize: input.pageSize,
+      });
+    } catch (error) {
+      log.error("EMAIL_ORG_SEARCH failed:", error);
+      throw toStructuredError(error);
+    }
+  });
+
+  registerValidatedHandler(
+    EMAIL_ORG_SELECTION_PREPARE,
+    emailOrgSelectionPrepareInputSchema,
+    async (input) => {
+      try {
+        const service = new EmailOrganizationSelectionService();
+        return await service.prepareSelection({
+          emailServiceId: input.emailServiceId,
+          kind: input.kind,
+          messageIds: input.messageIds,
+          filtersSummary: input.filtersSummary,
+        });
+      } catch (error) {
+        log.error("EMAIL_ORG_SELECTION_PREPARE failed:", error);
+        throw toStructuredError(error);
+      }
+    }
+  );
 
   // ---- Operation status / cancel / reconcile ----
   registerValidatedHandler(

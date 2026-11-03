@@ -41,6 +41,18 @@ export class EmailMessageLocationModule extends BaseModule {
     }
   }
 
+  async readByMessageIds(
+    messageIds: readonly number[]
+  ): Promise<EmailMessageLocationEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.locationModel.readByMessageIds(messageIds);
+    } catch (error) {
+      log.error("Error reading message locations:", error);
+      throw error;
+    }
+  }
+
   async applyMove(input: ApplyMoveInput): Promise<boolean> {
     try {
       await this.ensureConnection();

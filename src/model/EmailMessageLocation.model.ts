@@ -152,6 +152,14 @@ export class EmailMessageLocationModel extends BaseDb {
     });
   }
 
+  async readByMessageIds(messageIds: readonly number[]): Promise<EmailMessageLocationEntity[]> {
+    if (messageIds.length === 0) return [];
+    return await this.repository
+      .createQueryBuilder("loc")
+      .where("loc.messageId IN (:...ids)", { ids: [...messageIds] })
+      .getMany();
+  }
+
   async readByMessageId(messageId: number): Promise<EmailMessageLocationEntity | null> {
     return await this.repository.findOne({ where: { messageId } });
   }

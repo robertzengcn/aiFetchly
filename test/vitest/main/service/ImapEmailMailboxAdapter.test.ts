@@ -50,6 +50,10 @@ class FakeConnection implements MailboxActionConnection {
       { path: "Sent", name: "Sent", specialUse: "\\Sent" },
     ];
   }
+  async search(query: Record<string, unknown>, options?: { uid?: boolean }) {
+    this.calls.push({ kind: "search", args: [query, options] });
+    return [];
+  }
   async mailboxOpen(path: string) {
     this.calls.push({ kind: "mailboxOpen", args: [path] });
     const mailbox = this.state.mailboxes.get(path);

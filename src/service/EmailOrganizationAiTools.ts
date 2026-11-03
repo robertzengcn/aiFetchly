@@ -4,6 +4,9 @@ import { EmailForwardDeliveryService } from "@/service/emailOrganization/EmailFo
 import { EmailMailboxActionService } from "@/service/emailOrganization/EmailMailboxActionService";
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { EmailOrganizationSelectionService } from "@/service/emailOrganization/EmailOrganizationSelectionService";
+import { EmailOrganizationSearchService } from "@/service/emailOrganization/EmailOrganizationSearchService";
+import type { OrganizationSearchResult } from "@/service/emailOrganization/EmailOrganizationSearchService";
 import { isRetryableOrganizationErrorCode } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EmailOrganizationAuthorizationModule } from "@/modules/EmailOrganizationAuthorizationModule";
 import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
@@ -70,13 +73,45 @@ const sendForwardSchema = z.object({
   revision_id: positiveInt,
 });
 
-const moveToTrashSchema = z.object({
-  message_id: positiveInt,
+const moveToTrashSchema = z
+  .object({
+    message_id: positiveInt.optional(),
+    selection_id: z.string().min(8).max(64).optional(),
+  })
+  .refine(
+    (value) => (value.message_id !== undefined) !== (value.selection_id !== undefined),
+    { message: "Provide exactly one of message_id or selection_id." }
+  );
+
+const restoreEmailSchema = z
+  .object({
+    operation_id: z.string().min(8).max(64).optional(),
+    selection_id: z.string().min(8).max(64).optional(),
+    destination_folder_path: z.string().max(255).optional(),
+  })
+  .refine(
+    (value) => (value.operation_id !== undefined) !== (value.selection_id !== undefined),
+    { message: "Provide exactly one of operation_id or selection_id." }
+  );
+
+const searchEmailsSchema = z.object({
+  email_service_id: positiveInt,
+  source: z.enum(["local", "server"]).default("local"),
+  folder_paths: z.array(z.string().min(1).max(255)).max(20).optional(),
+  from_address: z.string().max(320).optional(),
+  subject: z.string().max(200).optional(),
+  received_from: z.string().max(40).optional(),
+  received_to: z.string().max(40).optional(),
+  unread_only: z.boolean().optional(),
+  has_attachments: z.boolean().optional(),
+  page_size: z.number().int().min(1).max(100).optional(),
 });
 
-const restoreEmailSchema = z.object({
-  operation_id: z.string().min(8).max(64),
-  destination_folder_path: z.string().max(255).optional(),
+const prepareSelectionSchema = z.object({
+  email_service_id: positiveInt,
+  kind: z.enum(["trash", "restore"]),
+  message_ids: z.array(positiveInt).min(1).max(100),
+  filters_summary: z.record(z.string(), z.unknown()).optional(),
 });
 
 const getOperationSchema = z.object({
@@ -253,11 +288,18 @@ export async function moveEmailToTrash(
   try {
     const input = moveToTrashSchema.parse(args);
     const actionService = new EmailMailboxActionService();
-    const result = await actionService.trashMessage({
-      messageId: input.message_id,
-      origin: "tool_confirmation",
-      actionId: actionIdFor(context),
-    });
+    const result =
+      input.selection_id !== undefined
+        ? await actionService.trashSelection({
+            selectionId: input.selection_id,
+            origin: "tool_confirmation",
+            actionId: actionIdFor(context),
+          })
+        : await actionService.trashMessage({
+            messageId: input.message_id as number,
+            origin: "tool_confirmation",
+            actionId: actionIdFor(context),
+          });
     return { success: true, result: { ...result } };
   } catch (error) {
     return failure(error);
@@ -271,12 +313,19 @@ export async function restoreEmail(
   try {
     const input = restoreEmailSchema.parse(args);
     const actionService = new EmailMailboxActionService();
-    const result = await actionService.restoreFromOperation({
-      priorOperationId: input.operation_id,
-      destinationFolderPath: input.destination_folder_path ?? null,
-      origin: "tool_confirmation",
-      actionId: actionIdFor(context),
-    });
+    const result =
+      input.selection_id !== undefined
+        ? await actionService.restoreSelection({
+            selectionId: input.selection_id,
+            origin: "tool_confirmation",
+            actionId: actionIdFor(context),
+          })
+        : await actionService.restoreFromOperation({
+            priorOperationId: input.operation_id as string,
+            destinationFolderPath: input.destination_folder_path ?? null,
+            origin: "tool_confirmation",
+            actionId: actionIdFor(context),
+          });
     return { success: true, result: { ...result } };
   } catch (error) {
     return failure(error);
@@ -299,6 +348,52 @@ export async function cancelEmailOperation(
         operation: operation ? projectOperation(operation, items) : null,
       },
     };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// ---- Stage C: search + frozen selections ----
+
+export async function searchEmails(
+  args: unknown
+): Promise<EmailOrganizationToolResult<{ search: OrganizationSearchResult }>> {
+  try {
+    const input = searchEmailsSchema.parse(args);
+    const service = new EmailOrganizationSearchService();
+    const search = await service.search({
+      emailServiceId: input.email_service_id,
+      source: input.source,
+      folderPaths: input.folder_paths,
+      fromAddress: input.from_address,
+      subject: input.subject,
+      receivedFrom: input.received_from,
+      receivedTo: input.received_to,
+      unreadOnly: input.unread_only,
+      hasAttachments: input.has_attachments,
+      pageSize: input.page_size,
+    });
+    return { success: true, search };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function prepareEmailSelection(
+  args: unknown,
+  context?: SkillExecutionContext
+): Promise<EmailOrganizationToolResult<{ selection: Record<string, unknown> }>> {
+  try {
+    const input = prepareSelectionSchema.parse(args);
+    const service = new EmailOrganizationSelectionService();
+    const selection = await service.prepareSelection({
+      emailServiceId: input.email_service_id,
+      kind: input.kind,
+      messageIds: input.message_ids,
+      filtersSummary: input.filters_summary,
+      ownerContext: context?.sourceUserMessageId ?? context?.toolCallId ?? null,
+    });
+    return { success: true, selection: { ...selection } };
   } catch (error) {
     return failure(error);
   }

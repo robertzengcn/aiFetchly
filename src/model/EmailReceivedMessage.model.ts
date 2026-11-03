@@ -510,6 +510,70 @@ export class EmailReceivedMessageModel extends BaseDb {
   }
 
   /** Loads stored messages by exact ids, preserving the requested order. */
+  /**
+   * Organization search over stored rows (PRD FR-17 local mode). Literal
+   * subject semantics (escapeLikePattern); caller decides folder coverage.
+   * Returns matched rows plus honest total/truncation information.
+   */
+  async searchForOrganization(input: {
+    emailServiceId: number;
+    folderPaths?: readonly string[];
+    fromAddress?: string;
+    subject?: string;
+    /** Inclusive UTC lower bound on receivedAt. */
+    receivedFrom?: Date;
+    /** Exclusive UTC upper bound on receivedAt. */
+    receivedTo?: Date;
+    unreadOnly?: boolean;
+    hasAttachments?: boolean;
+    limit: number;
+  }): Promise<{ rows: EmailReceivedMessageEntity[]; totalMatched: number; truncated: boolean }> {
+    const limit = Math.max(1, Math.min(input.limit, 100));
+    let qb = this.repository
+      .createQueryBuilder("msg")
+      .where("msg.emailServiceId = :emailServiceId", {
+        emailServiceId: input.emailServiceId,
+      });
+    if (input.folderPaths && input.folderPaths.length > 0) {
+      qb = qb.andWhere(
+        "EXISTS (SELECT 1 FROM email_message_location loc WHERE loc.messageId = msg.id AND loc.emailServiceId = :emailServiceId AND loc.folderPath IN (:...folderPaths))",
+        { emailServiceId: input.emailServiceId, folderPaths: [...input.folderPaths] }
+      );
+    }
+    if (input.fromAddress && input.fromAddress.trim() !== "") {
+      qb = qb.andWhere("msg.fromAddress LIKE :fromAddress ESCAPE '\\'", {
+        fromAddress: `%${escapeLikePattern(input.fromAddress.trim())}%`,
+      });
+    }
+    if (input.subject && input.subject.trim() !== "") {
+      qb = qb.andWhere("msg.subject LIKE :subject ESCAPE '\\'", {
+        subject: `%${escapeLikePattern(input.subject.trim())}%`,
+      });
+    }
+    if (input.receivedFrom) {
+      qb = qb.andWhere("msg.receivedAt >= :receivedFrom", {
+        receivedFrom: input.receivedFrom,
+      });
+    }
+    if (input.receivedTo) {
+      qb = qb.andWhere("msg.receivedAt < :receivedTo", { receivedTo: input.receivedTo });
+    }
+    if (input.unreadOnly) {
+      qb = qb.andWhere("msg.isUnread = 1");
+    }
+    if (input.hasAttachments !== undefined) {
+      qb = qb.andWhere("msg.hasAttachments = :hasAttachments", {
+        hasAttachments: input.hasAttachments ? 1 : 0,
+      });
+    }
+    const totalMatched = await qb.getCount();
+    const rows = await qb
+      .orderBy("msg.receivedAt", "DESC")
+      .take(limit)
+      .getMany();
+    return { rows, totalMatched, truncated: totalMatched > rows.length };
+  }
+
   async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
     if (ids.length === 0) return [];
     const rows = await this.repository

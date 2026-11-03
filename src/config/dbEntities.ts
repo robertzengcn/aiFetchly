@@ -116,6 +116,7 @@ import { EmailOrganizationAuthorizationEntity } from "@/entity/EmailOrganization
 import { EmailOrganizationAuditEntity } from "@/entity/EmailOrganizationAudit.entity";
 import { EmailForwardDraftEntity } from "@/entity/EmailForwardDraft.entity";
 import { EmailForwardRevisionEntity } from "@/entity/EmailForwardRevision.entity";
+import { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSelection.entity";
 import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
 import { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
@@ -224,6 +225,7 @@ export const DB_ENTITIES = [
   EmailOrganizationAuditEntity,
   EmailForwardDraftEntity,
   EmailForwardRevisionEntity,
+  EmailOrganizationSelectionEntity,
   // Task-completion-policy V1 (Slice 1): execution/ledger/operation tables.
   AiTaskExecutionEntity,
   AiTaskExecutionLedgerEntity,

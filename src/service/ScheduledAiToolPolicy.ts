@@ -71,6 +71,7 @@ export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
 export const SCHEDULED_LOOP_READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "list_email_folders",
   "get_email_operation",
+  "search_emails",
   // Email inbox/service configuration (read-only listings + bounded unread sync)
   "list_email_inboxes",
   "list_email_services",
