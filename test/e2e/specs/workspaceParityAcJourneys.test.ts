@@ -375,12 +375,10 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
       await expect(seededRow).toBeVisible({ timeout: 30_000 });
       await seededRow.click();
 
-      const reportButton = app.mainWindow
-        .locator(
-          '[data-testid="chat-center-surface"] [data-testid="report-conversation"], ' +
-            '[data-testid="ai-chat-root"] [data-testid="report-conversation"]'
-        )
-        .first();
+      await app.mainWindow.getByTestId("workspace-header-overflow").click();
+      const reportButton = app.mainWindow.getByTestId(
+        "workspace-overflow-report"
+      );
       await expect(reportButton).toBeEnabled({ timeout: 30_000 });
       await reportButton.click();
 

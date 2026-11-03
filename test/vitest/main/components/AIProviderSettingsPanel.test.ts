@@ -48,6 +48,7 @@ describe("AIProviderSettingsPanel", () => {
     vi.mocked(getAIProviderSettings).mockResolvedValue({
       mode: "local",
       hostedAIEnabled: false,
+      autoChatTitlesEnabled: true,
       localAIEnabled: true,
       localProvider: {
         preset: "ollama",

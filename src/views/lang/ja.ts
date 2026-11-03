@@ -2370,6 +2370,14 @@ export default {
     draft_label: "下書き — レビュー必須",
   },
   aiProvider: {
+    chatTitles: {
+      section: "チャットのタイトル",
+      description: "自動命名には会話の短い抜粋を使用し、少量のプロバイダー利用が発生する場合があります。",
+      autoToggle: "新しいチャットを自動的に命名",
+      hostedModelHint: "ホストモードではサービスの軽量モデルを使用します。",
+      customModelLabel: "タイトルモデル（任意）",
+      customModelHint: "新しいチャットの自動命名に使用します。設定したプロバイダーを使用します。",
+    },
     title: "AI プロバイダー",
     description:
       "カスタムプロバイダーは独自のモデルで AI チャットを利用できます。ホスト型 aiFetchly AI 機能には引き続きサブスクリプションが必要です。",
@@ -3785,6 +3793,21 @@ export default {
       duplicate: "会話を複製",
       deleteConfirm:
         "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
+    },
+    renameDialog: {
+      title: "チャットの名前を変更",
+      label: "チャット名",
+      save: "保存",
+      cancel: "キャンセル",
+      limitHint: "最大200文字",
+      errorEmpty: "チャット名を入力してください",
+      errorTooLong: "名前は200文字以内にしてください",
+      errorInvalid: "名前に使用できない文字が含まれています",
+      errorSaveFailed: "名前を変更できませんでした。もう一度お試しください。",
+      errorUnavailable: "このチャットは利用できなくなりました",
+      saving: "保存中…",
+      renameAction: "チャットの名前を変更",
+      menuButtonLabel: "会話の操作",
     },
     runStrip: {
       goal: "ゴール：{objective}",

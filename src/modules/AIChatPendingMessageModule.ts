@@ -552,13 +552,28 @@ export class AIChatPendingMessageModule extends BaseModule {
    */
   private async projectUserMessage(saved: AIChatMessageEntity): Promise<void> {
     try {
+      // Titles B01: prefer the persisted raw typed-text projection so the
+      // sidebar excerpt never shows attachment/mention enrichment.
+      let safeTyped = saved.content;
+      if (saved.metadata) {
+        try {
+          const meta = JSON.parse(saved.metadata) as {
+            safeTypedText?: string;
+          };
+          if (typeof meta.safeTypedText === "string") {
+            safeTyped = meta.safeTypedText;
+          }
+        } catch {
+          // fall back to persisted content
+        }
+      }
       await new AIChatConversationModule().recordMessagePersisted({
         conversationId: saved.conversationId,
         isResult: false,
-        previewText: saved.content,
+        previewText: safeTyped,
         // Generated title derives from the first user content, like the
         // coordinator path.
-        generatedTitle: saved.content,
+        generatedTitle: safeTyped,
         timestamp: saved.timestamp,
       });
     } catch (err) {

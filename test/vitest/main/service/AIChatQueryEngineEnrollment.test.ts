@@ -155,6 +155,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
     return {
       saveUserMessage: mockSaveUserMessage,
+stampUserMessageTurnIdentity: vi.fn().mockResolvedValue(undefined),
       // T02: the scheduled path uses saveUserMessageIfAbsent (stable id +
       // insert-if-absent) so a crash-retry does not duplicate the
       // transcript row. The interactive path still uses saveUserMessage.

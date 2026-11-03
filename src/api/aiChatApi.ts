@@ -1,5 +1,5 @@
 "use strict";
-import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpClient, type NoReplayRequestInit } from "@/modules/lib/httpclient";
 import { HttpResponseError } from "@/modules/lib/httpResponseError";
 import {
   CommonApiresp,
@@ -554,6 +554,30 @@ export interface OpenAIChatCompletionRequest {
    */
   fallbackModel?: string;
   /**
+   * Desktop-internal small-model fallback policy (chat-titles design §8.2).
+   * Never serialized on the wire. `"forbid"` disables the alias-404 fallback
+   * retry entirely: every failure propagates to the caller — the request
+   * class (automatic chat titles) must never spend a dispatch on the default
+   * model. Default `"allow"` preserves existing small-model callers.
+   */
+  smallModelFallbackPolicy?: "allow" | "forbid";
+  /**
+   * Desktop-internal request purpose tag (chat-titles design §8.5). Never
+   * serialized on the wire. `"chat_title"` suppresses content in debug
+   * request logging (title prompts are conversation excerpts — metadata
+   * only, PRD §8).
+   */
+  requestPurpose?: string;
+  /**
+   * Desktop-internal literal-model resolution flag (chat-titles design
+   * §8.3). Never serialized on the wire. When true, `model` is sent
+   * verbatim to custom providers — even a model literally named
+   * "small"/"haiku" is NOT rewritten to the configured default. Title
+   * requests require an explicitly configured model; silent alias mapping
+   * would spend the dispatch on an unintended model.
+   */
+  literalModel?: boolean;
+  /**
    * Desktop-internal per-call deadline budget in milliseconds (FR-035 /
    * B13). Never serialized on the wire: every payload builder copies
    * explicit fields only. When set, the local and hosted completion
@@ -1045,11 +1069,21 @@ export class AiChatApi {
    * fields (attachments / screenshots) are truncated to keep logs readable.
    * Enabled via launch.json env block for debugging only.
    */
-  private _debugLogRequest(endpoint: string, data: unknown): void {
+  private _debugLogRequest(
+    endpoint: string,
+    data: unknown,
+    options?: { purpose?: string }
+  ): void {
     if (
       process.env.AICHAT_DEBUG_REQUEST !== "true" &&
       process.env.AICHAT_DEBUG_REQUEST !== "1"
     ) {
+      return;
+    }
+    // Chat-title requests carry conversation excerpts: log metadata only,
+    // never prompt/response content (chat-titles PRD §8).
+    if (options?.purpose === "chat_title") {
+      console.log(`[ai-chat-debug] -> ${endpoint} (chat_title: content suppressed)`);
       return;
     }
     try {
@@ -2266,6 +2300,21 @@ export class AiChatApi {
   }
 
   /**
+   * Titles B04 (design §8.3): hosted-PINNED completion. Entitlement is
+   * verified here and the request goes directly to the hosted transport —
+   * the global provider is never re-resolved, so a concurrent mode switch
+   * cannot reroute an in-flight title request to a custom endpoint (where
+   * the "small" alias would silently become that provider's default model).
+   */
+  async openAIChatCompletionHostedPinned(
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
+  ): Promise<OpenAIChatCompletionResponse> {
+    (await this.getProviderResolver()).ensureHostedAIEnabled();
+    return this.openAIChatCompletionHosted(request, options);
+  }
+
+  /**
    * Non-streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: false or omitted)
    *
@@ -2360,7 +2409,9 @@ export class AiChatApi {
       data.response_format = request.response_format;
     }
     this.copyEnabledReasoningOption(request, data);
-    this._debugLogRequest("/api/ai/v1/chat/completions", data);
+    this._debugLogRequest("/api/ai/v1/chat/completions", data, {
+      purpose: request.requestPurpose,
+    });
     // B13: when the caller supplied a per-call budget, bound both the
     // response-headers phase AND the response-body phase by passing an
     // AbortSignal to postJson. postJson spreads options into _fetchJSON →
@@ -2475,7 +2526,13 @@ export class AiChatApi {
     data: OpenAIChatCompletionRequest,
     signal: AbortSignal | undefined
   ): Promise<OpenAIChatCompletionResponse> {
-    const options = signal ? { signal } : undefined;
+    // Titles B05: single-dispatch requests never replay after auth refresh.
+    const noReplay = request.requestPurpose === "chat_title";
+    const options: NoReplayRequestInit | undefined = signal
+      ? { signal, ...(noReplay ? { noAuthReplay: true } : {}) }
+      : noReplay
+      ? { noAuthReplay: true }
+      : undefined;
     try {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
@@ -2483,6 +2540,11 @@ export class AiChatApi {
         options
       );
     } catch (err) {
+      // Strict no-fallback policy (chat-titles design §8.2): propagate every
+      // failure without retrying the fallback/default model.
+      if (request.smallModelFallbackPolicy === "forbid") {
+        throw err;
+      }
       if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
         throw err;
       }

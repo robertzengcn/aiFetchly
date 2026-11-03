@@ -5,9 +5,11 @@ import type {
   WorkspaceConversationSummary,
   WorkspaceGroupSummary,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import type { ChatTitleUpdatedEvent } from "@/service/aiChatTitle/AIChatTitleTypes";
 import {
   bootstrapWorkspace,
   subscribeSummaryEvents,
+  subscribeTitleEvents,
 } from "@/views/api/aiChatWorkspace";
 
 /**
@@ -124,6 +126,29 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
   const collapsedWorkspaceKeys = ref<Set<string>>(loadCollapsedKeys());
 
   let summaryUnsubscribe: (() => void) | null = null;
+  let titleUnsubscribe: (() => void) | null = null;
+  /**
+   * B18: ids whose AUTHORITATIVE versioned title state is known (bootstrap,
+   * title event, or versioned summary). A legacy unversioned title can
+   * initialize a never-known row but never overwrite a known one — not even
+   * a cleared-to-empty known title.
+   */
+  const titleVersionedKnown = new Set<string>();
+  /**
+   * B17: title events arriving while a bootstrap response is in flight.
+   * Buffered (newest revision per id) and reconciled after install so a
+   * newer event can never be lost to the empty local index.
+   */
+  let bootstrapInFlight = false;
+  const pendingTitleEvents = new Map<string, ChatTitleUpdatedEvent>();
+  /**
+   * B23/F11: monotonic scope/bootstrap generation. EVERY request captures the
+   * current value and only the newest request may install results, write
+   * errors, clear in-flight state, or drain the title buffer — a stale
+   * success, rejection, or scope-reset response owns nothing.
+   */
+  let bootstrapGeneration = 0;
+  let activeBootstrapGeneration: number | null = null;
 
   // ---------------------------------------------------------------------------
   // BUGFIX 2026-11-02 (left menu never shows the new chat's workspace folder):
@@ -181,24 +206,95 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     conversationsById.value = index;
   }
 
-  /** Load the sidebar projection and start the summary subscription once. */
+  /**
+   * Load the sidebar projection. Event subscriptions start BEFORE the
+   * request so an update arriving mid-bootstrap cannot be lost
+   * (chat-titles design §10.3); the response then merges by revision.
+   */
   async function bootstrap(): Promise<void> {
     bootstrapError.value = null;
+    startEventSubscriptions();
+    bootstrapInFlight = true;
+    const generation = ++bootstrapGeneration;
+    activeBootstrapGeneration = generation;
     try {
       const response = await bootstrapWorkspace();
-      workspaces.value = response.workspaces;
-      unassigned.value = response.unassigned;
+      // F11/B23: a scope reset or a NEWER request superseded this one —
+      // install nothing and own no state transitions.
+      if (generation !== bootstrapGeneration) return;
+      workspaces.value = mergeGroupTitles(response.workspaces);
+      unassigned.value = mergeUnassignedTitles(response.unassigned);
       rebuildConversationIndex();
-      bootstrapped.value = true;
-      if (!summaryUnsubscribe) {
-        summaryUnsubscribe = subscribeSummaryEvents((event) => {
-          applySummaryEvent(event);
-        });
+      // B17/B18: the response is a versioned source — every delivered row
+      // now has authoritative title state.
+      for (const conversation of conversationsById.value.values()) {
+        titleVersionedKnown.add(conversation.conversationId);
       }
+      bootstrapped.value = true;
     } catch (err) {
+      // F11: a superseded request's rejection must not set the current
+      // scope's error state.
+      if (generation !== bootstrapGeneration) return;
       bootstrapError.value =
         err instanceof Error ? err.message : "Failed to load workspace";
+    } finally {
+      // F11: only the ACTIVE request may clear in-flight state and drain
+      // the shared buffer — a stale request must not consume current events.
+      if (activeBootstrapGeneration === generation) {
+        activeBootstrapGeneration = null;
+        bootstrapInFlight = false;
+        // B17: reconcile events buffered during the request (newer wins).
+        const buffered = [...pendingTitleEvents.values()];
+        pendingTitleEvents.clear();
+        for (const event of buffered) {
+          applyTitleUpdate(event);
+        }
+      }
     }
+  }
+
+  function startEventSubscriptions(): void {
+    if (!summaryUnsubscribe) {
+      summaryUnsubscribe = subscribeSummaryEvents((event) => {
+        applySummaryEvent(event);
+      });
+    }
+    if (!titleUnsubscribe) {
+      titleUnsubscribe = subscribeTitleEvents((event) => {
+        applyTitleUpdate(event);
+      });
+    }
+  }
+
+  /**
+   * Titles PRD §10.3: an old bootstrap response must not replace a NEWER
+   * locally known title. Merge keeps the response row but restores a local
+   * title/revision that is strictly newer.
+   */
+  function mergeConversationTitle(
+    row: WorkspaceConversationSummary
+  ): WorkspaceConversationSummary {
+    const local = conversationsById.value.get(row.conversationId);
+    if (!local) return row;
+    if (local.titleRevision > row.titleRevision) {
+      return { ...row, title: local.title, titleRevision: local.titleRevision };
+    }
+    return row;
+  }
+
+  function mergeGroupTitles(
+    groups: readonly WorkspaceGroupSummary[]
+  ): WorkspaceGroupSummary[] {
+    return groups.map((group) => ({
+      ...group,
+      conversations: group.conversations.map(mergeConversationTitle),
+    }));
+  }
+
+  function mergeUnassignedTitles(
+    rows: readonly WorkspaceConversationSummary[]
+  ): WorkspaceConversationSummary[] {
+    return rows.map(mergeConversationTitle);
   }
 
   /**
@@ -207,10 +303,29 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
    */
   function applySummaryEvent(event: ConversationSummaryEvent): void {
     const existing = conversationsById.value.get(event.conversationId);
+    // Titles PRD §10.3: apply a summary-carried title only when versioned
+    // at least as new as the stored revision; an unversioned legacy title
+    // cannot replace a versioned one (first-seen rows still accept it).
+    const storedRevision = existing?.titleRevision ?? 0;
+    // B18: a versioned summary marks the row known; a legacy unversioned
+    // title initializes only never-known rows (never a cleared-known one).
+    if (event.titleRevision !== undefined) {
+      titleVersionedKnown.add(event.conversationId);
+    }
+    const titleIsNewer =
+      event.titleRevision === undefined
+        ? !titleVersionedKnown.has(event.conversationId)
+        : event.titleRevision > storedRevision;
+    const mergedTitle = event.title !== undefined && titleIsNewer;
     const updated: WorkspaceConversationSummary = {
       conversationId: event.conversationId,
       workspaceKey: event.workspaceKey ?? existing?.workspaceKey ?? null,
-      title: event.title ?? existing?.title ?? "",
+      title: mergedTitle ? (event.title ?? "") : (existing?.title ?? ""),
+      titleRevision: mergedTitle
+        ? event.titleRevision !== undefined
+          ? event.titleRevision
+          : storedRevision
+        : storedRevision,
       preview: existing?.preview ?? "",
       lastActivityAt: event.lastActivityAt,
       unread: event.unread,
@@ -261,9 +376,67 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     }
   }
 
+  /**
+   * Titles design §10.2: revision-guarded title-only update. Ignores older
+   * revisions and unknown conversations (never resurrects deleted rows).
+   */
+  function applyTitleUpdate(event: ChatTitleUpdatedEvent): void {
+    const existing = conversationsById.value.get(event.conversationId);
+    if (!existing) {
+      // B17: an unknown id during bootstrap is buffered and reconciled
+      // after install; outside bootstrap it is ignored (never resurrects a
+      // deleted row).
+      if (bootstrapInFlight) {
+        const buffered = pendingTitleEvents.get(event.conversationId);
+        if (!buffered || event.titleRevision >= buffered.titleRevision) {
+          pendingTitleEvents.set(event.conversationId, event);
+        }
+      }
+      return;
+    }
+    titleVersionedKnown.add(event.conversationId);
+    // r3 G06: the FIRST versioned title initializes the row — a local
+    // placeholder (revision 0, empty title) accepts revision 0 as the
+    // authoritative seed. After initialization, equal revisions are
+    // idempotent duplicates (content never changes) and older are ignored.
+    const uninitializedPlaceholder =
+      existing.title === "" && existing.titleRevision === 0;
+    if (
+      !uninitializedPlaceholder &&
+      event.titleRevision < existing.titleRevision
+    ) {
+      return;
+    }
+    if (
+      !uninitializedPlaceholder &&
+      event.titleRevision === existing.titleRevision &&
+      existing.title !== (event.title ?? "")
+    ) {
+      // Equal revision, conflicting content: never overwrite (B18).
+      return;
+    }
+    const updated: WorkspaceConversationSummary = {
+      ...existing,
+      title: event.title ?? "",
+      titleRevision: event.titleRevision,
+    };
+    workspaces.value = workspaces.value.map((group) => ({
+      ...group,
+      conversations: group.conversations.map((c) =>
+        c.conversationId === updated.conversationId ? updated : c
+      ),
+    }));
+    unassigned.value = unassigned.value.map((c) =>
+      c.conversationId === updated.conversationId ? updated : c
+    );
+    rebuildConversationIndex();
+  }
+
   /** Register a locally created conversation before the first summary. */
   function upsertLocalConversation(
-    conversation: WorkspaceConversationSummary
+    conversation: Omit<WorkspaceConversationSummary, "titleRevision"> & {
+      titleRevision?: number;
+    }
   ): void {
     const existing = conversationsById.value.get(conversation.conversationId);
     if (existing) {
@@ -279,7 +452,10 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       });
       return;
     }
-    unassigned.value = [conversation, ...unassigned.value];
+    unassigned.value = [
+      { ...conversation, titleRevision: conversation.titleRevision ?? 0 },
+      ...unassigned.value,
+    ];
     rebuildConversationIndex();
   }
 
@@ -425,12 +601,39 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
       summaryUnsubscribe();
       summaryUnsubscribe = null;
     }
+    if (titleUnsubscribe) {
+      // B16: clear THIS handle — a stale truthy handle must never block
+      // re-subscription on the next mount.
+      titleUnsubscribe();
+      titleUnsubscribe = null;
+    }
     // BUGFIX 2026-11-02: drop any pending grouping refresh with the
     // subscription it would have been triggered by.
     if (groupingRefreshTimer !== null) {
       clearTimeout(groupingRefreshTimer);
       groupingRefreshTimer = null;
     }
+  }
+
+  /**
+   * B23: authenticated data-scope change reset — drop the previous scope's
+   * conversation/title state so no old bootstrap response, event, or title
+   * can populate the new scope. Safe to call repeatedly.
+   */
+  function resetForScopeChange(): void {
+    bootstrapGeneration += 1; // B23/F11: invalidate in-flight bootstrap work
+    activeBootstrapGeneration = null;
+    bootstrapInFlight = false;
+    teardown();
+    workspaces.value = [];
+    unassigned.value = [];
+    conversationsById.value = new Map();
+    titleVersionedKnown.clear();
+    pendingTitleEvents.clear();
+    bootstrapInFlight = false;
+    bootstrapped.value = false;
+    bootstrapError.value = null;
+    selectedConversationId.value = null;
   }
 
   // -----------------------------------------------------------------------
@@ -484,6 +687,8 @@ export const useChatWorkspaceStore = defineStore("chatWorkspace", () => {
     bootstrapError,
     bootstrap,
     applySummaryEvent,
+    applyTitleUpdate,
+    resetForScopeChange,
     upsertLocalConversation,
     markConversationReadLocally,
     requestedArtifactId,

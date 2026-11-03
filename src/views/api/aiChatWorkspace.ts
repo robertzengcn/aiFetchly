@@ -21,7 +21,9 @@ import {
   AI_CHAT_WORKSPACE_SET_FLAG,
   AI_CHAT_WORKSPACE_SUMMARY_EVENT,
   AI_CHAT_WORKSPACE_DETAIL_EVENT,
+  AI_CHAT_WORKSPACE_TITLE_UPDATED,
 } from "@/config/channellist";
+import type { RenameConversationResponse } from "@/schemas/ipc/aiChatWorkspace";
 import type {
   CancelChatRunRequest,
   ChatHistoryPageRequest,
@@ -35,6 +37,7 @@ import type {
   StartChatRunResponse,
   WorkspaceSidebarResponse,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import type { ChatTitleUpdatedEvent } from "@/service/aiChatTitle/AIChatTitleTypes";
 
 /** Renderer-safe workspace run activity row (bounded, safe fields). */
 export interface WorkspaceActivityRun {
@@ -178,8 +181,11 @@ export async function markConversationRead(
 
 export async function renameConversation(
   request: RenameConversationRequest
-): Promise<{ renamed: boolean }> {
-  return windowInvoke(AI_CHAT_WORKSPACE_RENAME, request);
+): Promise<RenameConversationResponse> {
+  return windowInvoke(
+    AI_CHAT_WORKSPACE_RENAME,
+    request
+  ) as Promise<RenameConversationResponse>;
 }
 
 export async function loadWorkspaceActivity(
@@ -216,6 +222,23 @@ export function subscribeSummaryEvents(
   windowReceive(AI_CHAT_WORKSPACE_SUMMARY_EVENT, listener);
   return () => {
     windowRemoveListener(AI_CHAT_WORKSPACE_SUMMARY_EVENT, listener);
+  };
+}
+
+/**
+ * Subscribe to revisioned title-only updates (chat-titles design §10.2).
+ * Returns an unsubscriber. A title event carries no run/unread metadata.
+ */
+export function subscribeTitleEvents(
+  cb: (event: ChatTitleUpdatedEvent) => void
+): () => void {
+  const listener = (raw: unknown): void => {
+    const event = parseEventPayload<ChatTitleUpdatedEvent>(raw);
+    if (event) cb(event);
+  };
+  windowReceive(AI_CHAT_WORKSPACE_TITLE_UPDATED, listener);
+  return () => {
+    windowRemoveListener(AI_CHAT_WORKSPACE_TITLE_UPDATED, listener);
   };
 }
 

@@ -533,3 +533,60 @@ describe("OpenAICompatibleProviderClient configured context size (G01)", () => {
     expect(models.data[0].context_size).toBeUndefined();
   });
 });
+
+describe("OpenAICompatibleProviderClient literal model resolution (chat titles)", () => {
+  function completionResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "cheap",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "ok" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  function wireBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    return JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+  }
+
+  it("literalModel sends the id verbatim even when it is literally named small", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse());
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      fetchMock as unknown as typeof fetch
+    );
+    await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      model: "small",
+      literalModel: true,
+    });
+    expect(wireBody(fetchMock).model).toBe("small");
+    expect(wireBody(fetchMock)).not.toHaveProperty("literalModel");
+  });
+
+  it("literalModel without a model still uses the configured default", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse());
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      fetchMock as unknown as typeof fetch
+    );
+    await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      literalModel: true,
+    });
+    expect(wireBody(fetchMock).model).toBe("llama3.1");
+  });
+});
