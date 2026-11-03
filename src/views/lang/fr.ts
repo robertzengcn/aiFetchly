@@ -1175,7 +1175,7 @@ export default {
     load_failed: "Impossible de charger le message.",
     invalid_message_id: "Cet identifiant de message n'est pas valide.",
     retry: "Réessayer",
-    classification: {
+    classification_state: {
       interested: "Intéressé",
       not_interested: "Pas intéressé",
       unsubscribe: "Désabonnement",

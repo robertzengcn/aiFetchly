@@ -187,7 +187,7 @@ const loadErrorDetail = ref<string | null>(null);
 const classificationLabel = computed(() => {
   const value = message.value?.classification;
   if (!value) return "—";
-  return t(`emailReceive.classification.${value}`) || value;
+  return t(`emailReceive.classification_state.${value}`) || value;
 });
 const replyStatusLabel = computed(() => {
   const value = message.value?.replyStatus;

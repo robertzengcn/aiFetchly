@@ -1186,7 +1186,7 @@ export default {
     load_failed: "No se pudo cargar el mensaje.",
     invalid_message_id: "Este id de mensaje no es válido.",
     retry: "Reintentar",
-    classification: {
+    classification_state: {
       interested: "Interesado",
       not_interested: "No interesado",
       unsubscribe: "Cancelar suscripción",

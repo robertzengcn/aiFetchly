@@ -41,6 +41,10 @@ const i18n = createI18n({
         reply_to: "Reply-To",
         received_at: "Received",
         classification: "Classification",
+        classification_state: {
+          interested: "Interested",
+          support_request: "Support request",
+        },
         reply_status: "Reply status",
         thread_label: "Thread",
         image_hidden: "[image hidden]",
@@ -48,10 +52,6 @@ const i18n = createI18n({
         invalid_message_id: "This message id is not valid.",
         retry: "Retry",
         status: { not_started: "Not started", sent: "Sent" },
-        classification: {
-          interested: "Interested",
-          support_request: "Support request",
-        },
       },
       emailOrganization: {
         forward_button: "Forward",

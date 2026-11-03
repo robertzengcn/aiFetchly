@@ -1143,7 +1143,7 @@ export default {
     load_failed: "邮件加载失败。",
     invalid_message_id: "邮件 ID 无效。",
     retry: "重试",
-    classification: {
+    classification_state: {
       interested: "感兴趣",
       not_interested: "不感兴趣",
       unsubscribe: "退订",

@@ -1166,7 +1166,7 @@ export default {
     load_failed: "メッセージを読み込めませんでした。",
     invalid_message_id: "このメッセージ ID は無効です。",
     retry: "再試行",
-    classification: {
+    classification_state: {
       interested: "関心あり",
       not_interested: "関心なし",
       unsubscribe: "配信停止",

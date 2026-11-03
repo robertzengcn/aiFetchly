@@ -1185,7 +1185,7 @@ export default {
     load_failed: "Die Nachricht konnte nicht geladen werden.",
     invalid_message_id: "Diese Nachrichten-ID ist ungültig.",
     retry: "Erneut versuchen",
-    classification: {
+    classification_state: {
       interested: "Interessiert",
       not_interested: "Nicht interessiert",
       unsubscribe: "Abmelden",
