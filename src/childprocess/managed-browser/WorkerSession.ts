@@ -744,6 +744,9 @@ export class WorkerSession {
         mode: input.mode,
         allowedDomainSuffixes: input.allowedDomainSuffixes,
         recipeStep: firstStep,
+        // T21: field fingerprints flow into the page function.
+        usernameField: firstStep?.usernameField ?? null,
+        passwordField: firstStep?.passwordField ?? null,
         username: input.username,
         password: input.password,
       });
@@ -753,6 +756,7 @@ export class WorkerSession {
         outcome: result.outcome,
         reasonCode: result.reasonCode ?? null,
         filledFieldStamps: [...result.filledFieldStamps],
+        recipe: result.recipe ?? null,
       });
     } finally {
       // A-FR-08: wipe local references to the credential.

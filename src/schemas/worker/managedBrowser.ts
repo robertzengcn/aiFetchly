@@ -824,6 +824,14 @@ const loginFormResultMessageSchema = z.strictObject({
   reasonCode: z.string().max(64).nullable(),
   /** Stamps of the fields the filler touched ([credential] masking). */
   filledFieldStamps: z.array(z.string().max(128)).max(16),
+  /** T21: learned-recipe payload on success (no values, fingerprints only). */
+  recipe: z
+    .strictObject({
+      formAction: z.string().max(2048).nullable(),
+      usernameField: z.string().max(128),
+      passwordField: z.string().max(128),
+    })
+    .nullable(),
 });
 
 const evaluateScriptResultMessageSchema = z.strictObject({

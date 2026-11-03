@@ -399,6 +399,30 @@ export class BrowserCredentialLoginService {
       const accountModule = new SocialAccountModule();
       if (result.outcome === "success") {
         await getDefaultBrowserSiteModule().markVerified(site.siteId);
+        // T21: save the learned login recipe (fingerprints only).
+        if (result.recipe) {
+          await getDefaultBrowserSiteModule()
+            .saveLoginRecipe(site.siteId, {
+              version: 1,
+              formAction: result.recipe.formAction,
+              steps: [
+                {
+                  usernameField: result.recipe.usernameField,
+                  passwordField: result.recipe.passwordField,
+                  submitVia: "form" as const,
+                },
+              ],
+            })
+            .catch(() => undefined);
+        }
+        // T21/A-FR-11: persist refreshed cookies for the account through
+        // the existing cookie path (captureAndSend already flowed via the
+        // worker; binding the account keeps the session authoritative).
+        if (credential.accountId !== null) {
+          await getDefaultManagedBrowserModule()
+            .bindAccountToSession(input.sessionId, credential.accountId)
+            .catch(() => undefined);
+        }
         if (credential.accountId !== null) {
           await accountModule.recordLoginFailureClear(credential.accountId);
         }

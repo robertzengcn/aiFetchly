@@ -39,6 +39,9 @@ export interface LoginFillTarget {
     readonly passwordField: string | null;
     readonly submitVia: "form" | "enter";
   } | null;
+  /** T21: top-level recipe fingerprints (used by the page function). */
+  readonly usernameField?: string | null;
+  readonly passwordField?: string | null;
   readonly username: string;
   readonly password: string;
 }
@@ -53,6 +56,12 @@ export interface LoginFillResult {
   readonly outcome: LoginFillOutcome;
   readonly reasonCode: string | null;
   readonly filledFieldStamps: readonly string[];
+  /** T21: learned-recipe payload (form action + field fingerprints). */
+  readonly recipe?: {
+    formAction: string | null;
+    usernameField: string;
+    passwordField: string;
+  };
 }
 
 export interface LoginFillPageLike {
@@ -70,10 +79,16 @@ export function fillLoginPageFunction(input: {
   username: string;
   password: string;
   submitVia: "form" | "enter";
+  /** T21: saved recipe field fingerprints (name/id/autocomplete). */
+  usernameField?: string | null;
+  passwordField?: string | null;
 }): {
   ok: boolean;
   reasonCode?: string | null;
   stamps?: string[];
+  /** T21: form action for recipe learning. */
+  formAction?: string | null;
+  filledFields?: { username: string; password: string };
 } {
   const isVisible = (el: Element): boolean => {
     if (!(el instanceof Element)) return false;
@@ -126,17 +141,46 @@ export function fillLoginPageFunction(input: {
     if (input.mode === "login" && passwordInputs.length !== 1) {
       return { ok: false, reasonCode: "ambiguous_password_field" };
     }
-    const usernameInput = Array.from(
-      form.querySelectorAll<HTMLInputElement>(
-        'input[type="email"], input[type="text"], input[type="tel"]'
-      )
-    ).find(
-      (el) => isVisible(el) && !el.disabled && !el.readOnly
-    );
+    const matchByFingerprint = (
+      el: HTMLInputElement,
+      fingerprint: string | null | undefined
+    ): boolean => {
+      if (!fingerprint) return false;
+      const f = fingerprint.toLowerCase();
+      return (
+        el.name.toLowerCase() === f ||
+        el.id.toLowerCase() === f ||
+        (el.getAttribute("autocomplete") ?? "").toLowerCase() === f
+      );
+    };
+    // T21: saved recipe first, deterministic detection second.
+    const usernameInput =
+      Array.from(
+        form.querySelectorAll<HTMLInputElement>(
+          'input[type="email"], input[type="text"], input[type="tel"]'
+        )
+      ).find(
+        (el) =>
+          matchByFingerprint(el, input.usernameField) &&
+          isVisible(el) &&
+          !el.disabled &&
+          !el.readOnly
+      ) ??
+      Array.from(
+        form.querySelectorAll<HTMLInputElement>(
+          'input[type="email"], input[type="text"], input[type="tel"]'
+        )
+      ).find(
+        (el) => isVisible(el) && !el.disabled && !el.readOnly
+      );
     if (!usernameInput) continue;
+    const passwordInput =
+      passwordInputs.find((el) =>
+        matchByFingerprint(el, input.passwordField)
+      ) ?? passwordInputs[0]!;
     candidates.push({
       form,
-      passwordInput: passwordInputs[0]!,
+      passwordInput,
       usernameInput,
     });
   }
@@ -280,7 +324,18 @@ export function fillLoginPageFunction(input: {
     pw.blur();
   }
 
-  return { ok: true, reasonCode: null, stamps };
+  return {
+    ok: true,
+    reasonCode: null,
+    stamps,
+    // T21: fingerprint the fields we actually used so the recipe can be
+    // saved and reused next time.
+    formAction: chosen.form.getAttribute("action"),
+    filledFields: {
+      username: stampOf(chosen.usernameInput),
+      password: stampOf(pw),
+    },
+  };
 }
 
 /** Outcome probe — also a real function (T02). */
@@ -355,6 +410,15 @@ export class LoginFormFiller {
           outcome: "success",
           reasonCode: null,
           filledFieldStamps: fillResult.stamps ?? [],
+          ...(fillResult.formAction !== undefined && fillResult.filledFields
+            ? {
+                recipe: {
+                  formAction: fillResult.formAction,
+                  usernameField: fillResult.filledFields.username,
+                  passwordField: fillResult.filledFields.password,
+                },
+              }
+            : {}),
         };
       }
       if (probe.errorText) {

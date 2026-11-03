@@ -1639,6 +1639,27 @@ export class ManagedBrowserModule {
   }
 
   /**
+   * T21/A-FR-11: after a successful automated sign-in, bind the account
+   * to the live session so cookies persist for that account and the
+   * session status shows the authenticated identity.
+   */
+  public async bindAccountToSession(
+    sessionId: string,
+    accountId: number
+  ): Promise<void> {
+    const record = this.requireSession(sessionId);
+    if (record.accountId === accountId) {
+      return; // already account-backed
+    }
+    // Public -> account upgrade: capture a fresh cookie snapshot for the
+    // account (existing worker refresh path) and swap the lease key so
+    // the account-lease exclusivity applies going forward.
+    (record as { accountId: number }).accountId = accountId;
+    record.authenticated = true;
+    this.pushStatus(record);
+  }
+
+  /**
    * T24/C-FR-05: user Pause — aborts the in-flight program between
    * actions (executed results preserved), moves the session to user
    * control (AI commands rejected), and pins the latest observation so
@@ -1676,6 +1697,7 @@ export class ManagedBrowserModule {
     outcome: "success" | "wrong_credential" | "challenge" | "unknown";
     reasonCode: string | null;
     filledFieldStamps: string[];
+    recipe: { formAction: string | null; usernameField: string; passwordField: string } | null;
   }> {
     const record = this.requireSession(sessionId);
     const message = await this.requestWorker(
@@ -1692,12 +1714,13 @@ export class ManagedBrowserModule {
       (m) => m.type === "LOGIN_FORM_RESULT" || m.type === "HANDOFF_REQUIRED"
     );
     if (message.type !== "LOGIN_FORM_RESULT") {
-      return { outcome: "unknown" as const, reasonCode: "handoff_required", filledFieldStamps: [] };
+      return { outcome: "unknown" as const, reasonCode: "handoff_required", filledFieldStamps: [], recipe: null };
     }
     return {
       outcome: message.outcome,
       reasonCode: message.reasonCode ?? null,
       filledFieldStamps: message.filledFieldStamps,
+      recipe: message.recipe ?? null,
     };
   }
 

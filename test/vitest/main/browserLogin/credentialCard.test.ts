@@ -38,6 +38,7 @@ vi.mock("@/modules/ManagedBrowserModule", () => ({
       filledFieldStamps: ["user", "pass"],
     }),
     requestHandoff: vi.fn().mockResolvedValue({}),
+    bindAccountToSession: vi.fn().mockResolvedValue(undefined),
   }),
 }));
 
