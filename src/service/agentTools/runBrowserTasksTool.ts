@@ -151,11 +151,26 @@ export async function runBrowserTasks(
   liveBatches.set(batchId, batchAbort);
   const control = deps.control ?? getDefaultAgentTaskControlService();
 
-  const results = await runWithConcurrency(
-    tasks,
-    concurrency,
-    async (task, index): Promise<BrowserBatchTaskResult> => {
+  let results: BrowserBatchTaskResult[];
+  try {
+    results = await runWithConcurrency(
+      tasks,
+      concurrency,
+      async (task, index): Promise<BrowserBatchTaskResult> => {
       const taskId = `${batchId}:${index}`;
+      // R07/M-FR-09: refuse already-aborted lanes before starting.
+      if (signal.aborted || batchAbort.signal.aborted) {
+        return {
+          task_index: index,
+          status: "cancelled",
+          summary: "skipped (batch already aborted)",
+          extracted: [],
+          final_url: null,
+          evidence: [],
+          needs_user: null,
+          user_interventions: [],
+        };
+      }
       control.register(taskId, conversationId);
       const childAbort = new AbortController();
       const onParentAbort = (): void => childAbort.abort();
@@ -233,8 +248,12 @@ export async function runBrowserTasks(
         batchAbort.signal.removeEventListener("abort", onParentAbort);
       }
     }
-  );
-
+    );
+  } finally {
+    // R07/M-FR-09: clean the live batch registration and listeners.
+    liveBatches.delete(batchId);
+    signal.removeEventListener("abort", onOuterAbort);
+  }
   return { batchId, results };
 }
 

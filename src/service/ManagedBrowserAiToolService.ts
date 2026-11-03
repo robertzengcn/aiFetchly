@@ -1080,38 +1080,14 @@ export class ManagedBrowserAiToolService {
           },
           { signal }
         )) as ChatCompletionLike;
-      }
+      },
+      undefined, // model: use the resolver's default
+      // R01/D-FR-02: each decision call re-checks the frozen provider
+      // config identity; a mid-task change returns provider_error.
+      () => currentProviderConfigKey()
     );
     const awaitedResultRef: { taskId?: string } = {};
-    // T19: durable admission BEFORE any mutation; the frozen route and
-    // provider revision are persisted for attribution + recovery.
-    try {
-      const { getDefaultBrowserTaskModule } = await import(
-        "@/modules/BrowserTaskModule"
-      );
-      const { providerConfigKey } = await import(
-        "@/service/aiProvider/AIProviderConfigVersion"
-      );
-      const admissionTaskId = `task_${Date.now().toString(36)}${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
-      awaitedResultRef.taskId = admissionTaskId;
-      await getDefaultBrowserTaskModule().recordAdmission({
-        taskId: admissionTaskId,
-        sessionId: parsed.data.session_id,
-        conversationId: context.conversationId,
-        providerMode: route,
-        providerConfigKey: providerConfigKey(),
-      });
-    } catch {
-      // Persistence failure before admission: the task cannot run with a
-      // durable cursor (design §6.2) — refuse rather than mutate unjournaled.
-      throw new ManagedBrowserAiToolError(
-        "internal_error",
-        undefined,
-        "task_cursor_unavailable"
-      );
-    }    // T17/D-FR-02: freeze the provider route at admission.
+    // T17/D-FR-02: freeze the provider route at admission.
     decisionClient.freezeRoute(currentProviderConfigKey());
     const runner = new BrowserTaskRunner(
       {
@@ -1174,8 +1150,11 @@ export class ManagedBrowserAiToolService {
             ]);
             if (outcome === "step_timeout") {
               void this.browserModule.cancelActiveRequest?.(sessionId);
+              // R02/D-FR-26: a timed-out dispatched step has UNKNOWN effect
+              // — the original program may still finish and input may have
+              // occurred. The runner must stop and reconcile, not retry.
               return {
-                effect: "known" as const,
+                effect: "unknown" as const,
                 pageRevision: 0,
                 results: [{ success: false, errorCode: "stop_timeout" }],
               };
@@ -1234,7 +1213,7 @@ export class ManagedBrowserAiToolService {
               .catch(() => undefined);
           }
         },
-        awaitHandoff: async (reason) => {
+        awaitHandoff: async (reason, runnerTaskId) => {
           const { awaitUserResolution } = await import(
             "@/service/browserAgents/HandoffCoordinator"
           );
@@ -1242,21 +1221,42 @@ export class ManagedBrowserAiToolService {
             "@/service/browserAgents/AgentTaskControlService"
           );
           const controlService = getDefaultAgentTaskControlService();
-          const taskId = (awaitedResultRef.taskId ??
-            `handoff_${context.toolCallId}`) as string;
-          controlService.register(taskId, context.conversationId);
+          controlService.register(runnerTaskId, context.conversationId);
           return await awaitUserResolution({
             sessionId: parsed.data.session_id,
             reason,
-            taskId,
+            taskId: runnerTaskId,
             signal: context.signal,
           });
         },
       }
     );
+    // R03: durable admission AFTER the runner is constructed — one taskId
+    // from admission through journal to result (no separate admission ID).
+    awaitedResultRef.taskId = runner.taskId;
+    try {
+      const { getDefaultBrowserTaskModule } = await import(
+        "@/modules/BrowserTaskModule"
+      );
+      const { providerConfigKey: admissionProviderConfigKey } = await import(
+        "@/service/aiProvider/AIProviderConfigVersion"
+      );
+      await getDefaultBrowserTaskModule().recordAdmission({
+        taskId: runner.taskId,
+        sessionId: parsed.data.session_id,
+        conversationId: context.conversationId,
+        providerMode: route,
+        providerConfigKey: admissionProviderConfigKey(),
+      });
+    } catch {
+      throw new ManagedBrowserAiToolError(
+        "internal_error",
+        undefined,
+        "task_cursor_unavailable"
+      );
+    }
     try {
       const result = await runner.run();
-      awaitedResultRef.taskId = result.taskId;
       try {
         const { getDefaultBrowserTaskModule } = await import(
           "@/modules/BrowserTaskModule"
@@ -1493,7 +1493,9 @@ export function buildSemanticActionDescriptors(
   const walk = (nodes: readonly BrowserAction[]): SemanticActionDescriptor[] =>
     nodes.flatMap((node) =>
       node.type === "if"
-        ? walk(node.then)
+        ? // R22/D-FR-27: the else branch's actions must also be bound —
+          // a changed else action changes the semantic fingerprint.
+          [...walk(node.then), ...walk(node.else ?? [])]
         : node.type === "repeat"
           ? walk(node.body)
           : [describe(node)]

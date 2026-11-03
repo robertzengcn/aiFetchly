@@ -65,6 +65,8 @@ export class AgentTaskControlService {
     string,
     Set<{ resolve: () => void; reject: (error: Error) => void }>
   >();
+  /** R04: per-task resume generation (incremented on resume). */
+  private readonly resumeGenerations = new Map<string, number>();
   private readonly now: () => number;
 
   constructor(now: () => number = Date.now) {
@@ -209,8 +211,16 @@ export class AgentTaskControlService {
       return false;
     }
     this.setState(taskId, "running");
+    // R04/C-FR-06: increment the generation so runners discard proposals
+    // that were pending across the pause/resume boundary.
+    this.resumeGenerations.set(taskId, (this.resumeGenerations.get(taskId) ?? 0) + 1);
     this.resolveAllWaiters(taskId);
     return true;
+  }
+
+  /** R04: the resume generation for a task (0 if never paused). */
+  public getResumeGeneration(taskId: string): number {
+    return this.resumeGenerations.get(taskId) ?? 0;
   }
 
   /** Stop: cancels every waiter (the loop fails fast, C-FR-04). */

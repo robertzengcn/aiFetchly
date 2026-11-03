@@ -239,6 +239,9 @@ export const CHAT_DECISION_SYSTEM_PROMPT = [
 export function buildChatDecisionPrompt(input: BrowserDecisionInput): string {
   return JSON.stringify({
     goal: input.goal,
+    // R17/D-FR-22: the recovery subgoal (if any) is critical context —
+    // without it the model cannot know what went wrong or what to try.
+    subgoal: input.subgoal ?? undefined,
     constraints: input.constraints,
     url: input.url,
     title: input.title,

@@ -452,6 +452,9 @@ export class LoginFormFiller {
         username: target.username,
         password: target.password,
         submitVia: target.recipeStep?.submitVia ?? "form",
+        // R20: recipe fingerprints must reach the page function.
+        usernameField: target.usernameField ?? target.recipeStep?.usernameField ?? null,
+        passwordField: target.passwordField ?? target.recipeStep?.passwordField ?? null,
         usernameFilled,
       });
       if (!fillResult.ok) {

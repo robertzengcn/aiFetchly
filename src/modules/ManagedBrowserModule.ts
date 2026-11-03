@@ -1737,9 +1737,12 @@ export class ManagedBrowserModule {
       const controller = new ProxyController();
       const result = await controller.checkProxyBatch({
         proxyIds: [proxyId],
-        mode: "basic",
-      } as never);
-      const results = result.results ?? [];
+        // R12/P-FR-04: all required fields — undefined concurrency
+        // produces NaN in the checker, launching zero workers.
+        mode: "basic" as const,
+        concurrency: 1,
+        timeoutMs: 10_000,
+      });      const results = result.results ?? [];
       return results.some((item) => item.basic === "pass");
     } catch (error) {
       log.warn(

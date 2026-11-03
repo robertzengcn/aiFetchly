@@ -92,7 +92,9 @@ export interface RunnerDeps {
    * the terminal-stop behavior.
    */
   readonly awaitHandoff?: (
-    reason: string
+    reason: string,
+    /** R05: the runner's actual task id — not the admission ref. */
+    taskId: string
   ) => Promise<"resolved" | "expired" | "cancelled">;
   /**
    * T19: durable cursor hooks (best-effort persistence; failures never
@@ -157,7 +159,12 @@ export interface RunnerExecutionResult {
 export class BrowserTaskRunner {
   private readonly deps: RunnerDeps;
   private readonly budget: MutableTaskBudget;
-  private readonly taskId = `task_${randomUUID().slice(0, 12)}`;
+  private readonly _taskId = `task_${randomUUID().slice(0, 12)}`;
+
+  /** R03: the runner's task id — the single identity for all persistence. */
+  public get taskId(): string {
+    return this._taskId;
+  }
   private leafSteps = 0;
   private decisionRequests = 0;
   private recoveryCalls = 0;
@@ -210,6 +217,7 @@ export class BrowserTaskRunner {
         const candidates = buildDecisionCandidates({ elements: observation.elements });
         const decisionInput = this.buildDecisionInput(observation, candidates);
         let decision: BrowserDecisionResult;
+        const generationBeforeDecide = control.getResumeGeneration(this.taskId);
         if (this.pendingRecovery) {
           // T18: consume the bounded recovery decision through the normal
           // validate/execute path (no second execution machinery).
@@ -286,11 +294,33 @@ export class BrowserTaskRunner {
         if (signal.aborted) {
           return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
         }
+        // R04/C-FR-06: if the gate closed and reopened DURING inference,
+        // the user paused and resumed — the held proposal is DISCARDED.
+        // The loop re-observes and makes a fresh decision on the next
+        // iteration (the gate now being open, control state is running).
+        if (
+          control.getResumeGeneration(this.taskId) > generationBeforeDecide
+        ) {
+          evidence.push("decision_discarded_after_resume");
+          observation = await this.deps.observe(this.input.sessionId);
+          continue;
+        }
         const action = decision.action;
         if (action.operation === "DONE") {
-          // D-AC-09: verification uses FRESH state, never the snapshot the
-          // decision itself saw — the model cannot certify its own claim.
-          observation = (await this.deps.observe(this.input.sessionId)) ?? observation;
+          // D-AC-09/R16: verification uses FRESH state. If the fresh
+          // observation FAILS, the task is partial/unverified — never
+          // completed using the stale pre-action snapshot.
+          const freshObservation = await this.deps.observe(this.input.sessionId);
+          if (!freshObservation) {
+            return this.terminal(
+              "partial",
+              "done_unverified_observation_unavailable",
+              [...evidence, "done:fresh_observation_failed"],
+              extracted,
+              observation
+            );
+          }
+          observation = freshObservation;
           const verification = this.verifyCompletion(observation, extracted);
           if (verification.verified) {
             return this.terminal("completed", "verified", [...evidence, verification.evidence], extracted, observation);
@@ -321,6 +351,34 @@ export class BrowserTaskRunner {
         ) {
           // T06/T07: untargeted operations take the SAME policy-stop,
           // unknown-effect, and failure accounting as targeted ones.
+          // R15/D-AC-04: validate provenance BEFORE dispatch. NAVIGATE
+          // must stay same-site (or an observed link); EXTRACT's target
+          // must exist in the current observation's candidates.
+          if (action.operation === "NAVIGATE" && action.url) {
+            const { parseUrlIdentity } = await import(
+              "@/service/browserDecision/RegistrableDomain"
+            );
+            const currentIdentity = parseUrlIdentity(observation.url);
+            const targetIdentity = parseUrlIdentity(action.url);
+            if (
+              !targetIdentity ||
+              !currentIdentity ||
+              targetIdentity.registrableDomain !==
+                currentIdentity.registrableDomain
+            ) {
+              evidence.push("navigate_not_same_site");
+              continue;
+            }
+          }
+          if (action.operation === "EXTRACT" && action.target_id) {
+            const extractTarget = candidates.find(
+              (c) => c.candidate_id === action.target_id
+            );
+            if (!extractTarget) {
+              evidence.push("extract_ref_not_in_observation");
+              continue;
+            }
+          }
           const programAction: RunnerAction | null =
             action.operation === "SCROLL_UP"
               ? { type: "scroll", direction: "up", amount: 600 }
@@ -593,7 +651,10 @@ export class BrowserTaskRunner {
     if (execution.stopCode === "handoff_required" && this.deps.awaitHandoff) {
       // T14/C-FR-02: block INSIDE the job for the user's dialog action.
       evidence.push(`${label}:handoff_awaited`);
-      const resolution = await this.deps.awaitHandoff("challenge_handoff");
+      const resolution = await this.deps.awaitHandoff(
+        "challenge_handoff",
+        this.taskId
+      );
       if (resolution === "resolved") {
         // C-FR-02: after resolution the agent MUST observe before acting.
         return { stop: null, resumedFromHandoff: true };
