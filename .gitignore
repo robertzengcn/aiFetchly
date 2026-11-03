@@ -167,3 +167,6 @@ debug/*
 
 # Local worktree: node_modules is symlinked to the primary checkout.
 node_modules
+
+# Dated local backup of .agents/skills (42MB, transient) — keep out of the repo
+.agents/skills.backup-*/

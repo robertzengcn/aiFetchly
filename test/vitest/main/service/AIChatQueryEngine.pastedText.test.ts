@@ -20,6 +20,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
     return {
     saveUserMessage: mockSaveUserMessage,
+stampUserMessageTurnIdentity: vi.fn().mockResolvedValue(undefined),
     getConversationMessages: vi.fn().mockResolvedValue([]),
     getRecentMessages: vi.fn().mockResolvedValue([]),
     saveAssistantMessage: vi.fn().mockResolvedValue({}),

@@ -288,16 +288,28 @@ export function isLinuxTrayHostAvailable(
 
 /**
  * Resolve tray icon candidates (main bundle dir first, then packaged
- * resources) matching the platform-copy plugin's output location.
+ * resources) matching the platform-copy plugin's output location. PNG is
+ * the primary format on every platform; the platform-native icon (.ico on
+ * Windows, .icns on macOS) is appended as a fallback so output directories
+ * built before the PNG copy existed still yield a usable tray icon
+ * (nativeImage decodes .ico/.icns on their native platforms).
  */
-export function resolveTrayIconCandidates(dirname: string): string[] {
-  return [
+export function resolveTrayIconCandidates(
+  dirname: string,
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  const resourcesPath = (
+    process as NodeJS.Process & { resourcesPath?: string }
+  ).resourcesPath;
+  const candidates: string[] = [
     path.join(dirname, "icon.png"),
     path.join(dirname, "..", "icon.png"),
-    path.join(
-      (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath ??
-        dirname,
-      "icon.png"
-    ),
+    path.join(resourcesPath ?? dirname, "icon.png"),
   ];
+  if (platform === "win32") {
+    candidates.push(path.join(dirname, "icon.ico"));
+  } else if (platform === "darwin") {
+    candidates.push(path.join(dirname, "icon.icns"));
+  }
+  return candidates;
 }

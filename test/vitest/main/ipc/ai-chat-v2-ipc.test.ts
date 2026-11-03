@@ -45,6 +45,7 @@ const mockGetConversationBusyReason = vi
   .hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock("@/main-process/communication/ai-chat-workspace-ipc", () => ({
   getConversationBusyReason: mockGetConversationBusyReason,
+  resetWorkspaceBackfillForScopeChange: vi.fn(),
 }));
 const mockToolApprovalState = vi.hoisted(() => ({
   modes: new Map<string, string>(),
@@ -141,6 +142,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     getConversations = mockGetConversations;
     createConversationIfNeeded = mockCreateConversationIfNeeded;
     saveUserMessage = mockSaveUserMessage;
+    stampUserMessageTurnIdentity = vi.fn().mockResolvedValue(undefined);
     getConversationMessages = mockGetConversationMessages;
     getRecentMessages = mockGetRecentMessages;
     saveAssistantMessage = mockSaveAssistantMessage;

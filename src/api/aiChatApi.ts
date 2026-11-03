@@ -1,5 +1,5 @@
 "use strict";
-import { HttpClient } from "@/modules/lib/httpclient";
+import { HttpClient, type NoReplayRequestInit } from "@/modules/lib/httpclient";
 import { HttpResponseError } from "@/modules/lib/httpResponseError";
 import {
   CommonApiresp,
@@ -554,6 +554,30 @@ export interface OpenAIChatCompletionRequest {
    */
   fallbackModel?: string;
   /**
+   * Desktop-internal small-model fallback policy (chat-titles design §8.2).
+   * Never serialized on the wire. `"forbid"` disables the alias-404 fallback
+   * retry entirely: every failure propagates to the caller — the request
+   * class (automatic chat titles) must never spend a dispatch on the default
+   * model. Default `"allow"` preserves existing small-model callers.
+   */
+  smallModelFallbackPolicy?: "allow" | "forbid";
+  /**
+   * Desktop-internal request purpose tag (chat-titles design §8.5). Never
+   * serialized on the wire. `"chat_title"` suppresses content in debug
+   * request logging (title prompts are conversation excerpts — metadata
+   * only, PRD §8).
+   */
+  requestPurpose?: string;
+  /**
+   * Desktop-internal literal-model resolution flag (chat-titles design
+   * §8.3). Never serialized on the wire. When true, `model` is sent
+   * verbatim to custom providers — even a model literally named
+   * "small"/"haiku" is NOT rewritten to the configured default. Title
+   * requests require an explicitly configured model; silent alias mapping
+   * would spend the dispatch on an unintended model.
+   */
+  literalModel?: boolean;
+  /**
    * Desktop-internal per-call deadline budget in milliseconds (FR-035 /
    * B13). Never serialized on the wire: every payload builder copies
    * explicit fields only. When set, the local and hosted completion
@@ -852,6 +876,17 @@ export interface StreamRecoveryInfo {
 const STREAM_RETRY_BASE_DELAY_MS = 1000;
 const MODEL_LIST_RETRY_MAX_ATTEMPTS = 3;
 const MODEL_LIST_RETRY_BASE_DELAY_MS = 500;
+/**
+ * Bounded auto-retry for the hosted NON-streaming completion on pure
+ * connection failures (no response was ever received — e.g. "fetch failed",
+ * ECONNREFUSED). Without this, a transiently unreachable AI server surfaces
+ * "Could not connect to the AI server." to the user on the first attempt,
+ * while the streaming path already auto-retries the same condition
+ * (openAIChatCompletionStreamEventsHosted). Initial attempt plus 2 retries.
+ */
+const COMPLETION_CONNECT_RETRY_MAX_ATTEMPTS = 3;
+const COMPLETION_CONNECT_RETRY_BASE_DELAY_MS = 1000;
+const COMPLETION_CONNECT_RETRY_MAX_DELAY_MS = 8000;
 
 /**
  * True when `err` is an HTTP 404 surfaced by `HttpClient` (`postJson`
@@ -873,6 +908,31 @@ function isHttpNotFoundError(err: unknown): boolean {
     }
   }
   return false;
+}
+
+/**
+ * True when `err` is a pure CONNECTION failure on the hosted path — the
+ * request never received a response (DNS/connect/socket failure). Uses the
+ * shared recovery classifier so the definition matches the streaming retry
+ * layer exactly, and never retries HTTP status envelopes (they carry a
+ * numeric `status`, which the classifier mounts as server_error /
+ * rate_limit / model_unavailable / ...), auth, quota, aborts, or timeouts.
+ */
+function isRetryableConnectFailure(err: unknown): boolean {
+  const classifier = new AIChatRecoveryClassifier();
+  try {
+    return classifier.classifyThrown(err).reason === "network";
+  } catch {
+    // Never let classification errors change the failure semantics.
+    return false;
+  }
+}
+
+/** Backoff before the next hosted-completion connect retry (1s, 2s, capped). */
+function computeCompletionConnectRetryDelayMs(attempt: number): number {
+  const raw =
+    COMPLETION_CONNECT_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+  return Math.min(raw, COMPLETION_CONNECT_RETRY_MAX_DELAY_MS);
 }
 
 export class AiChatApi {
@@ -1009,11 +1069,21 @@ export class AiChatApi {
    * fields (attachments / screenshots) are truncated to keep logs readable.
    * Enabled via launch.json env block for debugging only.
    */
-  private _debugLogRequest(endpoint: string, data: unknown): void {
+  private _debugLogRequest(
+    endpoint: string,
+    data: unknown,
+    options?: { purpose?: string }
+  ): void {
     if (
       process.env.AICHAT_DEBUG_REQUEST !== "true" &&
       process.env.AICHAT_DEBUG_REQUEST !== "1"
     ) {
+      return;
+    }
+    // Chat-title requests carry conversation excerpts: log metadata only,
+    // never prompt/response content (chat-titles PRD §8).
+    if (options?.purpose === "chat_title") {
+      console.log(`[ai-chat-debug] -> ${endpoint} (chat_title: content suppressed)`);
       return;
     }
     try {
@@ -2230,6 +2300,21 @@ export class AiChatApi {
   }
 
   /**
+   * Titles B04 (design §8.3): hosted-PINNED completion. Entitlement is
+   * verified here and the request goes directly to the hosted transport —
+   * the global provider is never re-resolved, so a concurrent mode switch
+   * cannot reroute an in-flight title request to a custom endpoint (where
+   * the "small" alias would silently become that provider's default model).
+   */
+  async openAIChatCompletionHostedPinned(
+    request: OpenAIChatCompletionRequest,
+    options?: { signal?: AbortSignal }
+  ): Promise<OpenAIChatCompletionResponse> {
+    (await this.getProviderResolver()).ensureHostedAIEnabled();
+    return this.openAIChatCompletionHosted(request, options);
+  }
+
+  /**
    * Non-streaming chat completion using the OpenAI-compatible API.
    * POST /v1/chat/completions (stream: false or omitted)
    *
@@ -2324,7 +2409,9 @@ export class AiChatApi {
       data.response_format = request.response_format;
     }
     this.copyEnabledReasoningOption(request, data);
-    this._debugLogRequest("/api/ai/v1/chat/completions", data);
+    this._debugLogRequest("/api/ai/v1/chat/completions", data, {
+      purpose: request.requestPurpose,
+    });
     // B13: when the caller supplied a per-call budget, bound both the
     // response-headers phase AND the response-body phase by passing an
     // AbortSignal to postJson. postJson spreads options into _fetchJSON →
@@ -2357,9 +2444,13 @@ export class AiChatApi {
       }
       const timer = setTimeout(() => controller.abort(), request.callBudgetMs);
       try {
-        return await this.postHostedCompletionWithSmallModelRetry(
-          request,
-          data,
+        return await this.withCompletionConnectRetry(
+          () =>
+            this.postHostedCompletionWithSmallModelRetry(
+              request,
+              data,
+              controller.signal
+            ),
           controller.signal
         );
       } finally {
@@ -2371,11 +2462,56 @@ export class AiChatApi {
     }
     // No per-call budget: the caller signal threads through to postJson
     // directly so an external abort still cancels the in-flight fetch (T04).
-    return await this.postHostedCompletionWithSmallModelRetry(
-      request,
-      data,
+    return await this.withCompletionConnectRetry(
+      () =>
+        this.postHostedCompletionWithSmallModelRetry(
+          request,
+          data,
+          options?.signal
+        ),
       options?.signal
     );
+  }
+
+  /**
+   * Bounded auto-retry wrapper for the hosted NON-streaming completion:
+   * re-runs `operation` a few times when it fails with a pure CONNECTION
+   * failure (no response ever received), so a transiently unreachable AI
+   * server recovers automatically instead of surfacing "Could not connect
+   * to the AI server." on the first attempt. The streaming path already
+   * retries the identical condition via
+   * {@link openAIChatCompletionStreamEventsHosted}; HTTP status envelopes,
+   * auth/quota/cancellation, and timeouts are NOT retried here — they keep
+   * their existing handling (401-refresh inside HttpClient, small-model 404
+   * fallback, lightweight-service same-route retry) to avoid stacking
+   * retry layers. The caller's abort signal cancels the in-flight fetch and
+   * the backoff sleeps immediately.
+   */
+  private async withCompletionConnectRetry<T>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    let attempt = 1;
+    for (;;) {
+      try {
+        return await operation();
+      } catch (err) {
+        if (
+          !isRetryableConnectFailure(err) ||
+          attempt >= COMPLETION_CONNECT_RETRY_MAX_ATTEMPTS
+        ) {
+          throw err;
+        }
+        const delayMs = computeCompletionConnectRetryDelayMs(attempt);
+        console.warn(
+          `[ai-chat-v2] hosted completion connection failure (${describeErrorDetail(
+            err
+          )}); retrying ${attempt}/${COMPLETION_CONNECT_RETRY_MAX_ATTEMPTS - 1} in ${delayMs}ms`
+        );
+        await this.sleepWithAbort(delayMs, signal);
+        attempt += 1;
+      }
+    }
   }
 
   /**
@@ -2390,7 +2526,13 @@ export class AiChatApi {
     data: OpenAIChatCompletionRequest,
     signal: AbortSignal | undefined
   ): Promise<OpenAIChatCompletionResponse> {
-    const options = signal ? { signal } : undefined;
+    // Titles B05: single-dispatch requests never replay after auth refresh.
+    const noReplay = request.requestPurpose === "chat_title";
+    const options: NoReplayRequestInit | undefined = signal
+      ? { signal, ...(noReplay ? { noAuthReplay: true } : {}) }
+      : noReplay
+      ? { noAuthReplay: true }
+      : undefined;
     try {
       return await this._httpClient.postJson(
         "/api/ai/v1/chat/completions",
@@ -2398,6 +2540,11 @@ export class AiChatApi {
         options
       );
     } catch (err) {
+      // Strict no-fallback policy (chat-titles design §8.2): propagate every
+      // failure without retrying the fallback/default model.
+      if (request.smallModelFallbackPolicy === "forbid") {
+        throw err;
+      }
       if (!isSmallModelAlias(data.model) || !isHttpNotFoundError(err)) {
         throw err;
       }

@@ -154,6 +154,27 @@ export class AIChatV2Module extends BaseModule {
     return saved;
   }
 
+  /**
+   * r3 G01: stamp durable turn identity onto an ALREADY-persisted user row
+   * (queue promotion happens before the engine assigns the turn). Merges
+   * turnId/sourceProviderVersion into the row's JSON metadata without
+   * touching content — a failed stamp only degrades association to role
+   * order, never the message itself.
+   */
+  async stampUserMessageTurnIdentity(
+    messageId: string,
+    turnId: string,
+    sourceProviderVersion: number
+  ): Promise<void> {
+    if (!messageId) return;
+    await this.ensureConnection();
+    await this.chatModule.stampUserMessageTurnIdentity(
+      messageId,
+      turnId,
+      sourceProviderVersion
+    );
+  }
+
   async saveAssistantMessage(params: {
     conversationId: string;
     content: string;

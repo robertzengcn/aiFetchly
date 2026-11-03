@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as path from "path";
 import {
   TrayController,
   isLinuxTrayHostAvailable,
   isLinuxTrayHostPlausible,
+  resolveTrayIconCandidates,
   type TrayControllerPorts,
   type TrayLike,
   type TrayMenuLike,
@@ -197,6 +199,40 @@ describe("TrayController — exiting state (FR-04 / TODO 10)", () => {
     const before = tray.tooltip;
     controller.setExiting(false); // already false
     expect(tray.tooltip).toBe(before);
+  });
+});
+
+describe("resolveTrayIconCandidates — platform icon fallbacks", () => {
+  it("lists PNG candidates first on every platform", () => {
+    for (const platform of ["win32", "darwin", "linux"] as const) {
+      const candidates = resolveTrayIconCandidates("/app/build", platform);
+      expect(candidates[0]).toBe(path.join("/app/build", "icon.png"));
+      // `<dirname>/../icon.png` covers bundle layouts where the icon sits
+      // one level above the main bundle directory.
+      expect(candidates).toContain(path.join("/app", "icon.png"));
+    }
+  });
+
+  it("appends the Windows .ico fallback after the PNGs (win32)", () => {
+    const candidates = resolveTrayIconCandidates("/app/build", "win32");
+    expect(candidates[candidates.length - 1]).toBe(
+      path.join("/app/build", "icon.ico")
+    );
+    expect(candidates.filter((c) => c.endsWith("icon.ico"))).toHaveLength(1);
+  });
+
+  it("appends the macOS .icns fallback after the PNGs (darwin)", () => {
+    const candidates = resolveTrayIconCandidates("/app/build", "darwin");
+    expect(candidates[candidates.length - 1]).toBe(
+      path.join("/app/build", "icon.icns")
+    );
+    expect(candidates.filter((c) => c.endsWith("icon.icns"))).toHaveLength(1);
+  });
+
+  it("Linux has no native-format fallback beyond PNG", () => {
+    const candidates = resolveTrayIconCandidates("/app/build", "linux");
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every((c) => c.endsWith("icon.png"))).toBe(true);
   });
 });
 

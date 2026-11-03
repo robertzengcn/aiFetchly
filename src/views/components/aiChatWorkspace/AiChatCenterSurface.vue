@@ -16,6 +16,10 @@
       @open-agent-tasks="onOpenAgentTasks"
       @clear="onClear"
       @delete="onDelete"
+      :report-enabled="conversationReportEnabled"
+      :report-loading="reportCapabilitiesLoading"
+      :report-disabled-reason="conversationReportDisabledReason"
+      @report="onOpenConversationReport"
       :goal-objective="
         sharedOrchestrationEnabled ? activeGoalObjective : null
       "
@@ -126,25 +130,23 @@
     <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
       <!-- The workspace badge is always visible above the composer: with no
            conversation selected it renders its unset state (Choose action),
-           which creates a chat on demand via onRequestWorkspaceSetup. -->
+           which creates a chat on demand via onRequestWorkspaceSetup.
+           Product decision: the default chat workspace does NOT surface the
+           memory icon entry in the composer strip (bottom of the chat area).
+           Workspace memory stays reachable through the Context-inspector
+           entry — the same store-owned overlay — so showMemory is pinned
+           off here regardless of the voice/memory adapter answer. -->
       <WorkspaceBadge
         :workspace="conversationWorkspace.workspace.value"
         :memory-count="conversationWorkspace.memoryCount.value"
         :loading="conversationWorkspace.loading.value"
         :busy="workspaceChangesBlocked"
-        :show-memory="voiceMemoryEnabled"
+        :show-memory="false"
         @request-set-workspace="onRequestWorkspaceSetup"
         @request-open-memory="openWorkspaceMemory"
         @request-remove-workspace="onRequestWorkspaceRemove"
       />
       <template v-if="conversationId">
-        <AIConversationReportButton
-          :enabled="conversationReportEnabled"
-          :loading="reportCapabilitiesLoading"
-          :disabled-reason="conversationReportDisabledReason"
-          compact
-          @open="onOpenConversationReport"
-        />
         <!-- FR-HIS-001/005 (history rollout flag): archive search entry and
              compaction progress/retry/cancel, reachable while the inspector
              is closed. -->
@@ -522,8 +524,17 @@
         />
       </v-card>
     </v-dialog>
-
-    <!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
+    <!-- Chat-titles FR-06: shared rename dialog (header overflow action). -->
+    <AiChatRenameDialog
+      :model-value="headerRename.renameTargetId.value !== null"
+      :initial-title="headerRename.renameInitialTitle.value"
+      :saving="headerRename.renameSaving.value"
+      :error="headerRename.renameError.value"
+      @save="(title) => void headerRename.commitRename(title)"
+      @cancel="headerRename.cancelRename()"
+      @update:model-value="(v) => !v && headerRename.cancelRename()"
+    />
+<!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
          old bottom-left icon-button activator is gone: the task list now
          opens from the conversation-header overflow menu and anchors to
          the header "..." button. -->
@@ -607,11 +618,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, getCurrentInstance,
+} from "vue";
 import { buildUploadedAttachments } from "@/views/components/aiChatV2/aiChatV2Attachment";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
+import AiChatRenameDialog from "./AiChatRenameDialog.vue";
 import AiChatConversationHeader from "@/views/components/aiChatWorkspace/AiChatConversationHeader.vue";
 
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
@@ -721,11 +734,13 @@ import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/ge
 import { MessageType } from "@/entityTypes/commonType";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import {
-  renameConversation,
+
   deleteConversation,
   duplicateConversation,
   exportConversation,
+
 } from "@/views/api/aiChatWorkspace";
+import { useConversationRename } from "@/views/composables/conversationRename";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useChatModelsStore } from "@/views/store/chatModels";
 import { useChatReportState } from "@/views/store/chatReportState";
@@ -737,7 +752,6 @@ import {
 } from "@/views/store/composerDrafts";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
-import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
 import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -772,6 +786,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
+const headerRename = useConversationRename();
 const selectedStore = useSelectedConversationStore();
 const inspector = useAppInspectorStore();
 // A02 (design §23.1): independent rollout adapter controls — each answer
@@ -872,7 +887,11 @@ function onRequestWorkspaceRemove(): void {
 // --- Header + run strip projection ------------------------------------------
 const headerTitle = computed(() => {
   const summary = workspaceStore.selectedConversation;
-  return summary?.title || selectedStore.selectedTitle;
+  // F12: an AUTHORITATIVE summary with an intentionally empty title (cleared
+  // nonmanual name) must NOT fall back to the old selection snapshot — the
+  // header shows the localized placeholder instead.
+  if (summary) return summary.title;
+  return selectedStore.selectedTitle;
 });
 
 const recovering = computed(() => selectedStore.recovery !== null);
@@ -3040,22 +3059,35 @@ function openProviderSettings(): void {
   void router.push({ name: "system_setting_ai_provider" });
 }
 
-async function onRename(): Promise<void> {
-  if (!conversationId.value) return;
-  const next = await appPrompt(
-    t("workspaceChat.header.renamePrompt") || "Rename chat",
-    headerTitle.value ?? ""
+function headerRenameActivator(): HTMLElement | null {
+  // r3 G10: getCurrentInstance() is NULL inside a DOM event handler —
+  // capture the component proxy at SETUP time instead.
+  const el = surfaceRootEl;
+  return (
+    el?.querySelector<HTMLElement>(
+      '[data-testid="workspace-header-overflow"]'
+    ) ?? null
   );
-  if (!next || !next.trim()) return;
-  try {
-    await renameConversation({
-      conversationId: conversationId.value,
-      title: next.trim(),
-    });
-    await workspaceStore.bootstrap();
-  } catch {
-    // Non-fatal — the title stays unchanged.
-  }
+}
+
+const surfaceSetupInstance = getCurrentInstance();
+const surfaceRootEl: HTMLElement | null = (() => {
+  const el = surfaceSetupInstance?.proxy?.$el ?? null;
+  return el instanceof HTMLElement ? el : null;
+})();
+
+function onRename(): void {
+  if (!conversationId.value) return;
+  // Chat-titles FR-06: shared dialog/composable; explicit save errors stay
+  // visible and the draft is preserved on failure (no silent swallow).
+  // F14: focus returns to the STABLE overflow activator (the menu item
+  // closes with the dialog and is never a valid target).
+  const overflowActivator = headerRenameActivator();
+  headerRename.openRename(
+    conversationId.value,
+    headerTitle.value ?? "",
+    overflowActivator
+  );
 }
 
 async function onCompact(): Promise<void> {
