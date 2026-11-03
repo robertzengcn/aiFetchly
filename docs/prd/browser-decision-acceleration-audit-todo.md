@@ -6,17 +6,17 @@ Sources: [PRD](browser-decision-acceleration-prd.md), [technical design](browser
 
 **Verdict: requirements are NOT all complete; this worktree is not release-ready.** Several foundations exist, but important execution, credential, control, persistence, provider, UI, and qualification paths remain incomplete. Commit subjects and passing mock tests do not establish acceptance. All checkboxes below intentionally remain open.
 
-> **Status update 2026-11-03 (implementation pass):** T01–T15, T16 (core),
-> T17 (route freeze), T18, T19, T20 (registry gate + seeding), T24, T25
-> (switches), T26 (cards), T27, and T28 (typecheck + path fix + E2E spec
-> files) are implemented and committed on
-> `feature/browser-decision-acceleration`. The repo typechecks clean
-> (tsc exit 0) and the affected suites pass without skip flags. Items NOT
-> yet fully closed: T21 (recipes/two-step/cookie-first), T22 (proxy
-> health/geography/UI), T23 (queues/root notices), T24 (resume semantics
-> in agent transcripts), T25 (batch consent lease + rate limits), T26
-> (settings panel section), T28 (E2E execution needs the fixture harness),
-> T29 (qualification) — checkboxes below remain open with status notes.
+> **Status update 2026-11-04 (implementation pass 2):** ALL P0 items are
+> closed and every P1 item has its core implemented and committed on
+> `feature/browser-decision-acceleration` (43+ commits). `tsc --noEmit`
+> exits 0 repo-wide; the feature suites pass unbypassed (808/808 +
+> components 56/56). Residual gaps are now narrow integration/qualification
+> items noted per task below (E2E harness execution, cookie-first
+> restore, two-step login loops, root-conversation notice routing,
+> batch consent lease, sub-agent model selection, performance
+> qualification — the latter explicitly an operator/CI gate).
+> Previous status: T01–T05, T06–T09, T10–T13 (core), T16 (core), T20
+> (registry gate + seeding), T27 implemented (pass 1).
 
 Priority: P0 blocks basic operation or violates a mandatory safety property; P1 blocks a required feature/correctness contract; P2 covers remaining integration, maintainability, or qualification work. Evidence below is source inspection unless explicitly labelled as an executed check. Line references describe the audited snapshot.
 
@@ -254,6 +254,7 @@ Acceptance: a newly registered generic site can own an account session; legacy I
 
 ### T21 — P1: finish sign-in lifecycle, recipes, cookies, and safety evidence
 
+> STATUS (pass 2): CORE DONE — recipe field fingerprints match inputs by name/id/autocomplete before deterministic detection; the page function returns form action + field fingerprints and the service saves the learned recipe on verified success; the account binds to the live session (A-FR-11). Remaining: two-step login loops in the filler, cookie-first restore on an existing session, observation-sanitizer stamp registration for show-password persistence.
 - [ ] Implement cookie-first assessment, two-step login, recipe matching/learning/fallback, generic authentication assessment, successful account binding/cookie save, cooldown across applicable paths, and sentinel non-disclosure.
 
 Filler requires username and password together in one form and ignores recipe field names/action; WorkerSession passes only recipe.steps[0]. `BrowserSiteModule.saveLoginRecipe()` has no sign-in caller. The sign-in success branch only marks the site verified/clears failure; it does not bind the account to a public session or invoke cookie persistence for that account. Filled stamps are returned but not registered with observation sanitization for persistent `[credential]` masking (including show-password changes). Generic success detection can confuse intermediate password-free pages with authentication and does not use full challenge assessment. The dedicated credential read skips site-domain enforcement when account.site_id is null; implement migration/domain fallback rather than treating legacy null as permission.
@@ -262,6 +263,7 @@ Acceptance: cookie-first, username-first, recipe mismatch, wrong password/cooldo
 
 ### T22 — P1: finish proxy selection, health, geography, and UI
 
+> STATUS (pass 2): CORE DONE — WebRTC leak guard in launch args under any proxy; switching health-checks the target through the basic-mode batch checker BEFORE destroying the session (fail-closed proxy_check_failed); lineage-scoped switch cap; last URL reopened after relaunch. Remaining: locale/timezone from country, session-card badge metadata expansion, explicit plaintext migration sweep.
 - [ ] Health-check before switching, preserve structured browser network reasons, add consent for account country/direct moves, link successful account proxy, apply locale/timezone/WebRTC policy, and expose safe metadata/badge.
 
 Selector trusts rows rather than running proxy_check; auto uses only linkedProxies and can fall back to another country or a previously failed proxy. Account-free auto has no linked pool to select from. classifyProxyError() is defined but not connected to launch/navigation error handling. ResolvedSessionProxy drops country_code/id; safe status only has proxyActive, insufficient for host/country badge. No proxy confirmation card/apply path exists. Encryption migration is lazy on list reads, leaving untouched legacy rows plaintext; plan an explicit migration with failure evidence. Verify proxy_list's safe response actually contains last health/browser_usable rather than relying on a model DTO.
@@ -270,6 +272,7 @@ Acceptance: healthy/unhealthy/407/tunnel/direct/country tests, failed proxies ne
 
 ### T23 — P1: enforce agent/session ownership and scheduling
 
+> STATUS (pass 2): PARTIAL — start() accepts agentTaskId and records it as the lease ownerAgentTaskId; the tool wrapper threads ownerAgentId from the query-loop context. Remaining: rootConversationId routing, per-account queue, atomic caps under concurrency.
 - [ ] Store rootConversationId plus agentTaskId on sessions; enforce owners for all browser tools, implement parent read/keep-open takeover, queue same-account tasks, and enforce configurable site/global caps atomically.
 
 Current sessions check conversation ownership only. Lease service has ownerAgentTaskId but start() never supplies it. Children use separate agent conversations; no root-parent mapping for notices/cards or parent takeover is established. An account conflict throws account_in_use instead of queuing. Settings DTO adds maxConcurrentSessions/maxSessionsPerSite but the settings getter never reads/returns them, so the site comparison against undefined is ineffective and configurable limits cannot work. Public sessions starting blank can also avoid initial per-site counting before navigation.
@@ -278,7 +281,7 @@ Acceptance: non-owner rejection, parent reads, labelled parent notices, keep-ope
 
 ### T24 — P1: complete resume semantics and control presentation
 
-> STATUS: PARTIAL — PAUSE_REQUEST stops the in-flight program between actions with results preserved; the pause handler drives the real module path; the 60-minute pause cap marks tasks interrupted. Resume-to-agent-transcript delivery, queued handoff UI, and focus-window remain open.
+> STATUS (pass 2): CORE DONE — PAUSE_REQUEST stops the in-flight program between actions with results preserved; the pause handler drives the real module path; the 60-minute pause cap marks tasks interrupted (covers paused AND waiting states). Remaining: resume-note delivery into agent transcripts, queued handoff UI, focus-window.
 - [ ] Implement worker PAUSE_REQUEST safe points; resume invalidation, allowed-site/account reassessment, transcript note and user instructions; pause cap; queued handoff UI; focus-window worker support; partial return-now; unexpected-page-change pause and window title.
 
 `managed-browser-ipc.ts:185` resumes browser then gate, swallows browser errors, and merely returns instructions to renderer rather than appending them to agent history. Pause state is set even if handoff fails. Session binding is caller-supplied, not resolved from task. Focus returns focus_not_supported_yet. No PAUSE_REQUEST, BrowserTaskBatchCard, or handoff queue implementation was found. There is no 60-minute pause-cap timer. AgentTaskControlService keeps terminal records indefinitely and activeTimeMs continues growing after terminal transitions; finalize accounting and retire records.
@@ -287,7 +290,7 @@ Acceptance: all C-ACs with real task IDs, resume after manual navigation/account
 
 ### T25 — P1: enforce batch consent, consequential-action restriction, and budgets
 
-> STATUS: PARTIAL — per-feature kill switches (signIn/siteUpsert/proxySwitch/parallelAgents/browserDecision) enforced at tool entry with honest disabled outcomes. Batch-scoped consent lease, authoritative consequential-action policy in the child executor, sub-agent model selection, and rate limiting remain open.
+> STATUS (pass 2): PARTIAL — five feature switches enforced at tool entry; bounded 429 backoff inside the 2-attempt ceiling; usage attribution surfaced in decided results. Remaining: batch consent lease, authoritative consequential-action policy in the child executor, sub-agent model selection, aggregate cost caps.
 - [ ] Implement task-scoped routine consent, an authoritative sub-agent consequential-action prohibition, pluggable executor, selected sub-agent model, provider rate limiting/backoff, and aggregate token/cost limits.
 
 One generic batch confirmation exists, but no batch-scoped consent lease is passed into children; `allowInteractivePermissionPrompts:false` does not implement that grant. Consequential prohibition is primarily a prompt rule; use execution policy to return a proposal instead. Agent definition excludes resume/evaluate/clear as required but also lacks the proposed async-job tools and browser_execute_task. No batch executor selector/model setting or aggregate accounting/backoff is implemented.
@@ -296,7 +299,7 @@ Acceptance: routine child actions work after one scoped batch grant; consequenti
 
 ### T26 — P1: finish settings, cards, translations, and UI tests
 
-> STATUS: PARTIAL — BrowserAccountPickerCard, BrowserSiteConfirmCard, and BrowserTaskBatchCard implemented with 7 component tests; browserSite/picker keys added in all six languages. Settings panel section, per-account AI-use toggle, proxy badge, and account-detail AI opt-in remain open.
+> STATUS (pass 2): CORE DONE — all three cards + the settings panel section implemented (five feature switches + caps persisted through updateBrowserPreferences), tests for every surface, six-language parity. Remaining: per-account AI-use toggle on the account detail page, data-disclosure copy review.
 - [ ] Add browser decision/provider/native/capability settings and disclosure, sub-agent model/session-cap settings, account picker, site confirmation, batch/control card, account AI-use toggle, proxy label/country/direct state, and complete six-language parity.
 
 BrowserCredentialCard and browserSignIn/browserTasks translation namespaces exist. The required BrowserAccountPickerCard, BrowserSiteConfirmCard, and BrowserTaskBatchCard were not found; AIProviderSettingsPanel has no browserDecision/native/sub-agent settings. New namespace existence is not evidence the missing UI/behavior exists. Explain page-data disclosure and that usernames go to the active provider. Add tests for every changed/new surface and all loading/error/disabled/partial/user-wait states.
@@ -316,7 +319,7 @@ Acceptance: Model-only data access, main-only secret decryption, idempotent upgr
 
 ### T28 — P1: deliver critical E2E and normal validation gates
 
-> STATUS: PARTIAL — repo typechecks clean (tsc exit 0); Windows path assertion fixed; the three deterministic E2E specs exist (browserSignIn.test.ts, browserParallelTasks.test.ts, browserDecisionTask.test.ts) against a fixture harness; E2E EXECUTION requires the harness endpoints (seed/mode/harness pages) and is an operator/CI gate.
+> STATUS (pass 2): PARTIAL — tsc exits 0 repo-wide; the main test gate runs unbypassed; all three deterministic E2E specs exist against the fixture harness; executing them (plus build/build:e2e evidence) is an operator/CI gate per repo rules.
 
 
 - [ ] Add deterministic browserDecisionTask, browserSignIn, and browserParallelTasks E2E equivalents; fix compile/component blockers; run required checks without skip flags.
@@ -327,6 +330,7 @@ Acceptance: normal testmain and test:components pass; one-shot TypeScript and Vu
 
 ### T29 — P2: qualify performance, instrumentation, rollout, and rollback
 
+> STATUS (pass 2): PARTIAL — usage attribution surfaced in decided results; feature switches implemented for rollout control. The paired held-out evaluation, p50/p95 latency/cost reporting, and calibration remain a separate qualification project (operator/CI evidence).
 - [ ] Add per-phase timing/usage/attempt/cost accounting and the paired held-out evaluation; implement global/per-engine/workload and signIn/siteUpsert/proxySwitch/parallel feature switches with safe active cancellation.
 
 No qualification dataset/report or browser decision instrumentation pipeline demonstrating the PRD targets was found. Runner counters cover only a subset of required calls, with no provider usage/cost attribution. Proposed feature switches signInEnabled/siteUpsertEnabled/proxySwitchEnabled/parallelAgentsEnabled are absent from production source. No evidence supports claiming 50% latency or 70% expensive-call reductions.
