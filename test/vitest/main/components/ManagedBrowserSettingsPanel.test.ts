@@ -27,11 +27,6 @@ const baseSettings: EffectiveManagedBrowserSettings = {
       proxySwitchEnabled: true,
       parallelAgentsEnabled: true,
       browserDecisionEnabled: true,
-      signInEnabled: true,
-      siteUpsertEnabled: true,
-      proxySwitchEnabled: true,
-      parallelAgentsEnabled: true,
-      browserDecisionEnabled: true,
 };
 
 const apiMocks = vi.hoisted(() => ({
