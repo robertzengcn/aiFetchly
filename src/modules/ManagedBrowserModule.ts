@@ -1702,6 +1702,32 @@ export class ManagedBrowserModule {
   }
 
   /**
+   * T22/P-FR-04: basic-mode health check for one proxy id. Uses the same
+   * batch checker the UI/AI paths use; any failure is fail-closed false.
+   */
+  private async checkProxyHealthy(proxyId: number): Promise<boolean> {
+    try {
+      const { ProxyController } = await import("@/controller/proxy-controller");
+      const controller = new ProxyController();
+      const result = await controller.checkProxyBatch({
+        proxyIds: [proxyId],
+        mode: "basic",
+      } as never);
+      const results =
+        (result as { results?: Array<{ basic?: "pass" | "failure" }> })
+          .results ?? [];
+      return results.some((item) => item.basic === "pass");
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] proxy health check failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    }
+  }
+
+  /**
    * PRD P-FR-02: controlled proxy switch. The session is stopped and a
    * fresh session starts with the new proxy under the same account (the
    * account cookies persist through the account session path). Capped at
@@ -1733,6 +1759,14 @@ export class ManagedBrowserModule {
       throw new ManagedBrowserError("proxy_switch_limit");
     }
     this.proxySwitchCounts.set(lineageKey, priorCount + 1);
+    // P-FR-04: health-check the target BEFORE destroying the working
+    // session — fail-closed so the model can choose another proxy.
+    if (target.kind === "proxy_id") {
+      const healthy = await this.checkProxyHealthy(target.proxyId);
+      if (!healthy) {
+        throw new ManagedBrowserError("proxy_no_usable_proxy", "proxy_check_failed");
+      }
+    }
     await this.stop(sessionId, "user_stop");
     return await this.start({
       ...(accountId > 0 ? { accountId } : {}),

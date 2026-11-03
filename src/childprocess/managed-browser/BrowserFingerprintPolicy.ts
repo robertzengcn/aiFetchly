@@ -213,6 +213,9 @@ export function composeLaunchArgs(
     // Authenticated proxies are handled via CDP auth in the worker —
     // credentials must not appear in argv (visible in process listings).
     args.push(`--proxy-server=${options.proxyServer}`);
+    // P-FR-06: prevent WebRTC from leaking the real IP over UDP when a
+    // proxy is active (P-FR-04 fail-closed posture extends to WebRTC).
+    args.push("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
   }
   const locale = options.locale ?? policy.locale;
   if (locale) {
