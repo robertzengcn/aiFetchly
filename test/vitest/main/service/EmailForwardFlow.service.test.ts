@@ -700,4 +700,203 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
     expect(before?.isAnswered).toBe(0);
     expect(before?.processedAt).toBeNull();
   });
+
+  // ---- D4 (review): security-bearing failure paths ----
+
+  function neverSendFactory(): ForwardSenderFactory {
+    return makeSenderFactory(() => {
+      throw new Error("SMTP must never be called");
+    }, []);
+  }
+
+  it("refuses a send against a superseded revision (stale currentRevisionId)", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    await draftService.updateDraft({
+      draftId: preview.draftId,
+      expectedRevisionId: preview.revisionId,
+      note: "bumped",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: neverSendFactory(),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.code).toBe("REVISION_CHANGED");
+  });
+
+  it("refuses an unknown authorization id", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: neverSendFactory(),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: 999999999,
+    });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.code).toBe("ACTION_NOT_AUTHORIZED");
+  });
+
+  it("refuses an expired authorization and never dispatches (APPROVAL_EXPIRED)", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: neverSendFactory(),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.code).toBe("APPROVAL_EXPIRED");
+  });
+
+  it("refuses when the one-time authorization was consumed by a concurrent caller", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    // Simulate the race winner.
+    expect(await authorizationModule.consume(issued.id, new Date())).toBe(true);
+
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: neverSendFactory(),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("failed");
+    // A consumed (or expired) authorization is not spendable — the spendability
+    // gate reports APPROVAL_EXPIRED; ACTION_NOT_AUTHORIZED is the missing-row code.
+    if (outcome.status === "failed") expect(outcome.code).toBe("APPROVAL_EXPIRED");
+    // No stranded operation: the replay check runs before the spendability
+    // gate, so no operation row exists for this refused send.
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    expect(op).toBeNull();
+  });
+
+  it("marks an all-rejected submission failed and leaves the draft unsubmitted", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => ({ accepted: [], rejected: ["finance@example.test"] }), []),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("submitted"); // submission happened; outcome is per-recipient
+    if (outcome.status === "submitted") {
+      expect(outcome.rejected).toEqual(["finance@example.test"]);
+      expect(outcome.accepted).toEqual([]);
+    }
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    expect(op?.status).toBe("failed");
+    expect(op?.errorCode).toBe("PROVIDER_REJECTED");
+    // A failed submission leaves the draft ready for a fresh authorized retry
+    // (a new revision/authorization), not marked submitted.
+    const detail = await draftService.readDraftDetail(preview.draftId);
+    expect(detail.revisionId).toBe(preview.revisionId);
+  });
 });

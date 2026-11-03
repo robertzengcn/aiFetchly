@@ -1,7 +1,6 @@
 import { log } from "@/modules/Logger";
 import {
   registerValidatedHandler,
-  registerAiValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
 import { StructuredIpcError } from "@/main-process/communication/_shared/StructuredIpcError";
 import {
@@ -46,11 +45,11 @@ import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes"
  *   status, cancel, reconcile) use ordinary validated handlers: they remain
  *   available independently of AI entitlement under the same action
  *   authorization rules.
- * - Draft create/update serve AI-function requests, so they run behind the
- *   AI enablement gate (checked before schema parsing) AND the same
- *   validation/authorization as the manual path — a renderer cannot label
- *   an AI request "manual" to bypass anything, because both paths share the
- *   services and all authorization is server-held.
+ * - Draft create/update are manual validated handlers: the AI's own path is
+ *   the tool layer (request-scoped confirmation + scheduled hard-block), not
+ *   these channels, whose only caller is the trusted review dialog. Drafts
+ *   never send anything without a separate, authorization-consuming send
+ *   call, so no AI entitlement applies here (PRD §9 manual-controls rule).
  *
  * The review→send flow mirrors the reply approve/send wiring: the review
  * dialog authorizes the displayed revision (one-time, 15-minute, hash-bound
@@ -113,7 +112,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
   );
 
   // ---- Draft lifecycle (create/update are AI-gated; detail/discard manual) ----
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     EMAIL_FORWARD_DRAFT_CREATE,
     emailForwardDraftCreateInputSchema,
     async (input) => {
@@ -138,7 +137,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
     }
   );
 
-  registerAiValidatedHandler(
+  registerValidatedHandler(
     EMAIL_FORWARD_DRAFT_UPDATE,
     emailForwardDraftUpdateInputSchema,
     async (input) => {

@@ -69,6 +69,16 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
+  async findItemById(itemId: number): Promise<EmailOrganizationOperationItemEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.findItemById(itemId);
+    } catch (error) {
+      log.error("Error finding organization operation item:", error);
+      throw error;
+    }
+  }
+
   async claimItem(input: ClaimItemInput): Promise<ClaimItemResult> {
     try {
       await this.ensureConnection();

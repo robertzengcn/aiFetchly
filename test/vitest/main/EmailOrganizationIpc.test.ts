@@ -66,21 +66,22 @@ beforeEach(() => {
 });
 
 describe("email organization IPC surface", () => {
-  it("AI-gates draft creation BEFORE parsing invalid bodies (design §8.2)", async () => {
+  it("keeps manual draft creation available WITHOUT AI entitlement (review D3)", async () => {
     tokenGetValue.mockImplementation((key: string) =>
       key === "user_ai_enabled" ? "false" : "false"
     );
     const result = await invoke(EMAIL_FORWARD_DRAFT_CREATE, { garbage: true });
     expect(result.status).toBe(false);
-    expect(result.msg.toLowerCase()).toContain("ai");
-    // The failure must NOT be a zod validation message — the gate fired first.
-    expect(result.msg).not.toContain("messageId");
+    // The failure is a zod validation message, NOT an AI-entitlement refusal:
+    // the trusted review dialog owns this channel; the AI path is the tool
+    // layer (request-scoped confirmation + scheduled hard-block).
+    expect(result.msg.toLowerCase()).not.toContain("ai feature");
   });
 
-  it("validates draft creation bodies when AI is enabled", async () => {
+  it("validates draft creation bodies (manual channel)", async () => {
     const result = await invoke(EMAIL_FORWARD_DRAFT_CREATE, { messageId: -5 });
     expect(result.status).toBe(false);
-    expect(result.msg).not.toContain("AI");
+    expect(result.msg).not.toContain("AI feature");
   });
 
   it("keeps manual trash controls available without AI entitlement (PRD §9)", async () => {

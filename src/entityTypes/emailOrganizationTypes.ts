@@ -191,7 +191,11 @@ export interface EmailForwardAttachmentManifestEntry {
 /** Per-recipient outcome for a forward submission. */
 export interface EmailForwardRecipientOutcome {
   readonly address: string;
-  readonly field: "to" | "cc" | "bcc";
+  /**
+   * Envelope field provenance when known. Operation projections omit it:
+   * item outcome rows flatten To/Cc/Bcc, so claiming "to" would be a lie.
+   */
+  readonly field?: "to" | "cc" | "bcc";
   readonly outcome: "accepted" | "rejected" | "unknown";
 }
 

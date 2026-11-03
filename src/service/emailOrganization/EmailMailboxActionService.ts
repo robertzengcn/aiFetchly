@@ -137,13 +137,16 @@ export class EmailMailboxActionService extends BaseModule {
           resultJson: JSON.stringify({ reason: "already_in_trash", trashFolder }),
         });
       } else if (claim.status === "item_not_pending") {
-        await this.operationModule.finalizeItem({
-          itemId: (await this.operationModule.listItems(noopOperation.operationId))[0].id,
-          operationId: noopOperation.operationId,
-          status: "failed",
-          errorCode: "LOCAL_COMMIT_PENDING",
-          sanitizedError: `No-op item could not be claimed (${claim.status}).`,
-        });
+        const currentItem = (await this.operationModule.listItems(noopOperation.operationId))[0];
+        if (currentItem.status !== "claimed") {
+          await this.operationModule.finalizeItem({
+            itemId: currentItem.id,
+            operationId: noopOperation.operationId,
+            status: "failed",
+            errorCode: "LOCAL_COMMIT_PENDING",
+            sanitizedError: `No-op item could not be claimed (${claim.status}).`,
+          });
+        }
       }
       await this.operationModule.recordAudit({
         operationId: noopOperation.operationId,
@@ -173,6 +176,14 @@ export class EmailMailboxActionService extends BaseModule {
       destinationFolderPath: trashFolder,
     });
     if (claim.status !== "claimed") {
+      // A claimed item belongs to a concurrent execution of this same action
+      // (duplicate tool delivery / double click): the winner owns the outcome.
+      // Finalizing 'failed' here would overwrite the winner's in-flight state
+      // and fence out its later success (red-team finding).
+      const current = await this.operationModule.findItemById(item.id);
+      if (current?.status === "claimed") {
+        return await this.projectResult(operation.operationId);
+      }
       await this.operationModule.finalizeItem({
         itemId: item.id,
         operationId: operation.operationId,
@@ -247,7 +258,7 @@ export class EmailMailboxActionService extends BaseModule {
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
       trashFolder
     );
-    await this.persistMoveOutcome(operation.operationId, claim.itemId, message.id, message.emailServiceId, move, trashFolder, input.origin, undefined, claim.attemptId);
+    await this.persistMoveOutcome(operation.operationId, claim.itemId, message.id, message.emailServiceId, move, trashFolder, input.origin, undefined, claim.attemptId, location.version);
     return await this.projectResult(operation.operationId);
   }
 
@@ -371,7 +382,7 @@ export class EmailMailboxActionService extends BaseModule {
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
       destinationFolder as string
     );
-    await this.persistMoveOutcome(operationId, claim.itemId, messageId, location.emailServiceId, move, destinationFolder as string, origin, priorOperationId, claim.attemptId);
+    await this.persistMoveOutcome(operationId, claim.itemId, messageId, location.emailServiceId, move, destinationFolder as string, origin, priorOperationId, claim.attemptId, location.version);
   }
 
   /** Shared outcome persistence for trash + restore moves. */
@@ -384,7 +395,8 @@ export class EmailMailboxActionService extends BaseModule {
     destinationFolder: string,
     origin: TrashMessageInput["origin"],
     priorOperationId?: string,
-    attemptId?: number
+    attemptId?: number,
+    claimFrozenVersion?: number | null
   ): Promise<void> {
     if (move.status === "moved") {
       // Record the provider mapping on the attempt BEFORE local commits: if
@@ -408,21 +420,33 @@ export class EmailMailboxActionService extends BaseModule {
           });
       }
       const destinationUid = move.destinationUid;
+      // Optimistic fence against the CLAIM-FROZEN version: a fresh read
+      // here would always pass and silently overwrite a concurrent move.
+      const currentRow = await this.locationModule.readByMessageId(messageId);
       const applyOk = await this.locationModule.applyMove({
         messageId,
-        // Optimistic fence: the claim froze the version; if another writer
-        // moved the row meanwhile the apply fails and reconciliation repairs.
-        expectedVersion: (await this.locationModule.readByMessageId(messageId))?.version ?? 0,
+        expectedVersion: claimFrozenVersion ?? currentRow?.version ?? 0,
         folderPath: destinationFolder,
         uidValidity: move.destinationUidValidity,
-        providerUid: destinationUid ?? (await this.locationModule.readByMessageId(messageId))?.providerUid ?? "",
+        providerUid: destinationUid ?? currentRow?.providerUid ?? "",
         state: destinationUid !== null ? "verified" : "stale",
         lastOperationId: operationId,
       });
       if (!applyOk) {
+        // Another writer moved the location between claim and apply: the
+        // remote move DID happen, so the item is honestly unknown and the
+        // reconcile path (with the attempt evidence) repairs state.
         log.warn(
-          `[EmailMailboxActionService] location version moved concurrently for message ${messageId}; scheduling reconciliation`
+          `[EmailMailboxActionService] location version moved concurrently for message ${messageId}; recording unknown for reconciliation`
         );
+        await this.operationModule.finalizeItem({
+          itemId,
+          operationId,
+          status: "outcome_unknown",
+          errorCode: "LOCAL_COMMIT_PENDING",
+          sanitizedError: "Location changed concurrently during the move; reconcile.",
+        });
+        return;
       }
       // Reply coordination (design §10.4): the location changed, so any
       // pending reply approval bound to the old location is invalid now.

@@ -1848,6 +1848,50 @@ function initialize() {
         );
       }
 
+      // Startup recovery + retention (design §13 / §9.2): expired claims
+      // become honest unknown outcomes for reconciliation, and unapproved
+      // encrypted artifacts older than the TTL are purged. Fire-and-forget;
+      // neither ever replays or resends an external action.
+      try {
+        const { EmailMailboxActionService } = await import(
+          "@/service/emailOrganization/EmailMailboxActionService"
+        );
+        const { EmailOrganizationArtifactStore } = await import(
+          "@/service/emailOrganization/EmailOrganizationArtifactStore"
+        );
+        const { EMAIL_ORGANIZATION_LIMITS } = await import(
+          "@/entityTypes/emailOrganizationTypes"
+        );
+        void new EmailMailboxActionService()
+          .reconcileExpiredClaims()
+          .then((reconciled: number) => {
+            if (reconciled > 0) {
+              log.info(
+                `[email-organization] startup recovery marked ${reconciled} expired claim(s) for reconciliation`
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] startup recovery failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+        void new EmailOrganizationArtifactStore(userdataPath)
+          .purgeOlderThan(new Date(Date.now() - EMAIL_ORGANIZATION_LIMITS.unapprovedArtifactTtlMs))
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] artifact retention sweep failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+      } catch (err) {
+        log.error(
+          "[email-organization] startup recovery import failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Post-synchronize email-reply upgrade validation (R23, technical design
       // §5.3). Runs AFTER ensureInitialized() has applied TypeORM synchronize
       // over the POPULATED database. Read-only: never repairs, drops, or
