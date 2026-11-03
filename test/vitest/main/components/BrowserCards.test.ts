@@ -44,9 +44,13 @@ const i18n = createI18n({
   },
 });
 
-function mountCard(component: unknown, props: Record<string, unknown>) {
+function mountCard(
+  component: unknown,
+  props: Record<string, unknown>
+): ReturnType<typeof mount> {
   return mount(component as never, {
-    props,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    props: props as any,
     global: {
       plugins: [i18n],
       stubs: {
