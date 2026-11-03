@@ -9,11 +9,10 @@ import { z } from "zod";
  * `NormalizedCookie` shape below BEFORE it ever reaches encryption. Only this
  * normalized array is encrypted and persisted.
  *
- * Note on zod version: the codebase and `registerValidatedHandler` are typed
- * against zod v3 (`from "zod"`). v3 has every capability this feature needs
- * (strictObject, enum, nullable, finite). Mixing v3/v4 ZodType across the
- * validated-handler boundary causes TS friction, so v3 is used consistently.
- * See docs/prd/secure-browser-profile-import-IMPLEMENTATION-PLAN.md §2.
+ * Note on zod version: the codebase is typed against zod v4 (`from "zod"`),
+ * which has every capability this feature needs (strictObject, enum,
+ * nullable, partialRecord). See docs/prd/secure-browser-profile-import-
+ * IMPLEMENTATION-PLAN.md §2 for the original v3-era design notes.
  */
 
 /** Shared size limits for cookie name/value (referenced by the normalizer too). */

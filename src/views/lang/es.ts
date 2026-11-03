@@ -3308,7 +3308,7 @@ export default {
       git_ref: "Rama / etiqueta / commit (opcional)",
       github_url: "URL de repositorio o asset de release de GitHub",
       github_ref: "Rama / etiqueta (opcional)",
-      npm_package: "Nombre del paquete (p. ej. @scope/pkg)",
+      npm_package: "Nombre del paquete (p. ej. {'@'}scope/pkg)",
       npm_version: "Versión (opcional)",
       npm_registry: "URL del registro (opcional, HTTPS)",
       npm_token: "Token de autenticación (opcional, no se guarda)",

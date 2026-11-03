@@ -45,6 +45,11 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema7Type {
   if (hit) return hit;
   const result = z.toJSONSchema(schema, {
     target: "openapi-3.0",
+    // io:"input" 匹配旧 zod-to-json-schema 的语义：带 default 的字段
+    // 不进 required（LLM 可省略）、对象不附加 additionalProperties、
+    // default 值仍写进 schema。默认的 io:"output" 会把带 default 的
+    // 字段全部标成 required，改变 LLM function calling 契约。
+    io: "input",
     unrepresentable: "any",
   }) as unknown as JsonSchema7Type;
   // 兜底移除可能附加的 $schema 字段，避免污染 LLM schema

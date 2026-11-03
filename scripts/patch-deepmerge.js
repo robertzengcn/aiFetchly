@@ -30,11 +30,17 @@
  *   the returned object can no longer have its prototype rewritten by
  *   merge input.
  *
- * Idempotent: files already containing the guard are left untouched.
- * Walks the whole node_modules tree so nested copies are patched too.
- * Anchored on `forEach(function(key) {`, which occurs exactly twice per
- * build (both mergeObject key loops) — files whose shape differs are
- * skipped with a warning, never corrupted.
+ * Idempotent: files already carrying the exact guard in BOTH loops are
+ * left untouched. Walks the whole node_modules tree so nested copies are
+ * patched too. Anchored on `forEach(function(key) {`, which occurs exactly
+ * twice per build (both mergeObject key loops) — files whose shape differs
+ * are skipped with a WARNING (install still succeeds so a future upstream
+ * shape change cannot brick installs; the WARNING is the CI signal).
+ * Writes are atomic (write-file-atomic) and the patched text is
+ * syntax-verified before it lands, so a partial or corrupting write is
+ * impossible. When any file is newly written, node_modules/.vite is
+ * removed so Vite's optimizeDeps prebundle can never keep serving a
+ * stale unpatched deepmerge copy to the renderer in dev.
  *
  * Invoked from the `postinstall` hook so the patch is always present
  * before any build/package run.
@@ -42,21 +48,22 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const writeFileAtomic = require("write-file-atomic");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const NODE_MODULES = path.join(PROJECT_ROOT, "node_modules");
+const VITE_DEPS_DIR = path.join(NODE_MODULES, ".vite");
 
 const GUARD =
   "if (key === '__proto__' || key === 'constructor' || key === 'prototype') { return }";
 const LOOP_ANCHOR = "forEach(function(key) {";
-const IDEMPOTENCE_MARKER = "=== '__proto__'";
 
 /**
  * Locate every deepmerge package directory (v4.x — the advisory range
  * starts at 4.2.0; 1.x used by webpack-chain is a different codebase and
  * not flagged) and return the three build outputs to harden.
  */
-function findVulnerableEntries() {
+function findVulnerableEntries(nodeModulesDir = NODE_MODULES) {
   const results = [];
   function walk(dir) {
     let entries;
@@ -92,7 +99,7 @@ function findVulnerableEntries() {
       }
     }
   }
-  walk(NODE_MODULES);
+  walk(nodeModulesDir);
   return results;
 }
 
@@ -102,12 +109,21 @@ function patchFile(filePath) {
     contents = fs.readFileSync(filePath, "utf8");
   } catch (err) {
     console.warn(`[patch-deepmerge] could not read ${filePath}: ${err.message}`);
-    return false;
+    return "failed";
   }
 
-  if (contents.includes(IDEMPOTENCE_MARKER)) {
-    console.log(`[patch-deepmerge] already patched: ${filePath}`);
-    return true;
+  const guardCount = contents.split(GUARD).length - 1;
+  if (guardCount === 2) {
+    return "already";
+  }
+  if (guardCount === 1) {
+    // Half-patched (e.g. a torn write from an older non-atomic version):
+    // re-patching would inject a second guard into one loop. Surface it.
+    console.warn(
+      `[patch-deepmerge] ${filePath} carries 1/2 guards (unexpected state); ` +
+        "NOT patching — reinstall node_modules to repair"
+    );
+    return "failed";
   }
 
   const occurrences = contents.split(LOOP_ANCHOR).length - 1;
@@ -116,45 +132,82 @@ function patchFile(filePath) {
       `[patch-deepmerge] expected exactly 2 mergeObject key loops in ${filePath}, ` +
         `found ${occurrences}; skipping (file shape differs from expected v4.3.1)`
     );
-    return false;
+    return "skipped";
   }
 
   const patched = contents.replaceAll(LOOP_ANCHOR, `${LOOP_ANCHOR} ${GUARD}`);
 
-  // Self-verify: both loops must now carry the guard before writing.
-  if (patched.split(IDEMPOTENCE_MARKER).length - 1 !== 2) {
+  // Self-verify before writing: both loops must carry the guard AND the
+  // result must still parse as JavaScript, so a guard landing inside a
+  // string literal can never be persisted.
+  if (patched.split(GUARD).length - 1 !== 2) {
     console.warn(`[patch-deepmerge] self-verify failed for ${filePath}; skipping`);
-    return false;
+    return "skipped";
+  }
+  try {
+    new Function(patched);
+  } catch (err) {
+    console.warn(
+      `[patch-deepmerge] patched text does not parse for ${filePath}: ${err.message}; skipping`
+    );
+    return "skipped";
   }
 
   try {
-    fs.writeFileSync(filePath, patched, "utf8");
+    writeFileAtomic.sync(filePath, patched, "utf8");
   } catch (err) {
     console.warn(`[patch-deepmerge] could not write ${filePath}: ${err.message}`);
-    return false;
+    return "failed";
   }
 
   console.log(`[patch-deepmerge] patched prototype poisoning in ${filePath}`);
-  return true;
+  return "patched";
 }
 
-function main() {
-  if (!fs.existsSync(NODE_MODULES)) {
+function main({ nodeModulesDir = NODE_MODULES, viteDepsDir = VITE_DEPS_DIR } = {}) {
+  if (!fs.existsSync(nodeModulesDir)) {
     console.log("[patch-deepmerge] node_modules not found; skipping");
     return;
   }
-  const targets = findVulnerableEntries();
+  const targets = findVulnerableEntries(nodeModulesDir);
   if (targets.length === 0) {
     console.log("[patch-deepmerge] no deepmerge@4.x installs found; nothing to do");
     return;
   }
-  let patchedCount = 0;
+  let wroteAny = false;
+  const results = { patched: 0, already: 0, skipped: 0, failed: 0 };
   for (const target of targets) {
-    if (patchFile(target)) patchedCount += 1;
+    const outcome = patchFile(target);
+    results[outcome] += 1;
+    if (outcome === "patched") wroteAny = true;
   }
   console.log(
-    `[patch-deepmerge] done: ${patchedCount}/${targets.length} file(s) patched`
+    `[patch-deepmerge] done: ${results.patched} newly patched, ` +
+      `${results.already} already patched, ${results.skipped} skipped, ` +
+      `${results.failed} failed of ${targets.length} file(s)`
   );
+  // Vite's optimizeDeps prebundle hashes only lockfile+config, not file
+  // content, so a newly patched deepmerge must invalidate the cache or the
+  // renderer keeps loading a stale unpatched prebundle in dev.
+  if (wroteAny && fs.existsSync(viteDepsDir)) {
+    try {
+      fs.rmSync(viteDepsDir, { recursive: true, force: true });
+      console.log("[patch-deepmerge] cleared node_modules/.vite (stale prebundle)");
+    } catch (err) {
+      console.warn(`[patch-deepmerge] could not clear node_modules/.vite: ${err.message}`);
+    }
+  }
+  if (results.skipped > 0 || results.failed > 0) {
+    console.warn(
+      `[patch-deepmerge] WARNING: ${results.skipped + results.failed} deepmerge ` +
+        "file(s) could NOT be verified as prototype-poisoning-patched. " +
+        "The hardening is INCOMPLETE for this install."
+    );
+  }
 }
 
-main();
+module.exports = { findVulnerableEntries, patchFile, main };
+
+if (require.main === module) {
+  main();
+}

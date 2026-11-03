@@ -3118,7 +3118,7 @@ export default {
       git_ref: "分支 / 标签 / 提交（可选）",
       github_url: "GitHub 仓库或发布资产地址",
       github_ref: "分支 / 标签（可选）",
-      npm_package: "包名（例如 @scope/pkg）",
+      npm_package: "包名（例如 {'@'}scope/pkg）",
       npm_version: "版本（可选）",
       npm_registry: "仓库地址（可选，HTTPS）",
       npm_token: "认证令牌（可选，不保存）",

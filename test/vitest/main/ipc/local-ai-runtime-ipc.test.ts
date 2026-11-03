@@ -168,6 +168,19 @@ describe("local-ai-runtime IPC registration", () => {
     expect(stub.getStatus).not.toHaveBeenCalled();
   });
 
+  // Pins zod v4's stricter RFC 9562 uuid validation at the IPC boundary:
+  // the pre-migration fixture UUIDs (variant nibble "4") must be rejected.
+  it("rejects non-RFC-9562 operationId/consentToken (zod v4 strict uuid)", async () => {
+    const res = await invoke(LOCAL_AI_RUNTIME_INSTALL, {
+      operationId: "11111111-2222-3333-4444-555555555555", // invalid variant nibble
+      runtimeId: "voice-sherpa",
+      expectedRuntimeVersion: "1.0.0",
+      consentToken: "22222222-3333-4444-5555-666666666666",
+    });
+    expect(res.status).toBe(false);
+    expect(stub.install).not.toHaveBeenCalled();
+  });
+
   it("routes install with full consent payload", async () => {
     const payload = {
       operationId: "11111111-2222-4333-8444-555555555555",
