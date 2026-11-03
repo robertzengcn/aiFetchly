@@ -40,6 +40,8 @@ export interface EmailReceiveSyncResult {
   readonly fetched: number;
   readonly stored: number;
   readonly messageIds: number[];
+  /** The folder the fetch actually ran against (configured or explicit). */
+  readonly folder: string;
 }
 
 /** Hard cap on messages per sync regardless of caller limit. */
@@ -157,7 +159,13 @@ export class EmailReceiveSyncService {
    */
   async syncUnread(
     emailServiceId: number,
-    options: { limit?: number; unreadOnly?: boolean; since?: Date }
+    options: {
+      limit?: number;
+      unreadOnly?: boolean;
+      since?: Date;
+      /** Explicit folder scope override; the configured folder is the default. */
+      folder?: string;
+    }
   ): Promise<EmailReceiveSyncResult> {
     const fetchOptions: EmailReceiveFetchOptions = {
       limit: Math.max(1, Math.min(options.limit ?? 10, SYNC_LIMIT_CAP)),
@@ -172,7 +180,14 @@ export class EmailReceiveSyncService {
       throw new Error("Receive is not configured or enabled for this service.");
     }
 
-    const normalizedConfig = normalizeReceiveConnectionConfig(config);
+    // Folder override (BUG-01): an explicitly requested folder is honored on
+    // the wire, never silently substituted with the configured folder. The
+    // result reports the folder that was actually read.
+    const requestedFolder = options.folder?.trim();
+    const normalizedConfig =
+      requestedFolder !== undefined && requestedFolder !== ""
+        ? { ...normalizeReceiveConnectionConfig(config), folder: requestedFolder }
+        : normalizeReceiveConnectionConfig(config);
     const validationError = validateReceiveEndpointConfig(normalizedConfig);
     if (validationError) {
       throw new Error(validationError);
@@ -224,6 +239,7 @@ export class EmailReceiveSyncService {
       fetched: parsed.length,
       stored: messageIds.length,
       messageIds,
+      folder: normalizedConfig.folder,
     };
   }
 

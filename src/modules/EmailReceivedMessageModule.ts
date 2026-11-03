@@ -120,6 +120,17 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /** Loads stored messages by exact ids, preserving the requested order. */
+  async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.readByIds(ids);
+    } catch (error) {
+      console.error("Error reading messages by ids:", error);
+      throw error;
+    }
+  }
+
   /** Cursor batch for the message-location backfill (provider identity only). */
   async listForLocationBackfill(
     afterId: number,

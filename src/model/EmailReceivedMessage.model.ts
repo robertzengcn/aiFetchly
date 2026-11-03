@@ -27,6 +27,14 @@ export interface ReceivedMessageListInput {
   classification?: EmailMessageClassification;
 }
 
+/**
+ * Escapes SQL LIKE metacharacters so `where` text matches literally
+ * (PRD §7 literal subject semantics). Use with `LIKE :search ESCAPE '\\'`.
+ */
+export function escapeLikePattern(text: string): string {
+  return text.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 export class EmailReceivedMessageModel extends BaseDb {
   /**
    * Resolved per access: BaseDb rebinds `this.sqliteDb` to the live
@@ -501,6 +509,19 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await qb.getMany();
   }
 
+  /** Loads stored messages by exact ids, preserving the requested order. */
+  async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.repository
+      .createQueryBuilder("msg")
+      .where("msg.id IN (:...ids)", { ids: [...ids] })
+      .getMany();
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is EmailReceivedMessageEntity => row !== undefined);
+  }
+
   /**
    * Cursor batch (ids strictly greater than afterId) carrying only the
    * provider-identity columns, used by the message-location backfill.
@@ -667,8 +688,8 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
     if (input.where) {
       qb = qb.andWhere(
-        "(msg.subject LIKE :search OR msg.fromAddress LIKE :search OR msg.fromName LIKE :search)",
-        { search: `%${input.where}%` }
+        "(msg.subject LIKE :search ESCAPE '\\' OR msg.fromAddress LIKE :search ESCAPE '\\' OR msg.fromName LIKE :search ESCAPE '\\')",
+        { search: `%${escapeLikePattern(input.where)}%` }
       );
     }
 
@@ -719,8 +740,8 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
     if (input.where) {
       qb = qb.andWhere(
-        "(msg.subject LIKE :search OR msg.fromAddress LIKE :search OR msg.fromName LIKE :search)",
-        { search: `%${input.where}%` }
+        "(msg.subject LIKE :search ESCAPE '\\' OR msg.fromAddress LIKE :search ESCAPE '\\' OR msg.fromName LIKE :search ESCAPE '\\')",
+        { search: `%${escapeLikePattern(input.where)}%` }
       );
     }
     return await qb.getCount();

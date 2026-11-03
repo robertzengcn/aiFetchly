@@ -205,17 +205,19 @@ export async function fetchUnreadEmails(args: unknown): Promise<
       limit: input.limit,
       unreadOnly: input.unread_only,
       since: input.since ? new Date(input.since) : undefined,
+      // BUG-01: an explicit folder is honored on the wire (validated by the
+      // schema) and the result reports the scope actually read.
+      folder: input.folder,
     });
 
-    // Load the freshly stored summaries (no bodies).
+    // Load ONLY the messages this sync stored (BUG-02): a zero-result fetch
+    // returns an empty list, never the newest cached rows, so stale or
+    // out-of-scope messages can never masquerade as fresh results.
     const messageModule = new EmailReceivedMessageModule();
-    const { records } = await messageModule.listByEmailService({
-      emailServiceId: input.email_service_id,
-      page: 0,
-      size: result.messageIds.length || input.limit,
-      unreadOnly: input.unread_only,
-      sortby: { key: "receivedat", order: "desc" },
-    });
+    const records =
+      result.messageIds.length > 0
+        ? await messageModule.readByIds(result.messageIds)
+        : [];
     const messages = records.map(toMessageSummary);
 
     // Audit the AI mailbox read.
@@ -230,6 +232,9 @@ export async function fetchUnreadEmails(args: unknown): Promise<
       email_service_id: input.email_service_id,
       fetched: result.fetched,
       stored: result.stored,
+      // The folder that was actually read (BUG-01): an explicit request is
+      // honored on the wire and the scope is disclosed, never substituted.
+      folder: result.folder,
       messages,
     };
   } catch (error) {

@@ -14,6 +14,39 @@
 
     <v-progress-linear v-if="loading" indeterminate></v-progress-linear>
 
+    <!-- BUG-04: actionable load-failure / invalid-selection states with retry. -->
+    <v-alert
+      v-if="!loading && loadError"
+      type="error"
+      variant="tonal"
+      class="mb-3"
+      role="alert"
+      data-testid="detail-load-error"
+    >
+      {{ t("emailReceive.load_failed") || "The message could not be loaded." }}
+      <span v-if="loadErrorDetail" class="text-body-2">({{ loadErrorDetail }})</span>
+    </v-alert>
+    <v-alert
+      v-else-if="!loading && invalidId"
+      type="warning"
+      variant="tonal"
+      class="mb-3"
+      role="alert"
+      data-testid="detail-invalid-id"
+    >{{ t("emailReceive.invalid_message_id") || "This message id is not valid." }}</v-alert>
+
+    <div v-if="!loading && !invalidId && (loadError || !message)" class="mb-3">
+      <v-btn
+        variant="text"
+        color="primary"
+        data-testid="detail-retry"
+        :loading="loading"
+        @click="loadMessage"
+      >
+        <v-icon start>mdi-refresh</v-icon>{{ t("emailReceive.retry") || "Retry" }}
+      </v-btn>
+    </div>
+
     <div v-if="message">
       <!-- Organization actions: forward / trash / restore (Stage B). -->
       <div class="d-flex align-center mb-3" data-testid="email-org-actions">
@@ -75,9 +108,9 @@
         <div><b>{{ t("emailReceive.from") }}:</b> {{ message.fromName ? message.fromName + " <" + message.fromAddress + ">" : message.fromAddress }}</div>
         <div><b>{{ t("emailReceive.reply_to") }}:</b> {{ message.replyToAddress || "—" }}</div>
         <div><b>{{ t("emailReceive.received_at") }}:</b> {{ formatDate(message.receivedAt) }}</div>
-        <div><b>{{ t("emailReceive.classification") }}:</b> {{ message.classification || "—" }}</div>
-        <div><b>{{ t("emailReceive.reply_status") }}:</b> {{ message.replyStatus }}</div>
-        <div v-if="message.threadKey"><b>Thread:</b> {{ message.threadKey }}</div>
+        <div><b>{{ t("emailReceive.classification") }}:</b> {{ classificationLabel }}</div>
+        <div><b>{{ t("emailReceive.reply_status") }}:</b> {{ replyStatusLabel }}</div>
+        <div v-if="message.threadKey"><b>{{ t("emailReceive.thread_label") || "Thread" }}:</b> {{ message.threadKey }}</div>
       </v-card>
 
       <!-- Sanitized body. Remote images are NOT loaded automatically. -->
@@ -142,22 +175,49 @@ const canOrganize = computed(() => message.value !== null && !loading.value);
 const renderedHtml = computed(() => {
   const html = message.value?.bodyHtmlSanitized;
   if (!html) return "";
-  return html.replace(/<img[^>]*>/gi, "[image hidden]");
+  return html.replace(/<img[^>]*>/gi, t("emailReceive.image_hidden") || "[image hidden]");
 });
 
-onMounted(async () => {
+const invalidId = ref(false);
+const loadError = ref(false);
+const loadErrorDetail = ref<string | null>(null);
+
+// Displayed enum states go through i18n keys; unknown values fall back to
+// the raw stored value so nothing renders as a bare key.
+const classificationLabel = computed(() => {
+  const value = message.value?.classification;
+  if (!value) return "—";
+  return t(`emailReceive.classification.${value}`) || value;
+});
+const replyStatusLabel = computed(() => {
+  const value = message.value?.replyStatus;
+  if (!value) return "—";
+  return t(`emailReceive.status.${value}`) || value;
+});
+
+async function loadMessage(): Promise<void> {
   const id = Number(route.params.id);
   if (!Number.isInteger(id) || id <= 0) {
+    invalidId.value = true;
     loading.value = false;
     return;
   }
+  loading.value = true;
+  loadError.value = false;
+  loadErrorDetail.value = null;
   try {
     message.value = await getReceivedMessage(id, true);
   } catch (err) {
     console.error("Failed to load message:", err);
+    loadError.value = true;
+    loadErrorDetail.value = err instanceof Error ? err.message : String(err);
   } finally {
     loading.value = false;
   }
+}
+
+onMounted(() => {
+  void loadMessage();
 });
 
 function goBack() {
