@@ -87,6 +87,15 @@
             data-testid="workspace-overflow-agent-tasks"
             @click="emit('open-agent-tasks')"
           />
+          <v-list-item
+            role="menuitem"
+            :title="t('aiConversationReport.action') || 'Report conversation'"
+            :subtitle="reportDisabledReason || undefined"
+            prepend-icon="mdi-flag-outline"
+            data-testid="workspace-overflow-report"
+            :disabled="!reportEnabled || reportLoading"
+            @click="emit('report')"
+          />
           <v-divider role="separator" />
           <v-list-item
             role="menuitem"
@@ -147,18 +156,27 @@ import {
   type ConversationStatusVisual,
 } from "./workspaceStatusUtil";
 
-const props = defineProps<{
-  title: string | null;
-  runtimeStatus: ConversationRuntimeStatus;
-  recovering: boolean;
-  activeToolCount: number;
-  inspectorOpen: boolean;
-  hasConversation: boolean;
-  /** Active goal objective, when shared orchestration exposes one. */
-  goalObjective?: string | null;
-  /** Active/paused scheduled-loop status, when one exists. */
-  loopStatus?: string | null;
-}>();
+const props = withDefaults(
+  defineProps<{
+    title: string | null;
+    runtimeStatus: ConversationRuntimeStatus;
+    recovering: boolean;
+    activeToolCount: number;
+    inspectorOpen: boolean;
+    hasConversation: boolean;
+    /** Active goal objective, when shared orchestration exposes one. */
+    goalObjective?: string | null;
+    /** Active/paused scheduled-loop status, when one exists. */
+    loopStatus?: string | null;
+    /** False when conversation reporting is off/fail-closed (PRD §11.4). */
+    reportEnabled?: boolean;
+    /** Content-report capability fetch in flight. */
+    reportLoading?: boolean;
+    /** Disabled reason shown as the item subtitle; empty when enabled. */
+    reportDisabledReason?: string;
+  }>(),
+  { reportEnabled: false, reportLoading: false, reportDisabledReason: "" }
+);
 
 const emit = defineEmits<{
   (e: "toggle-inspector"): void;
@@ -170,6 +188,7 @@ const emit = defineEmits<{
   (e: "open-agent-tasks"): void;
   (e: "clear"): void;
   (e: "delete"): void;
+  (e: "report"): void;
 }>();
 
 const { t } = useI18n();
