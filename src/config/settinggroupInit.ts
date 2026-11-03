@@ -116,36 +116,43 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         type: "input",
       },
       {
+        type: "1",
         key: "managed-browser-max-concurrent-sessions",
         value: "3",
         description: "managed-browser-max-concurrent-sessions-description",
       },
       {
+        type: "1",
         key: "managed-browser-max-sessions-per-site",
         value: "2",
         description: "managed-browser-max-sessions-per-site-description",
       },
       {
+        type: "1",
         key: "managed-browser-sign-in-enabled",
         value: "1",
         description: "managed-browser-sign-in-enabled-description",
       },
       {
+        type: "1",
         key: "managed-browser-site-upsert-enabled",
         value: "1",
         description: "managed-browser-site-upsert-enabled-description",
       },
       {
+        type: "1",
         key: "managed-browser-proxy-switch-enabled",
         value: "1",
         description: "managed-browser-proxy-switch-enabled-description",
       },
       {
+        type: "1",
         key: "managed-browser-parallel-agents-enabled",
         value: "1",
         description: "managed-browser-parallel-agents-enabled-description",
       },
       {
+        type: "1",
         key: "managed-browser-decision-enabled",
         value: "1",
         description: "managed-browser-decision-enabled-description",
