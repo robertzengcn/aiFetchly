@@ -312,18 +312,16 @@ describe("AiChatConversationHeader report conversation entry", () => {
       reportDisabledReason: REPORT_UNAVAILABLE,
     });
     const item = wrapper.get('[data-testid="workspace-overflow-report"]');
-    expect(item.attributes("disabled")).toBeDefined();
+    expect(item.attributes("disabled")).toBe("true");
     expect(item.attributes("aria-disabled")).toBe("true");
     expect(item.attributes("subtitle")).toBe(REPORT_UNAVAILABLE);
   });
 
   it("disables the item while capability fetch is in flight", () => {
     const wrapper = mountHeader("idle", { reportLoading: true });
-    expect(
-      wrapper
-        .get('[data-testid="workspace-overflow-report"]')
-        .attributes("disabled")
-    ).toBeDefined();
+    const item = wrapper.get('[data-testid="workspace-overflow-report"]');
+    expect(item.attributes("disabled")).toBe("true");
+    expect(item.attributes("aria-disabled")).toBe("true");
   });
 
   it("renders no reason subtitle and stays clickable when enabled", () => {

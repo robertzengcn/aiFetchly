@@ -176,7 +176,13 @@ const props = withDefaults(
     /** Disabled reason shown as the item subtitle; empty when enabled. */
     reportDisabledReason?: string;
   }>(),
-  { reportEnabled: false, reportLoading: false, reportDisabledReason: "" }
+  {
+    reportEnabled: false,
+    reportLoading: false,
+    reportDisabledReason: "",
+    goalObjective: null,
+    loopStatus: null,
+  }
 );
 
 const emit = defineEmits<{

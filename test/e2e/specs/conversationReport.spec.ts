@@ -40,8 +40,9 @@ async function openChat(app: {
   // (the legacy dock toggle path is obsolete — G02 doctrine).
   await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
-  // The report button + dialog live in the workspace strip, which renders
-  // once a conversation exists — start one from the sidebar.
+  // The report entry is the `workspace-overflow-report` item inside the
+  // conversation header's "..." overflow menu (`workspace-header-overflow`),
+  // which renders once a conversation exists — start one from the sidebar.
   const newChat = app.mainWindow.getByTestId("workspace-new-chat");
   await newChat.waitFor({ state: "visible", timeout: 5_000 });
   await newChat.click();
