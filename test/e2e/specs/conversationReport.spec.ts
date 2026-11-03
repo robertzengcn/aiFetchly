@@ -49,21 +49,20 @@ async function openChat(app: {
 }
 
 /**
- * The AiChatV2 report-conversation button. Scoped under `ai-chat-root` because
- * a second chat surface (legacy AiChatBox / knowledge chat) may also be mounted
- * on the page and renders the same test-id; strict-mode disambiguates by anchor.
+ * The report-conversation entry. The chat-first shell exposes it as the
+ * header overflow menu item (opened via the "..." button); the legacy dock
+ * (ai-chat-root) keeps its own report button. Scoped under the root present
+ * so a second chat surface rendering the same test-id is not matched.
  */
-function v2ReportButton(app: {
+async function v2ReportButton(app: {
   readonly mainWindow: import("@playwright/test").Page;
-}): import("@playwright/test").Locator {
-  // The chat-first shell hosts the report button in the workspace strip;
-  // the legacy dock (ai-chat-root) is the rollback surface. Scope to
-  // whichever root is present.
+}): Promise<import("@playwright/test").Locator> {
+  if ((await app.mainWindow.getByTestId("chat-center-surface").count()) > 0) {
+    await app.mainWindow.getByTestId("workspace-header-overflow").click();
+    return app.mainWindow.getByTestId("workspace-overflow-report");
+  }
   return app.mainWindow
-    .locator(
-      '[data-testid="chat-center-surface"] [data-testid="report-conversation"], ' +
-        '[data-testid="ai-chat-root"] [data-testid="report-conversation"]'
-    )
+    .locator('[data-testid="ai-chat-root"] [data-testid="report-conversation"]')
     .first();
 }
 
@@ -81,7 +80,7 @@ test.describe("Conversation reporting (Electron integration)", () => {
     await openChat(aiApp);
 
     // The button renders inside the AiChatV2 header.
-    const reportButton = v2ReportButton(aiApp);
+    const reportButton = await v2ReportButton(aiApp);
     await expect(reportButton).toBeVisible({ timeout: 30_000 });
 
     // Fail-closed: the capability fetch resolves to enabled:false (no real
@@ -95,7 +94,7 @@ test.describe("Conversation reporting (Electron integration)", () => {
   }) => {
     await openChat(disabledApp);
 
-    const reportButton = v2ReportButton(disabledApp);
+    const reportButton = await v2ReportButton(disabledApp);
     await expect(reportButton).toBeVisible({ timeout: 30_000 });
     // Conversation reporting is NOT AI-gated (PRD FR-4.4): the button still
     // renders on the disabled surface, but fail-closes to disabled because
@@ -135,18 +134,16 @@ test.describe("Conversation reporting (Electron integration)", () => {
       });
       await openChat(app);
 
-      const reportButton = v2ReportButton(app);
+      const reportButton = await v2ReportButton(app);
       await expect(reportButton).toBeVisible({ timeout: 30_000 });
       // The capability fetch resolved enabled:true over the fake loopback,
       // so the ONLY remaining disable reason is the empty conversation —
       // never an AI-plan gate and never "unavailable" (FR-4.4 fail-closed
       // contract honored, the AI gate stayed closed but reporting stayed
-      // reachable).
-      await expect(reportButton).toHaveAttribute(
-        "title",
-        /no reportable AI outputs/i,
-        { timeout: 30_000 }
-      );
+      // reachable). The header item surfaces the reason as its subtitle.
+      await expect(reportButton).toContainText(/no reportable AI outputs/i, {
+        timeout: 30_000,
+      });
       assertCleanTeardown(app);
     } finally {
       if (app) {
@@ -189,7 +186,7 @@ test.describe("Conversation reporting (Electron integration)", () => {
         .first()
         .waitFor({ state: "visible", timeout: 60_000 });
 
-      const reportButton = v2ReportButton(aiApp);
+      const reportButton = await v2ReportButton(aiApp);
       await expect(reportButton).toBeEnabled({ timeout: 60_000 });
       await reportButton.click();
 
