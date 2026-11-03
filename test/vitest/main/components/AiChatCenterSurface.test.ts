@@ -380,7 +380,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         WorkspaceBadge: defineComponent({
           name: "WorkspaceBadge",
-          props: ["workspace", "memoryCount", "loading", "busy"],
+          props: [
+            "workspace",
+            "memoryCount",
+            "loading",
+            "busy",
+            "showMemory",
+          ],
           template:
             '<div data-testid="workspace-badge-stub">{{ workspace ? workspace.rootPath || "unset" : "none" }}</div>',
         }),
@@ -3604,6 +3610,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
     const badge = wrapper.get('[data-testid="workspace-badge-stub"]');
     expect(badge.text()).toBe("/tmp/project");
+  });
+
+  it("never shows the memory entry in the composer-strip workspace badge", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    // Product decision: the bottom-of-chat-area workspace strip shows no
+    // memory icon button. Workspace memory stays reachable through the
+    // Context-inspector entry (same store-owned overlay), so the badge is
+    // pinned to showMemory=false regardless of the adapter answer.
+    const badge = wrapper.findComponent({ name: "WorkspaceBadge" });
+    expect(badge.props("showMemory")).toBe(false);
   });
 
   it("removes the approved workspace through the canonical revoke channel then refreshes (FR-WSP-002)", async () => {

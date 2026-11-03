@@ -126,13 +126,18 @@
     <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
       <!-- The workspace badge is always visible above the composer: with no
            conversation selected it renders its unset state (Choose action),
-           which creates a chat on demand via onRequestWorkspaceSetup. -->
+           which creates a chat on demand via onRequestWorkspaceSetup.
+           Product decision: the default chat workspace does NOT surface the
+           memory icon entry in the composer strip (bottom of the chat area).
+           Workspace memory stays reachable through the Context-inspector
+           entry — the same store-owned overlay — so showMemory is pinned
+           off here regardless of the voice/memory adapter answer. -->
       <WorkspaceBadge
         :workspace="conversationWorkspace.workspace.value"
         :memory-count="conversationWorkspace.memoryCount.value"
         :loading="conversationWorkspace.loading.value"
         :busy="workspaceChangesBlocked"
-        :show-memory="voiceMemoryEnabled"
+        :show-memory="false"
         @request-set-workspace="onRequestWorkspaceSetup"
         @request-open-memory="openWorkspaceMemory"
         @request-remove-workspace="onRequestWorkspaceRemove"
