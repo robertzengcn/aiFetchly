@@ -5,6 +5,31 @@
 - Specification: [PRD](./ai-email-forward-trash-organization-prd.md); [technical design](./ai-email-forward-trash-organization-technical-design.md).
 - Previous branch checklist: [reconciled TODO](./ai-email-forward-trash-organization-todo.md). This new report preserves that document rather than overwriting it.
 
+## REMEDIATION STATUS (2026-11-05, updated on this branch)
+
+| Group | Status | Commits |
+| --- | --- | --- |
+| R01 MIME corruption | **Fixed** (null-HTML semantics, CID relinking to selected parts, original-subject headers; 8-case content suite) | `36b2193cb` |
+| R02 attachment selection | **Fixed** (unresolved part ids refuse; limits apply to the selected set) | `36b2193cb` |
+| R03 intent/scheduled guard | **Partially fixed** — scheduled-origin service guard threaded from the host executor + enforced in send/trash/restore; the full trusted-intent chat gate (no-redundant-confirmation binding) remains open | `d865a528e` |
+| R04 recovery evidence | **Fixed** (append-only evidence, kind guard, full-locator + live destination-presence reconcile, 5-min lease sweep) | `2c20afb2e` |
+| R05 duplicate identities | **Fixed** (sync adopts verified destination occurrences; sync-authority fence protects operation-authored locations) | `2c20afb2e` |
+| R06 stale Undo/no-op provenance | **Fixed** (live-verified no-ops; only genuine succeeded moves restore; after-location lineage binding) | `2c20afb2e` |
+| R07 serialization | **Fixed** (per-account mutex across preflight→claim→I/O→persist for single/bulk/restore) | `2c20afb2e` |
+| R08 Trash ambiguity | **Fixed** (fail-closed TRASH_AMBIGUOUS; user-selected fallback folder UI still open) | `2c20afb2e` |
+| R09 edit/discard race | **Fixed** (final admission re-read before SMTP) | `d865a528e` |
+| R10 result semantics | **Fixed** (succeeded/partial envelope, all-rejected = failed, tool success only on verified success, card payload) | `d865a528e` |
+| R11 draft resume/Bcc/preview | **Fixed** (saved-draft resume by id, Bcc in private review + payload, findings + truncation disclosed) | `d865a528e` |
+| R12 persistent history/chat/bulk UI | **Open** — needs operation-history listing UI, chat cards, bulk progress; card gained Cancel control | — |
+| R13 selection preview | **Fixed** (authoritative per-item rows resolved from stored data) | `d865a528e` |
+| R14 keyboard/localization | **Partially fixed** (row buttons keyboard-operable with aria labels; card cancel; completed-vs-intended wording; separator/chat-journey localization remains) | `d865a528e` |
+| R15 server search | **Fixed** (flag normalization, exact UTC post-filter, hasAttachments = unknown + incomplete, cursor pagination, folder accounting) | `d865a528e` |
+| R16 entitlement gate | **Fixed** (all 10 organization tools gate AI entitlement before parsing; scheduled guard is separate) | `d865a528e` |
+| R17 retention | **Fixed** (all-revision purge on discard, hourly sweeps while open, .tmp-* cleanup) | `d865a528e` |
+| R18 MIME limits | **Fixed** (nested pgp/pkcs7/S-MIME rejection at any depth; conservative composed-byte bound enforced and persisted) | `36b2193cb` |
+
+Still open (environment-bound or UI-journey scope): R12 history/chat/bulk UI journeys, R03 full trusted-intent chat gate, R14 chat-journey localization, wire-level fixtures, Playwright E2E, performance runs, live-mailbox compatibility, aggregate diagnostics.
+
 ## Verdict
 
 **Not all requirements are complete. Neither Stage B nor Stage C is ready for release.** The branch now has substantial implementation: dedicated tools, entities/modules, native MOVE adapter, forwarding, encrypted artifacts, frozen selections, bulk actions, cancellation and mailbox components. The previous five baseline defects have code fixes and regression coverage. The earlier environment failures are not reproduced by this branch's focused tests.
