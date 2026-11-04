@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { AsyncMutex } from "@/utils/asyncMutex";
 import { log } from "@/modules/Logger";
 import { BaseModule } from "@/modules/baseModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
@@ -86,8 +87,34 @@ export class EmailMailboxActionService extends BaseModule {
     return new DefaultMailboxAdapter();
   }
 
+  /** R07: per-account coordination spanning preflight→claim→I/O→persist. */
+  private static accountMutexes = new Map<number, AsyncMutex>();
+
+  private static lockAccount(emailServiceId: number): AsyncMutex {
+    let mutex = EmailMailboxActionService.accountMutexes.get(emailServiceId);
+    if (mutex === undefined) {
+      mutex = new AsyncMutex();
+      EmailMailboxActionService.accountMutexes.set(emailServiceId, mutex);
+    }
+    return mutex;
+  }
+
+  private async runSerialized<T>(
+    emailServiceId: number,
+    work: () => Promise<T>
+  ): Promise<T> {
+    return await EmailMailboxActionService.lockAccount(emailServiceId).run(work);
+  }
+
   async trashMessage(input: TrashMessageInput): Promise<MailboxActionOutcome> {
     await this.ensureConnection();
+    return await this.runSerialized(
+      (await this.messageModule.read(input.messageId))?.emailServiceId ?? 0,
+      async () => await this.trashMessageInternal(input)
+    );
+  }
+
+  private async trashMessageInternal(input: TrashMessageInput): Promise<MailboxActionOutcome> {
     const message = await this.messageModule.read(input.messageId);
     if (!message) {
       return this.failedResult("SOURCE_NOT_FOUND", "Message not found.");
@@ -116,8 +143,30 @@ export class EmailMailboxActionService extends BaseModule {
     }
 
     // Verified no-op: already in Trash (nothing to move, nothing to invent).
-    // Claims like any other path so the fenced finalization applies.
+    // Live-verified (R06): the cached location is confirmed against the
+    // server before a no-op is recorded.
     if (location.folderPath === trashFolder) {
+      const receiveConfigForNoop = await this.resolveReceiveConfig(message.emailServiceId);
+      if (receiveConfigForNoop) {
+        const noopPresence = await this.adapter.checkMessagePresent(receiveConfigForNoop, {
+          folderPath: location.folderPath,
+          uidValidity: location.uidValidity,
+          uid: location.providerUid,
+        });
+        if (noopPresence.status === "absent") {
+          return this.failedResult(
+            "SOURCE_NOT_FOUND",
+            "The cached Trash location no longer holds this message."
+          );
+        }
+        if (noopPresence.status === "uid_validity_changed") {
+          await this.locationModule.markStale(message.id);
+          return this.failedResult(
+            "UID_VALIDITY_CHANGED",
+            "Trash folder UID validity changed; re-sync before acting."
+          );
+        }
+      }
       const noopOperation = await this.createOperation(input, message.emailServiceId, [message.id], trashFolder, "trash");
       const claim = await this.operationModule.claimItem({
         operationId: noopOperation.operationId,
@@ -281,6 +330,7 @@ export class EmailMailboxActionService extends BaseModule {
     await this.ensureConnection();
     const selectionService = new EmailOrganizationSelectionService();
     const selection = await selectionService.readValidSelection(input.selectionId);
+    return await this.runSerialized(selection.emailServiceId, async () => {
     if (selection.kind !== "trash") {
       // Consent integrity: a selection frozen for one action must never be
       // executed under another (a trash selection executed as restore would
@@ -303,6 +353,7 @@ export class EmailMailboxActionService extends BaseModule {
       destinations[messageId] = destination;
     }
     return await this.executeBulk(selection, parsed.messageIds, destinations, input.origin, input.actionId ?? null, "trash");
+    });
   }
 
   /**
@@ -317,6 +368,7 @@ export class EmailMailboxActionService extends BaseModule {
     await this.ensureConnection();
     const selectionService = new EmailOrganizationSelectionService();
     const selection = await selectionService.readValidSelection(input.selectionId);
+    return await this.runSerialized(selection.emailServiceId, async () => {
     if (selection.kind !== "restore") {
       return this.failedResult(
         "VALIDATION_FAILED",
@@ -331,6 +383,7 @@ export class EmailMailboxActionService extends BaseModule {
       );
     }
     return await this.executeBulk(selection, parsed.messageIds, parsed.destinations, input.origin, input.actionId ?? null, "restore");
+    });
   }
 
   /** Shared sequential bulk executor with per-item cancel checks (FR-20). */
@@ -516,6 +569,16 @@ export class EmailMailboxActionService extends BaseModule {
 
   async restoreFromOperation(input: RestoreFromOperationInput): Promise<MailboxActionOutcome> {
     await this.ensureConnection();
+    const priorProbe = await this.operationModule.readOperation(input.priorOperationId);
+    return await this.runSerialized(
+      priorProbe?.emailServiceId ?? 0,
+      async () => await this.restoreFromOperationInternal(input)
+    );
+  }
+
+  private async restoreFromOperationInternal(
+    input: RestoreFromOperationInput
+  ): Promise<MailboxActionOutcome> {
     const prior = await this.operationModule.readOperation(input.priorOperationId);
     if (!prior || prior.kind !== "trash") {
       return this.failedResult("OPERATION_NOT_FOUND", "Prior trash operation not found.");
@@ -527,9 +590,10 @@ export class EmailMailboxActionService extends BaseModule {
       );
     }
     const priorItems = await this.operationModule.listItems(prior.operationId);
-    const restorable = priorItems.filter(
-      (item) => item.status === "succeeded" || item.status === "noop"
-    );
+    // R06: only GENUINE successful moves restore — no-ops carry no original
+    // provenance (their before-folder is Trash itself) and must never be
+    // treated as restorable origin history.
+    const restorable = priorItems.filter((item) => item.status === "succeeded");
     if (restorable.length === 0) {
       return this.failedResult(
         "OPERATION_NOT_FOUND",
@@ -541,13 +605,44 @@ export class EmailMailboxActionService extends BaseModule {
     const destinationOverride = input.destinationFolderPath ?? null;
     const destinations = new Map<number, string | null>();
     for (const messageId of messageIds) {
-      const recorded =
-        restorable.find((item) => item.messageId === messageId)?.beforeFolderPath ?? null;
+      const priorItem = restorable.find((item) => item.messageId === messageId);
+      const recorded = priorItem?.beforeFolderPath ?? null;
       destinations.set(messageId, destinationOverride ?? recorded);
       if ((destinationOverride ?? recorded) === null) {
         return this.failedResult(
           "DESTINATION_INVALID",
           "No restore destination folder is recorded; pick a folder."
+        );
+      }
+      // R06: stale-Undo binding — the message must STILL be where the prior
+      // trash operation left it (same folder + same provider uid from the
+      // recorded mapping); otherwise this old intent must not mutate the
+      // newer state.
+      const current = await this.locationModule.readByMessageId(messageId);
+      let afterUid: string | null = null;
+      if (priorItem) {
+        const attempts = await this.operationModule.listAttemptsForItem(priorItem.id);
+        for (const attempt of attempts) {
+          if (attempt.resultJson === null) continue;
+          try {
+            const evidence = JSON.parse(attempt.resultJson) as { destinationUid?: string | null };
+            if (typeof evidence.destinationUid === "string") {
+              afterUid = evidence.destinationUid;
+            }
+          } catch {
+            // malformed evidence: fall through with uid null
+          }
+        }
+      }
+      const lineageIntact =
+        current !== null &&
+        current.state === "verified" &&
+        current.folderPath === priorItem?.destinationFolderPath &&
+        (afterUid === null || current.providerUid === afterUid);
+      if (!lineageIntact) {
+        return this.failedResult(
+          "LOCATION_STALE",
+          `Message ${messageId} moved since this Trash operation; use its current operation to restore.`
         );
       }
     }
@@ -851,28 +946,53 @@ export class EmailMailboxActionService extends BaseModule {
         uid: item.beforeProviderUid,
       });
       const attemptRows = await this.operationModule.listAttemptsForItem(item.id);
+      // R04: use the FULL saved locator mapping (uid + uidValidity), never
+      // just the destination uid.
       const mappingEvidence = attemptRows
         .map((attempt) => attempt.resultJson)
         .filter((json): json is string => json !== null)
         .map((json) => {
           try {
-            return JSON.parse(json) as { destinationUid?: string | null };
+            return JSON.parse(json) as {
+              destinationUid?: string | null;
+              destinationUidValidity?: string | null;
+            };
           } catch {
             return null;
           }
         })
-        .find((parsed) => parsed !== null && typeof parsed.destinationUid === "string");
+        .find(
+          (parsed) =>
+            parsed !== null &&
+            typeof parsed.destinationUid === "string" &&
+            typeof parsed.destinationUidValidity === "string"
+        );
 
       if (presence.status === "absent" && mappingEvidence && item.destinationFolderPath !== null) {
-        // Design §10.3: source absent + a strongly verified destination
-        // mapping reconciles to success. Absence alone (destination unknown,
-        // e.g. the user deleted the message in another client) must NOT be
-        // recorded as a successful move.
+        // Design §10.3 + R04: source absent + a strongly verified destination
+        // mapping reconciles only when the mapped destination is PRESENT on
+        // the server right now; otherwise the outcome stays unknown.
+        const destinationPresence = await this.adapter.checkMessagePresent(receiveConfig, {
+          folderPath: item.destinationFolderPath,
+          uidValidity: mappingEvidence.destinationUidValidity as string,
+          uid: mappingEvidence.destinationUid as string,
+        });
+        if (destinationPresence.status !== "present") {
+          await this.operationModule.finalizeItem({
+            itemId: item.id,
+            operationId,
+            status: "outcome_unknown",
+            errorCode: "OUTCOME_UNKNOWN",
+            sanitizedError:
+              "Source empty but the mapped destination is not verifiable on the server; manual resolution required.",
+          });
+          continue;
+        }
         const applyOk = await this.locationModule.applyMove({
           messageId: item.messageId,
           expectedVersion: item.beforeLocationVersion ?? 0,
           folderPath: item.destinationFolderPath,
-          uidValidity: null,
+          uidValidity: mappingEvidence.destinationUidValidity as string,
           providerUid: mappingEvidence.destinationUid as string,
           state: "verified",
           lastOperationId: operationId,

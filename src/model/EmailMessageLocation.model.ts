@@ -23,6 +23,11 @@ export interface UpsertLocationInput {
   readonly providerUid: string;
   readonly state: "verified" | "legacy_unverified" | "stale";
   readonly lastOperationId?: string | null;
+  /**
+   * R05 fence: sync observations must never revert an operation-authored
+   * verified location; only operation results carry operation authority.
+   */
+  readonly authority?: "sync" | "operation";
 }
 
 export type UpsertLocationResult =
@@ -83,6 +88,17 @@ export class EmailMessageLocationModel extends BaseDb {
       const existing = await repo.findOne({ where: { messageId: input.messageId } });
 
       if (existing) {
+        // R05 fence: a stale sync observation of the OLD folder must not
+        // overwrite a location an operation just wrote.
+        if (
+          input.authority === "sync" &&
+          existing.lastOperationId !== null &&
+          (existing.folderPath !== input.folderPath ||
+            existing.uidValidity !== input.uidValidity ||
+            existing.providerUid !== input.providerUid)
+        ) {
+          return { status: "ok", entity: existing } as UpsertLocationResult;
+        }
         existing.protocol = input.protocol;
         const identityChanged =
           existing.folderPath !== input.folderPath ||
@@ -158,6 +174,18 @@ export class EmailMessageLocationModel extends BaseDb {
       .createQueryBuilder("loc")
       .where("loc.messageId IN (:...ids)", { ids: [...messageIds] })
       .getMany();
+  }
+
+  /** Exact tuple lookup (verified-occurrence adoption input). */
+  async readByTuple(
+    emailServiceId: number,
+    folderPath: string,
+    uidValidity: string,
+    providerUid: string
+  ): Promise<EmailMessageLocationEntity | null> {
+    return await this.repository.findOne({
+      where: { emailServiceId, folderPath, uidValidity, providerUid },
+    });
   }
 
   async readByMessageId(messageId: number): Promise<EmailMessageLocationEntity | null> {

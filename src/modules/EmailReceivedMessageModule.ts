@@ -120,6 +120,20 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /** R05: refresh provider fields on an existing row (occurrence adoption). */
+  async updateProviderFieldsForSync(
+    messageId: number,
+    entity: EmailReceivedMessageEntity
+  ): Promise<EmailReceivedMessageEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.updateProviderFieldsForSync(messageId, entity);
+    } catch (error) {
+      console.error("Error updating provider fields for sync:", error);
+      throw error;
+    }
+  }
+
   /** Organization search over stored rows (PRD FR-17 local mode). */
   async searchForOrganization(input: Parameters<EmailReceivedMessageModel["searchForOrganization"]>[0]) {
     try {

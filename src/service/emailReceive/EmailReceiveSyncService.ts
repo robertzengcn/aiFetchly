@@ -264,6 +264,26 @@ export class EmailReceiveSyncService {
   ): Promise<EmailReceivedMessageEntity> {
     const entity = this.toEntity(emailServiceId, p);
 
+    // R05: MOVE changes the location table, not the received row's
+    // folder-scoped uid. If this fetch matches a verified location tuple
+    // owned by a DIFFERENT application message, it IS that occurrence:
+    // refresh its provider fields instead of inserting a duplicate identity.
+    if (p.providerFolder !== null && p.providerUidValidity !== null) {
+      const namespaced = parseNamespacedProviderUid(p.providerUid);
+      if (namespaced) {
+        const adopted = await this.locationModule.adoptVerifiedOccurrence({
+          emailServiceId,
+          folderPath: p.providerFolder,
+          uidValidity: p.providerUidValidity,
+          providerUid: namespaced.uid,
+          entity,
+        });
+        if (adopted !== null) {
+          return adopted;
+        }
+      }
+    }
+
     if (isNamespacedProviderUid(p.providerUid)) {
       const namespaced = parseNamespacedProviderUid(p.providerUid);
       if (namespaced) {
@@ -330,10 +350,12 @@ export class EmailReceiveSyncService {
   ): Promise<void> {
     try {
       const protocol: UpsertLocationInput["protocol"] =
-        p.providerFolder === null && !isNamespacedProviderUid(p.providerUid) &&
         p.providerUid.startsWith("pop3:")
           ? "pop3"
           : "imap";
+      // R05 fence: an operation-authored verified location is never reverted
+      // by a stale sync observation of the old folder.
+      const authority: "sync" | "operation" = "sync";
       const namespaced = parseNamespacedProviderUid(p.providerUid);
       const verified = namespaced !== null && protocol === "imap";
       const input: UpsertLocationInput = {
@@ -345,7 +367,7 @@ export class EmailReceiveSyncService {
         providerUid: namespaced ? namespaced.uid : p.providerUid,
         state: verified ? "verified" : "legacy_unverified",
       };
-      const result = await this.locationModule.upsertLocation(input);
+      const result = await this.locationModule.upsertLocation({ ...input, authority });
       if (result.status === "conflict") {
         log.warn(
           `[EmailReceiveSync] location tuple conflict for message ${messageId} ` +

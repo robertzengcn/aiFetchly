@@ -509,6 +509,43 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await qb.getMany();
   }
 
+  /**
+   * R05: refreshes provider-owned fields on an EXISTING message row during
+   * occurrence adoption — the same targeted provider patch upsertByProviderUid
+   * uses, but addressed by the stable id instead of the old uid key.
+   */
+  async updateProviderFieldsForSync(
+    messageId: number,
+    entity: EmailReceivedMessageEntity
+  ): Promise<EmailReceivedMessageEntity | null> {
+    const existing = await this.repository.findOne({ where: { id: messageId } });
+    if (!existing) return null;
+    const providerPatch: Partial<EmailReceivedMessageEntity> = {
+      messageId: entity.messageId,
+      threadKey: entity.threadKey,
+      inReplyTo: entity.inReplyTo,
+      referencesHeader: entity.referencesHeader,
+      fromAddress: entity.fromAddress,
+      fromName: entity.fromName,
+      replyToAddress: entity.replyToAddress,
+      toAddressesJson: entity.toAddressesJson,
+      ccAddressesJson: entity.ccAddressesJson,
+      subject: entity.subject,
+      bodyText: entity.bodyText,
+      bodyHtmlSanitized: entity.bodyHtmlSanitized,
+      snippet: entity.snippet,
+      receivedAt: entity.receivedAt,
+      isUnread: entity.isUnread,
+      isAnswered: entity.isAnswered,
+      answeredFlagCheckedAt: entity.answeredFlagCheckedAt,
+      providerFolder: entity.providerFolder,
+      providerUidValidity: entity.providerUidValidity,
+      providerUid: entity.providerUid,
+    };
+    await this.repository.update({ id: messageId }, providerPatch);
+    return await this.repository.findOne({ where: { id: messageId } });
+  }
+
   /** Loads stored messages by exact ids, preserving the requested order. */
   /**
    * Organization search over stored rows (PRD FR-17 local mode). Literal

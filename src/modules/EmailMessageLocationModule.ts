@@ -8,6 +8,8 @@ import {
   type UpsertLocationResult,
 } from "@/model/EmailMessageLocation.model";
 import { EmailMessageLocationEntity } from "@/entity/EmailMessageLocation.entity";
+import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 
 /**
  * Business facade over the message-location model (technical design §3.1).
@@ -15,10 +17,12 @@ import { EmailMessageLocationEntity } from "@/entity/EmailMessageLocation.entity
  */
 export class EmailMessageLocationModule extends BaseModule {
   private locationModel: EmailMessageLocationModel;
+  private receivedMessageModule: EmailReceivedMessageModule;
 
   constructor() {
     super();
     this.locationModel = new EmailMessageLocationModel(this.dbpath);
+    this.receivedMessageModule = new EmailReceivedMessageModule();
   }
 
   async upsertLocation(input: UpsertLocationInput): Promise<UpsertLocationResult> {
@@ -49,6 +53,38 @@ export class EmailMessageLocationModule extends BaseModule {
       return await this.locationModel.readByMessageIds(messageIds);
     } catch (error) {
       log.error("Error reading message locations:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * R05: adopts an exact verified destination occurrence for the message
+   * that owns it, refreshing that message's provider fields instead of
+   * inserting a duplicate identity. Returns the adopted row or null when
+   * no verified tuple owner exists.
+   */
+  async adoptVerifiedOccurrence(input: {
+    emailServiceId: number;
+    folderPath: string;
+    uidValidity: string;
+    providerUid: string;
+    entity: EmailReceivedMessageEntity;
+  }): Promise<EmailReceivedMessageEntity | null> {
+    try {
+      await this.ensureConnection();
+      const location = await this.locationModel.readByTuple(
+        input.emailServiceId,
+        input.folderPath,
+        input.uidValidity,
+        input.providerUid
+      );
+      if (!location || location.state !== "verified") return null;
+      return await this.receivedMessageModule.updateProviderFieldsForSync(
+        location.messageId,
+        input.entity
+      );
+    } catch (error) {
+      log.error("Error adopting verified occurrence:", error);
       throw error;
     }
   }

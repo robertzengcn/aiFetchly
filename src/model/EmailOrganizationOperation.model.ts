@@ -339,8 +339,8 @@ export class EmailOrganizationOperationModel extends BaseDb {
           .set({
             phase: "resolved",
             resolvedAt: new Date(),
-            providerMessageId: input.providerMessageId ?? null,
-            resultJson: input.resultJson ?? null,
+            providerMessageId: input.providerMessageId ?? undefined,
+            resultJson: input.resultJson ?? undefined,
           })
           .where("id = :attemptId AND phase != :resolved", {
             attemptId: input.attemptId,

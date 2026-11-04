@@ -1865,6 +1865,22 @@ function initialize() {
         const { EmailOrganizationSelectionService } = await import(
           "@/service/emailOrganization/EmailOrganizationSelectionService"
         );
+        // R04: a restart can occur BEFORE leases expire — sweep on an
+        // interval so no operation is left running indefinitely.
+        const leaseSweepTimer = setInterval(
+          () => {
+            void new EmailMailboxActionService()
+              .reconcileExpiredClaims()
+              .catch((err: unknown) => {
+                log.warn(
+                  "[email-organization] periodic lease sweep failed:",
+                  err instanceof Error ? err.message : String(err)
+                );
+              });
+          },
+          5 * 60 * 1000
+        );
+        leaseSweepTimer.unref();
         void new EmailMailboxActionService()
           .reconcileExpiredClaims()
           .then((reconciled: number) => {

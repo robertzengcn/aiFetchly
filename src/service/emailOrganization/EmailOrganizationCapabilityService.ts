@@ -81,9 +81,16 @@ export class EmailOrganizationCapabilityService extends BaseModule {
         if (!probe.moveCapability) {
           reasonCodes.push("MOVE_CAPABILITY_MISSING");
         }
-        trashFolderPath =
-          probe.folders.find((folder) => folder.specialUse === "\\Trash")?.path ?? null;
-        if (trashFolderPath === null) {
+        // R08: fail closed on ambiguity — multiple \\Trash advertisements
+        // cannot be resolved by guessing the first one.
+        const trashFolders = probe.folders.filter(
+          (folder) => folder.specialUse === "\\Trash"
+        );
+        if (trashFolders.length === 1) {
+          trashFolderPath = trashFolders[0].path;
+        } else if (trashFolders.length > 1) {
+          reasonCodes.push("TRASH_AMBIGUOUS");
+        } else {
           reasonCodes.push("TRASH_NOT_CONFIGURED");
         }
         if (probe.reasonCode !== null) {
