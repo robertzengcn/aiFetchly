@@ -128,6 +128,22 @@ export class EmailOrganizationArtifactStore implements EmailOrganizationArtifact
       return 0;
     }
     for (const entry of entries) {
+      // R17: interrupted atomic writes leave .tmp-* files — sweep them too.
+      if (entry.includes(".tmp-")) {
+        try {
+          const stat = fs.statSync(path.join(this.rootDir, entry));
+          if (stat.mtimeMs < cutoff.getTime()) {
+            fs.unlinkSync(path.join(this.rootDir, entry));
+            purged += 1;
+          }
+        } catch (error) {
+          log.warn(
+            `[EmailOrganizationArtifactStore] tmp sweep failed for ${entry}:`,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+        continue;
+      }
       if (!entry.endsWith(".enc")) continue;
       const target = path.join(this.rootDir, entry);
       try {

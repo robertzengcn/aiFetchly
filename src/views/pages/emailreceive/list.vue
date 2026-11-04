@@ -98,21 +98,30 @@
       </template>
       <template #item.actions="{ item }">
         <v-icon size="small" @click="openDetail(item.id)">mdi-eye</v-icon>
-        <v-icon
-          size="small"
-          class="ml-2"
-          data-testid="org-row-forward"
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          density="comfortable"
+          :aria-label="t('emailOrganization.forward_button') || 'Forward'"
           :title="t('emailOrganization.forward_button') || 'Forward'"
           @click="openDetail(item.id)"
-        >mdi-forward</v-icon>
-        <v-icon
-          size="small"
-          class="ml-2"
-          data-testid="org-row-trash"
+        >
+          <v-icon size="small">mdi-forward</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          density="comfortable"
+          :aria-label="t('emailOrganization.trash_button') || 'Trash'"
           :title="t('emailOrganization.trash_button') || 'Trash'"
-          :class="{ 'text-medium-emphasis': trashingRowId === item.id }"
+          :disabled="trashingRowId === item.id"
           @click="trashRow(item.id)"
-        >mdi-delete</v-icon>
+        >
+          <v-icon size="small">mdi-delete</v-icon>
+        </v-btn>
       </template>
     </v-data-table-server>
   </AppPageShell>

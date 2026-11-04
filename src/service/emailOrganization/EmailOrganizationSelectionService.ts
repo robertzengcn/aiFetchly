@@ -7,6 +7,7 @@ import { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSele
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import { log } from "@/modules/Logger";
@@ -43,6 +44,14 @@ export interface PrepareSelectionInput {
   readonly ownerContext?: string | null;
 }
 
+export interface SelectionPreviewItem {
+  readonly messageId: number;
+  readonly subject: string;
+  readonly fromAddress: string;
+  readonly currentFolderPath: string | null;
+  readonly destinationFolderPath: string | null;
+}
+
 export interface SelectionPreview {
   readonly selectionId: string;
   readonly kind: "trash" | "restore";
@@ -51,6 +60,8 @@ export interface SelectionPreview {
   readonly payloadHash: string;
   readonly expiresAt: string;
   readonly filtersSummary: Record<string, unknown> | null;
+  /** R13: the authoritative frozen set, resolved for inspection. */
+  readonly items: readonly SelectionPreviewItem[];
 }
 
 const SELECTION_TTL_MS = EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs;
@@ -60,12 +71,14 @@ export class EmailOrganizationSelectionService extends BaseModule {
   private readonly locationModule: EmailMessageLocationModule;
   private readonly capabilityService: EmailOrganizationCapabilityService;
   private readonly operationModule: EmailOrganizationOperationModule;
+  private readonly messageModule: EmailReceivedMessageModule;
 
   constructor(options?: { capabilityService?: EmailOrganizationCapabilityService }) {
     super();
     this.selectionModel = new EmailOrganizationSelectionModel(this.dbpath);
     this.locationModule = new EmailMessageLocationModule();
     this.operationModule = new EmailOrganizationOperationModule();
+    this.messageModule = new EmailReceivedMessageModule();
     this.capabilityService =
       options?.capabilityService ?? new EmailOrganizationCapabilityService();
   }
@@ -179,7 +192,7 @@ export class EmailOrganizationSelectionService extends BaseModule {
     log.info(
       `[EmailOrganizationSelectionService] selection ${entity.selectionId} frozen: ${uniqueIds.length} message(s), kind=${input.kind}`
     );
-    return this.toPreview(entity);
+    return await this.toPreview(entity);
   }
 
   /** Loads a selection and enforces expiry. Expired selections are dead. */
@@ -225,17 +238,37 @@ export class EmailOrganizationSelectionService extends BaseModule {
     return await model.purgeExpiredSelections(new Date());
   }
 
-  private toPreview(entity: EmailOrganizationSelectionEntity): SelectionPreview {
+  private async toPreview(
+    entity: EmailOrganizationSelectionEntity
+  ): Promise<SelectionPreview> {
+    const messageIds = JSON.parse(entity.messageIdsJson) as number[];
+    const destinations = entity.destinationsJson
+      ? (JSON.parse(entity.destinationsJson) as Record<number, string>)
+      : null;
+    const messages = await this.messageModule.readByIds(messageIds);
+    const locations = await this.locationModule.readByMessageIds(messageIds);
+    const locationByMessageId = new Map(locations.map((row) => [row.messageId, row]));
     return {
       selectionId: entity.selectionId,
       kind: entity.kind,
       emailServiceId: entity.emailServiceId,
-      count: (JSON.parse(entity.messageIdsJson) as number[]).length,
+      count: messageIds.length,
       payloadHash: entity.payloadHash,
       expiresAt: entity.expiresAt.toISOString(),
       filtersSummary: entity.filtersSummaryJson
         ? (JSON.parse(entity.filtersSummaryJson) as Record<string, unknown>)
         : null,
+      items: messageIds.map((messageId) => {
+        const message = messages.find((row) => row.id === messageId);
+        const location = locationByMessageId.get(messageId);
+        return {
+          messageId,
+          subject: message?.subject ?? "(unavailable)",
+          fromAddress: message?.fromAddress ?? "",
+          currentFolderPath: location?.folderPath ?? null,
+          destinationFolderPath: destinations?.[messageId] ?? null,
+        };
+      }),
     };
   }
 }

@@ -54,6 +54,14 @@
             :disabled="submitting"
           ></v-text-field>
           <v-text-field
+            v-model="bccInput"
+            :label="t('emailOrganization.bcc_recipients') || 'Bcc (optional, private)'"
+            density="compact"
+            hide-details="auto"
+            class="mb-2"
+            :disabled="submitting"
+          ></v-text-field>
+          <v-text-field
             v-model="subjectInput"
             :label="t('emailOrganization.subject_label') || 'Subject'"
             density="compact"
@@ -91,7 +99,23 @@
             ></v-checkbox>
           </div>
 
-          <div class="text-subtitle-2 mb-1">{{ t("emailOrganization.preview_header") || "Preview" }}</div>
+          <div
+            v-if="preview.validationFindings.length > 0"
+            class="text-caption text-warning mb-1"
+            data-testid="forward-findings"
+          >
+            {{ t("emailOrganization.findings_header") || "Content findings:" }}
+            {{ preview.validationFindings.join(", ") }}
+          </div>
+          <div class="text-subtitle-2 mb-1">
+            {{ t("emailOrganization.preview_header") || "Preview" }}
+            <span
+              v-if="preview.bodyPreviewText.length >= 4000"
+              class="text-medium-emphasis text-caption"
+            >
+              {{ t("emailOrganization.preview_truncated") || "(truncated preview)" }}
+            </span>
+          </div>
           <v-card variant="outlined" class="pa-2 preview-scroll">
             <pre style="white-space: pre-wrap; margin: 0">{{ preview.bodyPreviewText }}</pre>
           </v-card>
@@ -127,6 +151,7 @@ import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   createForwardDraft,
+  getForwardDraftDetail,
   updateForwardDraft,
   authorizeForwardRevision,
   sendApprovedForward,
@@ -138,6 +163,8 @@ import {
 const props = defineProps<{
   /** When non-null, the dialog is open for this received message. */
   messageId: number | null;
+  /** R11: an existing saved draft resumes here instead of creating anew. */
+  existingDraftId?: number | null;
 }>();
 
 const emit = defineEmits<{
@@ -157,6 +184,7 @@ const draftId = ref<number | null>(null);
 
 const toInput = ref("");
 const ccInput = ref("");
+const bccInput = ref("");
 const subjectInput = ref("");
 const noteInput = ref("");
 const selectedPartIds = ref<string[]>([]);
@@ -205,6 +233,19 @@ async function openForMessage(messageId: number): Promise<void> {
   preview.value = null;
   draftId.value = null;
   try {
+    // R11: a saved draft resumes — never silently replaced by a new one.
+    if (props.existingDraftId !== undefined && props.existingDraftId !== null) {
+      const existing = await getForwardDraftDetail(props.existingDraftId);
+      draftId.value = existing.draftId;
+      applyPreview(existing);
+      toInput.value = existing.to.join(", ");
+      ccInput.value = existing.cc.join(", ");
+      bccInput.value = existing.bcc.join(", ");
+      selectedPartIds.value = existing.attachmentManifest
+        .filter((entry: { selected: boolean }) => entry.selected)
+        .map((entry: { partId: string }) => entry.partId);
+      return;
+    }
     const created = await createForwardDraft({
       messageId,
       attachments: { mode: "all" },
@@ -227,13 +268,14 @@ function applyPreview(next: ForwardDraftPreviewDto): void {
   noteInput.value = next.note ?? "";
 }
 
-async function refreshDraft(): Promise<ForwardDraftPreviewDto | null> {
+async function refreshDraftWithBcc(): Promise<ForwardDraftPreviewDto | null> {
   if (draftId.value === null) return null;
   const updated = await updateForwardDraft({
     draftId: draftId.value,
     expectedRevisionId: preview.value?.revisionId ?? 0,
     to: parseAddresses(toInput.value),
     cc: parseAddresses(ccInput.value),
+    bcc: parseAddresses(bccInput.value),
     subject: subjectInput.value,
     note: noteInput.value === "" ? null : noteInput.value,
     attachments:
@@ -253,7 +295,8 @@ async function send(): Promise<void> {
   submitting.value = true;
   errorMessage.value = null;
   try {
-    const refreshed = await refreshDraft();
+    // Bcc participates in the approved payload (private review, envelope-only).
+    const refreshed = await refreshDraftWithBcc();
     if (!refreshed) return;
     // One-time hash-bound authorization for the exact displayed revision.
     const authorization = await authorizeForwardRevision({
@@ -279,7 +322,7 @@ async function saveDraft(): Promise<void> {
   savingDraft.value = true;
   errorMessage.value = null;
   try {
-    await refreshDraft();
+    await refreshDraftWithBcc();
     emit("draft-saved", draftId.value);
     close();
   } catch (error) {
@@ -306,6 +349,7 @@ function close(): void {
   errorMessage.value = null;
   toInput.value = "";
   ccInput.value = "";
+  bccInput.value = "";
   emit("closed");
 }
 

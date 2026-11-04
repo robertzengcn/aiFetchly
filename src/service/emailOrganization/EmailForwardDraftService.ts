@@ -59,6 +59,8 @@ export interface ForwardDraftPreview {
   readonly fromAddress: string;
   readonly to: readonly string[];
   readonly cc: readonly string[];
+  /** R11: private review can inspect Bcc (envelope-only, never forwarded headers). */
+  readonly bcc: readonly string[];
   readonly subject: string;
   readonly note: string | null;
   readonly attachmentManifest: readonly EmailForwardAttachmentManifestEntry[];
@@ -394,19 +396,23 @@ export class EmailForwardDraftService extends BaseModule {
       );
     }
     await this.authorizationModule.revokeAllForDraft(draftId, "draft discarded", new Date());
-    // Retention hygiene: a discarded draft's encrypted artifacts are dead
-    // weight — purge them immediately (metadata rows remain for audit).
-    if (revision) {
-      const artifactIds = [
-        revision.bodyTextArtifactId,
-        revision.bodyHtmlArtifactId,
-        ...parseAttachmentArtifactIds(revision.attachmentsJson),
-      ].filter((id): id is string => id !== null);
-      for (const artifactId of artifactIds) {
-        await this.artifactStore.purge(artifactId).catch(() => {
-          // best-effort; the retention sweep is the backstop
-        });
-      }
+    // R17: retention hygiene purges artifacts of ALL revisions (editing
+    // produces prior revisions whose bytes are also dead weight).
+    const allRevisions = await this.draftModule.listRevisionsForPurge(draftId);
+    const artifactIds: string[] = [];
+    for (const rev of allRevisions) {
+      if (rev.bodyTextArtifactId !== null) artifactIds.push(rev.bodyTextArtifactId);
+      if (rev.bodyHtmlArtifactId !== null) artifactIds.push(rev.bodyHtmlArtifactId);
+      artifactIds.push(
+        ...parseAttachmentArtifactIds(rev.attachmentsJson).filter(
+          (id): id is string => id !== null
+        )
+      );
+    }
+    for (const artifactId of artifactIds.filter((id): id is string => id !== null)) {
+      await this.artifactStore.purge(artifactId).catch(() => {
+        // best-effort; the retention sweep is the backstop
+      });
     }
   }
 
@@ -542,6 +548,7 @@ export class EmailForwardDraftService extends BaseModule {
       fromAddress: revision.fromAddress,
       to: parseStringArrayJson(revision.toRecipientsJson),
       cc: parseStringArrayJson(revision.ccRecipientsJson),
+      bcc: parseStringArrayJson(revision.bccRecipientsJson),
       subject: revision.subject,
       note: revision.note,
       attachmentManifest: manifest.map((entry) => ({ ...entry, artifactId: null })),

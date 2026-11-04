@@ -303,12 +303,16 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
         if (!message) continue;
         const envelope = (message as { envelope?: { from?: Array<{ address?: string }>; subject?: string; date?: Date | null } }).envelope;
         const flags = (message as { flags?: Set<string> }).flags;
+        // R15: system flags are case-insensitive per RFC 3501 (\\Seen vs \seen).
+        const seen = flags
+          ? Array.from(flags).some((flag) => flag.toLowerCase() === "\\seen")
+          : null;
         candidates.push({
           uid: String(uid),
           fromAddress: envelope?.from?.[0]?.address ?? null,
           subject: envelope?.subject ?? null,
           date: envelope?.date ? new Date(envelope.date).toISOString() : null,
-          seen: flags ? flags.has("\\seen") : null,
+          seen,
         });
       }
       return { status: "listed", candidates, capped };

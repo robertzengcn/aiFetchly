@@ -32,6 +32,9 @@ const i18n = createI18n({
         source_account: "source account",
         to_recipients: "To",
         cc_recipients: "Cc (optional)",
+        bcc_recipients: "Bcc (optional, private)",
+        findings_header: "Content findings:",
+        preview_truncated: "(truncated preview)",
         subject_label: "Subject",
         note_label: "Add a note (optional)",
         attachments_header: "Attachments",
@@ -58,6 +61,7 @@ function previewFixture(overrides?: Partial<ForwardDraftPreviewDto>): ForwardDra
     fromAddress: "ops@example.test",
     to: [],
     cc: [],
+    bcc: [],
     subject: "Fwd: Invoice",
     note: null,
     attachmentManifest: [
@@ -146,7 +150,7 @@ describe("EmailForwardReviewDialog", () => {
     const text = wrapper.text();
     // Subject is an editable input value; the manifest and preview are text.
     const inputs = wrapper.findAll("input");
-    const subjectInput = inputs[2];
+    const subjectInput = inputs[3]; // To, Cc, Bcc, Subject
     expect((subjectInput.element as HTMLInputElement).value).toBe("Fwd: Invoice");
     expect(text).toContain("invoice.pdf");
     expect(text).toContain("Forwarded message");

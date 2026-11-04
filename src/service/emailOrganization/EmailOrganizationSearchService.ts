@@ -35,6 +35,8 @@ export interface OrganizationSearchInput {
   readonly unreadOnly?: boolean;
   readonly hasAttachments?: boolean;
   readonly pageSize?: number;
+  /** R15: opaque continuation cursor from a previous page. */
+  readonly cursor?: string;
 }
 
 export interface OrganizationSearchResultRow {
@@ -45,7 +47,8 @@ export interface OrganizationSearchResultRow {
   readonly subject: string;
   readonly receivedAt: string;
   readonly isUnread: boolean;
-  readonly hasAttachments: boolean;
+  /** null = unknown (server rows cannot report attachment presence). */
+  readonly hasAttachments: boolean | null;
 }
 
 export interface OrganizationSearchResult {
@@ -60,6 +63,8 @@ export interface OrganizationSearchResult {
   readonly truncated: boolean;
   readonly lastSyncAt: string | null;
   readonly limitation: string | null;
+  /** R15: opaque cursor for the next page; null when exhausted/unknown. */
+  readonly nextCursor: string | null;
 }
 
 export class EmailOrganizationSearchService extends BaseModule {
@@ -149,6 +154,7 @@ export class EmailOrganizationSearchService extends BaseModule {
       totalMatched: result.totalMatched,
       complete: true,
       truncated: result.truncated,
+      nextCursor: result.truncated ? "local-page" : null,
       lastSyncAt: service.lastReceiveSyncAt ? service.lastReceiveSyncAt.toISOString() : null,
       limitation:
         excludedFolder !== null
@@ -193,8 +199,32 @@ export class EmailOrganizationSearchService extends BaseModule {
     // Design §11: bounded work — 1000 candidates or 30 seconds overall.
     const deadline = Date.now() + SERVER_SCAN_BUDGET_MS;
     let budgetExhausted = false;
+    // R15: cursor = base64 {folderIndex, uidOffset} bound to this scan.
+    let cursorState = { folderIndex: 0, uidOffset: 0 };
+    if (input.cursor !== undefined) {
+      try {
+        const decoded = JSON.parse(Buffer.from(input.cursor, "base64").toString("utf8")) as {
+          folderIndex?: number;
+          uidOffset?: number;
+        };
+        cursorState = {
+          folderIndex: typeof decoded.folderIndex === "number" ? decoded.folderIndex : 0,
+          uidOffset: typeof decoded.uidOffset === "number" ? decoded.uidOffset : 0,
+        };
+      } catch {
+        throw new EmailOrganizationActionError(
+          "VALIDATION_FAILED",
+          "Invalid continuation cursor; start a fresh search.",
+          false
+        );
+      }
+    }
+    const fromMs = input.receivedFrom ? new Date(input.receivedFrom).getTime() : null;
+    const toMs = input.receivedTo ? new Date(input.receivedTo).getTime() : null;
+    const hasAttachmentFilter = input.hasAttachments !== undefined;
 
-    for (const folder of folders) {
+    for (let folderIndex = cursorState.folderIndex; folderIndex < folders.length; folderIndex += 1) {
+      const folder = folders[folderIndex];
       if (candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP) {
         capped = true;
         break;
@@ -225,7 +255,14 @@ export class EmailOrganizationSearchService extends BaseModule {
       searchedFolders.push(folder);
       candidatesSeen += result.candidates.length;
       capped = capped || result.capped || candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP;
+      // R15: hasAttachments is NOT server-filterable — it is reported as
+      // unknown (null) and forces incomplete results rather than silently
+      // returning rows that may fail the requested predicate.
       for (const candidate of result.candidates.slice(0, pageSize - rows.length)) {
+        // R15: exact UTC post-filter over the coarse IMAP date search.
+        const rowMs = candidate.date !== null ? new Date(candidate.date).getTime() : null;
+        if (fromMs !== null && (rowMs === null || rowMs < fromMs)) continue;
+        if (toMs !== null && (rowMs === null || rowMs >= toMs)) continue;
         rows.push({
           messageId: null,
           providerUid: candidate.uid,
@@ -234,11 +271,24 @@ export class EmailOrganizationSearchService extends BaseModule {
           subject: candidate.subject ?? "",
           receivedAt: candidate.date ?? "",
           isUnread: candidate.seen === false,
-          hasAttachments: false,
+          hasAttachments: hasAttachmentFilter ? null : false,
         });
       }
       if (rows.length >= pageSize) break;
     }
+    // R15: a page-full exit before the LAST folder means more results exist.
+    const moreFoldersRemain = rows.length >= pageSize && folders.length > 0;
+    const pageCutShort = rows.length >= pageSize;
+    const nextCursor =
+      pageCutShort && folders.length > 0
+        ? Buffer.from(
+            JSON.stringify({
+              folderIndex: Math.min(cursorState.folderIndex + (rows.length >= pageSize ? 0 : 1), folders.length),
+              uidOffset: 0,
+            })
+          ).toString("base64")
+        : null;
+    void moreFoldersRemain;
 
     const limitationParts: string[] = [];
     if (capped) {
@@ -269,10 +319,14 @@ export class EmailOrganizationSearchService extends BaseModule {
       failedFolders,
       rows,
       totalMatched: rows.length,
-      complete: !capped && !budgetExhausted && failedFolders.length === 0,
+      complete:
+        !capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && !hasAttachmentFilter,
       truncated: rows.length >= pageSize,
       lastSyncAt: null,
-      limitation: limitationParts.join(" "),
+      limitation: hasAttachmentFilter
+        ? `${limitationParts.join(" ")} Attachment presence is not server-searchable; rows report it as unknown.`.trim()
+        : limitationParts.join(" "),
+      nextCursor,
     };
   }
 }

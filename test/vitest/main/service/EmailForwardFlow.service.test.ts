@@ -887,10 +887,10 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
       revisionId: preview.revisionId,
       authorizationId: issued.id,
     });
-    expect(outcome.status).toBe("submitted"); // submission happened; outcome is per-recipient
-    if (outcome.status === "submitted") {
-      expect(outcome.rejected).toEqual(["finance@example.test"]);
-      expect(outcome.accepted).toEqual([]);
+    // R10: all-rejected is a definitive failure envelope, not 'submitted'.
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") {
+      expect(outcome.code).toBe("PROVIDER_REJECTED");
     }
     const op = await delivery["operationModule"].findByIdempotencyKey(
       `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`

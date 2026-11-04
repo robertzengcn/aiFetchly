@@ -86,6 +86,18 @@ export class EmailForwardDraftModule extends BaseModule {
     }
   }
 
+  async listRevisionsForPurge(
+    draftId: number
+  ): Promise<Array<{ bodyTextArtifactId: string | null; bodyHtmlArtifactId: string | null; attachmentsJson: string }>> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.listRevisionsForPurge(draftId);
+    } catch (error) {
+      log.error("Error listing revisions for purge:", error);
+      throw error;
+    }
+  }
+
   async markSubmitted(draftId: number, revisionId: number): Promise<boolean> {
     try {
       await this.ensureConnection();

@@ -62,6 +62,8 @@ export interface SendForwardInput {
 export type SendForwardOutcome =
   | {
       readonly status: "submitted";
+      /** succeeded = every envelope recipient accepted; partial otherwise. */
+      readonly outcome: "succeeded" | "partially_succeeded";
       readonly operationId: string;
       readonly accepted: readonly string[];
       readonly rejected: readonly string[];
@@ -316,6 +318,24 @@ export class EmailForwardDeliveryService extends BaseModule {
         return await this.failNoDispatch(claim.itemId, operation.operationId, "TOO_MANY_RECIPIENTS", "Envelope recipients exceed the limit.", requestCorrelationId);
       }
 
+      // R09: final coordinated admission — re-read the draft/revision pair
+      // right before dispatch. An edit or discard that won the race between
+      // claim and here must not let the OLD content leave.
+      const admission = await this.draftModule.readDraft(draft.id);
+      if (
+        admission === null ||
+        admission.status !== "ready" ||
+        admission.currentRevisionId !== revision.id
+      ) {
+        return await this.failNoDispatch(
+          claim.itemId,
+          operation.operationId,
+          "REVISION_CHANGED",
+          "The draft was edited or discarded between approval and dispatch; the old content was not sent.",
+          requestCorrelationId
+        );
+      }
+
       const sender = this.senderFactory({
         id: service.id,
         from: service.from,
@@ -410,8 +430,21 @@ export class EmailForwardDeliveryService extends BaseModule {
       if (outcome === "outcome_unknown") {
         return { status: "outcome_unknown", operationId: operation.operationId, requestCorrelationId };
       }
+      if (outcome === "failed") {
+        // R10: an all-rejected submission is a definitive failure, never a
+        // generic 'submitted' success envelope.
+        return {
+          status: "failed",
+          operationId: operation.operationId,
+          code: "PROVIDER_REJECTED",
+          error: "All envelope recipients were rejected by the server.",
+          requestCorrelationId,
+        };
+      }
       return {
         status: "submitted",
+        // R10: full vs partial acceptance is explicit at the top level.
+        outcome,
         operationId: operation.operationId,
         accepted,
         rejected,

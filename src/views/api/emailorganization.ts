@@ -40,6 +40,7 @@ export interface ForwardDraftPreviewDto {
   fromAddress: string;
   to: string[];
   cc: string[];
+  bcc: string[];
   subject: string;
   note: string | null;
   attachmentManifest: Array<{
@@ -208,11 +209,13 @@ export interface OrganizationSearchResultDto {
     subject: string;
     receivedAt: string;
     isUnread: boolean;
-    hasAttachments: boolean;
+    /** null = unknown (server rows cannot report attachment presence). */
+    hasAttachments: boolean | null;
   }>;
   totalMatched: number;
   complete: boolean;
   truncated: boolean;
+  nextCursor: string | null;
   lastSyncAt: string | null;
   limitation: string | null;
 }

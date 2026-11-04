@@ -31,6 +31,17 @@
         >
           {{ t("emailOrganization.check_status_action") || "Check status" }}
         </v-btn>
+        <v-btn
+          v-if="canCancel"
+          size="small"
+          variant="tonal"
+          color="error"
+          data-testid="org-op-cancel"
+          :loading="cancelling"
+          @click="onCancel"
+        >
+          {{ t("emailOrganization.cancel_button") || "Cancel" }}
+        </v-btn>
       </div>
 
       <div v-if="operation" class="text-body-2 text-medium-emphasis">
@@ -68,6 +79,7 @@ import {
   getEmailOrganizationOperation,
   restoreFromOperation,
   reconcileEmailOrganizationOperation,
+  cancelEmailOrganizationOperation,
 } from "@/views/api/emailorganization";
 import type { EmailOrganizationOperationDto } from "@/entityTypes/emailOrganizationTypes";
 
@@ -85,6 +97,7 @@ const operation = ref<EmailOrganizationOperationDto | null>(null);
 const errorMessage = ref<string | null>(null);
 const restoring = ref(false);
 const reconciling = ref(false);
+const cancelling = ref(false);
 
 const showUndo = computed(
   () =>
@@ -172,6 +185,29 @@ function itemIcon(status: string): string {
   }
 }
 
+const canCancel = computed(
+  () =>
+    operation.value !== null &&
+    (operation.value.status === "running" ||
+      operation.value.status === "prepared" ||
+      operation.value.status === "awaiting_approval" ||
+      operation.value.status === "authorized")
+);
+
+async function onCancel(): Promise<void> {
+  if (props.operationId === null) return;
+  cancelling.value = true;
+  errorMessage.value = null;
+  try {
+    await cancelEmailOrganizationOperation(props.operationId);
+    await load();
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    cancelling.value = false;
+  }
+}
+
 function itemSummary(item: EmailOrganizationOperationDto["items"][number]): string {
   const accepted = item.recipientOutcomes.filter((entry) => entry.outcome === "accepted").length;
   const rejected = item.recipientOutcomes.filter((entry) => entry.outcome === "rejected").length;
@@ -183,8 +219,11 @@ function itemSummary(item: EmailOrganizationOperationDto["items"][number]): stri
     );
   }
   const codeSuffix = item.errorCode !== null ? ` · ${item.errorCode}` : "";
-  if (item.destinationFolderPath) {
-    return `${t("emailOrganization.moved_to_prefix") || "Moved to"} ${item.destinationFolderPath} · ${item.status}${codeSuffix}`;
+  // R14: an intended destination is not a completed move — only completed
+  // items say 'moved to'; pending/failed items report status + error.
+  const completed = item.status === "succeeded" || item.status === "noop";
+  if (completed && item.destinationFolderPath) {
+    return `${t("emailOrganization.moved_to_prefix") || "Moved to"} ${item.destinationFolderPath}${codeSuffix}`;
   }
   return `${item.status}${codeSuffix}`;
 }

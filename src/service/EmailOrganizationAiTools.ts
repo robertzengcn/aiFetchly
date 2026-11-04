@@ -16,6 +16,7 @@ import type { EmailOrganizationItemStatus } from "@/entityTypes/emailOrganizatio
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { log } from "@/modules/Logger";
+import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { parseStringArrayJson } from "@/utils/jsonArray";
 
 /**
@@ -142,7 +143,25 @@ const cancelOperationSchema = z.object({
 
 export type EmailOrganizationToolResult<T> =
   | ({ success: true } & T & Record<string, unknown>)
-  | { success: false; error: string; code?: string; retryable?: boolean };
+  | {
+      success: false;
+      error: string;
+      code?: string;
+      retryable?: boolean;
+      /** R10: structured partial/failed outcome payload (inspectable). */
+      result?: Record<string, unknown>;
+    };
+
+/**
+ * R16: AI-serving organization tools gate entitlement BEFORE parsing,
+ * materialization, network or state writes (AGENTS.md AI-IPC rule; the
+ * manual IPC path stays independent of AI entitlement by design).
+ */
+async function gateAiEntitlement(): Promise<EmailOrganizationToolResult<never> | null> {
+  const enabled = await ensureHostedAiEnabled();
+  if (enabled) return null;
+  return { success: false, error: "AI is disabled", code: "AI_DISABLED" };
+}
 
 function failure(error: unknown): EmailOrganizationToolResult<never> {
   if (error instanceof Error && error.name === "EmailOrganizationActionError") {
@@ -164,6 +183,22 @@ function actionIdFor(context: SkillExecutionContext | undefined): string | null 
   return context?.sourceUserMessageId ?? context?.toolCallId ?? null;
 }
 
+/**
+ * R03 (bounded): service-level second guard — scheduled executions are
+ * denied here BEFORE dispatch even if a denylist regresses. The flag is
+ * threaded by the host's scheduled executor, never by model arguments.
+ */
+function assertInteractive(context: SkillExecutionContext | undefined): EmailOrganizationToolResult<never> | null {
+  if (context?.scheduledOrigin === true) {
+    return {
+      success: false,
+      error: "Organization mutations are not allowed in scheduled executions.",
+      code: "ACTION_NOT_AUTHORIZED",
+    };
+  }
+  return null;
+}
+
 // ---- Read-only tools ----
 
 let capabilityServiceSingleton: EmailOrganizationCapabilityService | null = null;
@@ -177,7 +212,9 @@ function getCapabilityService(): EmailOrganizationCapabilityService {
 export async function listEmailFolders(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ email_service_id: number; folders: unknown[]; capabilities: unknown }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = listEmailFoldersSchema.parse(args);
     const capabilityService = getCapabilityService();
     const [folders, capabilities] = await Promise.all([
@@ -198,7 +235,9 @@ export async function listEmailFolders(
 export async function getEmailOperation(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ operation: EmailOrganizationOperationDto | null }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = getOperationSchema.parse(args);
     const module = new EmailOrganizationOperationModule();
     const operation = await module.readOperation(input.operation_id);
@@ -218,7 +257,9 @@ export async function createEmailForwardDraft(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ draft: ForwardDraftPreview }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = createForwardDraftSchema.parse(args);
     const service = new EmailForwardDraftService();
     const draft = await service.createDraft({
@@ -243,7 +284,9 @@ export async function createEmailForwardDraft(
 export async function updateEmailForwardDraft(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ draft: ForwardDraftPreview }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = updateForwardDraftSchema.parse(args);
     const service = new EmailForwardDraftService();
     const draft = await service.updateDraft({
@@ -268,7 +311,11 @@ export async function sendEmailForward(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
-  try {
+  const scheduledGuard = assertInteractive(context);
+    if (scheduledGuard !== null) return scheduledGuard;
+    const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = sendForwardSchema.parse(args);
     const draftModule = new EmailForwardDraftModule();
     const revision = await draftModule.readRevision(input.revision_id);
@@ -293,6 +340,35 @@ export async function sendEmailForward(
     log.info(
       `[EmailOrganizationAiTools] send_email_forward outcome=${outcome.status} correlation=${outcome.requestCorrelationId}`
     );
+    // R10: top-level success only for VERIFIED complete success; partial
+    // acceptance, failure and unknowns surface through the envelope.
+    const success =
+      (outcome.status === "submitted" && outcome.outcome === "succeeded") ||
+      (outcome.status === "failed" && false) ||
+      false;
+    void success;
+    if (outcome.status === "failed" || outcome.status === "outcome_unknown") {
+      return {
+        success: false,
+        error:
+          outcome.status === "failed"
+            ? outcome.error
+            : "Forward outcome unknown; check status before retrying.",
+        code:
+          outcome.status === "failed"
+            ? outcome.code
+            : "OUTCOME_UNKNOWN",
+        result: { ...outcome } as unknown as Record<string, unknown>,
+      };
+    }
+    if (outcome.status === "submitted" && outcome.outcome === "partially_succeeded") {
+      return {
+        success: false,
+        error: "Partial recipient acceptance: not all recipients were accepted.",
+        code: "PARTIAL_RECIPIENT_ACCEPTANCE",
+        result: { ...outcome } as unknown as Record<string, unknown>,
+      };
+    }
     return { success: true, result: { ...outcome } };
   } catch (error) {
     return failure(error);
@@ -303,7 +379,11 @@ export async function moveEmailToTrash(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
-  try {
+  const scheduledGuard = assertInteractive(context);
+    if (scheduledGuard !== null) return scheduledGuard;
+    const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = moveToTrashSchema.parse(args);
     const actionService = new EmailMailboxActionService();
     const result =
@@ -328,7 +408,11 @@ export async function restoreEmail(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
-  try {
+  const scheduledGuard = assertInteractive(context);
+    if (scheduledGuard !== null) return scheduledGuard;
+    const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = restoreEmailSchema.parse(args);
     const actionService = new EmailMailboxActionService();
     const result =
@@ -353,7 +437,9 @@ export async function restoreEmail(
 export async function cancelEmailOperation(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = cancelOperationSchema.parse(args);
     const module = new EmailOrganizationOperationModule();
     const cancelled = await module.cancelPending(input.operation_id);
@@ -376,7 +462,9 @@ export async function cancelEmailOperation(
 export async function searchEmails(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ search: OrganizationSearchResult }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = searchEmailsSchema.parse(args);
     const service = new EmailOrganizationSearchService();
     const search = await service.search({
@@ -401,7 +489,9 @@ export async function prepareEmailSelection(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ selection: Record<string, unknown> }>> {
-  try {
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
+    try {
     const input = prepareSelectionSchema.parse(args);
     const service = new EmailOrganizationSelectionService();
     const selection = await service.prepareSelection({

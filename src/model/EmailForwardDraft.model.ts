@@ -127,6 +127,17 @@ export class EmailForwardDraftModel extends BaseDb {
     return (result.affected ?? 0) === 1;
   }
 
+  /** R17: every revision of a draft, for full-retention purge on discard. */
+  async listRevisionsForPurge(
+    draftId: number
+  ): Promise<Array<{ bodyTextArtifactId: string | null; bodyHtmlArtifactId: string | null; attachmentsJson: string }>> {
+    return await this.revisionRepository
+      .createQueryBuilder("rev")
+      .select(["rev.bodyTextArtifactId", "rev.bodyHtmlArtifactId", "rev.attachmentsJson"])
+      .where("rev.draftId = :draftId", { draftId })
+      .getMany();
+  }
+
   async markDiscarded(draftId: number): Promise<boolean> {
     const result = await this.draftRepository
       .createQueryBuilder()

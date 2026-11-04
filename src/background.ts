@@ -1912,6 +1912,21 @@ function initialize() {
               err instanceof Error ? err.message : String(err)
             );
           });
+        // R17: an app open past the TTL must still run retention sweeps.
+        const retentionTimer = setInterval(
+          () => {
+            void new EmailOrganizationArtifactStore(userdataPath)
+              .purgeOlderThan(new Date(Date.now() - EMAIL_ORGANIZATION_LIMITS.unapprovedArtifactTtlMs))
+              .catch((err: unknown) => {
+                log.warn(
+                  "[email-organization] periodic artifact sweep failed:",
+                  err instanceof Error ? err.message : String(err)
+                );
+              });
+          },
+          60 * 60 * 1000
+        );
+        retentionTimer.unref();
       } catch (err) {
         log.error(
           "[email-organization] startup recovery import failed:",
