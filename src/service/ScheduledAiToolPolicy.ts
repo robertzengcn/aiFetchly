@@ -58,6 +58,7 @@ export const SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS: ReadonlySet<string> = new Set(
     "create_email_forward_draft",
     "update_email_forward_draft",
     "cancel_email_operation",
+    "prepare_email_selection",
   ]
 );
 

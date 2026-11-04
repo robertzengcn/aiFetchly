@@ -281,6 +281,15 @@ export class EmailMailboxActionService extends BaseModule {
     await this.ensureConnection();
     const selectionService = new EmailOrganizationSelectionService();
     const selection = await selectionService.readValidSelection(input.selectionId);
+    if (selection.kind !== "trash") {
+      // Consent integrity: a selection frozen for one action must never be
+      // executed under another (a trash selection executed as restore would
+      // move messages INTO Trash under a restore confirmation).
+      return this.failedResult(
+        "VALIDATION_FAILED",
+        `Selection was frozen for '${selection.kind}', not 'trash'.`
+      );
+    }
     const parsed = selectionService.parseSelection(selection);
     const destinations: Record<number, string> = {};
     for (const messageId of parsed.messageIds) {
@@ -308,6 +317,12 @@ export class EmailMailboxActionService extends BaseModule {
     await this.ensureConnection();
     const selectionService = new EmailOrganizationSelectionService();
     const selection = await selectionService.readValidSelection(input.selectionId);
+    if (selection.kind !== "restore") {
+      return this.failedResult(
+        "VALIDATION_FAILED",
+        `Selection was frozen for '${selection.kind}', not 'restore'.`
+      );
+    }
     const parsed = selectionService.parseSelection(selection);
     if (parsed.destinations === null) {
       return this.failedResult(
@@ -376,7 +391,21 @@ export class EmailMailboxActionService extends BaseModule {
     if (!item) return;
 
     const location = await this.locationModule.readByMessageId(messageId);
-    const frozenVersion = await this.selectionFrozenVersion(selection, messageId);
+    let frozenVersion: number | null;
+    try {
+      frozenVersion = await this.selectionFrozenVersion(selection, messageId);
+    } catch (error) {
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId,
+        status: "failed",
+        errorCode: error instanceof Error && error.name === "EmailOrganizationActionError"
+          ? (error as Error & { code: string }).code
+          : "LOCATION_STALE",
+        sanitizedError: error instanceof Error ? error.message.slice(0, 240) : String(error),
+      });
+      return;
+    }
     if (!location || location.state !== "verified" || location.folderPath === null || location.uidValidity === null) {
       await this.operationModule.finalizeItem({
         itemId: item.id,
@@ -455,17 +484,34 @@ export class EmailMailboxActionService extends BaseModule {
     await this.persistMoveOutcome(operationId, claim.itemId, messageId, location.emailServiceId, move, destinationFolder, origin, undefined, claim.attemptId, location.version);
   }
 
+  /**
+   * Fail closed (review): a malformed frozen-version row must not downgrade
+   * bulk execution to unpinned current-state execution. Null is only
+   * returned when the message legitimately has no frozen entry.
+   */
   private async selectionFrozenVersion(
     selection: EmailOrganizationSelectionEntity,
     messageId: number
   ): Promise<number | null> {
+    let versions: Record<string, number>;
     try {
-      const versions = JSON.parse(selection.locationVersionsJson) as Record<string, number>;
-      const version = versions[String(messageId)];
-      return typeof version === "number" ? version : null;
+      versions = JSON.parse(selection.locationVersionsJson) as Record<string, number>;
     } catch {
-      return null;
+      throw new EmailOrganizationActionError(
+        "LOCATION_STALE",
+        "The frozen selection's version record is unreadable; prepare the selection again.",
+        false
+      );
     }
+    const version = versions[String(messageId)];
+    if (typeof version !== "number") {
+      throw new EmailOrganizationActionError(
+        "LOCATION_STALE",
+        `Message ${messageId} has no frozen version in this selection; prepare it again.`,
+        false
+      );
+    }
+    return version;
   }
 
   async restoreFromOperation(input: RestoreFromOperationInput): Promise<MailboxActionOutcome> {

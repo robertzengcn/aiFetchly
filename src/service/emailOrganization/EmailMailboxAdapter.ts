@@ -113,6 +113,11 @@ export interface ServerSearchInput {
   readonly unreadOnly?: boolean;
   /** Maximum candidates to accept from this folder's SEARCH. */
   readonly cap: number;
+  /**
+   * How many candidates get full envelope metadata (default: cap). The
+   * caller typically needs only a page worth; fetching the rest is waste.
+   */
+  readonly metadataLimit?: number;
 }
 
 export type ServerSearchResult =

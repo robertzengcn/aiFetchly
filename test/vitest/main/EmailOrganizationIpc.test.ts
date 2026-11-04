@@ -41,6 +41,7 @@ import {
   EMAIL_FORWARD_DRAFT_CREATE,
   EMAIL_ORG_TRASH,
   EMAIL_ORG_OPERATION_GET,
+  EMAIL_ORG_SEARCH,
 } from "@/config/channellist";
 
 interface Envelope {
@@ -115,5 +116,31 @@ describe("email organization IPC surface", () => {
   it("rejects short operation ids before any lookup", async () => {
     const result = await invoke(EMAIL_ORG_OPERATION_GET, { operationId: "x" });
     expect(result.status).toBe(false);
+  });
+
+  it("enforces exactly-one of messageId/selectionId on trash (review)", async () => {
+    const neither = await invoke(EMAIL_ORG_TRASH, { actionId: "x" });
+    expect(neither.status).toBe(false);
+    const both = await invoke(EMAIL_ORG_TRASH, { messageId: 1, selectionId: "sel-12345678" });
+    expect(both.status).toBe(false);
+  });
+
+  it("rejects invalid date bounds on search (review)", async () => {
+    const garbage = await invoke(EMAIL_ORG_SEARCH, {
+      emailServiceId: 1,
+      receivedFrom: "not-a-date",
+    });
+    expect(garbage.status).toBe(false);
+    const swapped = await invoke(EMAIL_ORG_SEARCH, {
+      emailServiceId: 1,
+      receivedFrom: "2026-11-04T00:00:00Z",
+      receivedTo: "2026-11-03T00:00:00Z",
+    });
+    expect(swapped.status).toBe(false);
+    const emptyFolders = await invoke(EMAIL_ORG_SEARCH, {
+      emailServiceId: 1,
+      folderPaths: [],
+    });
+    expect(emptyFolders.status).toBe(false);
   });
 });

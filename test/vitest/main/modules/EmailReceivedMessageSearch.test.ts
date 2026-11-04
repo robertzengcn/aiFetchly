@@ -103,6 +103,48 @@ describe("received-message search semantics (BUG-02/BUG-03)", () => {
     expect(rows.map((row) => row.id).sort()).toEqual([601, 604]);
   });
 
+  it("readByIds preserves the requested order and skips unknown ids (review)", async () => {
+    const rows = await model.readByIds([603, 999999, 601]);
+    expect(rows.map((row) => row.id)).toEqual([603, 601]);
+    expect(await model.readByIds([])).toEqual([]);
+  });
+
+  it("searchForOrganization honors date bounds, unread and attachment filters (review)", async () => {
+    // receivedFrom is inclusive; receivedTo is exclusive. Seeds use now().
+    const now = Date.now();
+    const inclusive = await model.searchForOrganization({
+      emailServiceId: 1,
+      receivedFrom: new Date(now - 60 * 60 * 1000),
+      receivedTo: new Date(now + 60 * 60 * 1000),
+      limit: 50,
+    });
+    expect(inclusive.totalMatched).toBe(5);
+    const exclusive = await model.searchForOrganization({
+      emailServiceId: 1,
+      receivedTo: new Date(now - 60 * 60 * 1000),
+      limit: 50,
+    });
+    expect(exclusive.totalMatched).toBe(0);
+    const unread = await model.searchForOrganization({
+      emailServiceId: 1,
+      unreadOnly: true,
+      limit: 50,
+    });
+    expect(unread.totalMatched).toBe(3);
+    const withAttachments = await model.searchForOrganization({
+      emailServiceId: 1,
+      hasAttachments: true,
+      limit: 50,
+    });
+    expect(withAttachments.totalMatched).toBe(0);
+    const fromSender = await model.searchForOrganization({
+      emailServiceId: 1,
+      fromAddress: "sender@example.test",
+      limit: 50,
+    });
+    expect(fromSender.totalMatched).toBe(5);
+  });
+
   it("never returns a broader set for wildcard-only input", async () => {
     // A bare "_" under wildcard semantics would match EVERY row; literal
     // semantics match only the two subjects containing a real underscore.

@@ -218,6 +218,90 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
     expect(absent.status).toBe("absent");
   });
 
+  it("searchUids maps the query and extracts envelope metadata (FR-17 server)", async () => {
+    const state = makeState();
+    const holder: { value: FakeConnection | null } = { value: null };
+    const adapter = new ImapEmailMailboxAdapter({
+      connectionFactory: () => {
+        const fake = new FakeConnection(state);
+        fake.search = (async (query) => {
+          fake.calls.push({ kind: "search", args: [query] });
+          return [11, 12, 13];
+        }) as FakeConnection["search"];
+        fake.fetchOne = (async (seq: string | number) => ({
+          flags: new Set<string>(["\\seen"]),
+          envelope: {
+            from: [{ address: "a@b.test" }],
+            subject: `subject ${String(seq)}`,
+            date: new Date("2026-09-15T10:00:00Z"),
+          },
+        })) as unknown as FakeConnection["fetchOne"];
+        holder.value = fake;
+        return fake;
+      },
+    });
+    const connection = holder;
+    const result = await adapter.searchUids(config, "INBOX", {
+      fromAddress: "a@b.test",
+      subject: "September",
+      since: new Date("2026-09-01T00:00:00Z"),
+      before: new Date("2026-10-01T00:00:00Z"),
+      unreadOnly: false,
+      cap: 1000,
+      metadataLimit: 2,
+    });
+    expect(result.status).toBe("listed");
+    if (result.status !== "listed") return;
+    // Envelope fetches are bounded to metadataLimit, not the cap.
+    expect(result.candidates.length).toBe(2);
+    expect(result.capped).toBe(false);
+    expect(result.candidates[0].fromAddress).toBe("a@b.test");
+    expect(result.candidates[0].seen).toBe(true);
+    const searchCall = (connection.value as FakeConnection).calls.find(
+      (c) => c.kind === "search"
+    );
+    const query = searchCall?.args[0] as Record<string, unknown>;
+    expect(query["since"]).toEqual(new Date("2026-09-01T00:00:00Z"));
+    expect(query["before"]).toEqual(new Date("2026-10-01T00:00:00Z"));
+    expect(query["subject"]).toBe("September");
+    expect(query["from"]).toBe("a@b.test");
+  });
+
+  it("searchUids marks the result capped at exactly the candidate bound", async () => {
+    const state = makeState();
+    const adapter = new ImapEmailMailboxAdapter({
+      connectionFactory: () => {
+        const fake = new FakeConnection(state);
+        fake.search = (async () => [1, 2, 3]) as unknown as FakeConnection["search"];
+        return fake;
+      },
+    });
+    const connection = { value: null };
+    const result = await adapter.searchUids(config, "INBOX", {
+      cap: 3,
+      metadataLimit: 0,
+    });
+    expect(result.status).toBe("listed");
+    if (result.status !== "listed") return;
+    expect(result.capped).toBe(true);
+    expect(result.candidates.length).toBe(0);
+  });
+
+  it("searchUids reports PROVIDER_REJECTED when the server cannot search", async () => {
+    const state = makeState();
+    const adapter = new ImapEmailMailboxAdapter({
+      connectionFactory: () => {
+        const fake = new FakeConnection(state);
+        fake.search = (async () => false) as unknown as FakeConnection["search"];
+        return fake;
+      },
+    });
+    const connection = { value: null };
+    const result = await adapter.searchUids(config, "INBOX", { cap: 10 });
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.reasonCode).toBe("PROVIDER_REJECTED");
+  });
+
   it("probes capabilities and special-use folders in one connection", async () => {
     const adapter = buildAdapter(makeState());
     const probe = await adapter.probeCapabilities(config);

@@ -88,6 +88,23 @@ describe("scheduled-loop hard block (FR-16)", () => {
     expect(SCHEDULED_LOOP_READ_ONLY_TOOLS.has("get_email_operation")).toBe(true);
   });
 
+  it("classifies Stage C tools for scheduled loops (review T4)", () => {
+    // search_emails is genuinely read-only → curated scheduled read-only tier.
+    expect(SCHEDULED_LOOP_READ_ONLY_TOOLS.has("search_emails")).toBe(true);
+    expect(SCHEDULED_LOOP_ALWAYS_BLOCKED_TOOLS.has("search_emails")).toBe(false);
+    // prepare_email_selection writes local state → NOT read-only, NOT schedulable.
+    expect(SCHEDULED_LOOP_READ_ONLY_TOOLS.has("prepare_email_selection")).toBe(false);
+    const prepare = fakeSkill("prepare_email_selection");
+    const prepareDecision = canAutoApproveScheduledTool({
+      skill: prepare,
+      taskPolicy: { allowedTools: ["prepare_email_selection"] } as never,
+      toolName: "prepare_email_selection",
+      approvalMode: "full_access",
+    });
+    expect(prepareDecision.allowed).toBe(false);
+    expect(prepareDecision.riskLevel).toBe("blocked");
+  });
+
   it("refuses mutating tools even under full_access approval mode", () => {
     for (const name of MUTATING_TOOLS) {
       const skill = fakeSkill(name);

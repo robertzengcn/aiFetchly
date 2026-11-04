@@ -4,6 +4,7 @@ import { EmailServiceModule } from "@/modules/emailServiceModule";
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
 import type { EmailMailboxAdapter } from "@/service/emailOrganization/EmailMailboxAdapter";
 import { ImapEmailMailboxAdapter } from "@/service/emailOrganization/ImapEmailMailboxAdapter";
+import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 import { log } from "@/modules/Logger";
@@ -17,6 +18,7 @@ import { log } from "@/modules/Logger";
  */
 
 const SERVER_SCAN_CANDIDATE_CAP = 1000;
+const SERVER_SCAN_BUDGET_MS = 30_000;
 const SERVER_SCAN_PAGE_MAX = 100;
 
 export interface OrganizationSearchInput {
@@ -50,6 +52,8 @@ export interface OrganizationSearchResult {
   readonly source: "local" | "server";
   readonly emailServiceId: number;
   readonly searchedFolders: readonly string[];
+  /** Folders whose server search failed; completeness is false when set. */
+  readonly failedFolders: ReadonlyArray<{ readonly folderPath: string; readonly reasonCode: string }>;
   readonly rows: readonly OrganizationSearchResultRow[];
   readonly totalMatched: number;
   readonly complete: boolean;
@@ -63,13 +67,19 @@ export class EmailOrganizationSearchService extends BaseModule {
   private readonly serviceModule: EmailServiceModule;
   private readonly locationModule: EmailMessageLocationModule;
   private readonly adapter: EmailMailboxAdapter;
+  private readonly capabilityService: EmailOrganizationCapabilityService;
 
-  constructor(options?: { adapter?: EmailMailboxAdapter }) {
+  constructor(options?: {
+    adapter?: EmailMailboxAdapter;
+    capabilityService?: EmailOrganizationCapabilityService;
+  }) {
     super();
     this.messageModule = new EmailReceivedMessageModule();
     this.serviceModule = new EmailServiceModule();
     this.locationModule = new EmailMessageLocationModule();
     this.adapter = options?.adapter ?? new ImapEmailMailboxAdapter();
+    this.capabilityService =
+      options?.capabilityService ?? new EmailOrganizationCapabilityService();
   }
 
   async search(input: OrganizationSearchInput): Promise<OrganizationSearchResult> {
@@ -92,8 +102,22 @@ export class EmailOrganizationSearchService extends BaseModule {
       );
     }
     const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), 100);
+    // PRD §7: Trash is searched only when explicitly listed. Unscoped local
+    // searches exclude the account's Trash folder.
+    let excludedFolder: string | null = null;
+    if (input.folderPaths === undefined) {
+      const capabilities = await this.capabilityService.getCapabilities(input.emailServiceId);
+      excludedFolder = capabilities.trashFolderPath;
+    } else if (input.folderPaths.length === 0) {
+      throw new EmailOrganizationActionError(
+        "VALIDATION_FAILED",
+        "folderPaths must contain at least one folder when provided.",
+        false
+      );
+    }
     const result = await this.messageModule.searchForOrganization({
       emailServiceId: input.emailServiceId,
+      excludeFolderPath: excludedFolder ?? undefined,
       folderPaths: input.folderPaths,
       fromAddress: input.fromAddress,
       subject: input.subject,
@@ -111,6 +135,7 @@ export class EmailOrganizationSearchService extends BaseModule {
       source: "local",
       emailServiceId: input.emailServiceId,
       searchedFolders: input.folderPaths ? [...input.folderPaths] : ["ALL_LOCAL"],
+      failedFolders: [],
       rows: result.rows.map((row) => ({
         messageId: row.id,
         providerUid: row.providerUid,
@@ -126,8 +151,8 @@ export class EmailOrganizationSearchService extends BaseModule {
       truncated: result.truncated,
       lastSyncAt: service.lastReceiveSyncAt ? service.lastReceiveSyncAt.toISOString() : null,
       limitation:
-        input.folderPaths === undefined
-          ? "No explicit folder scope: results cover locally stored messages across folders; Trash is included only where a stored location says so."
+        excludedFolder !== null
+          ? `Unscoped local search: messages in ${excludedFolder} are excluded (Trash is searched only when explicitly listed).`
           : null,
     };
   }
@@ -152,14 +177,30 @@ export class EmailOrganizationSearchService extends BaseModule {
     const folders = input.folderPaths && input.folderPaths.length > 0
       ? [...input.folderPaths]
       : [receiveConfig.folder];
+    if (folders.length === 0) {
+      throw new EmailOrganizationActionError(
+        "VALIDATION_FAILED",
+        "folderPaths must contain at least one folder when provided.",
+        false
+      );
+    }
     const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), SERVER_SCAN_PAGE_MAX);
     const rows: OrganizationSearchResultRow[] = [];
+    const failedFolders: Array<{ folderPath: string; reasonCode: string }> = [];
+    const searchedFolders: string[] = [];
     let candidatesSeen = 0;
     let capped = false;
+    // Design §11: bounded work — 1000 candidates or 30 seconds overall.
+    const deadline = Date.now() + SERVER_SCAN_BUDGET_MS;
+    let budgetExhausted = false;
 
     for (const folder of folders) {
       if (candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP) {
         capped = true;
+        break;
+      }
+      if (Date.now() >= deadline) {
+        budgetExhausted = true;
         break;
       }
       const result = await this.adapter.searchUids(
@@ -172,12 +213,17 @@ export class EmailOrganizationSearchService extends BaseModule {
           before: input.receivedTo ? new Date(input.receivedTo) : undefined,
           unreadOnly: input.unreadOnly,
           cap: SERVER_SCAN_CANDIDATE_CAP - candidatesSeen,
+          metadataLimit: Math.max(pageSize - rows.length, 0),
         }
       );
-      if (result.status !== "listed") continue;
+      // Review (false completeness): a failed folder search is never a
+      // "no matches" result — it is disclosed and forces complete:false.
+      if (result.status !== "listed") {
+        failedFolders.push({ folderPath: folder, reasonCode: result.reasonCode });
+        continue;
+      }
+      searchedFolders.push(folder);
       candidatesSeen += result.candidates.length;
-      // Honest completeness: the adapter reports when its SEARCH hit the
-      // requested bound, and the global cap applies across folders.
       capped = capped || result.capped || candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP;
       for (const candidate of result.candidates.slice(0, pageSize - rows.length)) {
         rows.push({
@@ -194,18 +240,39 @@ export class EmailOrganizationSearchService extends BaseModule {
       if (rows.length >= pageSize) break;
     }
 
+    const limitationParts: string[] = [];
+    if (capped) {
+      limitationParts.push(
+        `The server scan stopped at the ${SERVER_SCAN_CANDIDATE_CAP}-candidate bound; results are incomplete and not an exact total.`
+      );
+    }
+    if (budgetExhausted) {
+      limitationParts.push(
+        `The server scan exceeded its ${Math.round(SERVER_SCAN_BUDGET_MS / 1000)}s budget; remaining folders were not searched.`
+      );
+    }
+    if (failedFolders.length > 0) {
+      limitationParts.push(
+        `${failedFolders.length} folder(s) could not be searched (${failedFolders.map((f) => f.reasonCode).join(", ")}).`
+      );
+    }
+    if (!capped && !budgetExhausted && failedFolders.length === 0) {
+      limitationParts.push(
+        "Server metadata is a bounded scan, not an exact total; attachment presence is not server-filtered and reports false locally."
+      );
+    }
+
     return {
       source: "server",
       emailServiceId: input.emailServiceId,
-      searchedFolders: folders,
+      searchedFolders: searchedFolders,
+      failedFolders,
       rows,
       totalMatched: rows.length,
-      complete: !capped,
+      complete: !capped && !budgetExhausted && failedFolders.length === 0,
       truncated: rows.length >= pageSize,
       lastSyncAt: null,
-      limitation: capped
-        ? `The server scan stopped at the ${SERVER_SCAN_CANDIDATE_CAP}-candidate bound; results are incomplete and not an exact total.`
-        : "Server metadata is a bounded scan, not an exact total; attachment presence is not server-filtered and reports false locally.",
+      limitation: limitationParts.join(" "),
     };
   }
 }

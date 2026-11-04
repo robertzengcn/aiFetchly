@@ -357,6 +357,33 @@ export class EmailOrganizationOperationModel extends BaseDb {
     });
   }
 
+  /**
+   * Recorded original folders (beforeFolderPath) of the latest succeeded
+   * trash item per message — the durable source for restore-selection
+   * destinations. Only verified trash provenance qualifies (design §10.2).
+   */
+  async findSucceededTrashDestinations(
+    messageIds: readonly number[]
+  ): Promise<Record<number, string>> {
+    if (messageIds.length === 0) return {};
+    const rows = await this.itemRepository
+      .createQueryBuilder("item")
+      .innerJoin(EmailOrganizationOperationEntity, "op", "op.operationId = item.operationId")
+      .where("item.messageId IN (:...messageIds)", { messageIds: [...messageIds] })
+      .andWhere("op.kind = :kind", { kind: "trash" })
+      .andWhere("item.status IN (:...statuses)", { statuses: ["succeeded", "noop"] })
+      .andWhere("item.beforeFolderPath IS NOT NULL")
+      .orderBy("item.id", "DESC")
+      .getMany();
+    const destinations: Record<number, string> = {};
+    for (const item of rows) {
+      if (destinations[item.messageId] === undefined && item.beforeFolderPath !== null) {
+        destinations[item.messageId] = item.beforeFolderPath;
+      }
+    }
+    return destinations;
+  }
+
   /** Persist provider result evidence on a non-resolved attempt. */
   async recordAttemptEvidence(attemptId: number, resultJson: string): Promise<void> {
     await this.attemptRepository

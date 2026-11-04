@@ -32,4 +32,15 @@ export class EmailOrganizationSelectionModel extends BaseDb {
   async read(selectionId: string): Promise<EmailOrganizationSelectionEntity | null> {
     return await this.repository.findOne({ where: { selectionId } });
   }
+
+  /** Retention: deletes selections whose expiry has passed. */
+  async purgeExpiredSelections(now: Date): Promise<number> {
+    const result = await this.repository
+      .createQueryBuilder()
+      .delete()
+      .where("expiresAt < :now", { now })
+      .execute();
+    return result.affected ?? 0;
+  }
 }
+

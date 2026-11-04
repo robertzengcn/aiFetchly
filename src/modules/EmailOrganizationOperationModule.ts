@@ -109,6 +109,18 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
+  async findSucceededTrashDestinations(
+    messageIds: readonly number[]
+  ): Promise<Record<number, string>> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.findSucceededTrashDestinations(messageIds);
+    } catch (error) {
+      log.error("Error finding succeeded trash destinations:", error);
+      throw error;
+    }
+  }
+
   async recordAttemptEvidence(attemptId: number, resultJson: string): Promise<void> {
     try {
       await this.ensureConnection();

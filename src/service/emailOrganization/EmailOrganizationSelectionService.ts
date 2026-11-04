@@ -6,6 +6,7 @@ import { EmailOrganizationSelectionModel } from "@/model/EmailOrganizationSelect
 import { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSelection.entity";
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
 import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import { log } from "@/modules/Logger";
@@ -58,11 +59,13 @@ export class EmailOrganizationSelectionService extends BaseModule {
   private readonly selectionModel: EmailOrganizationSelectionModel;
   private readonly locationModule: EmailMessageLocationModule;
   private readonly capabilityService: EmailOrganizationCapabilityService;
+  private readonly operationModule: EmailOrganizationOperationModule;
 
   constructor(options?: { capabilityService?: EmailOrganizationCapabilityService }) {
     super();
     this.selectionModel = new EmailOrganizationSelectionModel(this.dbpath);
     this.locationModule = new EmailMessageLocationModule();
+    this.operationModule = new EmailOrganizationOperationModule();
     this.capabilityService =
       options?.capabilityService ?? new EmailOrganizationCapabilityService();
   }
@@ -126,6 +129,19 @@ export class EmailOrganizationSelectionService extends BaseModule {
       }
       const trashFolder: string = capabilities.trashFolderPath;
       destinations = Object.fromEntries(uniqueIds.map((id) => [id, trashFolder]));
+    } else {
+      // Restore destinations freeze at prepare time from durable trash
+      // provenance (review S4): never accepted from the caller at execution.
+      const recorded = await this.operationModule.findSucceededTrashDestinations(uniqueIds);
+      const missing = uniqueIds.filter((id) => recorded[id] === undefined);
+      if (missing.length > 0) {
+        throw new EmailOrganizationActionError(
+          "OPERATION_NOT_FOUND",
+          `No successful AiFetchly Trash record for message(s) ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "…" : ""}; restore needs recorded provenance.`,
+          false
+        );
+      }
+      destinations = recorded;
     }
 
     const payloadHash = crypto
@@ -137,6 +153,17 @@ export class EmailOrganizationSelectionService extends BaseModule {
       )
       .digest("hex");
 
+    const filtersSummaryJson = input.filtersSummary
+      ? JSON.stringify(input.filtersSummary)
+      : null;
+    if (filtersSummaryJson !== null && filtersSummaryJson.length > 4096) {
+      // Review: bound the persisted coverage summary (unbounded JSON writes).
+      throw new EmailOrganizationActionError(
+        "VALIDATION_FAILED",
+        "The filters summary exceeds 4 KiB; send a compact provenance summary.",
+        false
+      );
+    }
     const entity = await this.selectionModel.create({
       selectionId: crypto.randomUUID() as string,
       emailServiceId: input.emailServiceId,
@@ -145,7 +172,7 @@ export class EmailOrganizationSelectionService extends BaseModule {
       locationVersionsJson: JSON.stringify(versions),
       destinationsJson: destinations ? JSON.stringify(destinations) : null,
       payloadHash,
-      filtersSummaryJson: input.filtersSummary ? JSON.stringify(input.filtersSummary) : null,
+      filtersSummaryJson,
       ownerContext: input.ownerContext ?? null,
       expiresAt: new Date(Date.now() + SELECTION_TTL_MS),
     });
@@ -191,6 +218,13 @@ export class EmailOrganizationSelectionService extends BaseModule {
     return { messageIds, versions, destinations };
   }
 
+  /** Retention: purge expired selections (called from the startup sweep). */
+  async purgeExpired(): Promise<number> {
+    await this.ensureConnection();
+    const model = new EmailOrganizationSelectionModel(this.dbpath);
+    return await model.purgeExpiredSelections(new Date());
+  }
+
   private toPreview(entity: EmailOrganizationSelectionEntity): SelectionPreview {
     return {
       selectionId: entity.selectionId,
@@ -205,3 +239,4 @@ export class EmailOrganizationSelectionService extends BaseModule {
     };
   }
 }
+

@@ -252,11 +252,17 @@ export function registerEmailOrganizationIpcHandlers(): void {
   registerValidatedHandler(EMAIL_ORG_TRASH, emailOrgTrashInputSchema, async (input) => {
     try {
       const actionService = new EmailMailboxActionService();
-      return await actionService.trashMessage({
-        messageId: input.messageId,
-        origin: "ui_action",
-        actionId: input.actionId ?? newUiActionId(),
-      });
+      return input.selectionId !== undefined
+        ? await actionService.trashSelection({
+            selectionId: input.selectionId,
+            origin: "ui_action",
+            actionId: input.actionId ?? newUiActionId(),
+          })
+        : await actionService.trashMessage({
+            messageId: input.messageId as number,
+            origin: "ui_action",
+            actionId: input.actionId ?? newUiActionId(),
+          });
     } catch (error) {
       log.error("EMAIL_ORG_TRASH failed:", error);
       throw toStructuredError(error);

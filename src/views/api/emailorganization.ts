@@ -160,6 +160,14 @@ export async function moveMessageToTrash(
   return await windowInvoke(EMAIL_ORG_TRASH, { messageId, actionId: actionId ?? null });
 }
 
+/** Executes a frozen bulk selection (review: closes the prepare/execute gap). */
+export async function trashSelection(
+  selectionId: string,
+  actionId?: string
+): Promise<MailboxActionResultDto> {
+  return await windowInvoke(EMAIL_ORG_TRASH, { selectionId, actionId: actionId ?? null });
+}
+
 export async function restoreFromOperation(
   operationId: string,
   destinationFolderPath?: string

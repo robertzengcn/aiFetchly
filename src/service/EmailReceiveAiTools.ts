@@ -224,7 +224,7 @@ export async function fetchUnreadEmails(args: unknown): Promise<
     await writeReadAudit(
       input.email_service_id,
       null,
-      "AI fetched unread inbox"
+      `AI fetched unread mail from folder ${result.folder}`
     );
 
     return {

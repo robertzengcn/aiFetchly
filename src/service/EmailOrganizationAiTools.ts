@@ -92,20 +92,38 @@ const restoreEmailSchema = z
   .refine(
     (value) => (value.operation_id !== undefined) !== (value.selection_id !== undefined),
     { message: "Provide exactly one of operation_id or selection_id." }
+  )
+  .refine(
+    (value) => value.selection_id === undefined || value.destination_folder_path === undefined,
+    {
+      message:
+        "destination_folder_path applies to single-message restores only; a frozen selection restores to its recorded folders.",
+    }
   );
 
-const searchEmailsSchema = z.object({
-  email_service_id: positiveInt,
-  source: z.enum(["local", "server"]).default("local"),
-  folder_paths: z.array(z.string().min(1).max(255)).max(20).optional(),
-  from_address: z.string().max(320).optional(),
-  subject: z.string().max(200).optional(),
-  received_from: z.string().max(40).optional(),
-  received_to: z.string().max(40).optional(),
-  unread_only: z.boolean().optional(),
-  has_attachments: z.boolean().optional(),
-  page_size: z.number().int().min(1).max(100).optional(),
-});
+const searchEmailsSchema = z
+  .object({
+    email_service_id: positiveInt,
+    source: z.enum(["local", "server"]).default("local"),
+    folder_paths: z.array(z.string().min(1).max(255)).max(20).optional(),
+    from_address: z.string().max(320).optional(),
+    subject: z.string().max(200).optional(),
+    received_from: z.string().datetime().max(40).optional(),
+    received_to: z.string().datetime().max(40).optional(),
+    unread_only: z.boolean().optional(),
+    has_attachments: z.boolean().optional(),
+    page_size: z.number().int().min(1).max(100).optional(),
+  })
+  .refine(
+    (value) =>
+      value.received_from === undefined ||
+      value.received_to === undefined ||
+      new Date(value.received_from).getTime() < new Date(value.received_to).getTime(),
+    { message: "received_from must be earlier than received_to." }
+  )
+  .refine((value) => value.folder_paths === undefined || value.folder_paths.length > 0, {
+    message: "folder_paths must contain at least one folder when provided.",
+  });
 
 const prepareSelectionSchema = z.object({
   email_service_id: positiveInt,

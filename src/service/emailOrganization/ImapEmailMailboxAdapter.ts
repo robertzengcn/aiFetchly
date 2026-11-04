@@ -290,7 +290,9 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
         return { status: "failed", reasonCode: "PROVIDER_REJECTED", sanitizedError: "search unsupported" };
       }
       const capped = uids.length >= input.cap;
-      const page = uids.slice(0, input.cap);
+      // Envelope fetches are the expensive part: only the caller-requested
+      // page worth are materialized; the rest stay counted but unnamed.
+      const page = uids.slice(0, Math.min(input.cap, input.metadataLimit ?? input.cap));
       const candidates: SearchCandidate[] = [];
       for (const uid of page) {
         const message = await withTimeout(

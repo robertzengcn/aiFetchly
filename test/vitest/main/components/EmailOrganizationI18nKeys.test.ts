@@ -47,6 +47,38 @@ describe("emailOrganization i18n coverage (six languages)", () => {
     });
   }
 
+  it("covers the emailReceive keys added by the organization feature (review)", () => {
+    const languages = [en, zh, es, fr, de, ja] as const;
+    for (const messages of languages) {
+      const block = (messages as unknown as Record<string, never>).emailReceive as Record<
+        string,
+        unknown
+      >;
+      for (const key of [
+        "thread_label",
+        "image_hidden",
+        "load_failed",
+        "invalid_message_id",
+        "retry",
+      ]) {
+        expect(typeof block[key], key).toBe("string");
+      }
+      const states = block["classification_state"] as Record<string, string>;
+      for (const key of [
+        "interested",
+        "not_interested",
+        "unsubscribe",
+        "bounce",
+        "auto_reply",
+        "support_request",
+        "needs_human_review",
+        "unknown",
+      ]) {
+        expect(typeof states[key], key).toBe("string");
+      }
+    }
+  });
+
   it("covers the status vocabulary for operation cards", () => {
     for (const kind of ["forward", "trash", "restore"]) {
       for (const status of [

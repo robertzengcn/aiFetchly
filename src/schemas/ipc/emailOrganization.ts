@@ -77,11 +77,17 @@ export const emailOrgSendInputSchema = lazySchema(() =>
 );
 
 export const emailOrgTrashInputSchema = lazySchema(() =>
-  z.strictObject({
-    messageId: positiveInt,
-    /** Optional UI-event idempotency anchor (double-click protection). */
-    actionId: z.string().max(255).nullable().optional(),
-  })
+  z
+    .strictObject({
+      messageId: positiveInt.optional(),
+      selectionId: z.string().min(8).max(64).optional(),
+      /** Optional UI-event idempotency anchor (double-click protection). */
+      actionId: z.string().max(255).nullable().optional(),
+    })
+    .refine(
+      (value) => (value.messageId !== undefined) !== (value.selectionId !== undefined),
+      { message: "Provide exactly one of messageId or selectionId." }
+    )
 );
 
 export const emailOrgRestoreInputSchema = lazySchema(() =>
@@ -98,18 +104,29 @@ export const emailOrgOperationInputSchema = lazySchema(() =>
 );
 
 export const emailOrgSearchInputSchema = lazySchema(() =>
-  z.strictObject({
+  z
+    .strictObject({
     emailServiceId: positiveInt,
     source: z.enum(["local", "server"]).default("local"),
     folderPaths: z.array(z.string().min(1).max(255)).max(20).optional(),
     fromAddress: z.string().max(320).optional(),
     subject: z.string().max(200).optional(),
-    receivedFrom: z.string().max(40).optional(),
-    receivedTo: z.string().max(40).optional(),
+    receivedFrom: z.string().datetime().max(40).optional(),
+    receivedTo: z.string().datetime().max(40).optional(),
     unreadOnly: z.boolean().optional(),
     hasAttachments: z.boolean().optional(),
     pageSize: z.number().int().min(1).max(100).optional(),
-  })
+    })
+    .refine(
+      (value) =>
+        value.receivedFrom === undefined ||
+        value.receivedTo === undefined ||
+        new Date(value.receivedFrom).getTime() < new Date(value.receivedTo).getTime(),
+      { message: "receivedFrom must be earlier than receivedTo." }
+    )
+    .refine((value) => value.folderPaths === undefined || value.folderPaths.length > 0, {
+      message: "folderPaths must contain at least one folder when provided.",
+    })
 );
 
 export const emailOrgSelectionPrepareInputSchema = lazySchema(() =>

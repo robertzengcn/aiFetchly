@@ -1862,6 +1862,9 @@ function initialize() {
         const { EMAIL_ORGANIZATION_LIMITS } = await import(
           "@/entityTypes/emailOrganizationTypes"
         );
+        const { EmailOrganizationSelectionService } = await import(
+          "@/service/emailOrganization/EmailOrganizationSelectionService"
+        );
         void new EmailMailboxActionService()
           .reconcileExpiredClaims()
           .then((reconciled: number) => {
@@ -1882,6 +1885,14 @@ function initialize() {
           .catch((err: unknown) => {
             log.warn(
               "[email-organization] artifact retention sweep failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+        void new EmailOrganizationSelectionService()
+          .purgeExpired()
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] selection purge failed:",
               err instanceof Error ? err.message : String(err)
             );
           });

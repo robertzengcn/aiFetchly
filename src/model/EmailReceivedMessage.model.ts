@@ -518,6 +518,8 @@ export class EmailReceivedMessageModel extends BaseDb {
   async searchForOrganization(input: {
     emailServiceId: number;
     folderPaths?: readonly string[];
+    /** Excluded folder (e.g. the account's Trash for unscoped searches). */
+    excludeFolderPath?: string;
     fromAddress?: string;
     subject?: string;
     /** Inclusive UTC lower bound on receivedAt. */
@@ -536,8 +538,14 @@ export class EmailReceivedMessageModel extends BaseDb {
       });
     if (input.folderPaths && input.folderPaths.length > 0) {
       qb = qb.andWhere(
-        "EXISTS (SELECT 1 FROM email_message_location loc WHERE loc.messageId = msg.id AND loc.emailServiceId = :emailServiceId AND loc.folderPath IN (:...folderPaths))",
+        "EXISTS (SELECT 1 FROM email_message_location loc WHERE loc.messageId = msg.id AND loc.emailServiceId = :emailServiceId AND loc.state = 'verified' AND loc.folderPath IN (:...folderPaths))",
         { emailServiceId: input.emailServiceId, folderPaths: [...input.folderPaths] }
+      );
+    }
+    if (input.excludeFolderPath) {
+      qb = qb.andWhere(
+        "NOT EXISTS (SELECT 1 FROM email_message_location locx WHERE locx.messageId = msg.id AND locx.emailServiceId = :emailServiceId AND locx.state = 'verified' AND locx.folderPath = :excludeFolderPath)",
+        { emailServiceId: input.emailServiceId, excludeFolderPath: input.excludeFolderPath }
       );
     }
     if (input.fromAddress && input.fromAddress.trim() !== "") {
