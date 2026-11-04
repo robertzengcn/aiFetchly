@@ -44,13 +44,12 @@ function makeElement(overrides: {
       return true;
     },
     async evaluate<T>(script: unknown): Promise<T> {
-      const source = String(script);
-      if (source.includes("aria-label")) {
-        // READ_ELEMENT_DESCRIPTOR_SCRIPT: report the attested descriptor.
+      // F02: identify page functions by name (stable across transpilation).
+      const fnName = typeof script === "function" ? script.name : "";
+      if (fnName === "readElementDescriptor") {
         return descriptor as unknown as T;
       }
-      if (source.includes("tagName !== 'INPUT'")) {
-        // probeInputType.
+      if (fnName === "probeInputElementTypeFn") {
         return (overrides.inputType ?? null) as unknown as T;
       }
       return undefined as unknown as T;

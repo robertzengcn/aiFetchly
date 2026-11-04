@@ -171,25 +171,25 @@ export function fillLoginPageFunction(input: {
       );
     };
     // T21: saved recipe first, deterministic detection second.
+    const eligibleUsernames = Array.from(
+      form.querySelectorAll<HTMLInputElement>(
+        'input[type="email"], input[type="text"], input[type="tel"]'
+      )
+    ).filter(
+      (el) => isVisible(el) && !el.disabled && !el.readOnly
+    );
+    // F09: prefer autocomplete="username" or "email" to avoid decoy
+    // search/text boxes that happen to appear first in the DOM.
     const usernameInput =
-      Array.from(
-        form.querySelectorAll<HTMLInputElement>(
-          'input[type="email"], input[type="text"], input[type="tel"]'
-        )
-      ).find(
-        (el) =>
-          matchByFingerprint(el, input.usernameField) &&
-          isVisible(el) &&
-          !el.disabled &&
-          !el.readOnly
+      eligibleUsernames.find((el) =>
+        matchByFingerprint(el, input.usernameField)
       ) ??
-      Array.from(
-        form.querySelectorAll<HTMLInputElement>(
-          'input[type="email"], input[type="text"], input[type="tel"]'
-        )
-      ).find(
-        (el) => isVisible(el) && !el.disabled && !el.readOnly
-      );
+      eligibleUsernames.find(
+        (el) =>
+          (el.getAttribute("autocomplete") ?? "").toLowerCase() === "username" ||
+          (el.getAttribute("autocomplete") ?? "").toLowerCase() === "email"
+      ) ??
+      eligibleUsernames[0];
     // T21: two-step login — step 2 (password-only) pages are valid when
     // the username was already submitted in a previous round.
     if (!usernameInput && input.usernameFilled) {
@@ -252,8 +252,13 @@ export function fillLoginPageFunction(input: {
   // T04: per-input length snapshot (NOT a sum) — prefilled usernames and
   // equal-and-opposite foreign changes are both detected.
   const allInputs = Array.from(document.querySelectorAll("input"));
-  const lengthsBefore = allInputs.map((el) => el.value.length);
-
+  // F09: use element identity (not array indices) so newly inserted
+  // inputs after the snapshot are caught by the tamper check.
+  const inputSet = new Set(allInputs);
+  const lengthsBefore = new Map<Element, number>();
+  for (const el of allInputs) {
+    lengthsBefore.set(el, el.value.length);
+  }
   const clearField = (el: HTMLInputElement): void => {
     setNativeValue(el, "");
   };
@@ -321,20 +326,22 @@ export function fillLoginPageFunction(input: {
     clearTouched();
     return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
   }
-  const lengthsAfter = Array.from(document.querySelectorAll("input")).map(
-    (el) => el.value.length
-  );
+  const lengthsAfter = Array.from(document.querySelectorAll("input"));
   const tampered: HTMLInputElement[] = [];
-  for (let i = 0; i < allInputs.length; i++) {
-    const before = lengthsBefore[i] ?? -1;
-    const after = lengthsAfter[i] ?? -2;
-    if (before === after) continue;
-    const el = allInputs[i]!;
+  for (const el of lengthsAfter) {
+    const before = lengthsBefore.get(el);
+    if (before === undefined) {
+      // F09: newly inserted input since the snapshot — a potential
+      // recipient injected by a page event handler.
+      if (el instanceof HTMLInputElement && el.value.length > 0) {
+        tampered.push(el);
+      }
+      continue;
+    }
+    if (el.value.length === before) continue;
     const isChosenUsername = el === chosen.usernameInput;
     const isChosenPassword = el === pw;
     if (isChosenUsername || isChosenPassword) continue;
-    // An input the filler never touched changed length: unexpected recipient
-    // or page mutation. Clear it too — no data stays behind.
     if (el instanceof HTMLInputElement) {
       tampered.push(el);
     }

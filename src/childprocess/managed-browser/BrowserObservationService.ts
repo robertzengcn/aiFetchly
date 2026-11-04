@@ -95,7 +95,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
         : htmlEl.tagName === 'TEXTAREA' || htmlEl.tagName === 'INPUT' ? 'textbox'
         : htmlEl.getAttribute('role') || 'generic');
     let name = htmlEl.getAttribute('aria-label')
-      || (htmlEl.labels && htmlEl.labels[0] ? htmlEl.labels[0].innerText : '')
+      || ((htmlEl as HTMLInputElement).labels && (htmlEl as HTMLInputElement).labels[0] ? (htmlEl as HTMLInputElement).labels[0].innerText : '')
       || htmlEl.innerText
       || htmlEl.getAttribute('placeholder')
       || htmlEl.getAttribute('title')
@@ -134,8 +134,14 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
  * attests the expected fingerprint from the latest observation; the live
  * descriptor must still match it.
  */
-export const READ_ELEMENT_DESCRIPTOR_SCRIPT = `((el) => {
-  const htmlEl = el;
+/**
+ * F02: real page function (not a string IIFE) so Puppeteer binds `el`.
+ */
+export function readElementDescriptor(el: Element): {
+  role: string;
+  name: string;
+} {
+  const htmlEl = el as HTMLElement;
   const role = htmlEl.getAttribute('role')
     || (htmlEl.tagName === 'A' ? 'link'
       : htmlEl.tagName === 'BUTTON' ? 'button'
@@ -143,15 +149,15 @@ export const READ_ELEMENT_DESCRIPTOR_SCRIPT = `((el) => {
       : htmlEl.tagName === 'TEXTAREA' || htmlEl.tagName === 'INPUT' ? 'textbox'
       : 'generic');
   let name = htmlEl.getAttribute('aria-label')
-    || (htmlEl.labels && htmlEl.labels[0] ? htmlEl.labels[0].innerText : '')
+    || ((htmlEl as HTMLInputElement).labels?.[0]?.innerText ?? '')
     || htmlEl.innerText
     || htmlEl.getAttribute('placeholder')
     || htmlEl.getAttribute('title')
     || htmlEl.getAttribute('value')
     || '';
-  name = name.replace(/\\s+/g, ' ').trim().slice(0, 200);
+  name = name.replace(/\s+/g, ' ').trim().slice(0, 200);
   return { role, name };
-})()`;
+}
 
 export interface LiveElementDescriptor {
   readonly role: string;
@@ -184,7 +190,11 @@ export function shapeElementRecord(
     role: record.role || "generic",
     // Accessible names are page-authored: scrub secret-shaped content
     // BEFORE budgeting (GAP-04).
-    name: budgetName(redactSecretsInText(record.name || "")),
+    // F09/A-AC-01: credential fields also redact their accessible name —
+    // a sentinel used as a value attribute can leak through the name.
+    name: record.isCredential
+      ? "[credential]"
+      : budgetName(redactSecretsInText(record.name || "")),
     disabled: record.disabled,
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),

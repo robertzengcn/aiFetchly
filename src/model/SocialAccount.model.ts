@@ -152,4 +152,9 @@ export class SocialAccountModel extends BaseDb {
     const saved = await this.repository.save(entity);
     return saved.id;
   }
+
+  /** F12: update the password for an existing account (module encrypts). */
+  async updatePassword(accountId: number, encryptedPass: string): Promise<void> {
+    await this.repository.update(accountId, { pass: encryptedPass });
+  }
 }

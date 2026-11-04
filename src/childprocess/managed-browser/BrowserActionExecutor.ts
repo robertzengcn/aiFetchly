@@ -23,7 +23,7 @@ import {
   redactSecrets,
 } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
-  READ_ELEMENT_DESCRIPTOR_SCRIPT,
+  readElementDescriptor,
   type LiveElementDescriptor,
 } from "@/childprocess/managed-browser/BrowserObservationService";
 
@@ -116,6 +116,39 @@ export interface ExecuteProgramOptions {
 type StopCode = NonNullable<BrowserProgramOutcome["stopCode"]>;
 
 const POLL_INTERVAL_MS = 250;
+
+// F02: real page functions so Puppeteer binds the element handle.
+function probeInputElementTypeFn(el: HTMLInputElement): string | null {
+  if (!el || el.tagName !== 'INPUT') return null;
+  const type = (el.getAttribute('type') || 'text').toLowerCase();
+  const auto = el.getAttribute('autocomplete') || '';
+  if (type === 'password') return 'password';
+  if (/one-time-code|otp/i.test(auto)) return 'otp';
+  if (/cc-number/i.test(auto)) return 'card';
+  if (/passkey|webauthn/i.test(auto)) return 'passkey';
+  return type;
+}
+
+function clearElementValueFn(el: HTMLInputElement): void {
+  el.value = '';
+}
+
+function clearElementWithEventFn(el: HTMLInputElement): void {
+  el.value = '';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function extractElementDataFn(el: Element): {
+  tag: string | null;
+  text: string;
+  href: string | null;
+} {
+  return {
+    tag: el.tagName ? el.tagName.toLowerCase() : null,
+    text: ((el as HTMLElement).innerText || (el as HTMLInputElement).value || '').slice(0, 2000),
+    href: el.tagName === 'A' ? ((el as HTMLAnchorElement).origin || null) : null,
+  };
+}
 
 export class BrowserActionExecutor {
   public async executeProgram(
@@ -328,7 +361,7 @@ export class BrowserActionExecutor {
             // begins here: a later failure (partial typing, detach) is
             // an unknown effect.
             dispatch.inputSent = true;
-            await entry.element.evaluate("((el) => { el.value = ''; })");
+            await entry.element.evaluate(clearElementValueFn);
             await entry.element.type(action.value, { delay: 10 });
             return { success: true };
           });
@@ -378,9 +411,7 @@ export class BrowserActionExecutor {
             }
             await entry.element.scrollIntoView();
             dispatch.inputSent = true;
-            await entry.element.evaluate(
-              "((el) => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })"
-            );
+            await entry.element.evaluate(clearElementWithEventFn);
             return { success: true };
           });
         case "go_back":
@@ -532,13 +563,7 @@ export class BrowserActionExecutor {
         continue;
       }
       const value = await lookup.entry.element
-        .evaluate<unknown>(
-          `((el) => ({
-            tag: el.tagName ? el.tagName.toLowerCase() : null,
-            text: (el.innerText || el.value || '').slice(0, 2000),
-            href: el.tagName === 'A' ? (el.origin || null) : null,
-          }))`
-        )
+        .evaluate<unknown>(extractElementDataFn)
         .catch(() => null);
       if (value != null) {
         extracted.push(redactSecrets(value));
@@ -591,7 +616,7 @@ export class BrowserActionExecutor {
       name: action.expectedName ?? lookup.entry.name,
     };
     const live = await lookup.entry.element
-      .evaluate<LiveElementDescriptor | null>(READ_ELEMENT_DESCRIPTOR_SCRIPT)
+      .evaluate<LiveElementDescriptor | null>(readElementDescriptor)
       .catch(() => null);
     if (!live || live.role !== expected.role || live.name !== expected.name) {
       return {
@@ -610,16 +635,7 @@ export class BrowserActionExecutor {
   ): Promise<string | null> {
     try {
       return await element.evaluate<string | null>(
-        `((el) => {
-          if (!el || el.tagName !== 'INPUT') return null;
-          const type = (el.getAttribute('type') || 'text').toLowerCase();
-          const auto = el.getAttribute('autocomplete') || '';
-          if (type === 'password') return 'password';
-          if (/one-time-code|otp/i.test(auto)) return 'otp';
-          if (/cc-number/i.test(auto)) return 'card';
-          if (/passkey|webauthn/i.test(auto)) return 'passkey';
-          return type;
-        })()`
+        probeInputElementTypeFn
       );
     } catch {
       return null;

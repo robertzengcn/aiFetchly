@@ -117,7 +117,13 @@ export async function selectProxyForSession(
         reasonCode: "proxy_change_requires_confirmation",
       };
     }
-    return { status: "resolved", proxy: await toResolvedProxy(row) };
+    const resolved = await toResolvedProxy(row);
+    if (resolved.mode === "unresolvable") {
+      // F04/P-FR-04: a proxy with unusable credentials must never become
+      // a direct connection — preserve the failure status.
+      return { status: "unresolvable", reasonCode: resolved.reasonCode ?? "proxy_resolution_failed" };
+    }
+    return { status: "resolved", proxy: resolved };
   }
 
   // auto: browser-usable proxy, preferring the requested country and a
@@ -139,5 +145,10 @@ export async function selectProxyForSession(
   if (!chosen) {
     return { status: "unresolvable", reasonCode: "proxy_no_usable_proxy" };
   }
-  return { status: "resolved", proxy: await toResolvedProxy(chosen) };
+  const resolved = await toResolvedProxy(chosen);
+  if (resolved.mode === "unresolvable") {
+    // F04/P-FR-04: fail-closed for auto-selected proxies too.
+    return { status: "unresolvable", reasonCode: resolved.reasonCode ?? "proxy_resolution_failed" };
+  }
+  return { status: "resolved", proxy: resolved };
 }

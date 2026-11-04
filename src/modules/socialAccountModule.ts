@@ -445,11 +445,12 @@ export class SocialAccountModule extends BaseModule {
     accountId: number,
     password: string
   ): Promise<void> {
+    // F12: delegate to the Model layer (no direct repository access).
     await this.ensureConnection();
-    const repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
-    await repository.update(accountId, {
-      pass: await this.encryptPass(password),
-    });
+    const encrypted = await this.encryptPass(password);
+    if (encrypted) {
+      await this.socialAccountModel.updatePassword(accountId, encrypted);
+    }
   }
 
   /** A-FR-10: record a failed automated sign-in (cooldown + UI reason). */
