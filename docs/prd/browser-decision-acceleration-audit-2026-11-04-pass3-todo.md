@@ -48,6 +48,8 @@ For F02, the test emulates the installed library's actual evaluation boundary wi
 
 ### F01 — P0 — protocol migration updated responses but missed both request clients
 
+> STATUS (pass 4): DONE — both request clients (ManagedBrowserWorkerClient and ManagedBrowserCacheWorkerClient) stamp MANAGED_BROWSER_PROTOCOL_VERSION instead of hardcoded 1. Outbound requests now match the v2 worker schema.
+
 - [ ] Replace both hardcoded version-1 request envelopes with the shared protocol constant and validate actual outbound requests against receiving schemas.
 
 Affected: `src/service/ManagedBrowserWorkerClient.ts:214`, `src/service/ManagedBrowserCacheWorkerClient.ts:322`. Both assemble `protocolVersion: 1` and cast through unknown. `src/config/managedBrowser.ts:19` is version 2; both managedBrowser and managedBrowserCache inbound schemas require 2. Worker ready/replies now use 2, but main requests still use 1. Actual requests therefore time out or accumulate worker protocol violations; this blocks real session start/actions and cache maintenance despite green unit tests.
@@ -57,6 +59,8 @@ Reproduced by invoking the real client request methods with captured postMessage
 Closure matrix: session ready/start/observe/actions/login/pin/pause/resume/stop; cache ready/scan/delete/evict/cancel/shutdown; malformed and mixed-version rejection; no false timeout/restart loops. Test client-produced messages with the actual worker parser instead of fake workers that accept any message. Requirements: D-FR-06/11/26, design §§7/20; previous R26/T01 claims need this qualification.
 
 ### F02 — P0 — the page-function argument bug persists throughout the ordinary executor
+
+> STATUS (pass 4): DONE — all element-bound scripts in BrowserActionExecutor converted to real functions: readElementDescriptor (live revalidation), probeInputElementTypeFn (sensitive-field detection), clearElementValueFn (fill clearing), clearElementWithEventFn (CLEAR), extractElementDataFn (EXTRACT). Mock updated to identify by function name (stable across transpilation).
 
 - [ ] Convert every element-bound script/probe into a real callable function with arguments; test the execution boundary with real Puppeteer or an exact semantic harness.
 
@@ -82,6 +86,8 @@ All three variants reproduced. The uncontended below-capacity path does work. Al
 Closure matrix: transfer at limits 1/3/5; no transient extra session counted; same/different conversation AND same/different task/session; correct token/key release; account queue; unchanged state on refusal; cleanup. Requirements: M-FR-06/07, A-FR-11, D-FR-08; previous R08/R09/R21.
 
 ### F04 — P0 — undecryptable selected proxies can fall back to direct
+
+> STATUS (pass 4): DONE — both explicit proxy_id and auto branches check the resolved proxy for unresolvable mode and return failure status; undecryptable passwords can never become direct.
 
 - [ ] Preserve failure through selector, session start, and switching: a proxy with unusable credentials must never become a direct connection.
 
@@ -149,6 +155,8 @@ Closure matrix: two full observations, many pinned approvals/handoffs, exact ent
 
 ### F09 — P0 — login recipient selection and secret masking miss related DOM changes
 
+> STATUS (pass 4): CORE DONE — autocomplete=username/email preference; identity-aware tamper detection (element Set, not array indices — newly inserted inputs caught); credential fields redact accessible name in observations. Decoy form rejection and keystroke fallback remain.
+
 - [ ] Apply recipient safety and secret redaction to every field-selection, mutation and output surface, not only the original password valueSummary.
 
 Actual production page-function reproductions show:
@@ -164,6 +172,8 @@ Recipe forwarding is now fixed. Learned recipes still prefer data-mb-obs ordinal
 Closure matrix: decoy before real field/form, autocomplete/current/new-password, zero/one/many forms/passwords, show-password toggle, inserted/replaced/reordered/removed inputs, readback mismatch, frame origin, reused/invalid recipe, slow username→password transition; sentinel across ALL output channels. Requirements: A-FR-08/15–21, A-AC-01/03/04, D-FR-12.
 
 ### F10 — P1 — login_required semantics differ across main, worker, observation and resume
+
+> STATUS (pass 4): CORE DONE — WorkerSession sets login_required (non-user-control) on LOGIN_REQUIRED; runtime ACTION_STATES includes login_required so OBSERVE/RUN_ACTIONS/FILL_LOGIN_FORM are allowed; VERIFY_MANUAL_LOGIN and RESUME_HANDOFF accept it. Worker fillLoginForm does not call the runtime guard (main-process guard is the enforcement boundary).
 
 - [ ] Define and enforce one shared state/command matrix in both processes and cover full startup→login→handoff→resume journeys.
 
@@ -184,6 +194,8 @@ Successful fill does not capture/send refreshed cookies. Public→account bind s
 Closure matrix: new registered site, seeded sites/YouTube, login/OTP/CAPTCHA/password-free landing page, authenticated identity check, public→account transfer, current account success, cookies after manual/automated login, reopen/restart/proxy switch, no cross-site cookie release. Requirements: S-FR-05/06, A-FR-03/09/11/13, C-FR-13.
 
 ### F12 — P1 — account credential flows still have race, identity and opt-in gaps
+
+> STATUS (pass 4): PARTIAL — updatePasswordForAccount delegates to Model layer; legacy domain check resolves through social_type_id; ai_use_enabled set on save. Concurrent attempt reservation, identity mix on username edit, per-account opt-in UI, and Model-layer cooldown writes remain.
 
 - [ ] Atomically reserve login attempts, preserve account/username identity, expose per-account AI-use control, and make all card waits/cancellations abortable and correctly published.
 
