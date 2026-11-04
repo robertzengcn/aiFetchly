@@ -263,6 +263,8 @@ export const EMAIL_ORGANIZATION_LIMITS = {
   maxRecipients: 20,
   /** Maximum MIME nesting depth tolerated while parsing. */
   maxMimeNesting: 20,
+  /** Conservative composed-message bound (unknown provider limit case). */
+  maxComposedBytes: 25 * 1024 * 1024,
   /** Review/authorization expiry. */
   authorizationTtlMs: 15 * 60 * 1000,
   /** Attempt lease duration before reconciliation. */

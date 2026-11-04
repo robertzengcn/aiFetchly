@@ -6,7 +6,7 @@ import { convert } from "html-to-text";
  * no iframes. Tracking pixels (1x1 images) are stripped. Remote images are
  * retained so the UI can decide whether to load them (disabled by default).
  */
-const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+export const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [
     "p",
     "br",
