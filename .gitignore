@@ -167,3 +167,6 @@ debug/*
 
 # Local worktree: node_modules is symlinked to the primary checkout.
 node_modules
+
+# Stray test artifact: SQLite instances created with a literal "false" path
+false/
