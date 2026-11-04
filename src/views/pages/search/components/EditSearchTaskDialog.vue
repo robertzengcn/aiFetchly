@@ -27,7 +27,7 @@
                 type="number"
                 min="1"
                 max="100"
-                :rules="[v => v >= 1 && v <= 100 || $t('validation.pages_range')]"
+                :rules="[(v: number) => v >= 1 && v <= 100 || $t('validation.pages_range')]"
                 required
               />
             </v-col>
@@ -40,7 +40,7 @@
                 type="number"
                 min="1"
                 max="10"
-                :rules="[v => v >= 1 && v <= 10 || $t('validation.concurrency_range')]"
+                :rules="[(v: number) => v >= 1 && v <= 10 || $t('validation.concurrency_range')]"
                 required
               />
             </v-col>
