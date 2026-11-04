@@ -653,7 +653,7 @@ describe("ManagedBrowserModule.start happy path", () => {
     });
   });
 
-  it("translates a LOGIN_REQUIRED start reply into user_login_in_progress", async () => {
+  it("translates a LOGIN_REQUIRED start reply into login_required", async () => {
     const h = makeHarness({
       startScript: {
         START_SESSION: (env) => {
@@ -666,7 +666,7 @@ describe("ManagedBrowserModule.start happy path", () => {
       accountId: ACCOUNT_ID,
       purpose: "test",
     });
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     expect(status.authenticated).toBe(false);
     expect(noticeTypes(h.notices)).toContain("login_required");
   });
@@ -853,7 +853,7 @@ describe("ManagedBrowserModule.verifyManualLogin", () => {
       accountId: ACCOUNT_ID,
       purpose: "test",
     });
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     return status.sessionId;
   }
 
@@ -875,27 +875,27 @@ describe("ManagedBrowserModule.verifyManualLogin", () => {
     ]);
   });
 
-  it("stays in user_login_in_progress and warns on a failed verification", async () => {
+  it("stays in login_required and warns on a failed verification", async () => {
     const h = makeHarness({
       startScript: {
         START_SESSION: () => loginRequiredReply("mb_fakesession0001"),
         VERIFY_MANUAL_LOGIN: () =>
           stateChangedReply(
             "mb_fakesession0001",
-            "user_login_in_progress",
+            "login_required",
             "not_verified"
           ),
       },
     });
     const sessionId = await startInLogin(h);
     const status = await h.module.verifyManualLogin(sessionId);
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     expect(status.authenticated).toBe(false);
     expect(noticeTypes(h.notices)).toContain("login_verification_failed");
     expect(noticeTypes(h.notices)).not.toContain("task_resuming");
   });
 
-  it("is rejected outside user_login_in_progress", async () => {
+  it("is rejected outside login_required", async () => {
     const h = makeHarness();
     const status = await h.module.start({
       accountId: ACCOUNT_ID,
@@ -1141,7 +1141,7 @@ describe("handoff-window expiry enforcement (FR-P0-013)", () => {
         accountId: ACCOUNT_ID,
         purpose: "test",
       });
-      expect(status.state).toBe("user_login_in_progress");
+      expect(status.state).toBe("login_required");
 
       // The window is manualLoginHandoffMs (10 min). Advancing the fake
       // timers moves both the timers AND the mocked Date.now (the module's
@@ -1177,7 +1177,7 @@ describe("handoff-window expiry enforcement (FR-P0-013)", () => {
       await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 
       expect(h.module.getStatus(status.sessionId)?.state).toBe(
-        "user_login_in_progress"
+        "login_required"
       );
     } finally {
       vi.useRealTimers();
@@ -1328,7 +1328,7 @@ describe("GAP-11 requested start URL", () => {
       purpose: "test",
       requestedStartUrl: "https://www.youtube.com/feed/history",
     });
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     expect(
       h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
     ).toBeUndefined();

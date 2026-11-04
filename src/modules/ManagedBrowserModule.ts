@@ -923,7 +923,8 @@ export class ManagedBrowserModule {
     const record = this.requireSession(sessionId);
     if (
       record.state !== "handoff" &&
-      record.state !== "user_login_in_progress"
+      record.state !== "user_login_in_progress" &&
+      record.state !== "login_required"
     ) {
       throw new ManagedBrowserError("action_not_allowed");
     }
@@ -1268,10 +1269,10 @@ export class ManagedBrowserModule {
       const returned =
         message.type === "SESSION_STATE_CHANGED" ? message.state : priorState;
       record.state =
-        returned === "handoff" || returned === "user_login_in_progress"
+        returned === "handoff" || returned === "user_login_in_progress" || returned === "login_required"
           ? returned
-          : priorState === "handoff"
-            ? "handoff"
+          : priorState === "handoff" || priorState === "login_required"
+            ? priorState === "handoff" ? "handoff" : "login_required"
             : "user_login_in_progress";
       this.publishNotice(record, "login_verification_failed", "verify-done", {
         reasonCode:
@@ -1416,7 +1417,11 @@ export class ManagedBrowserModule {
         this.clearHandoffWindow(record);
         break;
       case "LOGIN_REQUIRED":
-        record.state = "user_login_in_progress";
+        // login_required is a NON-user-control state: the adapter says
+        // the user is not authenticated and the automated sign-in flow
+        // (browser_sign_in) is about to run. user_login_in_progress is
+        // only set when the USER manually initiates login via handoff.
+        record.state = "login_required";
         record.authenticated = false;
         this.enterHandoffWindow(record);
         this.publishNotice(record, "login_required", "login-start", {
@@ -1667,11 +1672,22 @@ export class ManagedBrowserModule {
     if (acquireResult.status === "account_in_use") {
       throw new ManagedBrowserError("account_in_use");
     }
-    // Release the old public lease (token-based; use the stored token).
+    // Release the old public lease. If release fails (already gone), the
+    // account lease is still held — the old key is simply orphaned.
     this.leaseService.release(oldKey, sessionId, record.leaseToken);
     // Mutate the record: accountId, leaseToken, leaseKey.
+    // R08 fix: handle already_active (same owner already holds the
+    // account lease) — use the existing token, don't leave the record
+    // pointing at a mismatched token.
     if (acquireResult.status === "granted") {
       (record as { leaseToken: string }).leaseToken = acquireResult.leaseToken;
+    } else if (acquireResult.status === "already_active") {
+      // The account lease is already held by this session's owner —
+      // look up the existing token.
+      const existing = this.leaseService.findBySessionId(sessionId);
+      if (existing && existing.leaseKey === newKey) {
+        (record as { leaseToken: string }).leaseToken = existing.leaseToken;
+      }
     }
     (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
     (record as { accountId: number }).accountId = accountId;
@@ -1899,7 +1915,8 @@ export class ManagedBrowserModule {
       }
       if (
         current.state !== "handoff" &&
-        current.state !== "user_login_in_progress"
+        current.state !== "user_login_in_progress" &&
+        current.state !== "login_required"
       ) {
         return;
       }
