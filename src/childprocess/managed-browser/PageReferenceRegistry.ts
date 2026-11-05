@@ -69,7 +69,12 @@ export class PageReferenceRegistry<
   private readonly now: () => number;
   private currentObservationId: string | null = null;
 
-  constructor(initialRevision = 1, now: () => number = Date.now) {
+  constructor(
+    initialRevision = 1,
+    now: () => number = Date.now,
+    /** F08: injectable capacity for tests; defaults to the config bound. */
+    private readonly maxEntries: number = MANAGED_BROWSER_REFERENCE_REGISTRY.maxEntries
+  ) {
     this.revision = initialRevision;
     this.now = now;
   }
@@ -141,13 +146,29 @@ export class PageReferenceRegistry<
     frameId?: string | null;
   }): string {
     this.expire();
-    if (this.entries.size >= MANAGED_BROWSER_REFERENCE_REGISTRY.maxEntries) {
-      // Drop the oldest entry to stay bounded (never splits an observation:
-      // voidEntry removes the ref from its bucket, and the bounds sweep will
-      // evict that whole observation next).
-      const oldest = this.entries.keys().next().value;
-      if (oldest !== undefined) {
-        this.voidEntry(oldest);
+    if (this.entries.size >= this.maxEntries) {
+      // F08: only an UNPINNED, COMMITTED observation's entry may be
+      // evicted to make room — evicting a pinned (approval/handoff) or
+      // pending observation's refs silently breaks live resolutions.
+      let evicted = false;
+      for (const ref of this.entries.keys()) {
+        const bucket = this.bucketOfRef(ref);
+        if (!bucket || bucket.pinned || bucket.committedAt === null) {
+          continue;
+        }
+        this.voidEntry(ref);
+        evicted = true;
+        break;
+      }
+      if (!evicted) {
+        // F08: fail SAFELY — the observation build degrades this
+        // snapshot with a truncation notice instead of stealing refs
+        // from live approvals.
+        const error = new Error(
+          "reference registry saturated: every entry is pinned or pending"
+        );
+        error.name = "ReferenceRegistrySaturatedError";
+        throw error;
       }
     }
     const ref = `e_${randomRefSuffix()}`;

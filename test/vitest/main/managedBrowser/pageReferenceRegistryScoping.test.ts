@@ -136,3 +136,65 @@ describe("PageReferenceRegistry observation scoping (D-FR-15a)", () => {
     expect(registry.lookup(refs[0]!, 4).status).toBe("unknown_ref");
   });
 });
+
+// ---------------------------------------------------------------------------
+// F08: pinned-safe eviction and safe saturation
+// ---------------------------------------------------------------------------
+
+describe("PageReferenceRegistry F08 eviction safety", () => {
+  it("evicts only unpinned committed entries — pinned refs survive", () => {
+    // Capacity 4: one pinned observation (2 refs) + one committed (2 refs).
+    const registry = new PageReferenceRegistry<ExecutorElementHandle>(3, Date.now, 4);
+    registry.beginObservation("pinned-obs");
+    const pinnedRefs = registerBatch(registry, 2);
+    registry.commitObservation("pinned-obs");
+    registry.pinObservation("pinned-obs");
+
+    registry.beginObservation("free-obs");
+    const freeRefs = registerBatch(registry, 2);
+    registry.commitObservation("free-obs");
+
+    // Registering MORE must evict from the unpinned observation, never the
+    // pinned one.
+    const extra = registry.register({ element: fakeElement(), role: "button", name: "extra" });
+    expect(registry.lookup(extra).status).toBe("ok");
+    for (const ref of pinnedRefs) {
+      expect(registry.lookup(ref).status).toBe("ok");
+    }
+    // At least one of the free-obs refs was sacrificed.
+    const survivingFree = freeRefs.filter((ref) => registry.lookup(ref).status === "ok");
+    expect(survivingFree.length).toBeLessThan(freeRefs.length);
+  });
+
+  it("pending (uncommitted) observations are never eviction victims", () => {
+    const registry = new PageReferenceRegistry<ExecutorElementHandle>(3, Date.now, 3);
+    registry.beginObservation("pending-obs");
+    const pendingRefs = registerBatch(registry, 2);
+    // A committed observation fills the last slot.
+    registry.beginObservation("committed-obs");
+    const committedRef = registerBatch(registry, 1);
+    registry.commitObservation("committed-obs");
+
+    // Over capacity: the COMMITTED ref is the only legal victim.
+    const extra = registry.register({ element: fakeElement(), role: "button", name: "extra" });
+    expect(registry.lookup(extra).status).toBe("ok");
+    for (const ref of pendingRefs) {
+      expect(registry.lookup(ref).status).toBe("ok");
+    }
+    expect(registry.lookup(committedRef[0]!).status).toBe("unknown_ref");
+  });
+
+  it("fails SAFELY when every entry is pinned or pending", () => {
+    const registry = new PageReferenceRegistry<ExecutorElementHandle>(3, Date.now, 2);
+    registry.beginObservation("pinned-obs");
+    registerBatch(registry, 1);
+    registry.commitObservation("pinned-obs");
+    registry.pinObservation("pinned-obs");
+    registry.beginObservation("pending-obs");
+    registerBatch(registry, 1);
+
+    expect(() =>
+      registry.register({ element: fakeElement(), role: "button", name: "overflow" })
+    ).toThrowError(/saturated/);
+  });
+});

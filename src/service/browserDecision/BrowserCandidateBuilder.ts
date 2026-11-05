@@ -70,6 +70,11 @@ export function buildDecisionCandidates(
     if (candidates.length >= max) {
       break;
     }
+    // F08: a ref without a usable handle is never a decision candidate —
+    // the model would act on an action that can only fail.
+    if (element.ref === "e_nohandle") {
+      continue;
+    }
     // Sensitive inputs are excluded by the sanitizer's value summary.
     if (element.valueSummary && SECRET_VALUE_SUMMARIES.has(element.valueSummary)) {
       continue;

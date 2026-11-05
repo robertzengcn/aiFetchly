@@ -58,7 +58,9 @@ export interface CollectedElementRecord {
   readonly hrefOrigin: string | null;
   readonly visible: boolean;
   /** T21/A-AC-04: filled by the privileged login filler. */
-  isCredential?: boolean;}
+  isCredential?: boolean;
+  /** F08: set on the LAST record when the scan window was truncated. */
+  scanTruncated?: boolean;}
 
 /**
  * In-page collector: runs inside the page context; returns JSON records.
@@ -76,18 +78,40 @@ export const OBS_STAMPED_SELECTOR = `[${OBS_ELEMENT_STAMP_ATTRIBUTE}]`;
 
 export const COLLECT_ELEMENTS_SCRIPT = `(() => {
   const selector = ${JSON.stringify(INTERACTIVE_ELEMENTS_SELECTOR)};
+  const CAP = ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements};
+  // F08: the raw scan window is 4×CAP so controls hidden deep in the DOM
+  // can never crowd visible targets out of the collection.
+  const SCAN_CAP = CAP * 4;
   // Strip stamps from earlier passes first: an element that left the
   // selector set must not be picked up by the stamped-handle query.
   document.querySelectorAll('[${OBS_ELEMENT_STAMP_ATTRIBUTE}]').forEach(el => el.removeAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}'));
-  const els = Array.from(document.querySelectorAll(selector)).slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements * 2});
-  const out = [];
-  els.forEach((el, obsIndex) => {
-    const htmlEl = el;
-    htmlEl.setAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}', String(obsIndex));
-    const style = window.getComputedStyle(htmlEl);
+  const scanned = [];
+  const all = Array.from(document.querySelectorAll(selector));
+  const scanTruncatedRaw = all.length > SCAN_CAP;
+  all.slice(0, SCAN_CAP).forEach((el, docIndex) => {
+    const style = window.getComputedStyle(el);
     const visible = style.display !== 'none'
       && style.visibility !== 'hidden'
-      && htmlEl.offsetParent !== null;
+      && el.offsetParent !== null;
+    scanned.push({ el, docIndex, visible });
+  });
+  // F08: VISIBLE controls are chosen FIRST (in document order), hidden
+  // ones only fill the remaining budget — the pairing with the stamped
+  // handle query stays exact because the chosen subset is re-stamped in
+  // document order below.
+  const visibleSet = scanned.filter((entry) => entry.visible);
+  const hiddenSet = scanned.filter((entry) => !entry.visible);
+  const chosenVisible = visibleSet.slice(0, CAP);
+  const chosenHidden = hiddenSet.slice(0, CAP);
+  const chosen = chosenVisible.concat(chosenHidden)
+    .sort((a, b) => a.docIndex - b.docIndex)
+    .slice(0, CAP * 2);
+  const truncated =
+    scanTruncatedRaw || visibleSet.length > CAP || hiddenSet.length > CAP;
+  const out = [];
+  chosen.forEach((entry, obsIndex) => {
+    const htmlEl = entry.el;
+    htmlEl.setAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}', String(obsIndex));
     const role = htmlEl.getAttribute('role')
       || (htmlEl.tagName === 'A' ? 'link'
         : htmlEl.tagName === 'BUTTON' ? 'button'
@@ -120,10 +144,11 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       checked: htmlEl.checked === undefined ? null : !!htmlEl.checked,
       selected: htmlEl.tagName === 'SELECT' ? htmlEl.selectedIndex >= 0 : null,
       hrefOrigin,
-      visible,
+      visible: entry.visible,
       isCredential,
+      scanTruncated: truncated && obsIndex === chosen.length - 1 ? true : undefined,
     });
-  }
+  });
   return out;
 })()`;
 
@@ -265,10 +290,15 @@ export async function buildObservation(
     0,
     MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements
   );
+  // F08: the in-page collector reports scan truncation explicitly —
+  // hidden controls no longer silently crowd out visible targets, and
+  // a saturated scan window is surfaced instead of hidden.
   const truncatedElements =
+    records.some((r) => r.scanTruncated === true) ||
     records.filter((r) => r.visible).length > visible.length;
 
   const elements: BrowserElementSummary[] = [];
+  let registrySaturated = false;
   for (const record of visible) {
     const shaped = shapeElementRecord(record);
     const handle =
@@ -281,16 +311,35 @@ export async function buildObservation(
         record.isCredential || record.inputType === "password"
           ? budgetName(record.name || "")
           : shaped.name;
-      const ref = input.registry.register({
-        element: handle,
-        role: shaped.role,
-        name: rawName,
-      });
+      let ref: string;
+      try {
+        ref = input.registry.register({
+          element: handle,
+          role: shaped.role,
+          name: rawName,
+        });
+      } catch (error) {
+        // F08: a saturated registry (everything pinned/pending) degrades
+        // THIS observation explicitly — it never evicts a pinned ref to
+        // admit a new one.
+        if (
+          error instanceof Error &&
+          error.name === "ReferenceRegistrySaturatedError"
+        ) {
+          registrySaturated = true;
+          elements.push({ ref: "e_nohandle", ...toSummaryFields(shaped) });
+          continue;
+        }
+        throw error;
+      }
       elements.push({ ref, ...toSummaryFields(shaped) });
     } else {
       // No handle available (budget edge): expose without a usable ref.
       elements.push({ ref: "e_nohandle", ...toSummaryFields(shaped) });
     }
+  }
+  if (registrySaturated) {
+    notices.push({ code: "truncated" });
   }
 
   const textBudget = truncateText(
