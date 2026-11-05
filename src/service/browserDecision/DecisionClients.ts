@@ -184,7 +184,11 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         }
         const content = response.choices?.[0]?.message?.content ?? "";
         const parsed: unknown = JSON.parse(content);
-        const normalized = normalizeWireResult(parsed);
+        // F14/D-FR-19: a chat response can never claim native
+        // distribution — self-reported calibration is stripped.
+        const normalized = normalizeWireResult(parsed, {
+          allowNativeDistribution: false,
+        });
         // T29: usage attribution - provider-reported token totals are
         // surfaced in the uncertainty metadata (never as confidence).
         const usage = (
@@ -250,13 +254,26 @@ function parseBareAction(raw: unknown): {
   if (typeof operation !== "string" || !BARE_OPERATIONS.has(operation)) {
     return null;
   }
+  // F14: the fallback path enforces the SAME bounds as the strict
+  // schema — an oversized FILL text or URL is a schema violation, not
+  // a silently accepted action.
+  const bareUrl =
+    typeof record["url"] === "string" ? record["url"] : null;
+  const bareText =
+    typeof record["text"] === "string" ? record["text"] : null;
+  if (bareUrl !== null && bareUrl.length > 2048) {
+    return null;
+  }
+  if (bareText !== null && bareText.length > 2000) {
+    return null;
+  }
   return {
     operation: operation as BrowserProposedAction["operation"],
     target_id: typeof record["target_id"] === "string" ? record["target_id"] : null,
     option_id: typeof record["option_id"] === "string" ? record["option_id"] : null,
     key: validatePressKey(record["key"]),
-    url: typeof record["url"] === "string" ? record["url"] : null,
-    text: typeof record["text"] === "string" ? record["text"] : null,
+    url: bareUrl,
+    text: bareText,
   };
 }
 
@@ -285,7 +302,17 @@ export function buildChatDecisionPrompt(input: BrowserDecisionInput): string {
 }
 
 /** Normalize + validate provider wire output into the semantic result. */
-export function normalizeWireResult(raw: unknown): BrowserDecisionResult {
+/**
+ * F14: `allowNativeDistribution` — only the HOSTED native decision
+ * endpoint may report calibrated uncertainty. A chat response claiming
+ * native_distribution is untrusted and normalized to unavailable
+ * (D-FR-19).
+ */
+export function normalizeWireResult(
+  raw: unknown,
+  options: { readonly allowNativeDistribution?: boolean } = {}
+): BrowserDecisionResult {
+  const allowNativeDistribution = options.allowNativeDistribution ?? true;
   const parsed = decisionResultSchema.safeParse(raw);
   if (!parsed.success) {
     // Chat models reply with a bare action object (no status/uncertainty
@@ -305,13 +332,17 @@ export function normalizeWireResult(raw: unknown): BrowserDecisionResult {
   if (wire.status === "decided") {
     // Chat models have NO calibrated uncertainty (D-FR-19): never trust a
     // self-reported confidence; normalize to source unavailable.
+    if (!allowNativeDistribution || wire.uncertainty.source !== "native_distribution") {
+      return {
+        status: "decided",
+        action: wire.action,
+        uncertainty: { source: "unavailable", confidence: null },
+      };
+    }
     return {
       status: "decided",
       action: wire.action,
-      uncertainty:
-        wire.uncertainty.source === "native_distribution"
-          ? wire.uncertainty
-          : { source: "unavailable", confidence: null },
+      uncertainty: wire.uncertainty,
     };
   }
   return wire;

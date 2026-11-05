@@ -912,3 +912,71 @@ describe("BrowserTaskRunner F06 in-job approval wait", () => {
     expect(result.reason).toBe("approval_required");
   });
 });
+
+describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
+  const bareFill = {
+    operation: "FILL",
+    target_id: "c1",
+    option_id: null,
+    key: null,
+    url: null,
+    text: "x",
+  };
+
+  it("rejects an oversized bare FILL text (same bound as the strict schema)", () => {
+    const oversized = normalizeWireResult({
+      ...bareFill,
+      text: "x".repeat(2001),
+    });
+    expect(oversized).toEqual({
+      status: "invalid_input",
+      reason_code: "schema_violation",
+    });
+    // Exactly at the bound is accepted.
+    const atBound = normalizeWireResult({
+      ...bareFill,
+      text: "x".repeat(2000),
+    });
+    expect(atBound.status).toBe("decided");
+  });
+
+  it("rejects an oversized bare NAVIGATE url", () => {
+    const oversized = normalizeWireResult({
+      operation: "NAVIGATE",
+      target_id: null,
+      option_id: null,
+      key: null,
+      url: `https://example.test/${"x".repeat(2100)}`,
+      text: null,
+    });
+    expect(oversized).toEqual({
+      status: "invalid_input",
+      reason_code: "schema_violation",
+    });
+  });
+
+  it("strips claimed native_distribution from chat responses (D-FR-19)", () => {
+    const claimed = {
+      status: "decided",
+      action: bareFill,
+      uncertainty: { source: "native_distribution", confidence: 0.99 },
+    };
+    // Chat path: the claim is untrusted.
+    const chat = normalizeWireResult(claimed, { allowNativeDistribution: false });
+    expect(chat).toEqual({
+      status: "decided",
+      action: bareFill,
+      uncertainty: { source: "unavailable", confidence: null },
+    });
+    // Hosted native path: the claim is honored.
+    const hosted = normalizeWireResult(claimed);
+    if (hosted.status === "decided") {
+      expect(hosted.uncertainty).toEqual({
+        source: "native_distribution",
+        confidence: 0.99,
+      });
+    } else {
+      throw new Error("expected decided");
+    }
+  });
+});
