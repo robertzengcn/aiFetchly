@@ -126,10 +126,25 @@ export interface RunBrowserTasksDeps {
 
 /** T13: live batch abort trees — renderer Stop/Return-now abort children. */
 const liveBatches = new Map<string, AbortController>();
+/**
+ * F17: per-child abort trees — stopping ONE batch child task must
+ * never cancel its siblings.
+ */
+const liveChildren = new Map<string, AbortController>();
 
 /** Abort a batch's child tasks (C-FR-11 Return results now / M-FR-09 Stop). */
 export function abortBatch(batchId: string): number {
   const controller = liveBatches.get(batchId);
+  if (!controller) {
+    return 0;
+  }
+  controller.abort();
+  return 1;
+}
+
+/** F17: abort a SINGLE batch child task (BROWSER_TASK_STOP on `<batch>:<i>`). */
+export function abortTask(taskId: string): number {
+  const controller = liveChildren.get(taskId);
   if (!controller) {
     return 0;
   }
@@ -173,6 +188,7 @@ export async function runBrowserTasks(
       }
       control.register(taskId, conversationId);
       const childAbort = new AbortController();
+      liveChildren.set(taskId, childAbort);
       const onParentAbort = (): void => childAbort.abort();
       signal.addEventListener("abort", onParentAbort, { once: true });
       batchAbort.signal.addEventListener("abort", onParentAbort, {
@@ -194,26 +210,77 @@ export async function runBrowserTasks(
           } as unknown as Parameters<typeof runtime.runSync>[0],
           { ...getDefaultAgentRuntimeDeps(), signal: childAbort.signal }
         );
-        // A late abort (user Stop) outranks a successful agent result.
-        const aborted = childAbort.signal.aborted || signal.aborted;
+        // F17: the three abort sources classify DIFFERENTLY.
+        //  - parent signal → whole batch cancelled (T13 semantics);
+        //  - batchAbort alone → Return-results-now: unfinished tasks
+        //    report PARTIAL with bounded evidence, finished tasks keep
+        //    their real output;
+        //  - per-child abort → that ONE task is cancelled, siblings
+        //    continue.
+        const parentCancelled = signal.aborted;
+        const returnNow = !parentCancelled && batchAbort.signal.aborted;
+        const childStopped =
+          !parentCancelled && !returnNow && childAbort.signal.aborted;
+        const hasUsableOutput =
+          result.status === "completed" && result.output != null;
+        // T13: a parent-signal abort ALWAYS outranks the result. For a
+        // return-now or a single-child stop, output that already landed
+        // is honored (the work finished before the abort landed).
+        if (
+          parentCancelled ||
+          ((returnNow || childStopped) && !hasUsableOutput)
+        ) {
+          control.setState(
+            taskId,
+            returnNow ? "failed" : "cancelled",
+            returnNow ? "return_now_partial" : "user_stop"
+          );
+          return {
+            task_index: index,
+            status: returnNow ? "partial" : "cancelled",
+            summary: returnNow
+              ? "returned early (user requested results)"
+              : "cancelled by user stop",
+            extracted: [],
+            final_url: null,
+            evidence: returnNow ? ["return_now:unfinished"] : [],
+            needs_user: null,
+            user_interventions: mapInterventions(
+              control.get(taskId)?.interventions ?? []
+            ),
+          };
+        }
         // T12: the AGENT completing is not the BROWSER task succeeding —
         // honor the child's own output.status (failed / needs_user).
         const childOutputStatus = (
           result.output as { status?: string } | null
         )?.status;
-        const finalStatus: BrowserBatchTaskResult["status"] = aborted
-          ? "cancelled"
-          : result.status !== "completed"
+        const finalStatus: BrowserBatchTaskResult["status"] =
+          result.status !== "completed"
             ? "failed"
             : childOutputStatus === "failed"
               ? "failed"
               : childOutputStatus === "needs_user"
                 ? "partial"
                 : "completed";
+        // F17: cancellation is a CONTROL state, not a failure.
         control.setState(
           taskId,
           finalStatus === "completed" ? "completed" : "failed"
         );
+        const outputSessionId = (
+          result.output as { session_id?: string } | null
+        )?.session_id;
+        if (!task.keep_open && typeof outputSessionId === "string" && outputSessionId) {
+          // F17: the collector — not the agent prompt — owns cleanup of
+          // sessions the child opened (bounded: outputs that carry the
+          // session id; crash/cancel without an id is F16's map).
+          void import("@/modules/ManagedBrowserModule")
+            .then(({ getDefaultManagedBrowserModule }) =>
+              getDefaultManagedBrowserModule().stop(outputSessionId, "cancelled")
+            )
+            .catch(() => undefined);
+        }
         return {
           task_index: index,
           status: finalStatus,
@@ -228,22 +295,33 @@ export async function runBrowserTasks(
             : {}),
         };
       } catch (error) {
+        // F17: classify by the abort source that actually fired.
+        const parentCancelled = signal.aborted;
+        const returnNow = !parentCancelled && batchAbort.signal.aborted;
+        const childStopped =
+          !parentCancelled && !returnNow && childAbort.signal.aborted;
         control.setState(
           taskId,
-          signal.aborted ? "cancelled" : "failed",
+          parentCancelled || childStopped ? "cancelled" : "failed",
           error instanceof Error ? error.message : "task_error"
         );
         return {
           task_index: index,
-          status: signal.aborted ? "cancelled" : "failed",
+          status:
+            parentCancelled || childStopped
+              ? "cancelled"
+              : returnNow
+                ? "partial"
+                : "failed",
           summary: error instanceof Error ? error.message : "task error",
           extracted: [],
           final_url: null,
-          evidence: [],
+          evidence: returnNow ? ["return_now:error"] : [],
           needs_user: null,
           user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
         };
       } finally {
+        liveChildren.delete(taskId);
         signal.removeEventListener("abort", onParentAbort);
         batchAbort.signal.removeEventListener("abort", onParentAbort);
       }

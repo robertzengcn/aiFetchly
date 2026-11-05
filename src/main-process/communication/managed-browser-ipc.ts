@@ -216,12 +216,14 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     browserTaskStopSchema,
     async (input) => {
       controlService.cancel(input.taskId, "user_stop");
-      // T13: a batch task id also aborts the whole batch's abort tree.
+      // F17: stopping ONE batch child (`<batch>:<i>`) aborts only that
+      // child — its siblings keep running. Whole-batch termination is
+      // BROWSER_BATCH_RETURN_NOW's job.
       if (input.taskId.includes(":")) {
-        const { abortBatch } = await import(
+        const { abortTask } = await import(
           "@/service/agentTools/runBrowserTasksTool"
         );
-        abortBatch(input.taskId.split(":")[0]!);
+        abortTask(input.taskId);
       }
       if (input.sessionId) {
         await getDefaultManagedBrowserModule()

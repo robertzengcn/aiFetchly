@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  abortTask,
+  abortBatch,
   runBrowserTasks,
   runWithConcurrency,
   type BrowserBatchTaskResult,
@@ -174,5 +176,121 @@ describe("runBrowserTasks (M-FR-03/05/09)", () => {
       type: "approval",
       proposed_action: "click Publish",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F17: per-child Stop, Return-now semantics, control-state honesty
+// ---------------------------------------------------------------------------
+
+/** Control double that records every child task registration. */
+class CapturingControl extends AgentTaskControlService {
+  public registered: string[] = [];
+  public override register(taskId: string, conversationId: string) {
+    this.registered.push(taskId);
+    return super.register(taskId, conversationId);
+  }
+}
+
+function okOutput(summary: string) {
+  return {
+    status: "completed",
+    agentTaskId: "agt-x",
+    agentId: "agent-browser-operator",
+    agentVersion: 1,
+    toolCallsCount: 1,
+    sourceUrls: [],
+    output: {
+      status: "completed",
+      summary,
+      extracted: [],
+      final_url: null,
+      evidence: [],
+      needs_user: null,
+      user_interventions: [],
+    },
+  };
+}
+
+describe("runBrowserTasks F17 semantics", () => {
+  it("stopping ONE batch child cancels only that child", async () => {
+    const control = new CapturingControl();
+    const fakeRunAgent = () => ({
+      runSync: async (request: { prompt: string }) => {
+        if (request.prompt.includes("task 1/")) {
+          // The user pressed Stop on THIS child only.
+          const ownTaskId = control.registered[0]!;
+          expect(abortTask(ownTaskId)).toBe(1);
+          throw new Error("stopped by user");
+        }
+        return okOutput("sibling done");
+      },
+    }) as never;
+    const { results } = await runBrowserTasks(
+      [{ goal: "stop me (task 1/2)" }, { goal: "keep going (task 2/2)" }],
+      2,
+      "conv-1",
+      new AbortController().signal,
+      { runAgent: fakeRunAgent as never, control }
+    );
+    expect(results[0]!.status).toBe("cancelled");
+    // The sibling was NOT dragged down by the child Stop.
+    expect(results[1]!.status).toBe("completed");
+    // Cancellation is a cancelled CONTROL record, not a failure.
+    expect(control.get(control.registered[0]!)?.state).toBe("cancelled");
+    expect(control.get(control.registered[1]!)?.state).toBe("completed");
+  });
+
+  it("Return-now reports unfinished tasks as partial with evidence", async () => {
+    const control = new CapturingControl();
+    const fakeRunAgent = () => ({
+      runSync: async (request: { prompt: string }) => {
+        if (request.prompt.includes("task 2/")) {
+          // BROWSER_BATCH_RETURN_NOW: cancel the batch's control records
+          // and abort the live batch tree while THIS task is in flight.
+          const batchId = control.registered[1]!.split(":")[0]!;
+          control.cancelBatch(batchId);
+          expect(abortBatch(batchId)).toBe(1);
+          throw new Error("aborted mid-flight");
+        }
+        return okOutput("first done");
+      },
+    }) as never;
+    const { results } = await runBrowserTasks(
+      [{ goal: "task 1/2" }, { goal: "task 2/2" }],
+      1,
+      "conv-1",
+      new AbortController().signal,
+      { runAgent: fakeRunAgent as never, control }
+    );
+    // The finished task keeps its real output...
+    expect(results[0]!.status).toBe("completed");
+    // ...the unfinished one is PARTIAL (not cancelled) with evidence.
+    expect(results[1]!.status).toBe("partial");
+    expect(results[1]!.evidence).toContain("return_now:error");
+    expect(control.get(control.registered[1]!)?.state).toBe("failed");
+  });
+
+  it("Return-now keeps a child's usable output when the work already finished", async () => {
+    const control = new CapturingControl();
+    const fakeRunAgent = () => ({
+      runSync: async () => {
+        // Return-now fires AFTER the agent produced its output.
+        const batchId = control.registered[0]!.split(":")[0]!;
+        control.cancelBatch(batchId);
+        abortBatch(batchId);
+        return okOutput("actually finished");
+      },
+    }) as never;
+    const { results } = await runBrowserTasks(
+      [{ goal: "fast task" }],
+      1,
+      "conv-1",
+      new AbortController().signal,
+      { runAgent: fakeRunAgent as never, control }
+    );
+    expect(results[0]!.status).toBe("completed");
+    expect(results[0]!.summary).toBe("actually finished");
+    expect(control.get(control.registered[0]!)?.state).toBe("completed");
   });
 });
