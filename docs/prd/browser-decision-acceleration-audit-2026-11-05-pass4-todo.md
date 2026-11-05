@@ -312,7 +312,7 @@ Use these together with the exact symbols and failure branches above; filenames 
 
 | Families | Production paths to change/test together |
 | --- | --- |
-| F02/F08/F09/F14 | src/childprocess/managed-browser/BrowserObservationService.ts, BrowserActionExecutor.ts, PageReferenceRegistry.ts, LoginFormFiller.ts, ResultSanitizer.ts; src/service/browserDecision/CandidateBuilder.ts |
+| F02/F08/F09/F14 | src/childprocess/managed-browser/BrowserObservationService.ts, BrowserActionExecutor.ts, PageReferenceRegistry.ts, LoginFormFiller.ts, ResultSanitizer.ts; src/service/browserDecision/BrowserCandidateBuilder.ts |
 | F03/F10/F11/F18 | src/modules/ManagedBrowserModule.ts; src/service/ManagedBrowserLeaseService.ts; src/childprocess/managed-browser/WorkerSession.ts, ManagedBrowserRuntime.ts, adapters/GenericSignInAdapter.ts |
 | F05–F07/F13–F15/F22 | src/service/browserDecision/BrowserTaskRunner.ts, DecisionClients.ts; src/service/ManagedBrowserAiToolService.ts; src/modules/BrowserTaskModule.ts; src/model/BrowserTask.model.ts; src/entity/BrowserTask.entity.ts |
 | F06/F12/F16/F17/F20 | src/service/browserAgents/AgentTaskControlService.ts, HandoffCoordinator.ts; src/service/AgentRuntime.ts; src/service/agentTools/runBrowserTasksTool.ts; src/service/browserLogin/BrowserCredentialLoginService.ts; src/modules/socialAccountModule.ts; src/model/SocialAccount.model.ts |
