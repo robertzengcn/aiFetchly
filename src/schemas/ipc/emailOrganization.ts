@@ -137,3 +137,18 @@ export const emailOrgSelectionPrepareInputSchema = lazySchema(() =>
     filtersSummary: z.record(z.string(), z.unknown()).optional(),
   })
 );
+
+export const emailOrgOperationListInputSchema = lazySchema(() =>
+  z.strictObject({
+    emailServiceId: positiveInt.optional(),
+    messageId: positiveInt.optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+  })
+);
+
+export const emailOrgTrashSelectionStartInputSchema = lazySchema(() =>
+  z.strictObject({
+    selectionId: z.string().min(8).max(64),
+    actionId: z.string().max(255).nullable().optional(),
+  })
+);

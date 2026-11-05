@@ -49,6 +49,7 @@ const attachmentSelectionSchema = z.discriminatedUnion("mode", [
 
 const createForwardDraftSchema = z.object({
   message_id: positiveInt,
+  locale: z.enum(["en", "zh", "es", "fr", "de", "ja"]).optional(),
   to: z.array(z.string().max(320)).min(1).max(EMAIL_ORGANIZATION_LIMITS.maxRecipients),
   cc: z.array(z.string().max(320)).max(EMAIL_ORGANIZATION_LIMITS.maxRecipients).optional(),
   bcc: z.array(z.string().max(320)).max(EMAIL_ORGANIZATION_LIMITS.maxRecipients).optional(),
@@ -264,6 +265,7 @@ export async function createEmailForwardDraft(
     const service = new EmailForwardDraftService();
     const draft = await service.createDraft({
       messageId: input.message_id,
+      locale: input.locale ?? null,
       to: input.to,
       cc: input.cc,
       bcc: input.bcc,

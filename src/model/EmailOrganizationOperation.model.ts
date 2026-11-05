@@ -461,6 +461,59 @@ export class EmailOrganizationOperationModel extends BaseDb {
       .getMany();
   }
 
+  /**
+   * PRD §11: local aggregate diagnostic counts (no remote telemetry).
+   * Derived from the durable operations table; exported only through the
+   * existing explicit support workflow.
+   */
+  async aggregateDiagnostics(): Promise<
+    Array<{ kind: string; status: string; count: number }>
+  > {
+    return await this.operationRepository
+      .createQueryBuilder("op")
+      .select("op.kind", "kind")
+      .addSelect("op.status", "status")
+      .addSelect("COUNT(*)", "count")
+      .groupBy("op.kind")
+      .addGroupBy("op.status")
+      .getRawMany<{ kind: string; status: string; count: string }>()
+      .then((rows) =>
+        rows.map((row) => ({
+          kind: row.kind,
+          status: row.status,
+          count: Number(row.count),
+        }))
+      );
+  }
+
+  /**
+   * R12: persistent operation history for discovery after navigation or
+   * restart. Newest first, optionally filtered by account or message.
+   */
+  async listRecentOperations(input: {
+    readonly emailServiceId?: number | null;
+    readonly messageId?: number | null;
+    readonly limit?: number;
+  }): Promise<EmailOrganizationOperationEntity[]> {
+    const limit = Math.max(1, Math.min(input.limit ?? 20, 100));
+    const qb = this.operationRepository
+      .createQueryBuilder("op")
+      .orderBy("op.requestedAt", "DESC")
+      .take(limit);
+    if (input.emailServiceId != null) {
+      qb.andWhere("op.emailServiceId = :emailServiceId", {
+        emailServiceId: input.emailServiceId,
+      });
+    }
+    if (input.messageId != null) {
+      qb.andWhere(
+        "EXISTS (SELECT 1 FROM email_organization_operation_item it WHERE it.operationId = op.operationId AND it.messageId = :messageId)",
+        { messageId: input.messageId }
+      );
+    }
+    return await qb.getMany();
+  }
+
   /** Attempts whose lease expired while not yet resolved (recovery input). */
   async findExpiredClaims(now: Date): Promise<
     Array<{ attempt: EmailOrganizationAttemptEntity; item: EmailOrganizationOperationItemEntity }>

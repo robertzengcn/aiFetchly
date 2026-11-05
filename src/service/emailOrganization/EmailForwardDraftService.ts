@@ -35,6 +35,8 @@ import {
  */
 
 export interface CreateForwardDraftInput {
+  /** R14: UI locale for generated header labels (default en). */
+  readonly locale?: string | null;
   readonly messageId: number;
   readonly to: readonly string[];
   readonly cc?: readonly string[];
@@ -134,6 +136,7 @@ export class EmailForwardDraftService extends BaseModule {
         uid: location?.providerUid ?? "",
       },
       receiveConfig,
+      locale: input.locale ?? undefined,
       note: input.note ?? null,
       toRecipients: normalized.to,
       ccRecipients: normalized.cc,

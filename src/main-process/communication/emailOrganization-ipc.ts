@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { log } from "@/modules/Logger";
 import {
   registerValidatedHandler,
@@ -19,7 +20,11 @@ import {
   EMAIL_ORG_OPERATION_RECONCILE,
   EMAIL_ORG_SEARCH,
   EMAIL_ORG_SELECTION_PREPARE,
+  EMAIL_ORG_OPERATION_LIST,
+  EMAIL_ORG_TRASH_SELECTION_START,
+  EMAIL_ORG_DIAGNOSTICS,
 } from "@/config/channellist";
+import { lazySchema } from "@/utils/lazySchema";
 import {
   emailOrgAccountInputSchema,
   emailForwardDraftCreateInputSchema,
@@ -32,6 +37,8 @@ import {
   emailOrgOperationInputSchema,
   emailOrgSearchInputSchema,
   emailOrgSelectionPrepareInputSchema,
+  emailOrgOperationListInputSchema,
+  emailOrgTrashSelectionStartInputSchema,
 } from "@/schemas/ipc/emailOrganization";
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailOrganizationSearchService } from "@/service/emailOrganization/EmailOrganizationSearchService";
@@ -320,6 +327,64 @@ export function registerEmailOrganizationIpcHandlers(): void {
         });
       } catch (error) {
         log.error("EMAIL_ORG_SELECTION_PREPARE failed:", error);
+        throw toStructuredError(error);
+      }
+    }
+  );
+
+  // ---- R12: history listing + prompt-start bulk ----
+  registerValidatedHandler(
+    EMAIL_ORG_OPERATION_LIST,
+    emailOrgOperationListInputSchema,
+    async (input) => {
+      try {
+        const module = new EmailOrganizationOperationModule();
+        const operations = await module.listRecentOperations({
+          emailServiceId: input.emailServiceId ?? null,
+          messageId: input.messageId ?? null,
+          limit: input.limit,
+        });
+        const out = [];
+        for (const operation of operations) {
+          const items = await module.listItems(operation.operationId);
+          out.push(projectOperation(operation, items));
+        }
+        return { operations: out };
+      } catch (error) {
+        log.error("EMAIL_ORG_OPERATION_LIST failed:", error);
+        throw toStructuredError(error);
+      }
+    }
+  );
+
+  registerValidatedHandler(
+    EMAIL_ORG_TRASH_SELECTION_START,
+    emailOrgTrashSelectionStartInputSchema,
+    async (input) => {
+      try {
+        const actionService = new EmailMailboxActionService();
+        return await actionService.startTrashSelection({
+          selectionId: input.selectionId,
+          origin: "ui_action",
+          actionId: input.actionId ?? newUiActionId(),
+        });
+      } catch (error) {
+        log.error("EMAIL_ORG_TRASH_SELECTION_START failed:", error);
+        throw toStructuredError(error);
+      }
+    }
+  );
+
+  // ---- PRD §11: local aggregate diagnostics (explicit support workflow) ----
+  registerValidatedHandler(
+    EMAIL_ORG_DIAGNOSTICS,
+    lazySchema(() => z.void().optional()),
+    async () => {
+      try {
+        const module = new EmailOrganizationOperationModule();
+        return { aggregates: await module.aggregateDiagnostics() };
+      } catch (error) {
+        log.error("EMAIL_ORG_DIAGNOSTICS failed:", error);
         throw toStructuredError(error);
       }
     }

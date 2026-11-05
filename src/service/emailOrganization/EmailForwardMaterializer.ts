@@ -24,6 +24,8 @@ import { hashBytes } from "@/service/emailOrganization/EmailForwardEnvelopeHashe
  */
 
 export interface MaterializeForwardInput {
+  /** R14: UI locale for the forwarded-message separator/labels (default en). */
+  readonly locale?: string;
   readonly sourceMessageId: number;
   readonly location: {
     readonly folderPath: string;
@@ -57,6 +59,22 @@ export interface MaterializedForward {
 }
 
 export const FORWARD_SEPARATOR = "---------- Forwarded message ----------";
+
+/** R14: localized forwarded-message header labels (design §9.1 step 5). */
+const FORWARD_LABELS: Record<string, { separator: string; from: string; date: string; subject: string; to: string }> = {
+  en: { separator: "---------- Forwarded message ----------", from: "From", date: "Date", subject: "Subject", to: "To" },
+  zh: { separator: "---------- 转发的邮件 ----------", from: "发件人", date: "日期", subject: "主题", to: "收件人" },
+  es: { separator: "---------- Mensaje reenviado ----------", from: "De", date: "Fecha", subject: "Asunto", to: "Para" },
+  fr: { separator: "---------- Message transféré ----------", from: "De", date: "Date", subject: "Objet", to: "À" },
+  de: { separator: "---------- Weitergeleitete Nachricht ----------", from: "Von", date: "Datum", subject: "Betreff", to: "An" },
+  ja: { separator: "---------- 転送メッセージ ----------", from: "差出人", date: "日付", subject: "件名", to: "宛先" },
+};
+
+export function forwardLabelsForLocale(locale: string): {
+  separator: string; from: string; date: string; subject: string; to: string;
+} {
+  return FORWARD_LABELS[locale.slice(0, 2).toLowerCase()] ?? FORWARD_LABELS.en;
+}
 
 interface RawAttachment {
   readonly partId: string;
@@ -223,7 +241,7 @@ export class EmailForwardMaterializer {
 
     // R01: the quoted header block reflects the ORIGINAL message — the
     // outgoing (possibly edited/Fwd-prefixed) subject is separate.
-    const headerBlock = buildForwardedHeaderBlock(parsed);
+    const headerBlock = buildForwardedHeaderBlock(parsed, input.locale ?? "en");
     const bodyText = buildTextBody(input.note, headerBlock, originalText);
     const bodyHtml = buildHtmlBody(input.note, headerBlock, forwardedHtml, originalText);
 
@@ -386,14 +404,15 @@ function formatAddress(name: string | undefined, address: string | undefined): s
   return `${name} <${safeAddress}>`;
 }
 
-function buildForwardedHeaderBlock(parsed: ParsedMail): string {
+function buildForwardedHeaderBlock(parsed: ParsedMail, locale: string): string {
+  const labels = forwardLabelsForLocale(locale);
   const fromDate = parsed.date ? parsed.date.toUTCString() : "";
   const lines = [
-    FORWARD_SEPARATOR,
-    `From: ${formatAddress(parsed.from?.value?.[0]?.name, parsed.from?.value?.[0]?.address)}`,
-    `Date: ${fromDate}`,
-    `Subject: ${parsed.subject ?? ""}`,
-    `To: ${(parsed.to ? addressList(parsed.to) : []).join(", ")}`,
+    labels.separator,
+    `${labels.from}: ${formatAddress(parsed.from?.value?.[0]?.name, parsed.from?.value?.[0]?.address)}`,
+    `${labels.date}: ${fromDate}`,
+    `${labels.subject}: ${parsed.subject ?? ""}`,
+    `${labels.to}: ${(parsed.to ? addressList(parsed.to) : []).join(", ")}`,
   ];
   return lines.join("\n");
 }

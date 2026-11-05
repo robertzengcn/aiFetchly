@@ -112,12 +112,55 @@ export const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
  * only an allowed gate does. An explicit user denial is not skipped, so the
  * normal permission path can still refuse the call.
  */
+/**
+ * R03: organization mutation tools whose trusted current-turn intent was
+ * resolved to send_now skip the generic card — the explicit user request IS
+ * the confirmation, bound to this turn's message (PRD FR-07 direct-send).
+ * Review-first/draft/negation intents never skip; the model is told to
+ * present the draft instead.
+ */
+export const ORGANIZATION_EMAIL_MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  "send_email_forward",
+  "move_email_to_trash",
+  "restore_email",
+]);
+
+/**
+ * Pulls comparable text from the last user message (string content or
+ * text parts). Organization intent is resolved from this trusted host
+ * state — never from tool arguments or email content.
+ */
+export function extractUserMessageText(
+  message: OpenAIChatMessage | undefined
+): string {
+  if (message === undefined) return "";
+  if (typeof message.content === "string") return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((part) =>
+        typeof part === "object" && part !== null && "text" in part
+          ? String((part as { text?: unknown }).text ?? "")
+          : ""
+      )
+      .join(" ");
+  }
+  return "";
+}
+
 export function shouldSkipGenericToolPermission(input: {
   readonly toolName: string;
   readonly outboundSendGateAllowed: boolean;
   readonly explicitlyDenied: boolean;
+  readonly organizationSendGateAllowed?: boolean;
 }): boolean {
   if (input.toolName === OUTBOUND_EMAIL_DRAFT_TOOL) {
+    return true;
+  }
+  if (
+    ORGANIZATION_EMAIL_MUTATION_TOOLS.has(input.toolName) &&
+    input.organizationSendGateAllowed === true &&
+    !input.explicitlyDenied
+  ) {
     return true;
   }
   return (
@@ -132,6 +175,7 @@ import {
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
+import { resolveEmailOrganizationIntent } from "@/service/emailOrganization/EmailOrganizationIntentResolver";
 import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
@@ -573,6 +617,8 @@ interface PreparedToolCall {
    * the generic permission card must not be shown again (§14.2).
    */
   outboundSendGateAllowed?: boolean;
+  /** R03: trusted current-turn intent gate passed for org mutations. */
+  organizationSendGateAllowed?: boolean;
 }
 
 /**
@@ -4316,6 +4362,50 @@ export class AIChatQueryLoop {
           // Set only after the gate allows this exact send. The generic
           // permission card is then skipped; a blocked gate never reaches it.
           let outboundSendGateAllowed = false;
+          // R03: organization mutations resolve trusted current-turn intent
+          // (host state) — explicit send/delete executes once; review/draft/
+          // negation blocks the call and tells the model to present instead.
+          let organizationSendGateAllowed = false;
+          if (ORGANIZATION_EMAIL_MUTATION_TOOLS.has(call.name)) {
+            // Trusted current-turn text: the last user message in the loop
+            // input (host state — never a tool argument).
+            const lastUserMessage = [...input.messages]
+              .reverse()
+              .find((message) => message.role === "user");
+            const userText = extractUserMessageText(lastUserMessage);
+            const organizationDecision = resolveEmailOrganizationIntent(userText);
+            if (organizationDecision.mode === "send_now") {
+              organizationSendGateAllowed = true;
+            } else {
+              yield buildToolCallEvent(call.arguments ?? {});
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                organizationGateBlocked: true,
+                code: "review_required",
+                reason:
+                  "The user asked for a review/draft rather than immediate action. Present the draft or selection for review and wait for the user's explicit go-ahead.",
+              });
+              yield {
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  organizationGateBlocked: true,
+                  code: "review_required",
+                },
+              };
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
+            }
+          }
           if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
             const gateDecision = await this.evaluateOutboundEmailGate(
               input,
@@ -4607,7 +4697,8 @@ export class AIChatQueryLoop {
             input,
             executableCall,
             outboundAuthorization,
-            outboundSendGateAllowed
+            outboundSendGateAllowed,
+            organizationSendGateAllowed
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           yield buildToolCallEvent(effectiveArguments);
@@ -5535,6 +5626,7 @@ export class AIChatQueryLoop {
       batchHash: string;
     } | undefined,
     outboundSendGateAllowed = false,
+    organizationSendGateAllowed = false,
     onProgress?: ToolProgressEmitter,
     deadlineMs?: number
   ): Promise<
@@ -5851,6 +5943,7 @@ export class AIChatQueryLoop {
               skipPermissionCheck: shouldSkipGenericToolPermission({
                 toolName: call.name,
                 outboundSendGateAllowed,
+                organizationSendGateAllowed,
                 explicitlyDenied:
                   SkillPermissionService.getPermissionStatus(call.name) ===
                   "denied",
@@ -6772,7 +6865,8 @@ export class AIChatQueryLoop {
       authorizationId: number;
       batchHash: string;
     },
-    outboundSendGateAllowed = false
+    outboundSendGateAllowed = false,
+    organizationSendGateAllowed = false
   ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
     const descriptor = this.resolveHookToolDescriptor(input, call);
@@ -6855,6 +6949,7 @@ export class AIChatQueryLoop {
       startedAt,
       outboundAuthorization,
       outboundSendGateAllowed,
+      organizationSendGateAllowed,
     } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; then validated plugin
@@ -6882,6 +6977,7 @@ export class AIChatQueryLoop {
         effectiveCall,
         outboundAuthorization,
         outboundSendGateAllowed === true,
+        organizationSendGateAllowed === true,
         onProgress,
         pluginPolicy?.policy.maxRunMs
       );
@@ -6909,6 +7005,7 @@ export class AIChatQueryLoop {
         startedAt,
         outboundAuthorization,
         outboundSendGateAllowed === true,
+        organizationSendGateAllowed === true,
         onProgress
       );
     }
@@ -6956,6 +7053,7 @@ export class AIChatQueryLoop {
       batchHash: string;
     },
     outboundSendGateAllowed = false,
+    organizationSendGateAllowed = false,
     onProgress?: ToolProgressEmitter
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
@@ -6988,6 +7086,7 @@ export class AIChatQueryLoop {
         skipPermissionCheck: shouldSkipGenericToolPermission({
           toolName: call.name,
           outboundSendGateAllowed,
+          organizationSendGateAllowed,
           explicitlyDenied:
             SkillPermissionService.getPermissionStatus(call.name) === "denied",
         }),

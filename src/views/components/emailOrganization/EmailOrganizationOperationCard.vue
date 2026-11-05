@@ -69,19 +69,54 @@
         </div>
       </div>
     </v-card-text>
+    <v-dialog
+      v-model="folderPickerVisible"
+      max-width="420"
+      data-testid="org-op-folder-picker"
+    >
+      <v-card>
+        <v-card-text>
+          <div class="text-subtitle-2 mb-2">
+            {{ t("emailOrganization.pick_restore_folder") || "Choose a restore destination folder" }}
+          </div>
+          <v-select
+            v-model="selectedFolderPath"
+            :items="folderOptions.map((folder) => ({ title: folder.path, value: folder.path }))"
+            density="compact"
+            hide-details="auto"
+          ></v-select>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn
+            variant="text"
+            @click="folderPickerVisible = false"
+          >{{ t("emailOrganization.cancel_button") || "Cancel" }}</v-btn>
+          <v-btn
+            color="primary"
+            :disabled="selectedFolderPath === null"
+            :loading="restoring"
+            data-testid="org-op-folder-confirm"
+            @click="restoreToSelectedFolder"
+          >{{ t("emailOrganization.restore_button") || "Restore" }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from "vue";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   getEmailOrganizationOperation,
   restoreFromOperation,
   reconcileEmailOrganizationOperation,
   cancelEmailOrganizationOperation,
+  listEmailOrganizationFolders,
 } from "@/views/api/emailorganization";
 import type { EmailOrganizationOperationDto } from "@/entityTypes/emailOrganizationTypes";
+import type { EmailOrganizationFolderDto } from "@/entityTypes/emailOrganizationTypes";
 
 const props = defineProps<{
   operationId: string | null;
@@ -98,6 +133,40 @@ const errorMessage = ref<string | null>(null);
 const restoring = ref(false);
 const reconciling = ref(false);
 const cancelling = ref(false);
+// R12: reload the RESTORE operation after undo, not the stale trash one.
+const displayOperationId = ref<string | null>(null);
+// R12e: destination picker shown when a restore needs a replacement folder.
+const folderPickerVisible = ref(false);
+const folderOptions = ref<EmailOrganizationFolderDto[]>([]);
+const selectedFolderPath = ref<string | null>(null);
+// R12c: poll while the operation is open work so progress advances live.
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+const activeOperationId = computed(() => displayOperationId.value ?? props.operationId);
+
+const pollable = computed(() => {
+  const status = operation.value?.status;
+  return (
+    status === "running" ||
+    status === "prepared" ||
+    status === "awaiting_approval" ||
+    status === "authorized"
+  );
+});
+
+function stopPolling(): void {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function startPolling(): void {
+  stopPolling();
+  if (pollable.value) {
+    pollTimer = setInterval(() => void load(), 2000);
+  }
+}
 
 const showUndo = computed(
   () =>
@@ -229,31 +298,48 @@ function itemSummary(item: EmailOrganizationOperationDto["items"][number]): stri
 }
 
 async function load(): Promise<void> {
-  if (props.operationId === null) {
+  const target = activeOperationId.value;
+  if (target === null) {
     operation.value = null;
+    stopPolling();
     return;
   }
   errorMessage.value = null;
   try {
-    const result = await getEmailOrganizationOperation(props.operationId);
+    const result = await getEmailOrganizationOperation(target);
     operation.value = result.operation;
+    startPolling();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
   }
 }
 
-watch(() => props.operationId, load);
+watch(() => props.operationId, () => {
+  displayOperationId.value = null;
+  void load();
+});
+watch(pollable, startPolling);
 onMounted(load);
+onUnmounted(stopPolling);
 
 async function onUndo(): Promise<void> {
-  if (props.operationId === null) return;
+  if (activeOperationId.value === null) return;
   restoring.value = true;
   errorMessage.value = null;
   try {
-    const result = await restoreFromOperation(props.operationId);
+    const result = await restoreFromOperation(activeOperationId.value);
     if (result.success) {
       emit("restored", result.operationId);
+      // R12: switch the card to the RESTORE operation so the stale trash
+      // outcome never re-arms Undo.
+      displayOperationId.value = result.operationId;
       await load();
+    } else if (
+      result.errorCode === "DESTINATION_INVALID" ||
+      result.errorCode === "LOCATION_STALE"
+    ) {
+      // AC-16: removed original folder — offer a replacement explicitly.
+      await showFolderPicker();
     } else {
       errorMessage.value = result.errorCode ?? result.status;
     }
@@ -265,16 +351,57 @@ async function onUndo(): Promise<void> {
 }
 
 async function onReconcile(): Promise<void> {
-  if (props.operationId === null) return;
+  if (activeOperationId.value === null) return;
   reconciling.value = true;
   errorMessage.value = null;
   try {
-    await reconcileEmailOrganizationOperation(props.operationId);
+    await reconcileEmailOrganizationOperation(activeOperationId.value);
     await load();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);
   } finally {
     reconciling.value = false;
+  }
+}
+
+/** AC-16: pick a valid replacement destination and retry the restore. */
+async function showFolderPicker(): Promise<void> {
+  try {
+    const emailServiceId = operation.value?.emailServiceId;
+    if (emailServiceId === undefined || emailServiceId === null) {
+      errorMessage.value = "Account unavailable; cannot list folders.";
+      return;
+    }
+    const result = await listEmailOrganizationFolders(emailServiceId);
+    folderOptions.value = result.folders.filter(
+      (folder) => folder.specialUse !== "\\Trash"
+    );
+    folderPickerVisible.value = true;
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function restoreToSelectedFolder(): Promise<void> {
+  const priorId = activeOperationId.value;
+  const destination = selectedFolderPath.value;
+  if (priorId === null || destination === null) return;
+  restoring.value = true;
+  errorMessage.value = null;
+  try {
+    const result = await restoreFromOperation(priorId, destination);
+    if (result.success) {
+      displayOperationId.value = result.operationId;
+      folderPickerVisible.value = false;
+      emit("restored", result.operationId);
+      await load();
+    } else {
+      errorMessage.value = result.errorCode ?? result.status;
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    restoring.value = false;
   }
 }
 </script>

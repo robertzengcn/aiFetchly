@@ -121,6 +121,32 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
+  async aggregateDiagnostics(): Promise<
+    Array<{ kind: string; status: string; count: number }>
+  > {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.aggregateDiagnostics();
+    } catch (error) {
+      log.error("Error aggregating organization diagnostics:", error);
+      throw error;
+    }
+  }
+
+  async listRecentOperations(input: {
+    readonly emailServiceId?: number | null;
+    readonly messageId?: number | null;
+    readonly limit?: number;
+  }): Promise<EmailOrganizationOperationEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.listRecentOperations(input);
+    } catch (error) {
+      log.error("Error listing recent operations:", error);
+      throw error;
+    }
+  }
+
   async recordAttemptEvidence(attemptId: number, resultJson: string): Promise<void> {
     try {
       await this.ensureConnection();

@@ -15,6 +15,8 @@ import {
   EMAIL_ORG_OPERATION_RECONCILE,
   EMAIL_ORG_SEARCH,
   EMAIL_ORG_SELECTION_PREPARE,
+  EMAIL_ORG_OPERATION_LIST,
+  EMAIL_ORG_TRASH_SELECTION_START,
 } from "@/config/channellist";
 import type {
   EmailOrganizationCapabilityDto,
@@ -252,4 +254,23 @@ export async function prepareEmailSelection(input: {
   filtersSummary?: Record<string, unknown>;
 }): Promise<SelectionPreviewDto> {
   return await windowInvoke(EMAIL_ORG_SELECTION_PREPARE, input);
+}
+
+export async function listEmailOrganizationOperations(input: {
+  emailServiceId?: number;
+  messageId?: number;
+  limit?: number;
+}): Promise<{ operations: EmailOrganizationOperationDto[] }> {
+  return await windowInvoke(EMAIL_ORG_OPERATION_LIST, input);
+}
+
+/** R12: prompt-start bulk trash — returns the operation id immediately. */
+export async function startTrashSelection(
+  selectionId: string,
+  actionId?: string
+): Promise<{ operationId: string } | MailboxActionResultDto> {
+  return await windowInvoke(EMAIL_ORG_TRASH_SELECTION_START, {
+    selectionId,
+    actionId: actionId ?? null,
+  });
 }

@@ -322,6 +322,136 @@ export class EmailMailboxActionService extends BaseModule {
    * revalidated and individually reported (AC-14); partial completion is
    * never an aggregate success.
    */
+  /**
+   * R12: prompt-start variant — creates the durable operation synchronously
+   * and executes the bulk loop detached, so the caller gets the operation id
+   * immediately and can monitor/cancel while it runs.
+   */
+  async startTrashSelection(input: {
+    selectionId: string;
+    origin: TrashMessageInput["origin"];
+    actionId?: string | null;
+  }): Promise<{ operationId: string } | MailboxActionOutcome> {
+    await this.ensureConnection();
+    const selectionService = new EmailOrganizationSelectionService();
+    const selection = await selectionService.readValidSelection(input.selectionId);
+    if (selection.kind !== "trash") {
+      return this.failedResult(
+        "VALIDATION_FAILED",
+        `Selection was frozen for '${selection.kind}', not 'trash'.`
+      );
+    }
+    const parsed = selectionService.parseSelection(selection);
+    const destinations: Record<number, string> = {};
+    for (const messageId of parsed.messageIds) {
+      const destination = parsed.destinations?.[messageId];
+      if (typeof destination !== "string") {
+        return this.failedResult(
+          "DESTINATION_INVALID",
+          `Selection item ${messageId} has no recorded destination.`
+        );
+      }
+      destinations[messageId] = destination;
+    }
+    const operationId = await this.createBulkOperation(
+      selection,
+      parsed.messageIds,
+      destinations,
+      input.origin,
+      input.actionId ?? null,
+      "trash"
+    );
+    void this.runSerialized(selection.emailServiceId, async () => {
+      await this.executeBulkLoop(operationId, parsed.messageIds, destinations, input.origin, "trash");
+    }).catch((error: unknown) => {
+      log.error("[EmailMailboxActionService] detached bulk execution failed:", error);
+    });
+    return { operationId };
+  }
+
+  async startRestoreSelection(input: {
+    selectionId: string;
+    origin: TrashMessageInput["origin"];
+    actionId?: string | null;
+  }): Promise<{ operationId: string } | MailboxActionOutcome> {
+    await this.ensureConnection();
+    const selectionService = new EmailOrganizationSelectionService();
+    const selection = await selectionService.readValidSelection(input.selectionId);
+    if (selection.kind !== "restore") {
+      return this.failedResult(
+        "VALIDATION_FAILED",
+        `Selection was frozen for '${selection.kind}', not 'restore'.`
+      );
+    }
+    const parsed = selectionService.parseSelection(selection);
+    if (parsed.destinations === null) {
+      return this.failedResult(
+        "DESTINATION_INVALID",
+        "The selection does not record restore destinations."
+      );
+    }
+    const operationId = await this.createBulkOperation(
+      selection,
+      parsed.messageIds,
+      parsed.destinations,
+      input.origin,
+      input.actionId ?? null,
+      "restore"
+    );
+    void this.runSerialized(selection.emailServiceId, async () => {
+      await this.executeBulkLoop(operationId, parsed.messageIds, parsed.destinations as Record<number, string>, input.origin, "restore");
+    }).catch((error: unknown) => {
+      log.error("[EmailMailboxActionService] detached bulk restore failed:", error);
+    });
+    return { operationId };
+  }
+
+  /** Operation creation shared by the awaited and prompt-start bulk paths. */
+  private async createBulkOperation(
+    selection: EmailOrganizationSelectionEntity,
+    messageIds: number[],
+    destinations: Record<number, string>,
+    origin: TrashMessageInput["origin"],
+    actionId: string | null,
+    kind: "trash" | "restore"
+  ): Promise<string> {
+    const actionKey = actionId ?? `fresh-${crypto.randomUUID()}`;
+    const payloadHash = crypto
+      .createHash("sha256")
+      .update(`bulk-${kind}|${selection.payloadHash}|${actionKey}`)
+      .digest("hex");
+    const operationResult = await this.operationModule.createOperation({
+      operationId: crypto.randomUUID(),
+      kind,
+      emailServiceId: selection.emailServiceId,
+      origin,
+      payloadHash,
+      idempotencyKey: `bulk${kind}v1:${selection.selectionId}:${actionKey}`,
+      sourceUserMessageId: actionId,
+      messageIds,
+      destinations,
+      policyVersion: "fwv1",
+    });
+    return operationResult.operation.operationId;
+  }
+
+  private async executeBulkLoop(
+    operationId: string,
+    messageIds: number[],
+    destinations: Record<number, string>,
+    origin: TrashMessageInput["origin"],
+    kind: "trash" | "restore"
+  ): Promise<void> {
+    for (const messageId of messageIds) {
+      const operation = await this.operationModule.readOperation(operationId);
+      if (operation?.cancelRequestedAt !== null && operation?.cancelRequestedAt !== undefined) {
+        await this.operationModule.cancelPending(operationId);
+        break;
+      }
+      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, kind === "restore" ? { locationVersionsJson: "{}" } as EmailOrganizationSelectionEntity : { locationVersionsJson: "{}" } as EmailOrganizationSelectionEntity, kind, origin);
+    }
+  }
+
   async trashSelection(input: {
     selectionId: string;
     origin: TrashMessageInput["origin"];
