@@ -44,6 +44,11 @@ export interface LoginFillTarget {
   readonly passwordField?: string | null;
   readonly username: string;
   readonly password: string;
+  /**
+   * F10: invoked before EVERY round — a user takeover mid-fill must
+   * stop further credential rounds from running.
+   */
+  readonly shouldAbort?: () => boolean;
 }
 
 export type LoginFillOutcome =
@@ -537,6 +542,16 @@ export class LoginFormFiller {
     };
     let usernameFilled = false;
     for (let round = 0; round < 3; round++) {
+      // F10: the takeover check runs before EVERY round — the entry
+      // guard alone cannot protect an already accepted multi-round
+      // login against a mid-fill takeover.
+      if (target.shouldAbort?.()) {
+        return {
+          outcome: "unknown",
+          reasonCode: "fill_aborted_user_control",
+          filledFieldStamps: [],
+        };
+      }
       fillResult = await page.evaluate<
         Awaited<ReturnType<typeof fillLoginPageFunction>>
       >(fillLoginPageFunction, {

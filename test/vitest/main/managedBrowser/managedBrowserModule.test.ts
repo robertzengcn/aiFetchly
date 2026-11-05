@@ -11,6 +11,8 @@ import type { ManagedBrowserCacheCoordinator } from "@/modules/ManagedBrowserCac
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import {
   ManagedBrowserLeaseService,
+  accountLeaseKey,
+  publicSessionLeaseKey,
   type AcquireLeaseResult,
 } from "@/service/ManagedBrowserLeaseService";
 import { ManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
@@ -106,29 +108,56 @@ const SNAPSHOT_COOKIES: NormalizedCookie[] = [
 
 class FakeLease {
   public readonly acquireCalls: Array<
-    [number, { sessionId: string; ownerConversationId: string | null }]
+    [
+      string,
+      {
+        sessionId: string;
+        ownerConversationId: string | null;
+        ownerAgentTaskId?: string | null;
+      },
+    ]
   > = [];
   public readonly releaseCalls: Array<[string, string, string]> = [];
   public next: AcquireLeaseResult = {
     status: "granted",
     leaseToken: "lease-1",
   };
+  /** F03: result of the old-lease release during a bind transfer. */
+  public nextRelease: "released" | "not_held" | "token_mismatch" = "released";
+  /** F03: leases currently held, keyed by session (findBySessionId). */
+  public bySession: Array<{
+    sessionId: string;
+    leaseKey: string;
+    leaseToken: string;
+  }> = [];
 
   public acquire(
-    accountId: number,
-    opts: { sessionId: string; ownerConversationId: string | null }
+    leaseKey: string,
+    opts: {
+      sessionId: string;
+      ownerConversationId: string | null;
+      ownerAgentTaskId?: string | null;
+    }
   ): AcquireLeaseResult {
-    this.acquireCalls.push([accountId, opts]);
+    this.acquireCalls.push([leaseKey, opts]);
     return this.next;
+  }
+
+  public findBySessionId(sessionId: string): {
+    sessionId: string;
+    leaseKey: string;
+    leaseToken: string;
+  } | null {
+    return this.bySession.find((l) => l.sessionId === sessionId) ?? null;
   }
 
   public release(
     leaseKey: string,
     sessionId: string,
     token: string
-  ): "released" {
+  ): "released" | "not_held" | "token_mismatch" {
     this.releaseCalls.push([leaseKey, sessionId, token]);
-    return "released";
+    return this.nextRelease;
   }
 }
 
@@ -1663,4 +1692,124 @@ it("allows omitted account ids but rejects fabricated public sentinel ids at bot
   expect(managedBrowserStartInputSchema().safeParse({ purpose: "open" }).success).toBe(true);
   expect(browserStartSessionToolSchema().safeParse({ purpose: "open", account_id: 0 }).success).toBe(false);
   expect(managedBrowserStartInputSchema().safeParse({ purpose: "open", accountId: 0 }).success).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// F03: atomic account-lease transfer on bind
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule.bindAccountToSession (F03)", () => {
+  it("transfers the lease atomically on the uncontended path", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+      agentTaskId: "task_root_1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    // Acquire carried ownership; the old public lease was released.
+    expect(h.lease.acquireCalls[1][0]).toBe(accountLeaseKey(ACCOUNT_ID));
+    expect(h.lease.acquireCalls[1][1].ownerAgentTaskId).toBe("task_root_1");
+    expect(h.lease.releaseCalls).toEqual([
+      [publicSessionLeaseKey(started.sessionId), started.sessionId, "lease-1"],
+    ]);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+  });
+
+  it("refuses at the global session cap WITHOUT releasing the public lease", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "global_limit_reached" };
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID)
+    ).rejects.toMatchObject({ code: "global_session_limit" });
+    // The session is EXACTLY as it was: public lease intact, unauthenticated.
+    expect(h.lease.releaseCalls).toHaveLength(0);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(0);
+    expect(status?.authenticated).not.toBe(true);
+  });
+
+  it("refuses when a SIBLING session in the conversation holds the account", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    // The lease exists but is held by a DIFFERENT session.
+    h.lease.next = { status: "already_active", sessionId: "mb_sibling" };
+    h.lease.bySession = []; // nothing held by THIS session
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID)
+    ).rejects.toMatchObject({ code: "account_in_use" });
+    expect(h.lease.releaseCalls).toHaveLength(0);
+    expect(h.module.getStatus(started.sessionId)?.accountId).toBe(0);
+  });
+
+  it("adopts the existing token when THIS session already holds the account lease", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    // Recovery of a partial bind: the lease is held by THIS session.
+    h.lease.next = { status: "already_active", sessionId: started.sessionId };
+    h.lease.bySession = [
+      {
+        sessionId: started.sessionId,
+        leaseKey: accountLeaseKey(ACCOUNT_ID),
+        leaseToken: "tok-existing",
+      },
+    ];
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+    // The pre-existing account lease was NOT double-acquired-and-released.
+    expect(h.lease.releaseCalls).toEqual([
+      [publicSessionLeaseKey(started.sessionId), started.sessionId, "lease-1"],
+    ]);
+  });
+
+  it("rejects re-binding an already account-backed session to another account", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, 202)
+    ).rejects.toMatchObject({ code: "session_already_account_bound" });
+    // The original binding is untouched.
+    expect(h.lease.acquireCalls).toHaveLength(2);
+    expect(h.lease.acquireCalls[1][0]).toBe(accountLeaseKey(ACCOUNT_ID));
+  });
+
+  it("completes the bind when the OLD lease release fails (orphan logged)", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    h.lease.nextRelease = "token_mismatch";
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+  });
 });

@@ -184,3 +184,78 @@ function freshDom(): FakeDom {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// F10: a mid-fill takeover aborts further credential rounds
+// ---------------------------------------------------------------------------
+
+describe("F10: takeover aborts a multi-round fill", () => {
+  it("stops before the second round when the takeover flag trips", async () => {
+    // Round 0 emulates a username-only page; a takeover then trips the
+    // abort hook, so the password round must never run.
+    let round = 0;
+    const filler = new LoginFormFiller();
+    const page = {
+      url: () => "https://www.example.test/login",
+      evaluate: async (script: unknown, arg?: unknown) => {
+        void script;
+        round += 1;
+        if (round === 1) {
+          return { ok: true, reasonCode: null, stamps: ["user"], usernameOnlySubmitted: true };
+        }
+        return {
+          ok: true,
+          reasonCode: null,
+          stamps: ["user", "pass"],
+        };
+      },
+    };
+    const result = await filler.fill(page as Parameters<LoginFormFiller["fill"]>[0], {
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      recipeStep: null,
+      username: "user@example.test",
+      password: "sentinel-password-123",
+      shouldAbort: () => round >= 1,
+    });
+    expect(result.outcome).toBe("unknown");
+    expect(result.reasonCode).toBe("fill_aborted_user_control");
+    expect(result.filledFieldStamps).toEqual([]);
+    // Only the first (username-only) round ever executed.
+    expect(round).toBe(1);
+  });
+
+  it("runs all rounds when no takeover happens", async () => {
+    let round = 0;
+    const filler = new LoginFormFiller();
+    const page = {
+      url: () => "https://www.example.test/login",
+      evaluate: async (script: unknown, arg?: unknown) => {
+        void script;
+        void arg;
+        round += 1;
+        if (round === 1) {
+          return { ok: true, reasonCode: null, stamps: ["user"], usernameOnlySubmitted: true };
+        }
+        return {
+          ok: true,
+          reasonCode: null,
+          stamps: ["user", "pass"],
+        };
+      },
+    };
+    const result = await filler.fill(page as Parameters<LoginFormFiller["fill"]>[0], {
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      recipeStep: null,
+      username: "user@example.test",
+      password: "sentinel-password-123",
+      shouldAbort: () => false,
+    });
+    // Outcome detection probes after the fill; the probe double returns
+    // null which keeps the outcome unknown — that is fine here: the
+    // assertion is that BOTH rounds ran.
+    expect(round).toBeGreaterThanOrEqual(2);
+    void result;
+  });
+});

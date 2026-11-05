@@ -138,6 +138,8 @@ interface ActiveSessionRecord {
   readonly accountId: number;
   readonly platformId: number;
   readonly conversationId: string | null;
+  /** F03: retained so the account-lease transfer keeps ownership. */
+  readonly ownerAgentTaskId: string | null;
   readonly leaseToken: string;
   /** Lease key (account: or public:) used to release this session. */
   readonly leaseKey: string;
@@ -661,6 +663,7 @@ export class ManagedBrowserModule {
         accountId,
         platformId: account.platformId,
         conversationId: input.conversationId ?? null,
+        ownerAgentTaskId: input.agentTaskId ?? null,
         leaseToken: lease.leaseToken,
         leaseKey,
         siteDomain: requestedSiteDomain,
@@ -1657,7 +1660,12 @@ export class ManagedBrowserModule {
   ): Promise<void> {
     const record = this.requireSession(sessionId);
     if (record.accountId === accountId) {
-      return; // already account-backed
+      return; // already account-backed (same-session idempotency)
+    }
+    // F03: a session already bound to a DIFFERENT account must not be
+    // silently re-bound — release and restart is the controlled path.
+    if (record.leaseKey.startsWith("account:")) {
+      throw new ManagedBrowserError("session_already_account_bound");
     }
     // R08/M-FR-06: swap the lease from public:<sessionId> to
     // account:<accountId> so account-lease exclusivity applies going
@@ -1665,30 +1673,50 @@ export class ManagedBrowserModule {
     // account while this session holds it.
     const oldKey = record.leaseKey;
     const newKey = accountLeaseKey(accountId);
+    // F03: acquire FIRST and check EVERY discriminated outcome BEFORE
+    // the old lease or the record is touched — a refused transfer must
+    // leave the session exactly as it was (still public-leased).
     const acquireResult = this.leaseService.acquire(newKey, {
       sessionId,
       ownerConversationId: record.conversationId,
+      ownerAgentTaskId: record.ownerAgentTaskId,
     });
-    if (acquireResult.status === "account_in_use") {
-      throw new ManagedBrowserError("account_in_use");
-    }
-    // Release the old public lease. If release fails (already gone), the
-    // account lease is still held — the old key is simply orphaned.
-    this.leaseService.release(oldKey, sessionId, record.leaseToken);
-    // Mutate the record: accountId, leaseToken, leaseKey.
-    // R08 fix: handle already_active (same owner already holds the
-    // account lease) — use the existing token, don't leave the record
-    // pointing at a mismatched token.
+    let leaseToken: string;
     if (acquireResult.status === "granted") {
-      (record as { leaseToken: string }).leaseToken = acquireResult.leaseToken;
+      leaseToken = acquireResult.leaseToken;
     } else if (acquireResult.status === "already_active") {
-      // The account lease is already held by this session's owner —
-      // look up the existing token.
+      // The conversation already holds this account lease. Only THIS
+      // session holding it is acceptable (recovery of a partial bind);
+      // a SIBLING session holding it would mean two apparent
+      // controllers — refuse.
       const existing = this.leaseService.findBySessionId(sessionId);
-      if (existing && existing.leaseKey === newKey) {
-        (record as { leaseToken: string }).leaseToken = existing.leaseToken;
+      if (!existing || existing.leaseKey !== newKey) {
+        throw new ManagedBrowserError("account_in_use");
       }
+      leaseToken = existing.leaseToken;
+    } else {
+      // account_in_use | global_limit_reached — refuse without
+      // releasing the public lease or mutating the record.
+      throw new ManagedBrowserError(
+        acquireResult.status === "account_in_use"
+          ? "account_in_use"
+          : "global_session_limit"
+      );
     }
+    // The account lease is now held by THIS session. Release the old
+    // public lease; a failed release (not_held/token_mismatch) leaves an
+    // orphaned key — logged, never blocks the bind.
+    const released = this.leaseService.release(
+      oldKey,
+      sessionId,
+      record.leaseToken
+    );
+    if (released !== "released") {
+      log.warn(
+        `[ManagedBrowserModule] bind ${sessionId}: old lease ${oldKey} release -> ${released}`
+      );
+    }
+    (record as { leaseToken: string }).leaseToken = leaseToken;
     (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
     (record as { accountId: number }).accountId = accountId;
     record.authenticated = true;

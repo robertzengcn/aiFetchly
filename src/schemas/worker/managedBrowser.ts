@@ -203,6 +203,7 @@ const errorCodeSchema = z.enum([
   "proxy_no_usable_proxy",
   "proxy_switch_limit",
   "internal_error",
+  "session_already_account_bound",
 ]);
 
 const challengeKindSchema = z.enum([

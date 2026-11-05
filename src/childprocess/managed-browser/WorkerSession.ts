@@ -755,6 +755,17 @@ export class WorkerSession {
     if (!page) {
       return;
     }
+    // F10: the worker enforces the SAME command matrix as main — a
+    // main-only pre-request guard does not protect an already accepted
+    // multi-round login against a takeover.
+    const guard = assertCommandAllowed(
+      this.runtime.getState(),
+      "FILL_LOGIN_FORM"
+    );
+    if (!guard.ok) {
+      this.emitError(requestId, guard.errorCode, "fill blocked by session state");
+      return;
+    }
     try {
       const firstStep = input.recipe?.steps[0] ?? null;
       const result = await this.loginFiller.fill(page, {
@@ -766,6 +777,13 @@ export class WorkerSession {
         passwordField: firstStep?.passwordField ?? null,
         username: input.username,
         password: input.password,
+        // F10: every round re-checks the command matrix so a user
+        // takeover mid-fill stops further credential rounds.
+        shouldAbort: () =>
+          !assertCommandAllowed(
+            this.runtime.getState(),
+            "FILL_LOGIN_FORM"
+          ).ok,
       });
       this.send({
         ...this.base(requestId),

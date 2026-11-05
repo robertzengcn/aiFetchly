@@ -100,7 +100,8 @@ export type ManagedBrowserErrorCode =
   | "cache_path_invalid"
   | "cache_maintenance_failed"
   | "cache_limit_invalid"
-  | "internal_error";
+  | "internal_error"
+  | "session_already_account_bound";
 
 /** Bounded reason codes for user handoff (technical design §18). */
 export type ManagedBrowserHandoffReason =

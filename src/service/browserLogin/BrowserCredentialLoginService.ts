@@ -417,12 +417,27 @@ export class BrowserCredentialLoginService {
         // the existing cookie path (captureAndSend already flowed via the
         // worker; binding the account keeps the session authoritative).
         if (credential.accountId !== null) {
-          await getDefaultManagedBrowserModule()
-            .bindAccountToSession(input.sessionId, credential.accountId)
-            .catch(() => undefined);
+          await accountModule.recordLoginFailureClear(credential.accountId);
         }
         if (credential.accountId !== null) {
-          await accountModule.recordLoginFailureClear(credential.accountId);
+          try {
+            await getDefaultManagedBrowserModule().bindAccountToSession(
+              input.sessionId,
+              credential.accountId
+            );
+          } catch (error) {
+            // F03: a failed lease transfer means NO account-backed
+            // session — never report signed_in. The fill itself
+                // succeeded; hand off with the transfer reason.
+            return {
+              status: "handoff_required",
+              accountId: credential.accountId,
+              siteId: site.siteId,
+              reasonCode: `account_bind_failed:${
+                error instanceof Error ? error.message : "unknown"
+              }`,
+            };
+          }
         }
         return {
           status: "signed_in",
