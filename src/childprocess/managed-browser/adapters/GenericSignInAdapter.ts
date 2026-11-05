@@ -68,6 +68,14 @@ export class GenericSignInAdapter implements PlatformBrowserAdapter {
     if (!signals) {
       return { state: "unknown", reasonCode: "no_page" };
     }
+    // F11: the challenge probe is PART of the assessment — an OTP/verify,
+    // CAPTCHA, passkey or recovery page is NEVER authenticated, however
+    // benign its URL path looks (an OTP-only /verify page has no password
+    // input and may not match the login-path markers).
+    const challenge = await this.detectChallenge(page).catch(() => null);
+    if (challenge) {
+      return { state: "challenge", challenge: challenge.kind };
+    }
     if (
       !signals.passwordVisible &&
       !signals.onLoginPath &&
