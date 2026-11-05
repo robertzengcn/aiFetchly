@@ -90,14 +90,41 @@ export const browserBatchArgsSchema = z
     }
   });
 
-/** Entry used by the skillsRegistry wrapper. */
+/**
+ * F20/D-AC-02: the SAME provider-aware admission as every browser tool —
+ * AI availability, browser enablement, and the parallel-agents feature
+ * switch are checked BEFORE any session start or agent admission. Note the
+ * deliberate ABSENCE of the browserDecisionEnabled check: parallel browser
+ * tasks are the EXISTING browser tools path and stay usable when
+ * acceleration is disabled (D-AC-12).
+ */
 export async function runBrowserTasksForTool(
   tasks: readonly BrowserBatchTaskInput[],
   concurrency: number,
   conversationId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  deps: RunBrowserTasksDeps = {}
 ): Promise<{ batchId: string; results: BrowserBatchTaskResult[] }> {
-  return runBrowserTasks(tasks, concurrency, conversationId, signal);
+  const { BrowserAiAvailabilityService } = await import(
+    "@/service/browserDecision/BrowserAiAvailabilityService"
+  );
+  if (!new BrowserAiAvailabilityService().isAvailable()) {
+    throw new Error("ai_disabled:browser_ai_unavailable");
+  }
+  const { ManagedBrowserSettingsModule } = await import(
+    "@/modules/ManagedBrowserSettingsModule"
+  );
+  const effective = await new ManagedBrowserSettingsModule()
+    .getEffectiveSettings();
+  if (!effective.browserEnabled) {
+    throw new Error(
+      `managed_browser_disabled:${effective.disabledReasonCode ?? "browser_disabled"}`
+    );
+  }
+  if (!effective.parallelAgentsEnabled) {
+    throw new Error("managed_browser_disabled:parallel_agents_disabled");
+  }
+  return runBrowserTasks(tasks, concurrency, conversationId, signal, deps);
 }
 
 /** Bounded-concurrency worker-pool executor (modeled on process_artifact_batch). */

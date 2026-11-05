@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   abortTask,
   abortBatch,
@@ -292,5 +292,102 @@ describe("runBrowserTasks F17 semantics", () => {
     expect(results[0]!.status).toBe("completed");
     expect(results[0]!.summary).toBe("actually finished");
     expect(control.get(control.registered[0]!)?.state).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F20: provider-aware + feature-switch admission on the batch entry
+// ---------------------------------------------------------------------------
+
+const settingsState = { browserEnabled: true, parallelAgentsEnabled: true };
+
+vi.mock("@/service/browserDecision/BrowserAiAvailabilityService", () => ({
+  BrowserAiAvailabilityService: class {
+    public isAvailable(): boolean {
+      return aiAvailable;
+    }
+  },
+}));
+
+vi.mock("@/modules/ManagedBrowserSettingsModule", () => ({
+  ManagedBrowserSettingsModule: class {
+    public async getEffectiveSettings() {
+      return {
+        browserEnabled: settingsState.browserEnabled,
+        disabledReasonCode: null,
+        parallelAgentsEnabled: settingsState.parallelAgentsEnabled,
+      };
+    }
+  },
+}));
+
+let aiAvailable = true;
+
+describe("runBrowserTasksForTool F20 admission", () => {
+  it("refuses when browser AI is unavailable (provider-aware, before any work)", async () => {
+    aiAvailable = false;
+    const { runBrowserTasksForTool } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    await expect(
+      runBrowserTasksForTool(
+        [{ goal: "g" }],
+        1,
+        "conv-f20",
+        new AbortController().signal
+      )
+    ).rejects.toThrow("ai_disabled");
+    aiAvailable = true;
+  });
+
+  it("refuses when parallelAgentsEnabled is off", async () => {
+    settingsState.parallelAgentsEnabled = false;
+    const { runBrowserTasksForTool } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    await expect(
+      runBrowserTasksForTool(
+        [{ goal: "g" }],
+        1,
+        "conv-f20",
+        new AbortController().signal
+      )
+    ).rejects.toThrow("parallel_agents_disabled");
+    settingsState.parallelAgentsEnabled = true;
+  });
+
+  it("admits the batch when all gates pass", async () => {
+    const { runBrowserTasksForTool } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    const { batchId, results } = await runBrowserTasksForTool(
+      [{ goal: "one task" }],
+      1,
+      "conv-f20-ok",
+      new AbortController().signal,
+      {
+        runAgent: (() => ({
+          runSync: async () => ({
+            status: "completed",
+            agentTaskId: "agt-f20",
+            agentId: "agent-browser-operator",
+            agentVersion: 1,
+            toolCallsCount: 0,
+            sourceUrls: [],
+            output: {
+              status: "completed",
+              summary: "done",
+              extracted: [],
+              final_url: null,
+              evidence: [],
+              needs_user: null,
+              user_interventions: [],
+            },
+          }),
+        })) as never,
+      }
+    );
+    expect(batchId).toMatch(/^batch_/);
+    expect(results[0]!.status).toBe("completed");
   });
 });
