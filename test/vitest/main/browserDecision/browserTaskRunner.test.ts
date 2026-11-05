@@ -749,3 +749,89 @@ describe("F05 lifecycle checks at every await boundary", () => {
     }
   });
 });
+
+describe("BrowserTaskRunner F07 persistence and terminal correctness", () => {
+  it("an execution exception finalizes failed — never completed", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      throw new Error("worker exited");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f07a", conversationId: "conv-1", goal: "click" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("runner_error:worker exited");
+  });
+
+  it("a known failed step journals no_effect — never confirmed", async () => {
+    const outcomes: Array<"confirmed" | "no_effect" | "unknown"> = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "known",
+      pageRevision: 3,
+      results: [{ success: false, errorCode: "stale_page_reference" }],
+    });
+    const persistActionOutcome = async (
+      outcome: "confirmed" | "no_effect" | "unknown"
+    ): Promise<void> => {
+      outcomes.push(outcome);
+    };
+    // No completion criteria: the loop ends via budget with the failed
+    // step already journaled honestly.
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f07b", conversationId: "conv-1", goal: "click" },
+      { ...deps, persistActionOutcome }
+    );
+    await runner.run();
+    expect(outcomes).toEqual(["no_effect"]);
+  });
+
+  it("persists the RUNNING and TERMINAL cursor phases with real counters", async () => {
+    const phases: Array<{ phase: string; leafSteps: number; decisionRequests: number }> = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const persistCursor = async (input: {
+      phase: string;
+      leafSteps: number;
+      decisionRequests: number;
+    }): Promise<void> => {
+      phases.push({ phase: input.phase, leafSteps: input.leafSteps, decisionRequests: input.decisionRequests });
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f07c",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      { ...deps, persistCursor }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    expect(phases[0]).toMatchObject({ phase: "running", leafSteps: 0 });
+    const terminalPhase = phases[phases.length - 1]!;
+    expect(terminalPhase.phase).toBe("completed");
+    expect(terminalPhase.leafSteps).toBe(1);
+    expect(terminalPhase.decisionRequests).toBe(2);
+  });
+});

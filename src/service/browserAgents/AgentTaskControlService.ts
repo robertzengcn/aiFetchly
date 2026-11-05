@@ -114,17 +114,35 @@ export class AgentTaskControlService {
     if (!record) {
       return;
     }
+    // F07: failed/completed are FINAL — no failed→completed overwrites.
+    // A cancelled record may still be REFINED by the collector: Return-
+    // now pre-cancels a batch, and the real per-task outcome (failed /
+    // completed with usable output) replaces the pre-cancellation mark.
+    if (TERMINAL_STATES.has(record.state)) {
+      const refinementAllowed =
+        record.state === "cancelled" &&
+        (state === "failed" || state === "completed");
+      if (refinementAllowed) {
+        record.state = state;
+        record.reason = reason ?? record.reason;
+      } else if (state === record.state) {
+        record.reason = reason ?? record.reason;
+      }
+      return;
+    }
     if (record.state !== state) {
       // Active-time accounting (C-FR-09/D-21): the clock accumulates only
       // while running; waits freeze it and never count against budgets.
-      const wasWaiting = isWaitingState(record.state);
       const willWait = isWaitingState(state);
-      if (!wasWaiting && willWait) {
-        if (record.runningSinceEpochMs !== null) {
-          record.activeTimeMs += this.now() - record.runningSinceEpochMs;
-          record.runningSinceEpochMs = null;
-        }
-      } else if (wasWaiting && !willWait) {
+      const becomesTerminal = TERMINAL_STATES.has(state);
+      if (record.runningSinceEpochMs !== null && (willWait || becomesTerminal)) {
+        record.activeTimeMs += this.now() - record.runningSinceEpochMs;
+        record.runningSinceEpochMs = null;
+      } else if (
+        record.runningSinceEpochMs === null &&
+        !willWait &&
+        !becomesTerminal
+      ) {
         record.runningSinceEpochMs = this.now();
       }
       record.state = state;
@@ -132,6 +150,10 @@ export class AgentTaskControlService {
     record.reason = reason ?? record.reason;
     if (TERMINAL_STATES.has(state)) {
       this.resolveAllWaiters(taskId);
+      // F07: bounded retirement — a terminal task can never be waited on
+      // or resumed again, so its transient state is released.
+      this.waiters.delete(taskId);
+      this.resumeGenerations.delete(taskId);
     }
   }
 

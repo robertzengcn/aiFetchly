@@ -101,3 +101,44 @@ describe("AgentTaskControlService", () => {
     expect(service.getState("task-5")).toBe("paused");
   });
 });
+
+describe("AgentTaskControlService F07 terminal correctness", () => {
+  it("a terminal record never transitions again", () => {
+    const service = new AgentTaskControlService();
+    service.register("f07-term", "conv-1");
+    service.setState("f07-term", "failed", "boom");
+    // A later completed overwrite (e.g. a stray finally) is refused.
+    service.setState("f07-term", "completed");
+    expect(service.getState("f07-term")).toBe("failed");
+    service.setState("f07-term", "running");
+    expect(service.getState("f07-term")).toBe("failed");
+  });
+
+  it("activeTimeMs freezes once the task reaches a terminal state", () => {
+    let now = 0;
+    const service = new AgentTaskControlService(() => now);
+    service.register("f07-clock", "conv-1");
+    now = 5_000;
+    service.setState("f07-clock", "failed", "boom");
+    const frozen = service.activeTimeMs("f07-clock");
+    expect(frozen).toBe(5_000);
+    now = 900_000;
+    // The clock no longer grows after completion (reproduced leak).
+    expect(service.activeTimeMs("f07-clock")).toBe(frozen);
+  });
+});
+
+describe("AgentTaskControlService F07 return-now refinement", () => {
+  it("a cancelled record may be refined by the collector; failed is final", () => {
+    const service = new AgentTaskControlService();
+    service.register("f07-refine", "conv-1");
+    // Return-now pre-cancels the batch...
+    service.setState("f07-refine", "cancelled", "batch_return_now");
+    // ...and the collector refines the real outcome.
+    service.setState("f07-refine", "failed", "aborted mid-flight");
+    expect(service.getState("f07-refine")).toBe("failed");
+    // But a failed record is final — no completed overwrite afterwards.
+    service.setState("f07-refine", "completed");
+    expect(service.getState("f07-refine")).toBe("failed");
+  });
+});

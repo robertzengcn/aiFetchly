@@ -106,6 +106,7 @@ export interface RunnerDeps {
     leafSteps: number;
     decisionRequests: number;
     recoveryCalls: number;
+    activeTimeMs?: number;
   }) => Promise<void>;
   readonly persistActionIntent?: (actionType: string) => Promise<void>;
   readonly persistActionOutcome?: (
@@ -195,7 +196,21 @@ export class BrowserTaskRunner {
     const signal = this.deps.signal ?? new AbortController().signal;
     const evidence: string[] = [];
     const extracted: unknown[] = [];
-    let observation = await this.deps.observe(this.input.sessionId);
+    // F07: the initial observe happens INSIDE the try — a throw must
+    // reach the catch below and finalize the task, never leave it
+    // running. The loop's null-check performs the fetch.
+    let observation: RunnerObservation | null = null;
+    // T19/F07: persist the RUNNING cursor phase at loop start.
+    try {
+      await this.deps.persistCursor?.({
+        phase: "running",
+        leafSteps: this.leafSteps,
+        decisionRequests: this.decisionRequests,
+        recoveryCalls: this.recoveryCalls,
+      });
+    } catch {
+      /* best-effort persistence never blocks execution */
+    }
 
     try {
       while (this.leafSteps < this.budget.leafSteps && this.decisionRequests < this.budget.decisionRequests) {
@@ -437,9 +452,7 @@ export class BrowserTaskRunner {
           const execution = await this.deps.runActions(this.input.sessionId, {
             actions: [programAction],
           });
-          await this.deps.persistActionOutcome?.(
-            execution.effect === "unknown" ? "unknown" : "confirmed"
-          );
+          await this.deps.persistActionOutcome?.(this.stepOutcomeOf(execution));
           const processed = await this.processExecution(
             action.operation,
             null,
@@ -511,9 +524,7 @@ export class BrowserTaskRunner {
         const execution = await this.deps.runActions(this.input.sessionId, {
           actions: [programAction],
         });
-        await this.deps.persistActionOutcome?.(
-          execution.effect === "unknown" ? "unknown" : "confirmed"
-        );
+        await this.deps.persistActionOutcome?.(this.stepOutcomeOf(execution));
                 const processed = await this.processExecution(
           action.operation,
           { role: target.role, name: target.name },
@@ -567,11 +578,41 @@ export class BrowserTaskRunner {
         extracted,
         observation
       );
+    } catch (error) {
+      // F07: an execution exception is a FAILED terminal — never a
+      // completed overwrite from the finally below.
+      return this.terminal(
+        "failed",
+        `runner_error:${error instanceof Error ? error.message : "unknown"}`,
+        evidence,
+        extracted,
+        observation
+      );
     } finally {
       if (control.getState(this.taskId) === "running") {
         control.setState(this.taskId, "completed");
       }
     }
+  }
+
+  /**
+   * F07: the journal outcome reflects what actually happened — a known
+   * failed step or a policy stop did NOT take effect; only a known
+   * success is confirmed; unknown stays unknown.
+   */
+  private stepOutcomeOf(
+    execution: RunnerExecutionResult
+  ): "confirmed" | "no_effect" | "unknown" {
+    if (execution.effect === "unknown") {
+      return "unknown";
+    }
+    if (execution.stopCode) {
+      return "no_effect";
+    }
+    if (execution.results[0]?.success === false) {
+      return "no_effect";
+    }
+    return "confirmed";
   }
 
   private buildDecisionInput(
@@ -853,6 +894,20 @@ export class BrowserTaskRunner {
       status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed",
       reason
     );
+    // T19/F07: the TERMINAL cursor carries the real counters and the
+    // frozen active time. Best-effort: persistence never blocks the
+    // result.
+    if (this.deps.persistCursor) {
+      void this.deps
+        .persistCursor({
+          phase: status,
+          leafSteps: this.leafSteps,
+          decisionRequests: this.decisionRequests,
+          recoveryCalls: this.recoveryCalls,
+          activeTimeMs: control.activeTimeMs(this.taskId),
+        })
+        .catch(() => undefined);
+    }
     return {
       taskId: this.taskId,
       sessionId: this.input.sessionId,

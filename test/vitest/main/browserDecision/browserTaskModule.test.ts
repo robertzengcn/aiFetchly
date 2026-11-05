@@ -78,3 +78,34 @@ describe("BrowserTaskModule durable cursor (T19)", () => {
     expect(await module.markUnfinishedInterrupted()).toBe(0);
   });
 });
+
+describe("BrowserTaskModule F07 cursor merge", () => {
+  it("omitted counters keep their persisted values", async () => {
+    const module = new BrowserTaskModule();
+    await module.recordAdmission({
+      taskId: "task_f07merge",
+      sessionId: "mb_merge",
+      conversationId: "conv-1",
+      providerMode: "chat",
+      providerConfigKey: "provider-config:v1",
+    });
+    // The runner reports the full counter set mid-run.
+    await module.recordCursor({
+      taskId: "task_f07merge",
+      phase: "running",
+      leafSteps: 3,
+      decisionRequests: 4,
+      recoveryCalls: 1,
+      activeTimeMs: 12_345,
+    });
+    // A later phase update carries ONLY the phase (e.g. a journal write).
+    await module.recordCursor({ taskId: "task_f07merge", phase: "journal" });
+    const cursor = await module.getCursor("task_f07merge");
+    expect(cursor).not.toBeNull();
+    expect(cursor?.phase).toBe("journal");
+    expect(cursor?.leafSteps).toBe(3);
+    expect(cursor?.decisionRequests).toBe(4);
+    expect(cursor?.recoveryCalls).toBe(1);
+    expect(cursor?.activeTimeMs).toBe(12_345);
+  });
+});

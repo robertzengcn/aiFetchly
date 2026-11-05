@@ -59,15 +59,34 @@ export class BrowserTaskModule extends BaseModule {
     readonly userInterventionCount?: number;
   }): Promise<void> {
     const model = await this.getModel();
-    const entity = new BrowserTaskEntity();
+    // F07: MERGE with the existing cursor — counters a caller omits keep
+    // their persisted values instead of being reset to zero.
+    const existing = await model.findByTaskId(input.taskId);
+    const entity = existing ?? new BrowserTaskEntity();
     entity.taskId = input.taskId;
     entity.phase = input.phase;
-    entity.leafSteps = input.leafSteps ?? 0;
-    entity.decisionRequests = input.decisionRequests ?? 0;
-    entity.recoveryCalls = input.recoveryCalls ?? 0;
-    entity.activeTimeMs = input.activeTimeMs ?? 0;
-    entity.userInterventionCount = input.userInterventionCount ?? null;
+    if (input.leafSteps !== undefined) {
+      entity.leafSteps = input.leafSteps;
+    }
+    if (input.decisionRequests !== undefined) {
+      entity.decisionRequests = input.decisionRequests;
+    }
+    if (input.recoveryCalls !== undefined) {
+      entity.recoveryCalls = input.recoveryCalls;
+    }
+    if (input.activeTimeMs !== undefined) {
+      entity.activeTimeMs = input.activeTimeMs;
+    }
+    if (input.userInterventionCount !== undefined) {
+      entity.userInterventionCount = input.userInterventionCount;
+    }
     await model.upsertByTaskId(entity);
+  }
+
+  /** F07: read the durable cursor (tests + recovery diagnostics). */
+  public async getCursor(taskId: string): Promise<BrowserTaskEntity | null> {
+    const model = await this.getModel();
+    return await model.findByTaskId(taskId);
   }
 
   /**
