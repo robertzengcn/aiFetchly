@@ -8,6 +8,7 @@ import {
 import {
   sanitizeMailboxError,
   type EmailMailboxAdapter,
+  type SentCopyAppendResult,
   type FolderListResult,
   type FullSourceResult,
   type MailboxCapabilityProbe,
@@ -37,6 +38,11 @@ export interface MailboxActionConnection {
     query: Record<string, unknown>,
     options?: { uid?: boolean }
   ): Promise<number[] | false>;
+  append(
+    folder: string,
+    message: Buffer | string,
+    options?: { flags?: string[] }
+  ): Promise<{ uid?: number } | boolean>;
   fetchOne(
     seq: string | number,
     query: Record<string, unknown>,
@@ -264,6 +270,42 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
     }
   }
 
+  async appendSent(
+    config: EmailReceiveConnectionConfig,
+    rawMessage: Buffer
+  ): Promise<SentCopyAppendResult> {
+    const session = await this.connect(config);
+    if (!session.ok) {
+      return {
+        status: "failed",
+        reasonCode: "ACCOUNT_NOT_AVAILABLE",
+        sanitizedError: session.error,
+      };
+    }
+    try {
+      // Prefer the special-use Sent folder; probe for it per attempt.
+      const list = await withTimeout(session.connection.list(), COMMAND_TIMEOUT_MS, "folder listing");
+      const sentFolder = list.find((entry) => entry.specialUse === "\\Sent")?.path;
+      if (sentFolder === undefined) {
+        return { status: "skipped", reason: "no_sent_folder" };
+      }
+      await withTimeout(
+        session.connection.append(sentFolder, rawMessage, { flags: ["\\Seen"] }),
+        COMMAND_TIMEOUT_MS,
+        "sent append"
+      );
+      return { status: "saved" };
+    } catch (error) {
+      return {
+        status: "failed",
+        reasonCode: "PROVIDER_REJECTED",
+        sanitizedError: sanitizeMailboxError(error),
+      };
+    } finally {
+      await closeSession(session.connection);
+    }
+  }
+
   async searchUids(
     config: EmailReceiveConnectionConfig,
     folderPath: string,
@@ -290,9 +332,12 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
         return { status: "failed", reasonCode: "PROVIDER_REJECTED", sanitizedError: "search unsupported" };
       }
       const capped = uids.length >= input.cap;
+      // T09: continue within the folder from the caller's uid offset.
+      const offset = input.uidOffset ?? 0;
+      const window = uids.slice(offset, offset + input.cap);
       // Envelope fetches are the expensive part: only the caller-requested
       // page worth are materialized; the rest stay counted but unnamed.
-      const page = uids.slice(0, Math.min(input.cap, input.metadataLimit ?? input.cap));
+      const page = window.slice(0, Math.min(window.length, input.metadataLimit ?? input.cap));
       const candidates: SearchCandidate[] = [];
       for (const uid of page) {
         const message = await withTimeout(

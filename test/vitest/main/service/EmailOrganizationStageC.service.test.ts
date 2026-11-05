@@ -78,6 +78,9 @@ class BulkFakeAdapter implements EmailMailboxAdapter {
   ): Promise<ServerSearchResult> {
     return { status: "listed", candidates: [], capped: false };
   }
+  async appendSent() {
+    return { status: "skipped" as const, reason: "no_sent_folder" };
+  }
 }
 
 interface BulkState {
@@ -472,6 +475,60 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     expect(result.limitation).toContain("1000");
     // Envelope fetches are bounded to the page, not the candidate cap.
     expect(result.limitation).not.toContain("could not be searched");
+  });
+
+  it("continues server search across pages without repeating rows (review T09)", async () => {
+    // 3 candidates in INBOX; page size 2 → page 1 returns 2, cursor resumes
+    // at uidOffset 2 → page 2 returns the third.
+    const adapter = new BulkFakeAdapter();
+    adapter.searchUids = async (_c, _folder, input) => ({
+      status: "listed" as const,
+      candidates: [
+        { uid: "1", fromAddress: "a@b.test", subject: "September 1", date: "2026-09-15T10:00:00Z", seen: false },
+        { uid: "2", fromAddress: "a@b.test", subject: "September 2", date: "2026-09-16T10:00:00Z", seen: false },
+        { uid: "3", fromAddress: "a@b.test", subject: "September 3", date: "2026-09-17T10:00:00Z", seen: true },
+      ].slice(input.uidOffset ?? 0),
+      capped: false,
+    });
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+
+    const page1 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX"],
+      pageSize: 2,
+    });
+    expect(page1.rows.length).toBe(2);
+    expect(page1.rows.map((row) => row.subject)).toEqual(["September 1", "September 2"]);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX"],
+      pageSize: 2,
+      cursor: page1.nextCursor ?? undefined,
+    });
+    expect(page2.rows.map((row) => row.subject)).toEqual(["September 3"]);
+    expect(page2.nextCursor).toBeNull(); // exhausted
+
+    // No duplicates across pages.
+    const subjects = [...page1.rows, ...page2.rows].map((row) => row.subject);
+    expect(new Set(subjects).size).toBe(subjects.length);
+  });
+
+  it("rejects a malformed continuation cursor (review T09)", async () => {
+    await expect(
+      searchService.search({
+        emailServiceId: ACCOUNT_ID,
+        source: "server",
+        folderPaths: ["INBOX"],
+        cursor: "%%%not-base64%%%",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
   it("never reports a failed server folder as complete with zero rows (review CRITICAL)", async () => {

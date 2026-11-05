@@ -51,6 +51,11 @@ export type FolderListResult =
   | { readonly status: "listed"; readonly folders: readonly MailboxFolderInfo[] }
   | { readonly status: "failed"; readonly reasonCode: string; readonly sanitizedError: string };
 
+export type SentCopyAppendResult =
+  | { readonly status: "saved" }
+  | { readonly status: "failed"; readonly reasonCode: string; readonly sanitizedError: string }
+  | { readonly status: "skipped"; readonly reason: string };
+
 export interface MailboxCapabilityProbe {
   readonly moveCapability: boolean;
   readonly folders: readonly MailboxFolderInfo[];
@@ -79,6 +84,15 @@ export interface EmailMailboxAdapter {
     location: MailboxLocation,
     destinationFolderPath: string
   ): Promise<MoveResult>;
+  /**
+   * T16 (AC-22): append the submitted raw MIME to the account's Sent
+   * folder. Never resends; a failure is a separate warning, not a
+   * submission failure.
+   */
+  appendSent(
+    config: EmailReceiveConnectionConfig,
+    rawMessage: Buffer
+  ): Promise<SentCopyAppendResult>;
   /**
    * Bounded IMAP SEARCH per folder returning envelope metadata only (FR-17
    * server mode). Unsupported exact filters must not silently broaden:
@@ -118,6 +132,8 @@ export interface ServerSearchInput {
    * caller typically needs only a page worth; fetching the rest is waste.
    */
   readonly metadataLimit?: number;
+  /** T09: skip the first N matched UIDs (continuation within a folder). */
+  readonly uidOffset?: number;
 }
 
 export type ServerSearchResult =

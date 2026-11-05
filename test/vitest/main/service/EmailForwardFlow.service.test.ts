@@ -19,6 +19,7 @@ import type {
   MailboxLocation,
   MoveResult,
   PresenceResult,
+  SentCopyAppendResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationArtifactBackend } from "@/service/emailOrganization/EmailOrganizationArtifactStore";
 import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
@@ -102,6 +103,9 @@ class FakeAdapter implements EmailMailboxAdapter {
   async searchUids() {
     return { status: "listed" as const, candidates: [], capped: false };
   }
+  async appendSent(): Promise<SentCopyAppendResult> {
+    return { status: "skipped", reason: "no_sent_folder" };
+  }
 }
 
 class MemoryArtifacts implements EmailOrganizationArtifactBackend {
@@ -127,7 +131,9 @@ class MemoryArtifacts implements EmailOrganizationArtifactBackend {
   }
 }
 
-type SenderBehavior = () => { accepted: string[]; rejected: string[] } | Error;
+type SenderBehavior = () =>
+  | { accepted: string[]; rejected: string[]; raw?: Buffer; response?: string; messageId?: string }
+  | Error;
 
 function makeSenderFactory(
   behavior: SenderBehavior,
@@ -144,7 +150,13 @@ function makeSenderFactory(
       callLog.push(call);
       const result = behavior();
       if (result instanceof Error) throw result;
-      return { accepted: result.accepted, rejected: result.rejected, messageId: "<provider-1>" };
+      return {
+        accepted: result.accepted,
+        rejected: result.rejected,
+        messageId: "<provider-1>",
+        // T16: forward raw MIME when the behavior supplies it.
+        ...(result.raw !== undefined ? { raw: result.raw } : {}),
+      };
     },
   });
 }
@@ -693,6 +705,64 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
     if (outcome.status === "failed") {
       expect(outcome.code).toBe("REVISION_CHANGED");
     }
+  });
+
+  it("records Sent-copy failure separately without resending (review T16/AC-22)", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+
+    // Sender exposes the raw MIME (nodemailer behavior) and succeeds; the
+    // adapter's Sent-append FAILS — submission must stand, no resend.
+    const sendCalls: number[] = [];
+    let appendCalls = 0;
+    const failingAppendAdapter = new FakeAdapter(() => ({
+      status: "fetched",
+      source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+      uidValidity: "4242",
+    }));
+    failingAppendAdapter.appendSent = async () => {
+      appendCalls += 1;
+      return { status: "failed" as const, reasonCode: "PROVIDER_REJECTED", sanitizedError: "mailbox full" };
+    };
+    const delivery2 = new EmailForwardDeliveryService({
+      adapter: failingAppendAdapter,
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => {
+        sendCalls.push(1);
+        return { accepted: ["finance@example.test"], rejected: [], messageId: "<x>", response: "250 ok", raw: Buffer.from("raw") };
+      }, []),
+    });
+    const outcome = await delivery2.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    // Submission still succeeded despite the failed append.
+    expect(outcome.status).toBe("submitted");
+    expect(sendCalls.length).toBe(1); // no resend
+    expect(appendCalls).toBe(1);
+    const op = await delivery2["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    expect(op?.status).toBe("succeeded");
+    const items = await delivery2["operationModule"].listItems(op!.operationId);
+    const evidence = JSON.parse(
+      (await delivery2["operationModule"].listAttemptsForItem(items[0].id))[0].resultJson ?? "{}"
+    ) as { sentCopyStatus?: string };
+    expect(evidence.sentCopyStatus).toBe("failed");
   });
 
   it("never touches reply or processed state on the source message (FR-10)", async () => {

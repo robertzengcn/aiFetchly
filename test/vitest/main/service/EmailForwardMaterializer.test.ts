@@ -48,6 +48,9 @@ class StubAdapter implements EmailMailboxAdapter {
   async searchUids(): Promise<ServerSearchResult> {
     return { status: "listed", candidates: [], capped: false };
   }
+  async appendSent() {
+    return { status: "skipped" as const, reason: "no_sent_folder" };
+  }
 }
 
 class MemoryArtifacts implements EmailOrganizationArtifactBackend {

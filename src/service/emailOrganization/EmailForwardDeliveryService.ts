@@ -45,6 +45,8 @@ interface SubmissionInfo {
   readonly rejected?: ReadonlyArray<string | { address?: string }>;
   readonly messageId?: string;
   readonly response?: string;
+  /** T16: nodemailer exposes the raw composed MIME for Sent-copy append. */
+  readonly raw?: Buffer;
 }
 
 export interface ForwardSender {
@@ -400,7 +402,30 @@ export class EmailForwardDeliveryService extends BaseModule {
       const info = await sender.sendMail(mailOptions);
       const { accepted, rejected, unknown } = classifyRecipients(info, envelopeRecipients);
 
-      // ---- Persist outcome + Sent copy status (Stage B: not_requested) ----
+      // T16 (AC-22): attempt the Sent-copy append only after SMTP accepted
+      // at least one recipient. A failed append is a SEPARATE warning — it
+      // never changes submission state and never triggers a resend.
+      const sentCopyStatus: EmailSentCopyStatus = await (async () => {
+        if (accepted.length === 0) return "not_requested";
+        if (info.raw === undefined || info.raw.length === 0) return "not_requested";
+        const loc = await this.locationModule.readByMessageId(draft.messageId).catch(() => null);
+        if (loc === null) return "unknown";
+        const receiveConfig = await new EmailServiceModule()
+          .getEmailServiceReceiveConfig(loc.emailServiceId)
+          .catch(() => null);
+        if (receiveConfig === null) return "unknown";
+        const appendResult = await this.adapter
+          .appendSent(receiveConfig, info.raw)
+          .catch(() => ({ status: "failed" as const, reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: "append threw" }));
+        if (appendResult.status === "saved") return "saved";
+        if (appendResult.status === "skipped") return "not_requested";
+        log.warn(
+          `[EmailForwardDeliveryService] Sent-copy append failed (${requestCorrelationId}): ${appendResult.sanitizedError}`
+        );
+        return "failed";
+      })();
+
+      // ---- Persist outcome + Sent copy status ----
       const outcome: "succeeded" | "partially_succeeded" | "failed" | "outcome_unknown" =
         unknown.length > 0
           ? "outcome_unknown"
@@ -428,7 +453,7 @@ export class EmailForwardDeliveryService extends BaseModule {
                 : null,
         attemptId: claim.attemptId,
         resultJson: JSON.stringify({
-          sentCopyStatus: "not_requested" as EmailSentCopyStatus,
+          sentCopyStatus,
           response: (info.response ?? "").slice(0, 200),
         }),
       });
@@ -436,6 +461,8 @@ export class EmailForwardDeliveryService extends BaseModule {
       if (outcome === "succeeded" || outcome === "partially_succeeded" || outcome === "outcome_unknown") {
         await this.draftModule.markSubmitted(draft.id, revision.id);
       }
+
+
 
       await this.operationModule.recordAudit({
         operationId: operation.operationId,
@@ -579,6 +606,7 @@ export function createOutboundSenderFactory(): ForwardSenderFactory {
           rejected: (info as { rejected?: ReadonlyArray<string | { address?: string }> }).rejected,
           messageId: (info as { messageId?: string }).messageId,
           response: (info as { response?: string }).response,
+          raw: (info as { message?: Buffer }).message,
         };
       },
     };

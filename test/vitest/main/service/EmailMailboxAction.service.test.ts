@@ -58,6 +58,9 @@ class BulkFakeAdapterShim implements EmailMailboxAdapter {
   async checkMessagePresent(): Promise<PresenceResult> {
     return { status: "present" };
   }
+  async appendSent() {
+    return { status: "skipped" as const, reason: "no_sent_folder" };
+  }
   async searchUids(): Promise<ServerSearchResult> {
     return { status: "listed", candidates: [], capped: false };
   }
@@ -97,6 +100,9 @@ class ActionFakeAdapter implements EmailMailboxAdapter {
   }
   async checkMessagePresent(_config: unknown, location: MailboxLocation): Promise<PresenceResult> {
     return this.state.presence(location);
+  }
+  async appendSent(): Promise<{ status: "skipped"; reason: string }> {
+    return { status: "skipped", reason: "no_sent_folder" };
   }
   async searchUids() {
     return { status: "listed" as const, candidates: [], capped: false };

@@ -59,6 +59,9 @@ class CountingFakeAdapter implements EmailMailboxAdapter {
   async searchUids() {
     return { status: "listed" as const, candidates: [], capped: false };
   }
+  async appendSent() {
+    return { status: "skipped" as const, reason: "no_sent_folder" };
+  }
 }
 
 async function seedService(

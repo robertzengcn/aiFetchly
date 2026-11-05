@@ -199,7 +199,8 @@ export class EmailOrganizationSearchService extends BaseModule {
     // Design §11: bounded work — 1000 candidates or 30 seconds overall.
     const deadline = Date.now() + SERVER_SCAN_BUDGET_MS;
     let budgetExhausted = false;
-    // R15: cursor = base64 {folderIndex, uidOffset} bound to this scan.
+    // R15/T09: cursor = base64 {folderIndex, uidOffset} — uidOffset skips
+    // matched UIDs WITHIN the folder so continuation never repeats a page.
     let cursorState = { folderIndex: 0, uidOffset: 0 };
     if (input.cursor !== undefined) {
       try {
@@ -244,6 +245,7 @@ export class EmailOrganizationSearchService extends BaseModule {
           unreadOnly: input.unreadOnly,
           cap: SERVER_SCAN_CANDIDATE_CAP - candidatesSeen,
           metadataLimit: Math.max(pageSize - rows.length, 0),
+          uidOffset: folderIndex === cursorState.folderIndex ? cursorState.uidOffset : 0,
         }
       );
       // Review (false completeness): a failed folder search is never a
@@ -253,7 +255,10 @@ export class EmailOrganizationSearchService extends BaseModule {
         continue;
       }
       searchedFolders.push(folder);
-      candidatesSeen += result.candidates.length;
+      // T09: candidates returned already skip the folder's uid offset.
+      candidatesSeen += cursorState.folderIndex === folderIndex
+        ? cursorState.uidOffset + result.candidates.length
+        : result.candidates.length;
       capped = capped || result.capped || candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP;
       // R15: hasAttachments is NOT server-filterable — it is reported as
       // unknown (null) and forces incomplete results rather than silently
@@ -277,17 +282,17 @@ export class EmailOrganizationSearchService extends BaseModule {
       if (rows.length >= pageSize) break;
     }
     // R15: a page-full exit before the LAST folder means more results exist.
-    // R15-review: the cursor advances to the NEXT folder (candidates within
-    // a folder are not offset-addressable through the bounded SEARCH), so a
-    // page that cuts a folder short discloses the truncation via
-    // complete:false instead of pretending an exact continuation.
+    // T09: a page that fills mid-folder emits a cursor with the advanced
+    // uidOffset so continuation resumes exactly where this page stopped.
     const pageCutShort = rows.length >= pageSize;
-    const nextCursor =
-      pageCutShort && cursorState.folderIndex + 1 < folders.length
-        ? Buffer.from(
-            JSON.stringify({ folderIndex: cursorState.folderIndex + 1 })
-          ).toString("base64")
-        : null;
+    const nextCursor = pageCutShort
+      ? Buffer.from(
+          JSON.stringify({
+            folderIndex: cursorState.folderIndex,
+            uidOffset: cursorState.uidOffset + rows.length,
+          })
+        ).toString("base64")
+      : null;
 
     const limitationParts: string[] = [];
     if (capped) {
