@@ -6,6 +6,7 @@ import {
   type ManagedBrowserAiToolServiceDeps,
 } from "@/service/ManagedBrowserAiToolService";
 import { ManagedBrowserError } from "@/modules/ManagedBrowserModule";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { BrowserActionRiskClassifier } from "@/service/BrowserActionRiskClassifier";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
 
@@ -753,4 +754,107 @@ it("reports a fresh-browser startup failure without retrying or hiding it", asyn
     .mockRejectedValueOnce(new ManagedBrowserError("browser_dependency_missing"));
   await expect(makeService({ module }).startSession({ account_id: 1, purpose: "open" }, CTX)).rejects.toMatchObject({ code: "browser_dependency_missing" });
   expect(module.start).toHaveBeenCalledTimes(2);
+});
+
+// ---------------------------------------------------------------------------
+// F06: in-job approval wait (D-AC-05 pending step preserved)
+// ---------------------------------------------------------------------------
+
+describe("awaitRunnerApproval (F06)", () => {
+  function makeApprovalService(overrides: {
+    peek?: () => "approve" | "deny" | null;
+    consume?: () => "approve" | "deny" | null;
+  }) {
+    const module = makeModule();
+    const service = new ManagedBrowserAiToolService({
+      browserModule: {
+        ...module,
+        peekApprovalForProgram: overrides.peek,
+        consumeApprovalForProgram: overrides.consume,
+      } as unknown as BrowserModuleLike,
+    } as unknown as ManagedBrowserAiToolServiceDeps);
+    return service;
+  }
+
+  it("resolves approved when the user approves the bound program", async () => {
+    const service = makeApprovalService({
+      peek: () => "approve",
+      consume: () => "approve",
+    });
+    // Simulate the seam recording a pending approval binding.
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("mb_app1", {
+      programDigest: "digest-1",
+      pageRevision: 3,
+      requestId: "tc-1",
+    });
+    const control = getDefaultAgentTaskControlService();
+    control.register("f06-approve", "conv-1");
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app1",
+      taskId: "f06-approve",
+      pollIntervalMs: 1,
+      waitWindowMs: 2_000,
+    });
+    expect(resolution).toBe("approved");
+    // The wait opened and closed the intervention (gate reopened).
+    expect(control.getState("f06-approve")).toBe("running");
+    expect(control.get("f06-approve")?.openIntervention).toBeNull();
+  });
+
+  it("resolves denied when the user denies", async () => {
+    const service = makeApprovalService({
+      peek: () => "deny",
+      consume: () => "deny",
+    });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("mb_app2", {
+      programDigest: "digest-2",
+      pageRevision: 3,
+      requestId: "tc-2",
+    });
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app2",
+      taskId: "f06-deny",
+      pollIntervalMs: 1,
+      waitWindowMs: 2_000,
+    });
+    expect(resolution).toBe("denied");
+  });
+
+  it("expires when no approval binding exists for the session", async () => {
+    const service = makeApprovalService({});
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app_missing",
+      taskId: "f06-none",
+      pollIntervalMs: 1,
+    });
+    expect(resolution).toBe("expired");
+  });
+
+  it("expires when the window lapses without a decision", async () => {
+    const service = makeApprovalService({ peek: () => null });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("mb_app3", {
+      programDigest: "digest-3",
+      pageRevision: 3,
+      requestId: "tc-3",
+    });
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app3",
+      taskId: "f06-window",
+      pollIntervalMs: 1,
+      waitWindowMs: 30,
+    });
+    expect(resolution).toBe("expired");
+  });
 });

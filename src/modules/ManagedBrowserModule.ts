@@ -980,6 +980,39 @@ export class ManagedBrowserModule {
   }
 
   /**
+   * F06: NON-consuming probe for a recorded approval decision — the
+   * in-job approval wait polls this while the dialog is open. Same
+   * matching/expiry rules as consume, nothing is deleted.
+   */
+  public peekApprovalForProgram(input: {
+    readonly sessionId: string;
+    readonly programDigest: string;
+    readonly pageRevision: number;
+  }): "approve" | "deny" | null {
+    for (const entry of this.approvalDecisions.values()) {
+      if (entry.sessionId !== input.sessionId) {
+        continue;
+      }
+      if (this.now() - entry.recordedAtEpochMs > 10 * 60_000) {
+        continue;
+      }
+      if (entry.decision === "deny") {
+        return "deny";
+      }
+      if (
+        entry.programDigest === null ||
+        entry.programDigest !== input.programDigest ||
+        entry.pageRevision === null ||
+        entry.pageRevision !== input.pageRevision
+      ) {
+        continue;
+      }
+      return "approve";
+    }
+    return null;
+  }
+
+  /**
    * Consume the single outstanding APPROVE decision for a session (the
    * one-click approval dialog authorizes the model's retry). Returns
    * "deny" when the user denied (still consumed), null when no decision

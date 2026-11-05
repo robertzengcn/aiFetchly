@@ -835,3 +835,80 @@ describe("BrowserTaskRunner F07 persistence and terminal correctness", () => {
     expect(terminalPhase.decisionRequests).toBe(2);
   });
 });
+
+describe("BrowserTaskRunner F06 in-job approval wait", () => {
+  const approvalRequiredStop: RunnerExecutionResult = {
+    effect: "known",
+    pageRevision: 3,
+    results: [],
+    stopCode: "approval_required",
+  };
+  const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  };
+
+  it("re-dispatches the preserved pending step after approval", async () => {
+    const dispatches: number[] = [];
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      dispatches.push(dispatchCount);
+      if (dispatchCount === 1) {
+        return approvalRequiredStop;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f06app",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        awaitApproval: async () => "approved",
+      }
+    );
+    const result = await runner.run();
+    // The SAME pending step was re-dispatched (2 dispatches total) and the
+    // task completed.
+    expect(dispatches).toEqual([1, 2]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("CLICK:Go:approval_granted");
+  });
+
+  it("ends partial with approval_denied when the user denies", async () => {
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => approvalRequiredStop;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f06deny", conversationId: "conv-1", goal: "click" },
+      { ...deps, awaitApproval: async () => "denied" }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_denied");
+  });
+
+  it("caps approval re-dispatches to avoid a pathological approve loop", async () => {
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      return approvalRequiredStop;
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f06loop", conversationId: "conv-1", goal: "click" },
+      { ...deps, awaitApproval: async () => "approved" }
+    );
+    const result = await runner.run();
+    // Initial dispatch + 3 approved re-dispatches, then the depth cap ends
+    // the task with the honest approval_required terminal.
+    expect(dispatchCount).toBe(4);
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_required");
+  });
+});

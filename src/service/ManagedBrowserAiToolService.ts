@@ -10,6 +10,8 @@ import {
   type SemanticActionDescriptor,
 } from "@/service/browserDecision/BrowserApprovalFingerprint";
 import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
 import { browserSetProxyToolSchema } from "@/schemas/aiTools/browserProxy";
 import { browserSiteUpsertToolSchema } from "@/schemas/aiTools/browserSite";
@@ -227,6 +229,11 @@ export interface BrowserModuleLike {
     conversationId?: string
   ): Promise<SafeManagedBrowserStatus>;
   /** Consume the approval decision bound to this exact program (TODO-MSB-002). */
+  peekApprovalForProgram?(input: {
+    readonly sessionId: string;
+    readonly programDigest: string;
+    readonly pageRevision: number;
+  }): "approve" | "deny" | null;
   consumeApprovalForProgram?(input: {
     sessionId: string;
     programDigest: string;
@@ -263,6 +270,15 @@ export type RunnerAuthorizedOutcome =
 
 export class ManagedBrowserAiToolService {
   private readonly browserModule: BrowserModuleLike;
+  /**
+   * F06: the approval request LAST notified for a session (digest +
+   * revision bound) — the runner's in-job approval wait polls the
+   * decision against exactly this binding.
+   */
+  private readonly pendingRunnerApprovals = new Map<
+    string,
+    { programDigest: string; pageRevision: number; requestId: string }
+  >();
   private readonly settings: ManagedBrowserSettingsModule;
   private readonly classifier: BrowserActionRiskClassifier;
   private readonly cacheModule: NonNullable<
@@ -610,6 +626,13 @@ export class ManagedBrowserAiToolService {
           programDigest,
           pageRevision: parsed.data.page_revision,
         });
+        // F06: the runner's in-job approval wait polls the decision
+        // against exactly this digest+revision binding.
+        this.pendingRunnerApprovals.set(parsed.data.session_id, {
+          programDigest,
+          pageRevision: parsed.data.page_revision,
+          requestId: context.toolCallId,
+        });
         throw new ManagedBrowserAiToolError(
           "approval_required",
           assessment.riskClass,
@@ -818,6 +841,83 @@ export class ManagedBrowserAiToolService {
       };
     } catch (error) {
       this.wrapModuleError(error);
+    }
+  }
+
+  /**
+   * F06/D-AC-05: the in-job approval wait. Blocks INSIDE the runner's
+   * step for the user's approve/deny decision on the LAST notified
+   * approval for this session. User-wait time freezes the runner's
+   * active clock (control intervention) and the parent poll's deadline
+   * (ToolJobRegistry user-wait). User-only resolution; bounded by the
+   * 10-minute approval window and the 60-minute pause cap.
+   */
+  public async awaitRunnerApproval(input: {
+    readonly sessionId: string;
+    readonly taskId: string;
+    readonly jobId?: string | null;
+    readonly signal?: AbortSignal;
+    readonly pollIntervalMs?: number;
+    /** Test/override for the 10-minute approval window. */
+    readonly waitWindowMs?: number;
+  }): Promise<"approved" | "denied" | "expired"> {
+    const entry = this.pendingRunnerApprovals.get(input.sessionId);
+    if (!entry) {
+      return "expired";
+    }
+    const control = getDefaultAgentTaskControlService();
+    control.beginIntervention(input.taskId, "approval_required");
+    if (input.jobId) {
+      getDefaultToolJobRegistry().setUserWait(
+        input.jobId,
+        true,
+        "approval_required"
+      );
+    }
+    const pollIntervalMs = input.pollIntervalMs ?? 500;
+    const deadline = Date.now() + (input.waitWindowMs ?? 10 * 60_000);
+    try {
+      while (Date.now() < deadline) {
+        if (input.signal?.aborted) {
+          return "expired";
+        }
+        const peeked = this.browserModule.peekApprovalForProgram?.({
+          sessionId: input.sessionId,
+          programDigest: entry.programDigest,
+          pageRevision: entry.pageRevision,
+        });
+        if (peeked === "approve" || peeked === "deny") {
+          const consumed =
+            this.browserModule.consumeApprovalForProgram?.({
+              sessionId: input.sessionId,
+              programDigest: entry.programDigest,
+              pageRevision: entry.pageRevision,
+            }) ?? null;
+          if (consumed === "approve") {
+            return "approved";
+          }
+          if (consumed === "deny") {
+            return "denied";
+          }
+          // Consumed but expired between peek and consume: keep polling
+          // until the window closes.
+        }
+        control.enforcePauseCap(input.taskId);
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      }
+      return "expired";
+    } finally {
+      this.pendingRunnerApprovals.delete(input.sessionId);
+      if (input.jobId) {
+        getDefaultToolJobRegistry().setUserWait(input.jobId, false);
+      }
+      control.endIntervention(input.taskId);
+      // F06: never leave the runner's control gate closed — if the
+      // resolution path did not resume the task, reopen it here.
+      const record = control.get(input.taskId);
+      if (record?.state === "waiting_for_user") {
+        control.resume(input.taskId);
+      }
     }
   }
 
@@ -1222,6 +1322,17 @@ export class ManagedBrowserAiToolService {
               .recordActionOutcome({ taskId: awaitedResultRef.taskId, outcome })
               .catch(() => undefined);
           }
+        },
+        // F06/D-AC-05: the ALWAYS-CONFIRM approval gate becomes an
+        // in-job wait — the pending step is preserved and re-dispatched
+        // after the user approves.
+        awaitApproval: async (approvalInput) => {
+          return this.awaitRunnerApproval({
+            sessionId: parsed.data.session_id,
+            taskId: approvalInput.taskId,
+            jobId: context.jobId ?? null,
+            signal: context.signal,
+          });
         },
         awaitHandoff: async (reason, runnerTaskId) => {
           const { awaitUserResolution } = await import(

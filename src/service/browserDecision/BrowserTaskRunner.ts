@@ -112,6 +112,15 @@ export interface RunnerDeps {
   readonly persistActionOutcome?: (
     outcome: "confirmed" | "no_effect" | "unknown"
   ) => Promise<void>;
+  /**
+   * F06/D-AC-05: blocks INSIDE the job for the user's approve/deny
+   * decision on the pending approval. User-wait time is excluded from
+   * active budgets by the control service. Omit to keep the terminal
+   * approval_required behavior.
+   */
+  readonly awaitApproval?: (input: {
+    taskId: string;
+  }) => Promise<"approved" | "denied" | "expired">;
   readonly control?: ReturnType<typeof getDefaultAgentTaskControlService>;
   readonly now?: () => number;
 }
@@ -457,7 +466,11 @@ export class BrowserTaskRunner {
             action.operation,
             null,
             execution,
-            evidence
+            evidence,
+            () =>
+              this.deps.runActions(this.input.sessionId, {
+                actions: [programAction],
+              })
           );
           if (processed.stop) {
             return this.terminal(
@@ -529,7 +542,11 @@ export class BrowserTaskRunner {
           action.operation,
           { role: target.role, name: target.name },
           execution,
-          evidence
+          evidence,
+          () =>
+            this.deps.runActions(this.input.sessionId, {
+              actions: [programAction],
+            })
         );
         if (processed.stop) {
           // T18: a failures-exhausted stop gets ONE bounded recovery
@@ -724,7 +741,10 @@ export class BrowserTaskRunner {
     operation: string,
     target: { readonly role: string; readonly name: string } | null,
     execution: RunnerExecutionResult,
-    evidence: string[]
+    evidence: string[],
+    /** F06: re-dispatches the SAME pending step after an approval. */
+    redispatch?: () => Promise<RunnerExecutionResult>,
+    approvalDepth = 0
   ): Promise<{
     stop: { status: "partial" | "failed"; reason: string } | null;
     resumedFromHandoff?: boolean;
@@ -747,6 +767,44 @@ export class BrowserTaskRunner {
           reason: resolution === "expired" ? "handoff_expired" : "handoff_cancelled",
         },
       };
+    }
+    if (execution.stopCode === "approval_required" && this.deps.awaitApproval) {
+      // F06/D-AC-05: the pending step is preserved IN-JOB — block for
+      // the user's decision, then re-dispatch the SAME action (the
+      // recorded approval binds to the exact semantic digest; a page
+      // change during the wait forces a fresh approval). Depth-capped.
+      evidence.push(`${label}:approval_awaited`);
+      const resolution = await this.deps.awaitApproval({
+        taskId: this.taskId,
+      });
+      if (resolution === "approved" && redispatch && approvalDepth < 3) {
+        evidence.push(`${label}:approval_granted`);
+        const retryExecution = await redispatch();
+        return await this.processExecution(
+          operation,
+          target,
+          retryExecution,
+          evidence,
+          redispatch,
+          approvalDepth + 1
+        );
+      }
+      if (resolution === "denied" || resolution === "expired") {
+        evidence.push(
+          `${label}:approval_${resolution === "denied" ? "denied" : "expired"}`
+        );
+        return {
+          stop: {
+            status: "partial",
+            reason:
+              resolution === "denied" ? "approval_denied" : "approval_expired",
+          },
+        };
+      }
+      // approved without a redispatch path: fall through to the
+      // terminal below (defensive; executeTask always provides one).
+      evidence.push(`${label}:approval_required`);
+      return { stop: { status: "partial", reason: "approval_required" } };
     }
     if (execution.stopCode) {
       // D-AC-05: the authorized seam stopped the action. Terminal,
