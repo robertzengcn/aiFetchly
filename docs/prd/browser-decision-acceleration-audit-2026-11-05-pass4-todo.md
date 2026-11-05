@@ -35,6 +35,18 @@ Implementation HEAD after this round: `0eb47cbf6`. Every closure below was commi
 | F20 | PARTIAL: `runBrowserTasksForTool` enforces the SAME provider-aware admission as every browser tool — AI availability, browser enablement, and `parallelAgentsEnabled` — BEFORE any session start or agent admission (and deliberately does NOT require browserDecisionEnabled: parallel browser tasks stay usable with acceleration off). Still open: mid-inference switch changes. | `9242ea7bd` |
 | F08/F11/F13–F16/F19/F21–F24 | Still open as detailed below (site-registry switch-over, planner/bindings/SELECT options, ownership mapping, card mounting, hosted/native parity, E2E + performance evidence). | — |
 
+## 0c. Pass-7 implementation round (2026-11-06) — capacity/contract closures
+
+Implementation HEAD after this round: `662f34a75`. Every closure below was committed with regression tests. Final validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgents + managedBrowser 462 tests pass; managedBrowserWorkerUnits 40 pass.
+
+| Family | Status this round | Commit(s) |
+| --- | --- | --- |
+| F13 | CLOSED: approval fingerprints bind WHOLE-program semantics — if/repeat STRUCTURE (condition kind, semantic condition target via role/name or digested url/text, iteration cap) is part of the fingerprint, and SELECT values serialize canonically (JSON-array digest; the `join(',')` collision is gone). Reproduced collisions (repeat 1 vs 5, changed if condition, `['a,b','c']` vs `['a','b,c']`) now all produce distinct fingerprints; reobservation-stable matching is preserved. | `b2de3f684` |
+| F08 | CLOSED (core): the collector partitions VISIBLE-first (4×CAP scan window; hidden controls can never crowd visible targets out; truncation is reported explicitly via `scanTruncated`); registry eviction only sacrifices UNPINNED+COMMITTED entries (pinned/pending are never stolen; a saturated registry fails SAFELY — the observation degrades with a truncation notice instead of evicting live approvals); `e_nohandle` refs are excluded from decision candidates. Still open: per-decision ref pinning for the full pending lifetime, candidate relevance ranking. | `3cf4ad0c6` |
+| F14 | PARTIAL: bare wire results enforce the SAME bounds as the strict schema (oversized FILL text / URL → schema_violation); chat responses can never claim `native_distribution` uncertainty (stripped to unavailable; the hosted native path still honors it). EXTRACT output already flows worker→main→runner→criteria (F07b). Still open: SELECT option collection/`option_ids`, NAVIGATE full-URL provenance (same-site alone accepted), completion criteria in the decision prompt. | `acc8385d8` |
+| F19 | PARTIAL (session manifests): the SITE REGISTRY is consulted FIRST — a registered high-ID site IS the platform definition (account sessions start without a static manifest row), and the cookie-refresh policy derives from the registry when no manifest exists. Still open: SocialAccountModule/socialaccount UI label consumers, proposal/confirmation state machine for extra domains. | `662f34a75` |
+| F11/F15/F16/F21–F24 | Still open as detailed below (cookie lifecycle/adapter assessment, planner/progress state machine, ownership mapping, card mounting, hosted/native parity, E2E + performance evidence). | — |
+
 ## 1. Current validation and evidence
 
 | Check | Result |
