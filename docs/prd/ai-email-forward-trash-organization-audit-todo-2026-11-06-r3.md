@@ -76,6 +76,29 @@ Audit-only probes are not production changes. Their failure scenarios must becom
 | FR-19 bounded bulk/progress | Partial | Detached executor and missing UI; T08/T13. |
 | FR-20 cancel unstarted work | Partial | Useful background execution/UI required; T08/T13/T14 and cancel/restart fault tests. |
 
+## Remediation status (2026-11-06, updated on this branch)
+
+| Group | Status | Notes |
+| --- | --- | --- |
+| T01 direct-action permission | **Resolved by design change** — the intent gate is BLOCK-ONLY (review/draft/negation refuse; send_now keeps the single permission card), so the dropped-approval path no longer exists; the third /review found the substring matcher injectable, so card-skip was deliberately removed | `19e440d2f`, `6c62ed025` |
+| T02 resolver precision | **Fixed** — capability-question class + 'do not move' negation added | `6c62ed025` |
+| T03 send race + expiry | **Fixed** — expiry enforced at delivery; last pre-SMTP admission moved after dispatch marking | `6c62ed025` |
+| T04 reconcile | **Fixed** — kind guard (earlier) + idempotent already-applied local repair | `6c62ed025` |
+| T05 restore provenance | **Fixed** — full after-locator binding incl. UIDVALIDITY; noop excluded from bulk provenance (earlier) | `6c62ed025`, `19e440d2f` |
+| T06 Trash resolution | **Fixed** — fallback resolver ambiguity fail-closed; noop requires present evidence; missing config/failed probe honest | `6c62ed025` |
+| T07 serialization | **Partially fixed** — reconcile under account mutex; full reply-admission coordination remains open | `19e440d2f` |
+| T08 detached executor | **Fixed** (third review — real selection entity threaded) | `19e440d2f` |
+| T09 search continuations | **Partially fixed** — cursor advances folders, exposed through schemas; per-folder uid offsets remain open | `6c62ed025` |
+| T10 duplicate-byte CIDs | **Fixed** — sequential per-hash candidate consumption in document order preserves part identity | `6c62ed025` |
+| T11 composed bound | **Fixed** — folding + header budget + 4% margin upper-bounds the encoder; persisted on create/edit | `6c62ed025` |
+| T12 outcome display | **Fixed** — already_attempted warning with prior outcome; partial counts on the page | `6c62ed025` |
+| T13 UI journeys | **Partially fixed** — saved-draft resume caller wired; history/bulk preview UI still minimal | `6c62ed025` |
+| T14 chat cards | **Fixed** — org cards checked in the skip loop (common call/result sequence) + anchor path; Cancel uses the displayed operation | `6c62ed025` |
+| T15 localization | **Fixed** — draft locale persisted/reused on edit; item_status localized with te() guards in six languages | `6c62ed025` |
+| T16 Sent copy | **Open by recorded scope decision** — `not_requested` per design §9.4 initial-release allowance; AC-22 requires Sent-append support (deferred with provider validation) | — |
+| T17 delayed source sync | **Fixed** — obsolete old-source observations detected via operation-authored locators and skipped | `6c62ed025` |
+| V01/V02 validation gates | **Open** — operator/CI scope (wire fixtures, Playwright, perf, live mailboxes); AGENTS.md forbids local packaging | — |
+
 ## Detailed TODO — confirmed defects and incomplete implementation
 
 ### T01 — P2: direct-action permission is lost between gate and executor
