@@ -12,16 +12,32 @@ import ja from "@/views/lang/ja";
  * English silently — this test makes the fallback visible at CI time.
  */
 
-const ENGLISH = (en as unknown as Record<string, Record<string, string>>).emailOrganization;
+const ENGLISH = (en as unknown as Record<string, Record<string, unknown>>).emailOrganization as Record<string, unknown>;
 
-function keysOf(block: Record<string, string>): Set<string> {
-  return new Set(Object.keys(block));
+type LocaleTree = Record<string, string | Record<string, string>>;
+
+function flattenKeys(
+  tree: Record<string, unknown>,
+  prefix = ""
+): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = [];
+  for (const [key, value] of Object.entries(tree)) {
+    const fullKey = prefix === "" ? key : `${prefix}.${key}`;
+    if (typeof value === "string") {
+      out.push({ key: fullKey, value });
+    } else if (value !== null && typeof value === "object") {
+      out.push(...flattenKeys(value as Record<string, unknown>, fullKey));
+    }
+  }
+  return out;
 }
 
-function nonEmptyValues(block: Record<string, string>): boolean {
-  return Object.values(block).every(
-    (value) => typeof value === "string" && value.trim().length > 0
-  );
+function keysOf(block: Record<string, unknown>): Set<string> {
+  return new Set(flattenKeys(block).map((entry) => entry.key));
+}
+
+function nonEmptyValues(block: Record<string, unknown>): boolean {
+  return flattenKeys(block).every((entry) => entry.value.trim().length > 0);
 }
 
 describe("emailOrganization i18n coverage (six languages)", () => {
@@ -39,7 +55,7 @@ describe("emailOrganization i18n coverage (six languages)", () => {
     ["ja", ja],
   ] as const) {
     it(`covers every key in ${name}`, () => {
-      const block = (messages as unknown as Record<string, Record<string, string>>)
+      const block = (messages as unknown as Record<string, Record<string, unknown>>)
         .emailOrganization;
       expect(block, name).toBeDefined();
       expect(keysOf(block)).toEqual(keysOf(ENGLISH));

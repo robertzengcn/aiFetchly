@@ -1127,6 +1127,17 @@ export default {
     description_hint: "input filter description",
   },
   emailOrganization: {
+    already_attempted: "This forward was already attempted",
+    item_status: {
+      pending: "Pending",
+      claimed: "In progress",
+      succeeded: "Completed",
+      partially_succeeded: "Partially completed",
+      noop: "Already in place",
+      failed: "Failed",
+      cancelled: "Cancelled",
+      outcome_unknown: "Outcome unknown",
+    },
     forward_button: "Forward",
     trash_button: "Trash",
     undo_action: "Undo",

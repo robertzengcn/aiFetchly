@@ -174,6 +174,7 @@ export class EmailForwardDraftService extends BaseModule {
         currentRevisionId: null,
         conversationId: input.conversationId ?? null,
         provenance: input.provenance,
+        locale: input.locale ?? "en",
         submittedAt: null,
       },
       {
@@ -201,7 +202,7 @@ export class EmailForwardDraftService extends BaseModule {
         attachmentsJson: JSON.stringify(materialized.attachments),
         composedMessageId,
         composedHash,
-        composedByteCount: null,
+        composedByteCount: materialized.composedByteCount,
         validationFindingsJson: JSON.stringify(materialized.validationFindings),
         expiresAt,
       },
@@ -285,6 +286,7 @@ export class EmailForwardDraftService extends BaseModule {
         uid: location?.providerUid ?? "",
       },
       receiveConfig,
+      locale: draft.locale,
       note,
       toRecipients: normalized.to,
       ccRecipients: normalized.cc,
@@ -340,7 +342,7 @@ export class EmailForwardDraftService extends BaseModule {
         attachmentsJson: JSON.stringify(materialized.attachments),
         composedMessageId,
         composedHash,
-        composedByteCount: null,
+        composedByteCount: materialized.composedByteCount,
         validationFindingsJson: JSON.stringify(materialized.validationFindings),
         expiresAt,
       }

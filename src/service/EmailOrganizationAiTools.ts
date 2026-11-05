@@ -345,6 +345,14 @@ export async function sendEmailForward(
     );
     // R10: top-level success only for VERIFIED complete success; partial
     // acceptance, failure and unknowns surface through the envelope.
+    if (outcome.status === "already_processed" && outcome.priorOutcome !== "succeeded") {
+      return {
+        success: false,
+        error: `This forward was already attempted; the prior operation is ${outcome.priorOutcome}.`,
+        code: "ALREADY_ATTEMPTED",
+        result: { ...outcome } as unknown as Record<string, unknown>,
+      };
+    }
     if (outcome.status === "failed" || outcome.status === "outcome_unknown") {
       return {
         success: false,

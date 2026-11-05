@@ -1107,6 +1107,17 @@ export default {
     description_hint: "フィルターの説明を入力",
   },
   emailOrganization: {
+    already_attempted: "この転送は既に試行済みです",
+    item_status: {
+      pending: "待機中",
+      claimed: "実行中",
+      succeeded: "完了",
+      partially_succeeded: "部分完了",
+      noop: "既に配置済み",
+      failed: "失敗",
+      cancelled: "キャンセル済み",
+      outcome_unknown: "結果不明",
+    },
     forward_button: "転送",
     trash_button: "ゴミ箱へ",
     undo_action: "元に戻す",

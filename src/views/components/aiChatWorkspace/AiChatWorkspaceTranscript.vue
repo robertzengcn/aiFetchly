@@ -448,6 +448,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           if (replyId !== null) {
             result.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
           }
+          // T14: organization cards surface in the skip loop too — the common
+          // call/result sequence must not lose the progress/Undo card.
+          const orgId = organizationOperationIdFromMessage(messages[i]);
+          if (orgId !== null) {
+            result.push({
+              kind: "email-organization",
+              key: `email-organization-${messages[i].id}`,
+              operationId: orgId,
+            });
+          }
           if (isOutboundBatchResultMessage(messages[i])) {
             result.push({
               kind: "outbound-batch",

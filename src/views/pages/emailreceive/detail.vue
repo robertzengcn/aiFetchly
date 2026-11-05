@@ -127,6 +127,7 @@
 
     <EmailForwardReviewDialog
       :message-id="forwardDialogMessageId"
+      :existing-draft-id="forwardDialogMessageId !== null ? savedDraftIds.get(forwardDialogMessageId) ?? null : null"
       @closed="forwardDialogMessageId = null"
       @sent="onForwardSent"
       @draft-saved="onDraftSaved"
@@ -157,6 +158,8 @@ const message = ref<ReceivedMessageDetailDto | null>(null);
 const loading = ref(true);
 
 const forwardDialogMessageId = ref<number | null>(null);
+// T13: saved draft ids per message, so reopening resumes instead of recreating.
+const savedDraftIds = ref(new Map<number, number>());
 const trashing = ref(false);
 const restoring = ref(false);
 const actionMessage = ref<string | null>(null);
@@ -305,7 +308,13 @@ async function restoreLastTrash(): Promise<void> {
 
 function onForwardSent(result: SendForwardResultDto): void {
   forwardDialogMessageId.value = null;
-  if (result.status === "submitted") {
+  if (result.status === "submitted" && result.outcome === "partially_succeeded") {
+    setActionMessage(
+      `${t("emailOrganization.forward_submitted") || "Forward submitted"}: ` +
+        `${result.accepted?.length ?? 0} accepted, ${result.rejected?.length ?? 0} rejected, ${result.unknown?.length ?? 0} unknown.`,
+      "warning"
+    );
+  } else if (result.status === "submitted") {
     setActionMessage(
       t("emailOrganization.forward_submitted") ||
         "Forward submitted. Delivery depends on the receiving server.",
@@ -317,10 +326,19 @@ function onForwardSent(result: SendForwardResultDto): void {
       "warning"
     );
   } else if (result.status === "already_processed") {
-    setActionMessage(
-      t("emailOrganization.already_submitted") || "This forward was already submitted.",
-      "info"
-    );
+    // T12: the prior operation's durable outcome decides the message —
+    // already-attempted is not accepted-by-SMTP when it failed/unknown.
+    if (result.priorOutcome !== undefined && result.priorOutcome !== "succeeded") {
+      setActionMessage(
+        `${t("emailOrganization.already_attempted") || "This forward was already attempted"} (${result.priorOutcome}).`,
+        "warning"
+      );
+    } else {
+      setActionMessage(
+        t("emailOrganization.already_submitted") || "This forward was already submitted.",
+        "info"
+      );
+    }
   } else {
     setActionMessage(
       `${t("emailOrganization.action_failed") || "Action failed"}: ${result.code ?? result.status}`,
@@ -329,7 +347,11 @@ function onForwardSent(result: SendForwardResultDto): void {
   }
 }
 
-function onDraftSaved(): void {
+function onDraftSaved(draftId: number): void {
+  // T13: remember the saved draft so reopening resumes it.
+  if (message.value !== null) {
+    savedDraftIds.value.set(message.value.id, draftId);
+  }
   setActionMessage(
     t("emailOrganization.draft_saved") || "Forward draft saved. Reopen Forward to review and send it.",
     "info"

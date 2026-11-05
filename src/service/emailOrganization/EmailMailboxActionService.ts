@@ -147,25 +147,36 @@ export class EmailMailboxActionService extends BaseModule {
     // server before a no-op is recorded.
     if (location.folderPath === trashFolder) {
       const receiveConfigForNoop = await this.resolveReceiveConfig(message.emailServiceId);
-      if (receiveConfigForNoop) {
-        const noopPresence = await this.adapter.checkMessagePresent(receiveConfigForNoop, {
-          folderPath: location.folderPath,
-          uidValidity: location.uidValidity,
-          uid: location.providerUid,
-        });
-        if (noopPresence.status === "absent") {
-          return this.failedResult(
-            "SOURCE_NOT_FOUND",
-            "The cached Trash location no longer holds this message."
-          );
-        }
-        if (noopPresence.status === "uid_validity_changed") {
-          await this.locationModule.markStale(message.id);
-          return this.failedResult(
-            "UID_VALIDITY_CHANGED",
-            "Trash folder UID validity changed; re-sync before acting."
-          );
-        }
+      if (!receiveConfigForNoop) {
+        // T06: missing config is an unavailable state, never a verified no-op.
+        return this.failedResult(
+          "ACCOUNT_NOT_AVAILABLE",
+          "Account receive configuration is unavailable; the no-op could not be verified."
+        );
+      }
+      const noopPresence = await this.adapter.checkMessagePresent(receiveConfigForNoop, {
+        folderPath: location.folderPath,
+        uidValidity: location.uidValidity,
+        uid: location.providerUid,
+      });
+      if (noopPresence.status === "absent") {
+        return this.failedResult(
+          "SOURCE_NOT_FOUND",
+          "The cached Trash location no longer holds this message."
+        );
+      }
+      if (noopPresence.status === "uid_validity_changed") {
+        await this.locationModule.markStale(message.id);
+        return this.failedResult(
+          "UID_VALIDITY_CHANGED",
+          "Trash folder UID validity changed; re-sync before acting."
+        );
+      }
+      if (noopPresence.status === "failed") {
+        return this.failedResult(
+          "OUTCOME_UNKNOWN",
+          "The Trash presence check failed; the no-op could not be verified."
+        );
       }
       const noopOperation = await this.createOperation(input, message.emailServiceId, [message.id], trashFolder, "trash");
       const claim = await this.operationModule.claimItem({
@@ -758,14 +769,22 @@ export class EmailMailboxActionService extends BaseModule {
       // newer state.
       const current = await this.locationModule.readByMessageId(messageId);
       let afterUid: string | null = null;
+      let afterUidValidity: string | null = null;
       if (priorItem) {
         const attempts = await this.operationModule.listAttemptsForItem(priorItem.id);
         for (const attempt of attempts) {
           if (attempt.resultJson === null) continue;
           try {
-            const evidence = JSON.parse(attempt.resultJson) as { destinationUid?: string | null };
+            const evidence = JSON.parse(attempt.resultJson) as {
+              destinationUid?: string | null;
+              destinationUidValidity?: string | null;
+            };
+            // T05: bind the full after-locator (uid + uidValidity).
             if (typeof evidence.destinationUid === "string") {
               afterUid = evidence.destinationUid;
+            }
+            if (typeof evidence.destinationUidValidity === "string") {
+              afterUidValidity = evidence.destinationUidValidity;
             }
           } catch {
             // malformed evidence: fall through with uid null
@@ -776,7 +795,9 @@ export class EmailMailboxActionService extends BaseModule {
         current !== null &&
         current.state === "verified" &&
         current.folderPath === priorItem?.destinationFolderPath &&
-        (afterUid === null || current.providerUid === afterUid);
+        (afterUid === null || current.providerUid === afterUid) &&
+        // T05: a UIDVALIDITY reset with the same numeric UID must not pass.
+        (afterUidValidity === null || current.uidValidity === afterUidValidity);
       if (!lineageIntact) {
         return this.failedResult(
           "LOCATION_STALE",
@@ -1146,6 +1167,40 @@ export class EmailMailboxActionService extends BaseModule {
           });
           continue;
         }
+        // T04: crash after applyMove but before item finalization leaves the
+        // location at version v+1 pointing at the exact destination — the
+        // before-version CAS can never succeed again. Accept an
+        // already-applied locator with matching lineage as idempotent
+        // success instead of looping on LOCAL_COMMIT_PENDING forever.
+        const currentRow = await this.locationModule.readByMessageId(item.messageId);
+        const alreadyApplied =
+          currentRow !== null &&
+          currentRow.folderPath === item.destinationFolderPath &&
+          currentRow.providerUid === (mappingEvidence.destinationUid as string) &&
+          currentRow.uidValidity === (mappingEvidence.destinationUidValidity as string) &&
+          currentRow.lastOperationId === operationId;
+        if (alreadyApplied) {
+          await this.operationModule.finalizeItem({
+            itemId: item.id,
+            operationId,
+            status: "succeeded",
+            resultJson: JSON.stringify({
+              reconciled: true,
+              idempotentLocalRepair: true,
+              destinationFolder: item.destinationFolderPath,
+            }),
+          });
+          await this.operationModule.recordAudit({
+            operationId,
+            itemId: item.id,
+            messageId: item.messageId,
+            emailServiceId: operation.emailServiceId,
+            action: "reconciled_move",
+            status: "succeeded",
+            detail: { idempotentLocalRepair: true, destinationFolder: item.destinationFolderPath },
+          });
+          continue;
+        }
         const applyOk = await this.locationModule.applyMove({
           messageId: item.messageId,
           expectedVersion: item.beforeLocationVersion ?? 0,
@@ -1251,12 +1306,16 @@ export class EmailMailboxActionService extends BaseModule {
       const capabilities = await this.capabilityService.getCapabilities(emailServiceId);
       return capabilities.trashFolderPath;
     }
-    // Without a capability service, resolve Trash from a live folder probe.
+    // T06: the fallback resolver enforces the SAME fail-closed rules as the
+    // capability service — ambiguity never guesses the first match.
     const receiveConfig = await this.resolveReceiveConfig(emailServiceId);
     if (!receiveConfig) return null;
     const listing = await this.adapter.listFolders(receiveConfig);
     if (listing.status !== "listed") return null;
-    return listing.folders.find((folder) => folder.specialUse === "\\Trash")?.path ?? null;
+    const trashFolders = listing.folders.filter(
+      (folder) => folder.specialUse === "\\Trash"
+    );
+    return trashFolders.length === 1 ? trashFolders[0].path : null;
   }
 
   private async resolveReceiveConfig(

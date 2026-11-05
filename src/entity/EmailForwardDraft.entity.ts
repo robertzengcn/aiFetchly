@@ -29,5 +29,8 @@ export class EmailForwardDraftEntity extends AuditableEntity {
   /** Who created the draft: "ai" (tool) or "user" (manual UI). */
   @Column("varchar", { length: 20, default: "user" }) provenance!: string;
 
+  /** T15: UI locale for generated header labels; reused on every edit. */
+  @Column("varchar", { length: 10, default: "en" }) locale!: string;
+
   @Column("datetime", { nullable: true }) submittedAt!: Date | null;
 }

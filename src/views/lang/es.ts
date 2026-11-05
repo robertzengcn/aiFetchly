@@ -1127,6 +1127,17 @@ export default {
     description_hint: "Ingrese la descripción del filtro",
   },
   emailOrganization: {
+    already_attempted: "Este reenvío ya se había intentado",
+    item_status: {
+      pending: "Pendiente",
+      claimed: "En curso",
+      succeeded: "Completado",
+      partially_succeeded: "Parcialmente completado",
+      noop: "Ya en su lugar",
+      failed: "Fallido",
+      cancelled: "Cancelado",
+      outcome_unknown: "Resultado desconocido",
+    },
     forward_button: "Reenviar",
     trash_button: "Papelera",
     undo_action: "Deshacer",

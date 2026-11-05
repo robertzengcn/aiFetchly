@@ -283,6 +283,61 @@ describe("R01 — original content and headers preserved in composed output", ()
     expect(result.bodyHtml).toContain("cid:logo1");
   });
 
+  it("relinks identical-byte inline parts to the SELECTED cid without dropping references (review T10)", async () => {
+    // Two inline parts, identical bytes, distinct CIDs (logo1/logo2).
+    const identicalB64 = "aGVsbG8gaW5saW5l";
+    const source = [
+      "From: a@b.test",
+      "To: c@d.test",
+      "Subject: dup",
+      'Content-Type: multipart/mixed; boundary="OUTER"',
+      "",
+      "--OUTER",
+      'Content-Type: multipart/alternative; boundary="INNER"',
+      "",
+      "--INNER",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      '<p>one <img src="cid:logo1"> two <img src="cid:logo2"></p>',
+      "--INNER--",
+      "--OUTER",
+      'Content-Type: image/png; name="one.png"',
+      'Content-Disposition: inline; filename="one.png"',
+      "Content-Transfer-Encoding: base64",
+      "Content-ID: <logo1>",
+      "",
+      identicalB64,
+      "--OUTER",
+      'Content-Type: image/png; name="two.png"',
+      'Content-Disposition: inline; filename="two.png"',
+      "Content-Transfer-Encoding: base64",
+      "Content-ID: <logo2>",
+      "",
+      identicalB64,
+      "--OUTER--",
+      "",
+    ].join("\r\n");
+    adapter.setSource({ status: "fetched", source: Buffer.from(source, "utf8"), uidValidity: "4242" });
+
+    // Select only the FIRST part: both references must render (identical
+    // bytes), pointing at the SELECTED part's content-id — never empty.
+    const onlyFirst = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "parts", partIds: ["part-1"] },
+    });
+    expect(onlyFirst.bodyHtml).toContain('src="cid:logo1"');
+    expect(onlyFirst.bodyHtml).not.toContain('src=""');
+
+    // Select BOTH: both references stay, each part travels.
+    const both = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "all" },
+    });
+    expect(both.bodyHtml).toContain("cid:logo1");
+    expect(both.bodyHtml).toContain("cid:logo2");
+    expect(both.selectedAttachmentCount).toBe(2);
+  });
+
   it("remote tracking images are stripped while cid references survive sanitization", async () => {
     adapter.setSource({
       status: "fetched",

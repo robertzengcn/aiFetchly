@@ -1,4 +1,5 @@
 import { simpleParser, type ParsedMail } from "mailparser";
+import crypto from "crypto";
 import sanitizeHtml from "sanitize-html";
 import { SANITIZE_OPTIONS } from "@/service/emailReceive/EmailHtmlSanitizer";
 import { htmlToText } from "@/service/emailReceive/EmailBodyNormalizationService";
@@ -249,9 +250,14 @@ export class EmailForwardMaterializer {
     const bodyHtmlArtifactId = await this.artifactStore.put(Buffer.from(bodyHtml, "utf8"));
 
     const selected = manifest.filter((entry) => entry.selected);
-    const composedByteCount = estimateComposedBytes(bodyText, bodyHtml, selected.map((entry) => ({
-      content: rawAttachments.find((att) => att.partId === entry.partId)?.content ?? Buffer.alloc(0),
-    })));
+    const composedByteCount = estimateComposedBytes(
+      bodyText,
+      bodyHtml,
+      selected.map((entry) => ({
+        content: rawAttachments.find((att) => att.partId === entry.partId)?.content ?? Buffer.alloc(0),
+      })),
+      { subject: input.subject, recipients: [...input.toRecipients, ...input.ccRecipients, ...input.bccRecipients] }
+    );
     if (composedByteCount > EMAIL_ORGANIZATION_LIMITS.maxComposedBytes) {
       throw new EmailOrganizationActionError(
         "SOURCE_TOO_LARGE",
@@ -328,17 +334,32 @@ function assertSupportedMime(parsed: ParsedMail): void {
 export function estimateComposedBytes(
   bodyText: string,
   bodyHtml: string,
-  selectedAttachments: ReadonlyArray<{ readonly content: Buffer }>
+  selectedAttachments: ReadonlyArray<{ readonly content: Buffer }>,
+  metadata?: { readonly subject?: string; readonly recipients?: readonly string[] }
 ): number {
-  const encoded = (bytes: number): number => 4 * Math.ceil(bytes / 3);
+  // T11: the estimator MUST upper-bound the encoder. Nodemailer base64-encodes
+  // bodies/attachments and folds lines every 76 chars (\r\n per line ≈ +2.7%),
+  // headers/filenames/boundaries add variable bytes, and the audit measured a
+  // real 15 MiB case 544 KB above the previous constant-overhead estimate.
+  const encodedWithFolding = (bytes: number): number => {
+    const base64 = 4 * Math.ceil(bytes / 3);
+    const folding = Math.ceil(base64 / 76) * 2;
+    return base64 + folding;
+  };
   const textBytes = Buffer.byteLength(bodyText, "utf8");
   const htmlBytes = Buffer.byteLength(bodyHtml, "utf8");
   const attachmentsBytes = selectedAttachments.reduce(
-    (sum, entry) => sum + encoded(entry.content.length),
+    (sum, entry) => sum + encodedWithFolding(entry.content.length),
     0
   );
-  // Bodies + headers + MIME boundaries, all conservatively base64-counted.
-  return encoded(textBytes) + encoded(htmlBytes) + attachmentsBytes + 8192;
+  const bodiesBytes = encodedWithFolding(textBytes) + encodedWithFolding(htmlBytes);
+  // Header budget: subject (UTF-8 encoded-word worst case ≈ 6x), recipient
+  // list, message-id, MIME headers per part, boundaries.
+  const subjectBytes = encodedWithFolding(Buffer.byteLength(metadata?.subject ?? "", "utf8") * 6);
+  const recipientBytes = (metadata?.recipients ?? []).join(",").length * 4;
+  const headersBudget = 8192 + subjectBytes + recipientBytes + selectedAttachments.length * 1024;
+  // 4% safety margin over the computed bound (audit-measured deficit ≈ 2.6%).
+  return Math.ceil((bodiesBytes + attachmentsBytes + headersBudget) * 1.04);
 }
 
 function extractAttachments(parsed: ParsedMail): RawAttachment[] {
@@ -485,10 +506,21 @@ export function relinkCidImages(
   findings: string[]
 ): string | null {
   if (html === null) return null;
-  // R-review: key by content hash (bounded memory; identical bytes with
-  // different CIDs keep the SELECTED candidate's content-id).
-  const crypto = require("crypto") as typeof import("crypto");
-  const byHash = new Map<string, { cid: string; selected: boolean }>();
+  // T10 (hash map, prefers SELECTED on identical-byte collisions): distinct
+  // CIDs with identical bytes render identically, so relinking every data:
+  // URI to the selected part's content-id is semantically correct — the
+  // rendered bytes match and the referenced part travels with the message.
+  // Dropping the reference (as a byte→last-CID map did pre-19e440d2f) is
+  // what corrupted content.
+  // Candidates per content hash, in attachment order. mailparser replaces
+  // each cid: ref in document order with the referenced part's data: URI, so
+  // the Nth occurrence of a hash in the HTML maps to the Nth same-byte part
+  // — preserving part identity even when distinct CIDs carry identical
+  // bytes (audit T10).
+  const candidatesByHash = new Map<
+    string,
+    Array<{ cid: string; selected: boolean }>
+  >();
   for (const attachment of rawAttachments) {
     if (attachment.cid === null) continue;
     const key = crypto
@@ -498,23 +530,26 @@ export function relinkCidImages(
     const selected =
       selection.mode === "all" ||
       (selection.mode === "parts" && selection.partIds.includes(attachment.partId));
-    const existing = byHash.get(key);
-    if (existing === undefined || (!existing.selected && selected)) {
-      byHash.set(key, { cid: attachment.cid, selected });
-    }
+    const list = candidatesByHash.get(key) ?? [];
+    list.push({ cid: attachment.cid, selected });
+    candidatesByHash.set(key, list);
   }
+  const consumedByHash = new Map<string, number>();
   return html.replace(DATA_URI_PATTERN, (match, _quote: string, _uri: string, base64: string) => {
     const key = crypto
       .createHash("sha256")
       .update(Buffer.from(base64.replace(/\s/g, ""), "base64"))
       .digest("hex");
-    const match_ = byHash.get(key);
-    if (match_ === undefined) return match; // unrelated embedded data URI
-    if (!match_.selected) {
+    const candidates = candidatesByHash.get(key);
+    if (candidates === undefined) return match; // unrelated embedded data URI
+    const consumed = consumedByHash.get(key) ?? 0;
+    consumedByHash.set(key, consumed + 1);
+    const candidate = candidates[consumed % candidates.length];
+    if (!candidate.selected) {
       findings.push("unselected_inline_image_removed");
       return 'src=""';
     }
-    return `src="cid:${match_.cid}"`;
+    return `src="cid:${candidate.cid}"`;
   });
 }
 

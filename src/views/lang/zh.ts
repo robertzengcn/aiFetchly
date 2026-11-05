@@ -1084,6 +1084,17 @@ export default {
     description_hint: "输入过滤器描述",
   },
   emailOrganization: {
+    already_attempted: "此转发已尝试过",
+    item_status: {
+      pending: "等待中",
+      claimed: "进行中",
+      succeeded: "已完成",
+      partially_succeeded: "部分完成",
+      noop: "已处于目标位置",
+      failed: "失败",
+      cancelled: "已取消",
+      outcome_unknown: "结果未知",
+    },
     forward_button: "转发",
     trash_button: "移到废件箱",
     undo_action: "撤销",

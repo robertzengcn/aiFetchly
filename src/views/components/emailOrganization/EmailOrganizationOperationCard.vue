@@ -126,7 +126,7 @@ const emit = defineEmits<{
   (event: "restored", operationId: string): void;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 
 const operation = ref<EmailOrganizationOperationDto | null>(null);
 const errorMessage = ref<string | null>(null);
@@ -277,6 +277,15 @@ async function onCancel(): Promise<void> {
   }
 }
 
+/** T15: te() guard — a missing key falls back to a readable value, not the key. */
+function tOrRaw(key: string, fallback: string): string {
+  return te(key) ? t(key) : fallback;
+}
+
+function itemStatusText(status: string): string {
+  return tOrRaw(`emailOrganization.item_status.${status}`, status);
+}
+
 function itemSummary(item: EmailOrganizationOperationDto["items"][number]): string {
   const accepted = item.recipientOutcomes.filter((entry) => entry.outcome === "accepted").length;
   const rejected = item.recipientOutcomes.filter((entry) => entry.outcome === "rejected").length;
@@ -294,7 +303,7 @@ function itemSummary(item: EmailOrganizationOperationDto["items"][number]): stri
   if (completed && item.destinationFolderPath) {
     return `${t("emailOrganization.moved_to_prefix") || "Moved to"} ${item.destinationFolderPath}${codeSuffix}`;
   }
-  return `${item.status}${codeSuffix}`;
+  return `${itemStatusText(item.status)}${codeSuffix}`;
 }
 
 async function load(): Promise<void> {

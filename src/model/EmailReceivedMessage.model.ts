@@ -546,6 +546,34 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await this.repository.findOne({ where: { id: messageId } });
   }
 
+  /**
+   * T17: finds an existing message with the same RFC message-id whose
+   * verified location is operation-authored (moved by Trash/restore) in a
+   * DIFFERENT folder — the marker that an old-source observation is stale.
+   * Returns that stable row so the caller skips duplicate insertion.
+   */
+  async findObsoleteSourceObservation(
+    emailServiceId: number,
+    normalizedOrRawMessageId: string,
+    observedFolder: string | null
+  ): Promise<EmailReceivedMessageEntity | null> {
+    const normalized = normalizeStoredMessageId(normalizedOrRawMessageId);
+    if (!normalized) return null;
+    const rows = await this.repository
+      .createQueryBuilder("msg")
+      .innerJoin("email_message_location", "loc", "loc.messageId = msg.id")
+      .where("msg.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere(
+        "(msg.normalizedMessageId = :normalized OR msg.messageId = :raw)",
+        { normalized, raw: normalizedOrRawMessageId }
+      )
+      .andWhere("loc.state = 'verified'")
+      .andWhere("loc.lastOperationId IS NOT NULL")
+      .andWhere("loc.folderPath != :observedFolder", { observedFolder: observedFolder ?? "" })
+      .getMany();
+    return rows[0] ?? null;
+  }
+
   /** Loads stored messages by exact ids, preserving the requested order. */
   /**
    * Organization search over stored rows (PRD FR-17 local mode). Literal

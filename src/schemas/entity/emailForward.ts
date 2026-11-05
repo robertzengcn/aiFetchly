@@ -14,6 +14,7 @@ export const emailForwardDraftWriteSchema = lazySchema(() =>
     currentRevisionId: z.number().int().nullable().optional(),
     conversationId: z.number().int().nullable().optional(),
     provenance: z.enum(["ai", "user"]).optional(),
+    locale: z.string().max(10).optional(),
     submittedAt: z.coerce.date().nullable().optional(),
   })
 );

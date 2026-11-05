@@ -120,6 +120,25 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /** T17: detects obsolete old-source observations after a move. */
+  async findObsoleteSourceObservation(
+    emailServiceId: number,
+    messageId: string,
+    observedFolder: string | null
+  ): Promise<EmailReceivedMessageEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.findObsoleteSourceObservation(
+        emailServiceId,
+        messageId,
+        observedFolder
+      );
+    } catch (error) {
+      console.error("Error finding obsolete source observation:", error);
+      throw error;
+    }
+  }
+
   /** R05: refresh provider fields on an existing row (occurrence adoption). */
   async updateProviderFieldsForSync(
     messageId: number,

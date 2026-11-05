@@ -84,6 +84,8 @@ export type SendForwardOutcome =
     }
   | {
       readonly status: "already_processed";
+      /** T12: the prior operation's durable status (may be failed/unknown). */
+      readonly priorOutcome: string;
       readonly operationId: string;
       readonly requestCorrelationId: string;
     };
@@ -150,7 +152,15 @@ export class EmailForwardDeliveryService extends BaseModule {
     const replayKey = buildForwardIdempotencyKey(draft.id, revision.id, revision.composedHash);
     const existingOperation = await this.operationModule.findByIdempotencyKey(replayKey);
     if (existingOperation) {
-      return { status: "already_processed", operationId: existingOperation.operationId, requestCorrelationId };
+      // T12: the duplicate envelope projects the EXISTING durable outcome —
+      // already-attempted is not accepted-by-SMTP when the prior operation
+      // failed or is unresolved.
+      return {
+        status: "already_processed",
+        priorOutcome: existingOperation.status,
+        operationId: existingOperation.operationId,
+        requestCorrelationId,
+      };
     }
 
     if (draft.status === "submitted" || draft.status === "discarded") {
@@ -189,7 +199,12 @@ export class EmailForwardDeliveryService extends BaseModule {
     });
     const operation = operationResult.operation;
     if (operationResult.status === "existing") {
-      return { status: "already_processed", operationId: operation.operationId, requestCorrelationId };
+      return {
+        status: "already_processed",
+        priorOutcome: operation.status,
+        operationId: operation.operationId,
+        requestCorrelationId,
+      };
     }
 
     const items = await this.operationModule.listItems(operation.operationId);
@@ -318,20 +333,18 @@ export class EmailForwardDeliveryService extends BaseModule {
         return await this.failNoDispatch(claim.itemId, operation.operationId, "TOO_MANY_RECIPIENTS", "Envelope recipients exceed the limit.", requestCorrelationId);
       }
 
-      // R09: final coordinated admission — re-read the draft/revision pair
-      // right before dispatch. An edit or discard that won the race between
-      // claim and here must not let the OLD content leave.
-      const admission = await this.draftModule.readDraft(draft.id);
+      // T03: revision/artifact expiry is enforced at the trusted delivery
+      // boundary — a fresh authorization on expired retained artifacts must
+      // not dispatch before the hourly purge runs.
       if (
-        admission === null ||
-        admission.status !== "ready" ||
-        admission.currentRevisionId !== revision.id
+        revision.expiresAt !== null &&
+        revision.expiresAt.getTime() <= Date.now()
       ) {
         return await this.failNoDispatch(
           claim.itemId,
           operation.operationId,
-          "REVISION_CHANGED",
-          "The draft was edited or discarded between approval and dispatch; the old content was not sent.",
+          "APPROVAL_EXPIRED",
+          "The revision content expired; re-materialize the draft.",
           requestCorrelationId
         );
       }
@@ -365,6 +378,25 @@ export class EmailForwardDeliveryService extends BaseModule {
       };
 
       await this.operationModule.markAttemptDispatched(claim.attemptId);
+
+      // T03: the LAST pre-SMTP gate sits between dispatch marking and the
+      // submission itself — the narrowest honest window. An edit/discard
+      // committing inside the prior awaits is caught here.
+      const finalAdmission = await this.draftModule.readDraft(draft.id);
+      if (
+        finalAdmission === null ||
+        finalAdmission.status !== "ready" ||
+        finalAdmission.currentRevisionId !== revision.id
+      ) {
+        return await this.failNoDispatch(
+          claim.itemId,
+          operation.operationId,
+          "REVISION_CHANGED",
+          "The draft was edited or discarded during dispatch preparation; the old content was not sent.",
+          requestCorrelationId
+        );
+      }
+
       const info = await sender.sendMail(mailOptions);
       const { accepted, rejected, unknown } = classifyRecipients(info, envelopeRecipients);
 

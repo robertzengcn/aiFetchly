@@ -1126,6 +1126,17 @@ export default {
     description_hint: "Filterbeschreibung eingeben",
   },
   emailOrganization: {
+    already_attempted: "Diese Weiterleitung wurde bereits versucht",
+    item_status: {
+      pending: "Ausstehend",
+      claimed: "In Bearbeitung",
+      succeeded: "Abgeschlossen",
+      partially_succeeded: "Teilweise abgeschlossen",
+      noop: "Bereits am Ziel",
+      failed: "Fehlgeschlagen",
+      cancelled: "Abgebrochen",
+      outcome_unknown: "Ergebnis unbekannt",
+    },
     forward_button: "Weiterleiten",
     trash_button: "Papierkorb",
     undo_action: "Rückgängig",

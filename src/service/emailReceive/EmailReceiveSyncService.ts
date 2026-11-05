@@ -284,6 +284,25 @@ export class EmailReceiveSyncService {
       }
     }
 
+    // T17: a delayed OLD-source fetch after a MOVE must not become a new
+    // application identity. If the same RFC message-id already exists on a
+    // message whose verified location is operation-authored elsewhere, the
+    // observation is obsolete — return the original row unchanged.
+    if (p.messageId !== null) {
+      const obsolete = await this.messageModule.findObsoleteSourceObservation(
+        emailServiceId,
+        p.messageId,
+        p.providerFolder
+      );
+      if (obsolete !== null) {
+        log.info(
+          `[EmailReceiveSync] obsolete source observation for message ${obsolete.id} ` +
+            `(old folder ${String(p.providerFolder)}); skipped duplicate insertion`
+        );
+        return obsolete;
+      }
+    }
+
     if (isNamespacedProviderUid(p.providerUid)) {
       const namespaced = parseNamespacedProviderUid(p.providerUid);
       if (namespaced) {

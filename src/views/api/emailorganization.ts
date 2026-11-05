@@ -82,6 +82,8 @@ export interface MailboxActionResultDto {
 
 export interface SendForwardResultDto {
   status: "submitted" | "failed" | "outcome_unknown" | "already_processed";
+  outcome?: "succeeded" | "partially_succeeded";
+  priorOutcome?: string;
   operationId: string | null;
   accepted?: string[];
   rejected?: string[];

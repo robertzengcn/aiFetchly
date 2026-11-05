@@ -86,13 +86,31 @@ const NEGATION_PHRASES: PhraseSet = [
   "do not send",
   "don't trash",
   "do not trash",
+  "don't move",
+  "do not move",
+  "do not move this",
   "不要转发",
   "不要删除",
+  "不要移动",
   "не пересылать",
   "ne pas transférer",
   "no reenvíes",
   "nicht weiterleiten",
   "転送しないで",
+];
+
+/** T02: capability questions — information requests, never actions. */
+const CAPABILITY_QUESTION_PHRASES: PhraseSet = [
+  "can you explain",
+  "how do i",
+  "how to forward",
+  "explain how",
+  "what happens when",
+  "is it possible to",
+  "can this email be forwarded",
+  "can emails be forwarded",
+  "怎么转发",
+  "如何转发",
 ];
 
 const ACTION_TOPIC_MARKERS: PhraseSet = [
@@ -160,6 +178,17 @@ export function resolveEmailOrganizationIntent(
       mode: "draft_only",
       reasonCode: "negated",
       confidence: 0.95,
+      resolverVersion: EMAIL_ORGANIZATION_RESOLVER_VERSION,
+    };
+  }
+
+  // T02: capability questions precede any action phrase — "how do I forward
+  // this email?" contains the send phrases but is an information request.
+  if (matchesAny(text, CAPABILITY_QUESTION_PHRASES) !== null) {
+    return {
+      mode: "draft_only",
+      reasonCode: "capability_question",
+      confidence: 0.9,
       resolverVersion: EMAIL_ORGANIZATION_RESOLVER_VERSION,
     };
   }

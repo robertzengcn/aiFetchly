@@ -1116,6 +1116,17 @@ export default {
     description_hint: "input filter description",
   },
   emailOrganization: {
+    already_attempted: "Ce transfert a déjà été tenté",
+    item_status: {
+      pending: "En attente",
+      claimed: "En cours",
+      succeeded: "Terminé",
+      partially_succeeded: "Partiellement terminé",
+      noop: "Déjà en place",
+      failed: "Échec",
+      cancelled: "Annulé",
+      outcome_unknown: "Résultat inconnu",
+    },
     forward_button: "Transférer",
     trash_button: "Corbeille",
     undo_action: "Annuler",
