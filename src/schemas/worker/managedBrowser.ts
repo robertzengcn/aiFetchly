@@ -740,6 +740,19 @@ const actionProgressMessageSchema = z.strictObject({
   messageCode: z.string().min(1).max(64),
 });
 
+// F07: the executor's stop codes ride on ACTION_RESULT so the main
+// process can finalize honestly without losing the step evidence.
+const actionStopCodeSchema = z.enum([
+  "completed",
+  "cancelled",
+  "consecutive_failures",
+  "limit_exceeded",
+  "stale_page_reference",
+  "navigation_blocked",
+  "handoff_required",
+  "unknown_effect",
+]);
+
 const actionResultMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("ACTION_RESULT"),
@@ -757,6 +770,9 @@ const actionResultMessageSchema = z.strictObject({
       })
     )
     .max(MANAGED_BROWSER_ACTION_LIMITS.maxActionsPerProgram),
+  stopCode: actionStopCodeSchema.nullable(),
+  // F07: EXTRACT payloads reach the runner's completion criteria.
+  extracted: z.array(z.unknown()).max(20).optional(),
   observation: observationSchema.nullable(),
 });
 

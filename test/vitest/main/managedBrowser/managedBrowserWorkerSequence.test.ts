@@ -241,3 +241,68 @@ it("starts a public worker ready without navigating to YouTube or reading accoun
   expect(navigations.every((url) => url === "about:blank")).toBe(true);
   await session.dispose("user_stop");
 });
+
+// ---------------------------------------------------------------------------
+// F07: ACTION_RESULT carries the full step evidence
+// ---------------------------------------------------------------------------
+
+describe("ACTION_RESULT schema carries the full step evidence (F07)", () => {
+  const base = {
+    protocolVersion: 2,
+    sessionId: "mb_f07_schema01",
+    requestId: "req_f07_schema01",
+    sequence: 1,
+  };
+
+  function parse(value: unknown): { ok: boolean } {
+    const result = managedBrowserOutboundSchema().safeParse(value);
+    return { ok: result.success };
+  }
+
+  it("accepts stopCode and extracted on ACTION_RESULT", () => {
+    const parsed = parse({
+      ...base,
+      type: "ACTION_RESULT",
+      effect: "known",
+      pageRevision: 3,
+      results: [
+        {
+          actionIndex: 0,
+          type: "extract",
+          success: true,
+          errorCode: null,
+          elementFound: true,
+          urlAfter: null,
+        },
+      ],
+      stopCode: null,
+      extracted: [{ ref: "e_aaa", text: "widget price: 10" }],
+      observation: null,
+    });
+    expect(parsed.ok).toBe(true);
+    // A terminal stop code rides along too.
+    const stopped = parse({
+      ...base,
+      type: "ACTION_RESULT",
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "consecutive_failures",
+      observation: null,
+    });
+    expect(stopped.ok).toBe(true);
+  });
+
+  it("rejects unknown stop codes on ACTION_RESULT", () => {
+    const parsed = parse({
+      ...base,
+      type: "ACTION_RESULT",
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "mystery_stop",
+      observation: null,
+    });
+    expect(parsed.ok).toBe(false);
+  });
+});

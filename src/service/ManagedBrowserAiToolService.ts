@@ -969,7 +969,13 @@ export class ManagedBrowserAiToolService {
           page_revision: status.pageRevision,
         },
         context
-      )) as { type?: string; effect?: string; pageRevision?: number; results?: Array<{ success: boolean; errorCode?: string | null }> };
+      )) as {
+        type?: string;
+        effect?: string;
+        pageRevision?: number;
+        results?: Array<{ success: boolean; errorCode?: string | null }>;
+        extracted?: readonly unknown[];
+      };
       if (message.type === "HANDOFF_REQUIRED") {
         return { kind: "stop", stopCode: "handoff_required" };
       }
@@ -981,6 +987,8 @@ export class ManagedBrowserAiToolService {
           success: r.success,
           errorCode: r.errorCode ?? null,
         })),
+        // F07: EXTRACT payloads reach the runner's completion criteria.
+        ...(message.extracted ? { extracted: message.extracted } : {}),
       };
     } catch (error) {
       if (error instanceof ManagedBrowserAiToolError) {
@@ -1171,6 +1179,8 @@ export class ManagedBrowserAiToolService {
               effect: outcome.effect,
               pageRevision: outcome.pageRevision,
               results: [...outcome.results],
+              // F07: EXTRACT payloads reach the completion criteria.
+              ...(outcome.extracted ? { extracted: outcome.extracted } : {}),
             };
           } finally {
             clearTimeout(stepTimer);
