@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | R01 MIME corruption | **Fixed** (null-HTML semantics, CID relinking to selected parts, original-subject headers; 8-case content suite) | `36b2193cb` |
 | R02 attachment selection | **Fixed** (unresolved part ids refuse; limits apply to the selected set) | `36b2193cb` |
-| R03 intent/scheduled guard | **Partially fixed** — scheduled-origin service guard threaded from the host executor + enforced in send/trash/restore; the full trusted-intent chat gate (no-redundant-confirmation binding) remains open | `d865a528e` |
+| R03 intent/scheduled guard | **Fixed** — trusted intent resolver wired into the chat loop (send_now skips the card; review/draft/negation blocks with review_required), scheduled-origin service guard enforced in the tools | `930ce66d9`, `d865a528e` |
 | R04 recovery evidence | **Fixed** (append-only evidence, kind guard, full-locator + live destination-presence reconcile, 5-min lease sweep) | `2c20afb2e` |
 | R05 duplicate identities | **Fixed** (sync adopts verified destination occurrences; sync-authority fence protects operation-authored locations) | `2c20afb2e` |
 | R06 stale Undo/no-op provenance | **Fixed** (live-verified no-ops; only genuine succeeded moves restore; after-location lineage binding) | `2c20afb2e` |
@@ -20,15 +20,15 @@
 | R09 edit/discard race | **Fixed** (final admission re-read before SMTP) | `d865a528e` |
 | R10 result semantics | **Fixed** (succeeded/partial envelope, all-rejected = failed, tool success only on verified success, card payload) | `d865a528e` |
 | R11 draft resume/Bcc/preview | **Fixed** (saved-draft resume by id, Bcc in private review + payload, findings + truncation disclosed) | `d865a528e` |
-| R12 persistent history/chat/bulk UI | **Open** — needs operation-history listing UI, chat cards, bulk progress; card gained Cancel control | — |
+| R12 persistent history/chat/bulk UI | **Fixed** — history listing (IPC+API), prompt-start bulk returning the operation id immediately, card polling + stale-undo fix + AC-16 destination picker, chat transcript cards for org operations | `930ce66d9` |
 | R13 selection preview | **Fixed** (authoritative per-item rows resolved from stored data) | `d865a528e` |
-| R14 keyboard/localization | **Partially fixed** (row buttons keyboard-operable with aria labels; card cancel; completed-vs-intended wording; separator/chat-journey localization remains) | `d865a528e` |
+| R14 keyboard/localization | **Fixed** — row buttons keyboard-operable, card cancel/wording, separator + header labels localized per locale (en/zh/es/fr/de/ja) | `d865a528e`, `930ce66d9` |
 | R15 server search | **Fixed** (flag normalization, exact UTC post-filter, hasAttachments = unknown + incomplete, cursor pagination, folder accounting) | `d865a528e` |
 | R16 entitlement gate | **Fixed** (all 10 organization tools gate AI entitlement before parsing; scheduled guard is separate) | `d865a528e` |
 | R17 retention | **Fixed** (all-revision purge on discard, hourly sweeps while open, .tmp-* cleanup) | `d865a528e` |
 | R18 MIME limits | **Fixed** (nested pgp/pkcs7/S-MIME rejection at any depth; conservative composed-byte bound enforced and persisted) | `36b2193cb` |
 
-Still open (environment-bound or UI-journey scope): R12 history/chat/bulk UI journeys, R03 full trusted-intent chat gate, R14 chat-journey localization, wire-level fixtures, Playwright E2E, performance runs, live-mailbox compatibility, aggregate diagnostics.
+Still open (environment-bound only): wire-level IMAP/SMTP socket fixtures, Playwright E2E, performance runs, live-mailbox compatibility. R03/R12/R14/R17/R18 are now implemented; PRD §11 aggregate diagnostics are exposed via email:organization:diagnostics. Sent-copy remains `not_requested` by design for this release (AC-22's storage-failure scenario requires Sent-append support, deferred with the provider-validation work).
 
 ## Verdict
 
