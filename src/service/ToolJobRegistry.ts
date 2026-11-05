@@ -407,6 +407,21 @@ export class ToolJobRegistry {
     return { waiting: wait?.waiting === true, since: wait?.since ?? null };
   }
 
+  /**
+   * F06: true when ANY live job is currently waiting for the user.
+   * Used by the agent runtime's wait-aware deadline: during a user
+   * wait the wall-clock budget freezes (D-21). Concurrent waits pause
+   * sibling deadlines too — the safe direction (never a false abort).
+   */
+  isAnyWaitingForUser(): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.userWait?.waiting === true) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** PRD C-FR-09: mark a job as waiting for the user (or not). */
   setUserWait(jobId: string, waiting: boolean, reason?: string | null): void {
     const job = this.jobs.get(jobId);

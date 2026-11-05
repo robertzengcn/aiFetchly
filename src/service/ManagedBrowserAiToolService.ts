@@ -1227,6 +1227,9 @@ export class ManagedBrowserAiToolService {
             reason,
             taskId: runnerTaskId,
             signal: context.signal,
+            // F06: the parent poll's user-wait exclusion needs the
+            // blocking producer to publish waiting for THIS job.
+            jobId: context.jobId ?? null,
           });
         },
       }

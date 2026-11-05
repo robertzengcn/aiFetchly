@@ -176,6 +176,9 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     sessionId?: string;
   }): Promise<{ ok: boolean }> => {
     controlService.setState(input.taskId, "paused", "user_paused");
+    // F06: the 60-minute pause cap only covers pauses with an open
+    // intervention record — explicit pause opens one.
+    controlService.beginIntervention(input.taskId, "user_paused");
     if (input.sessionId) {
       // T24/C-FR-05: PAUSE_REQUEST stops the in-flight program between
       // actions (executed results preserved), then the session moves to
@@ -207,6 +210,8 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           .resumeAfterHandoff(input.sessionId)
           .catch(() => undefined);
       }
+      // F06: closing the intervention keeps the cap record truthful.
+      controlService.endIntervention(input.taskId);
       controlService.resume(input.taskId);
       return { ok: true, instructions: input.instructions ?? null };
     }

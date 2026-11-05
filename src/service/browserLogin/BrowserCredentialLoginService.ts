@@ -338,8 +338,30 @@ export class BrowserCredentialLoginService {
           ?.resolve({ username: "", password: "", save: false, cancelled: true });
       };
       input.signal?.addEventListener("abort", onCardAbort, { once: true });
-      const submitted = await cardPromise;
-      input.signal?.removeEventListener("abort", onCardAbort);
+      // F06: the username-only card branch is ALSO a user wait — the
+      // parent poll's exclusion must cover it like the no-account
+      // branch does.
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const cardJobId = input.jobId ?? null;
+      if (cardJobId) {
+        getDefaultToolJobRegistry().setUserWait(cardJobId, true, "credential_card");
+      }
+      let submitted: {
+        username: string;
+        password: string;
+        save: boolean;
+        cancelled: boolean;
+      };
+      try {
+        submitted = await cardPromise;
+      } finally {
+        input.signal?.removeEventListener("abort", onCardAbort);
+        if (cardJobId) {
+          getDefaultToolJobRegistry().setUserWait(cardJobId, false);
+        }
+      }
       if (submitted.cancelled) {
         await getDefaultManagedBrowserModule()
           .requestHandoff(input.sessionId, "user_requested")

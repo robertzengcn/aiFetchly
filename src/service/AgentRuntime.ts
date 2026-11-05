@@ -145,6 +145,11 @@ export interface AgentRuntimeDeps {
   getSkillDefinition?: AIChatQueryLoopDeps["getSkillDefinition"];
   /** Inject an event sink for streaming (foreground only). */
   eventSink?: AIChatQueryEventSink;
+  /**
+   * F06: when true, the run's active-time deadline freezes (a blocking
+   * user wait is in progress). Omit for the old wall-clock behavior.
+   */
+  isUserWaiting?: () => boolean;
   /** Optional. When provided, the runtime triggers auto-dream consolidation
    * after a completed task. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
@@ -518,9 +523,28 @@ export class AgentRuntime {
     } else {
       deps?.signal?.addEventListener("abort", abortFromParent, { once: true });
     }
-    const timer = setTimeout(() => {
-      abortController.abort();
-    }, definition.maxRuntimeMs);
+    // F06: the runtime deadline is ACTIVE-TIME — user waits (blocking
+    // handoff/credential dialogs) freeze the budget instead of aborting
+    // a healthy wait at the wall-clock cap (D-21/C-FR-09).
+    let activeRuntimeMs = 0;
+    const deadlineTickMs = 1_000;
+    const timer = setInterval(() => {
+      if (abortController.signal.aborted) {
+        clearInterval(timer);
+        return;
+      }
+      if (deps?.isUserWaiting?.()) {
+        return;
+      }
+      activeRuntimeMs += deadlineTickMs;
+      if (activeRuntimeMs >= definition.maxRuntimeMs) {
+        clearInterval(timer);
+        abortController.abort();
+      }
+    }, deadlineTickMs);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
 
     let finalText = "";
     let capturedImages: OpenAIChatImage[] | undefined;
@@ -621,7 +645,7 @@ export class AgentRuntime {
         msg
       );
     } finally {
-      clearTimeout(timer);
+      clearInterval(timer);
       deps?.signal?.removeEventListener("abort", abortFromParent);
       // Review fix: release the live-controller registration on EVERY exit
       // path (a thrown loop.run previously leaked the entry, and a later

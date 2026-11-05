@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { AgentRuntimeRegistry, getDefaultAgentRuntimeDeps } from "@/service/AgentRuntimeRegistry";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 
 export interface BrowserBatchTaskInput {
   readonly goal: string;
@@ -208,7 +209,14 @@ export async function runBrowserTasks(
             },
             parentConversationId: conversationId,
           } as unknown as Parameters<typeof runtime.runSync>[0],
-          { ...getDefaultAgentRuntimeDeps(), signal: childAbort.signal }
+          {
+            ...getDefaultAgentRuntimeDeps(),
+            signal: childAbort.signal,
+            // F06: a blocking handoff/credential wait freezes this
+            // child's active-time deadline (D-21).
+            isUserWaiting: () =>
+              getDefaultToolJobRegistry().isAnyWaitingForUser(),
+          }
         );
         // F17: the three abort sources classify DIFFERENTLY.
         //  - parent signal → whole batch cancelled (T13 semantics);

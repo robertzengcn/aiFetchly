@@ -92,7 +92,8 @@ export interface RunnerDeps {
    * the terminal-stop behavior.
    */
   readonly awaitHandoff?: (
-    reason: string,
+    /** F06: a schema-valid ManagedBrowserHandoffReason. */
+    reason: import("@/entityTypes/managedBrowserTypes").ManagedBrowserHandoffReason,
     /** R05: the runner's actual task id — not the admission ref. */
     taskId: string
   ) => Promise<"resolved" | "expired" | "cancelled">;
@@ -692,7 +693,7 @@ export class BrowserTaskRunner {
       // T14/C-FR-02: block INSIDE the job for the user's dialog action.
       evidence.push(`${label}:handoff_awaited`);
       const resolution = await this.deps.awaitHandoff(
-        "challenge_handoff",
+        "challenge_unresolved",
         this.taskId
       );
       if (resolution === "resolved") {

@@ -116,7 +116,7 @@ const proxyConfigSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
-const handoffReasonSchema = z.enum([
+export const handoffReasonSchema = z.enum([
   "login_required",
   "login_expired",
   "captcha_sensitive_flow",

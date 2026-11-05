@@ -68,6 +68,8 @@ export class AgentTaskControlService {
   /** R04: per-task resume generation (incremented on resume). */
   private readonly resumeGenerations = new Map<string, number>();
   private readonly now: () => number;
+  /** F06: lazy sweep enforcing the 60-minute pause/wait cap. */
+  private pauseCapSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(now: () => number = Date.now) {
     this.now = now;
@@ -141,6 +143,34 @@ export class AgentTaskControlService {
     }
     record.openIntervention = { reason, startedAtEpochMs: this.now() };
     this.setState(taskId, "waiting_for_user", reason);
+    this.ensurePauseCapSweep();
+  }
+
+  /**
+   * F06: the pause cap is SCHEDULED — a lazy sweep runs while any task
+   * is paused/waiting and stops itself when none remain.
+   */
+  private ensurePauseCapSweep(): void {
+    if (this.pauseCapSweepTimer) {
+      return;
+    }
+    const timer = setInterval(() => {
+      let pausable = 0;
+      for (const [taskId, record] of this.tasks) {
+        if (record.state === "paused" || record.state === "waiting_for_user") {
+          pausable++;
+          this.enforcePauseCap(taskId);
+        }
+      }
+      if (pausable === 0 && this.pauseCapSweepTimer) {
+        clearInterval(this.pauseCapSweepTimer);
+        this.pauseCapSweepTimer = null;
+      }
+    }, 30_000);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    this.pauseCapSweepTimer = timer;
   }
 
   /** End the open intervention (user acted or the window lapsed). */
