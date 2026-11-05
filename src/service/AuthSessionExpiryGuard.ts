@@ -30,7 +30,11 @@ export function isAuthShapedSessionFailure(err: unknown): boolean {
     return true;
   }
   const msg = err instanceof Error ? err.message : String(err);
-  return /authentication failed/i.test(msg);
+  return (
+    /authentication failed/i.test(msg) ||
+    /failed to refresh (access )?token/i.test(msg) ||
+    /token refresh failed/i.test(msg)
+  );
 }
 
 /** Guards against duplicate/concurrent sign-out flights. */

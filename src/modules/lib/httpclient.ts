@@ -54,7 +54,12 @@ export function isRefreshTokenInvalidError(error: unknown): boolean {
     msg.includes("refresh token has expired") ||
     msg.includes("refresh token is invalid") ||
     msg.includes("refresh token rejected") ||
-    msg.includes("http error: 401")
+    msg.includes("failed to refresh access token") ||
+    msg.includes("token refresh failed") ||
+    msg.includes("failed to refresh token") ||
+    msg.includes("no row found") ||
+    msg.includes("http error: 401") ||
+    msg.includes("http error: 403")
   );
 }
 

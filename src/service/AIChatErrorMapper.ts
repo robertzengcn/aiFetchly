@@ -169,7 +169,7 @@ export function isContentLevelTransientError(err: unknown): boolean {
  */
 
 const AUTH_EXPIRED_MESSAGE_PATTERN =
-  /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|Forbidden/i;
+  /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|failed to refresh (access )?token|token refresh failed|Forbidden/i;
 
 /**
  * True when the failure means the hosted app session is no longer valid

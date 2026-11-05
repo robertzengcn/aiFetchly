@@ -169,6 +169,58 @@ describe("HttpClient 403 → refresh → sign-out (session expiry re-login)", ()
       "Authentication failed after token refresh retry (HTTP 403)."
     );
     expect(userSafeError(err)).toBe(AUTH_EXPIRED_SENTINEL);
+    expect(userSafeError(new Error("Failed to refresh access token"))).toBe(
+      AUTH_EXPIRED_SENTINEL
+    );
+    expect(userSafeError(new Error("Token refresh failed"))).toBe(
+      AUTH_EXPIRED_SENTINEL
+    );
+  });
+
+  it("postStream: 403 → refresh returns { status: false, code: 500, msg: 'Failed to refresh access token' } → signs out", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: 403 } }, { status: 403 })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            status: false,
+            code: 500,
+            msg: "Failed to refresh access token",
+          },
+          { status: 200 }
+        )
+      );
+
+    await expect(
+      client.postStream("/api/ai/v1/chat/completions", { stream: true })
+    ).rejects.toThrow(/Failed to refresh access token/);
+
+    await vi.waitFor(() => expect(mockSignout).toHaveBeenCalledTimes(1));
+  });
+
+  it("get (models): 403 → refresh returns { status: false, code: 500, msg: 'Failed to refresh access token' } → signs out", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: 403 } }, { status: 403 })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            status: false,
+            code: 500,
+            msg: "Failed to refresh access token",
+          },
+          { status: 200 }
+        )
+      );
+
+    await expect(client.get("/api/ai/v1/models")).rejects.toThrow(
+      /Failed to refresh access token/
+    );
+
+    await vi.waitFor(() => expect(mockSignout).toHaveBeenCalledTimes(1));
   });
 
   it("no refresh token stored → signs out so the user can re-login", async () => {

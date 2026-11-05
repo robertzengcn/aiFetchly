@@ -42,6 +42,12 @@ describe("AIChatErrorMapper - userSafeError", () => {
         new Error("Authentication failed after token refresh retry (HTTP 403).")
       )
     ).toBe(AUTH_EXPIRED_SENTINEL);
+    expect(userSafeError(new Error("Failed to refresh access token"))).toBe(
+      AUTH_EXPIRED_SENTINEL
+    );
+    expect(userSafeError(new Error("Token refresh failed"))).toBe(
+      AUTH_EXPIRED_SENTINEL
+    );
     expect(
       isAuthExpiredError(
         new AIChatRecoverableError({
