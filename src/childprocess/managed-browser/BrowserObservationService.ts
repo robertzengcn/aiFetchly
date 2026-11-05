@@ -95,7 +95,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
         : htmlEl.tagName === 'TEXTAREA' || htmlEl.tagName === 'INPUT' ? 'textbox'
         : htmlEl.getAttribute('role') || 'generic');
     let name = htmlEl.getAttribute('aria-label')
-      || ((htmlEl as HTMLInputElement).labels && (htmlEl as HTMLInputElement).labels[0] ? (htmlEl as HTMLInputElement).labels[0].innerText : '')
+      || (htmlEl.labels && htmlEl.labels[0] ? htmlEl.labels[0].innerText : '')
       || htmlEl.innerText
       || htmlEl.getAttribute('placeholder')
       || htmlEl.getAttribute('title')
@@ -269,10 +269,16 @@ export async function buildObservation(
     const handle =
       record.obsId != null ? handles[Number(record.obsId)] : undefined;
     if (handle) {
+      // F02: register with the RAW name so the live descriptor comparison
+      // in withElement matches (the LLM summary still uses the masked
+      // name via toSummaryFields).
+      const rawName = record.isCredential
+        ? budgetName(record.name || "")
+        : shaped.name;
       const ref = input.registry.register({
         element: handle,
         role: shaped.role,
-        name: shaped.name,
+        name: rawName,
       });
       elements.push({ ref, ...toSummaryFields(shaped) });
     } else {

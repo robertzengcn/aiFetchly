@@ -379,8 +379,9 @@ export class WorkerSession {
         case "unauthenticated":
         case "unknown": {
           // Same-context manual login handoff (FR-HANDOFF-001).
+          // F10: stay in login_required (non-user-control) so the
+          // automated sign-in flow (browser_sign_in) can run.
           this.runtime.transition("login_required");
-          this.runtime.transition("user_login_in_progress");
           this.send({
             ...this.base(payload.requestId),
             type: "LOGIN_REQUIRED",
@@ -718,7 +719,9 @@ export class WorkerSession {
     // not_verified / challenge / unknown → user keeps control in the
     // state they confirmed from (manual login or handoff).
     const restore: ManagedBrowserSessionState =
-      prior === "handoff" ? "handoff" : "user_login_in_progress";
+      prior === "handoff" || prior === "login_required"
+        ? prior
+        : "user_login_in_progress";
     this.runtime.transition(restore);
     this.send({
       ...this.base(requestId),
