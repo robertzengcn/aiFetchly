@@ -16,6 +16,9 @@ export interface ObservationElementLike {
   readonly disabled?: boolean | null;
   readonly checked?: boolean | null;
   readonly selected?: boolean | null;
+  /** F14: observed SELECT options. */
+  readonly option_ids?: readonly string[] | null;
+  readonly option_labels?: readonly string[] | null;
 }
 
 const ROLE_OPERATIONS: Record<string, readonly BrowserDecisionOperation[]> = {
@@ -95,6 +98,11 @@ export function buildDecisionCandidates(
       disabled: Boolean(element.disabled),
       ...(element.checked != null ? { checked: element.checked } : {}),
       ...(element.selected != null ? { selected: element.selected } : {}),
+      // F14: the decision can only pick OBSERVED options.
+      ...(element.option_ids != null ? { option_ids: element.option_ids } : {}),
+      ...(element.option_labels != null
+        ? { option_labels: element.option_labels }
+        : {}),
     });
   }
   return candidates;

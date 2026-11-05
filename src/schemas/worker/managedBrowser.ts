@@ -636,6 +636,11 @@ const elementSummarySchema = z.strictObject({
   checked: z.boolean().optional(),
   selected: z.boolean().optional(),
   hrefOrigin: z.string().max(512).optional(),
+  // F14: observed SELECT options — ids are positional (o_N), labels
+  // and values are the sanitized page-authored strings.
+  option_ids: z.array(z.string().max(8)).max(20).optional(),
+  option_labels: z.array(z.string().max(200)).max(20).optional(),
+  option_values: z.array(z.string().max(200)).max(20).optional(),
 });
 
 const observationSchema = z.strictObject({

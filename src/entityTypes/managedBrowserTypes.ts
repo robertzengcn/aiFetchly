@@ -328,6 +328,10 @@ export interface BrowserElementSummary {
   readonly checked?: boolean;
   readonly selected?: boolean;
   readonly hrefOrigin?: string;
+  /** F14: observed SELECT options (positional o_N ids + labels/values). */
+  readonly option_ids?: string[];
+  readonly option_labels?: string[];
+  readonly option_values?: string[];
 }
 
 /** Safe page notice attached to an observation (code-driven, never page text). */

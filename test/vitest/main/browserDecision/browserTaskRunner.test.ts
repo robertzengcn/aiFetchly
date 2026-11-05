@@ -980,3 +980,97 @@ describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
     }
   });
 });
+
+describe("BrowserTaskRunner F14 SELECT option mapping", () => {
+  it("maps the decided positional option id to the OBSERVED value", async () => {
+    const seen: RunnerAction[] = [];
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_0", "o_1", "o_2"],
+          option_values: ["de", "fr", "jp"],
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_1", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f14sel",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // o_1 resolved to the REAL observed value "fr" — never the raw token.
+    expect(seen[0]).toMatchObject({ type: "select", values: ["fr"] });
+    expect(result.status).toBe("completed");
+  });
+
+  it("refuses an option id outside the observed list", async () => {
+    const seen: RunnerAction[] = [];
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_0"],
+          option_values: ["de"],
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_7", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f14sel2",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The unobserved option never dispatched; the loop continued to DONE.
+    expect(seen).toEqual([]);
+    expect(result.status).toBe("completed");
+  });
+});

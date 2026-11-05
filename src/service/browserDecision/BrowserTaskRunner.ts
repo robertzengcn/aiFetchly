@@ -136,6 +136,9 @@ export interface RunnerObservation {
     name: string;
     valueSummary?: string | null;
     disabled?: boolean | null;
+    /** F14: observed SELECT options (positional ids + real values). */
+    readonly option_ids?: readonly string[] | null;
+    readonly option_values?: readonly string[] | null;
   }>;
   readonly visibleText: string;
 }
@@ -875,14 +878,31 @@ export class BrowserTaskRunner {
           ...expected,
           value: action.text,
         };
-      case "SELECT":
+      case "SELECT": {
+        if (!action.option_id) {
+          return null;
+        }
+        // F14: the decided option id is POSITIONAL (o_N) into the
+        // observed option list — it maps to the REAL value here, so the
+        // executor selects an option that actually exists.
+        const optionMatch = /^o_(\d+)$/.exec(action.option_id);
+        const element = observation.elements.find(
+          (el) => el.ref === target.candidate_id
+        );
+        const optionIndex = optionMatch ? Number(optionMatch[1]) : -1;
+        const optionValue =
+          element?.option_values != null ? element.option_values[optionIndex] : undefined;
+        if (optionValue === undefined) {
+          return null; // unsupported: the option is not in the observed list
+        }
         return {
           type: "select",
           ref: target.candidate_id,
           pageRevision: observation.pageRevision,
           ...expected,
-          values: action.option_id ? [action.option_id] : [],
+          values: [optionValue],
         };
+      }
       case "HOVER":
         return {
           type: "hover",

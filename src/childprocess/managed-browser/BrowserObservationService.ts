@@ -60,7 +60,9 @@ export interface CollectedElementRecord {
   /** T21/A-AC-04: filled by the privileged login filler. */
   isCredential?: boolean;
   /** F08: set on the LAST record when the scan window was truncated. */
-  scanTruncated?: boolean;}
+  scanTruncated?: boolean;
+  /** F14: observed SELECT options (value + label), bounded. */
+  options?: Array<{ v: string; l: string }>;}
 
 /**
  * In-page collector: runs inside the page context; returns JSON records.
@@ -92,7 +94,8 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
     const style = window.getComputedStyle(el);
     const visible = style.display !== 'none'
       && style.visibility !== 'hidden'
-      && el.offsetParent !== null;
+      && el.offsetParent !== null
+      && !(el.tagName === 'INPUT' && el.type === 'hidden');
     scanned.push({ el, docIndex, visible });
   });
   // F08: VISIBLE controls are chosen FIRST (in document order), hidden
@@ -133,6 +136,19 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
     if (htmlEl.tagName === 'A' && htmlEl.href) {
       try { hrefOrigin = new URL(htmlEl.href).origin; } catch (e) { hrefOrigin = null; }
     }
+    // F14: observed SELECT options — bounded (20), sanitized downstream.
+    let options = null;
+    if (htmlEl.tagName === 'SELECT' && !isCredential) {
+      options = [];
+      const opts = htmlEl.querySelectorAll('option');
+      for (let oi = 0; oi < opts.length && options.length < 20; oi++) {
+        const opt = opts[oi];
+        options.push({
+          v: String(opt.value ?? '').slice(0, 200),
+          l: String(opt.text ?? '').replace(/\\s+/g, ' ').trim().slice(0, 200),
+        });
+      }
+    }
     out.push({
       obsId: String(obsIndex),
       tag: htmlEl.tagName.toLowerCase(),
@@ -146,6 +162,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       hrefOrigin,
       visible: entry.visible,
       isCredential,
+      options,
       scanTruncated: truncated && obsIndex === chosen.length - 1 ? true : undefined,
     });
   });
@@ -207,7 +224,18 @@ export interface BuildObservationInput {
 /** Convert a collected record into a safe summary (no secrets, budgeted). */
 export function shapeElementRecord(
   record: CollectedElementRecord
-): Pick<BrowserElementSummary, "role" | "name" | "disabled" | "checked" | "selected" | "hrefOrigin"> & {
+): Pick<
+  BrowserElementSummary,
+  | "role"
+  | "name"
+  | "disabled"
+  | "checked"
+  | "selected"
+  | "hrefOrigin"
+  | "option_ids"
+  | "option_labels"
+  | "option_values"
+> & {
   readonly valueSummary?: string;
   readonly inputType: string | null;
 } {
@@ -229,6 +257,20 @@ export function shapeElementRecord(
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
     ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
+    // F14: positional option ids (o_0..) plus sanitized labels/values
+    // so the decision can pick an OBSERVED option and the runner can
+    // map it back to the real value.
+    ...(record.options && record.options.length > 0
+      ? {
+          option_ids: record.options.map((_, i) => `o_${i}`),
+          option_labels: record.options.map((o) =>
+            redactSecretsInText(o.l || o.v || "")
+          ),
+          option_values: record.options.map((o) =>
+            redactSecretsInText(o.v || "")
+          ),
+        }
+      : {}),
     ...(record.value != null && record.value !== ""
       ? {
           valueSummary: record.isCredential
@@ -389,6 +431,9 @@ function toSummaryFields(
   if (shaped.checked != null) out.checked = shaped.checked;
   if (shaped.selected != null) out.selected = shaped.selected;
   if (shaped.hrefOrigin != null) out.hrefOrigin = shaped.hrefOrigin;
+  if (shaped.option_ids != null) out.option_ids = shaped.option_ids;
+  if (shaped.option_labels != null) out.option_labels = shaped.option_labels;
+  if (shaped.option_values != null) out.option_values = shaped.option_values;
   return out as Omit<BrowserElementSummary, "ref">;
 }
 
