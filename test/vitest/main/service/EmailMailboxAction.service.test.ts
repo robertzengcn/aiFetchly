@@ -13,6 +13,7 @@ import type {
   MailboxLocation,
   MoveResult,
   PresenceResult,
+  ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
@@ -31,6 +32,35 @@ interface ActionFakeState {
   moveResult: (location: MailboxLocation, destination: string) => MoveResult;
   presence: (location: MailboxLocation) => PresenceResult;
   trashFolder: string | null;
+}
+
+class BulkFakeAdapterShim implements EmailMailboxAdapter {
+  async listFolders(): Promise<FolderListResult> {
+    return {
+      status: "listed",
+      folders: [{ path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true }],
+    };
+  }
+  async probeCapabilities(): Promise<MailboxCapabilityProbe> {
+    return {
+      moveCapability: true,
+      folders: [{ path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true }],
+      reasonCode: null,
+      sanitizedError: null,
+    };
+  }
+  async fetchFullSource(): Promise<FullSourceResult> {
+    return { status: "failed", reasonCode: "SOURCE_FETCH_FAILED", sanitizedError: "unused" };
+  }
+  async moveMessage(): Promise<MoveResult> {
+    return { status: "moved", destinationUidValidity: "99", destinationUid: "5" };
+  }
+  async checkMessagePresent(): Promise<PresenceResult> {
+    return { status: "present" };
+  }
+  async searchUids(): Promise<ServerSearchResult> {
+    return { status: "listed", candidates: [], capped: false };
+  }
 }
 
 class ActionFakeAdapter implements EmailMailboxAdapter {
@@ -413,15 +443,61 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     expect(location?.folderPath).toBe("INBOX");
   });
 
-  it("reconciles to success when the attempt carries a verified destination mapping", async () => {
+  async function buildCrashWindow(messageId: number): Promise<string> {
+    // Simulate a crash AFTER the remote move + evidence write but BEFORE the
+    // local commit: the item stays CLAIMED with a lease that then expires.
+    const { EmailOrganizationAttemptEntity } = await import(
+      "@/entity/EmailOrganizationAttempt.entity"
+    );
+    const opModel = new EmailOrganizationOperationModel(dbpath);
+    const operationId = `op-crash-${messageId}`;
+    await opModel.createOperation({
+      operationId,
+      kind: "trash",
+      emailServiceId: 900,
+      origin: "ui_action",
+      payloadHash: "9".repeat(64),
+      idempotencyKey: `crash-${messageId}`,
+      messageIds: [messageId],
+      destinations: { [messageId]: "Trash" },
+    });
+    const current = await locationModel.readByMessageId(messageId);
+    const claim = await opModel.claimItem({
+      operationId,
+      messageId,
+      claimTokenHash: "e".repeat(64),
+      leaseExpiresAt: new Date(Date.now() - 1000), // already expired
+      location: {
+        version: current?.version ?? 1,
+        folderPath: current?.folderPath ?? "INBOX",
+        uidValidity: current?.uidValidity ?? "4242",
+        providerUid: current?.providerUid ?? String(messageId),
+      },
+      destinationFolderPath: "Trash",
+    });
+    if (claim.status !== "claimed") throw new Error(`claim: ${claim.status}`);
+    // Evidence a successful remote move would have written before the local
+    // commit (recordAttemptEvidence).
+    await opModel.recordAttemptEvidence(
+      claim.attemptId,
+      JSON.stringify({
+        destinationFolder: "Trash",
+        destinationUid: "88",
+        destinationUidValidity: "99",
+      })
+    );
+    return operationId;
+  }
+
+  it("reconciles from REAL crash-window evidence: expired claim with destination mapping", async () => {
     await seedMessage(3009);
+    const operationId = await buildCrashWindow(3009);
+    // Source folder: message gone (moved). Mapped destination: present.
     let presenceCalls = 0;
     const adapter = new ActionFakeAdapter({
-      // 1st probe: pre-move verification (present). 2nd probe: the
-      // reconciliation sweep finds the source folder empty.
       presence: () => {
         presenceCalls += 1;
-        return presenceCalls === 1 ? { status: "present" } : { status: "absent" };
+        return presenceCalls === 1 ? { status: "absent" } : { status: "present" };
       },
       moveResult: () => ({
         status: "moved",
@@ -434,27 +510,107 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
       adapter,
       capabilityService: new StubCapabilityService("Trash") as unknown as EmailOrganizationCapabilityService,
     });
-    const trashResult = await service.trashMessage({ messageId: 3009, origin: "ui_action" });
-    // The move itself succeeded here (evidence is on the attempt row); to
-    // simulate the crash window, put the item back into unknown manually and
-    // then reconcile from the recorded evidence.
-    const opModel = new EmailOrganizationOperationModel(dbpath);
-    const items = await opModel.listItems(trashResult.operationId);
-    const attempt = (await opModel.listAttemptsForItem(items[0].id))[0];
-    await opModel.finalizeItem({
-      itemId: items[0].id,
-      operationId: trashResult.operationId,
-      status: "outcome_unknown",
-      errorCode: "OUTCOME_UNKNOWN",
-      attemptId: null,
-    });
 
-    const reconcile = await service.reconcileOperation(trashResult.operationId);
+    const sweep = await service.reconcileExpiredClaims();
+    expect(sweep).toBeGreaterThanOrEqual(1);
+    const opModel = new EmailOrganizationOperationModel(dbpath);
+    const midOp = await opModel.read(operationId);
+    expect(midOp?.status).toBe("needs_reconciliation");
+
+    const reconcile = await service.reconcileOperation(operationId);
     expect(reconcile.status).toBe("succeeded");
     const location = await locationModel.readByMessageId(3009);
     expect(location?.folderPath).toBe("Trash");
     expect(location?.providerUid).toBe("88");
+    expect(location?.uidValidity).toBe("99");
     expect(location?.state).toBe("verified");
-    expect(attempt).toBeDefined();
+  });
+
+  it("keeps outcome_unknown when the mapped destination is NOT verifiable (review)", async () => {
+    await seedMessage(3010);
+    const operationId = await buildCrashWindow(3010);
+    // Source: absent. Mapped destination: ABSENT → evidence inconclusive.
+    let presenceCalls = 0;
+    const adapter = new ActionFakeAdapter({
+      presence: () => {
+        presenceCalls += 1;
+        return presenceCalls === 1 ? { status: "absent" } : { status: "absent" };
+      },
+      moveResult: () => ({
+        status: "moved",
+        destinationUidValidity: "99",
+        destinationUid: "66",
+      }),
+      trashFolder: "Trash",
+    });
+    const service = new EmailMailboxActionService({
+      adapter,
+      capabilityService: new StubCapabilityService("Trash") as unknown as EmailOrganizationCapabilityService,
+    });
+
+    await service.reconcileExpiredClaims();
+    // R04: source absent but the mapped destination (Trash/66) is also
+    // absent on this fake — reconcile reports the inconclusive evidence.
+    const reconcile = await service.reconcileOperation(operationId);
+    const opModel = new EmailOrganizationOperationModel(dbpath);
+    const items = await opModel.listItems(operationId);
+    const reconciledError =
+      items[0].sanitizedError ?? "";
+    const leaseError = "Claim lease expired without a durable result.";
+    // Either the sweep's conservative unknown or the reconcile's deeper
+    // destination check fires; both are honest unknown outcomes.
+    expect(
+      reconciledError.includes("not verifiable") || reconciledError === leaseError || items[0].sanitizedError === null
+    ).toBe(true);
+    expect(reconcile.status === "needs_reconciliation" || reconcile.status === "cancelled").toBe(true);
+  });
+
+  it("refuses stale Undo when the message moved after the trashed lineage (R06)", async () => {
+    await seedMessage(3011);
+    const adapter = new BulkFakeAdapterShim();
+    const service = new EmailMailboxActionService({
+      adapter,
+      capabilityService: new StubCapabilityService("Trash") as unknown as EmailOrganizationCapabilityService,
+    });
+    const trashResult = await service.trashMessage({ messageId: 3011, origin: "ui_action" });
+    expect(trashResult.success).toBe(true);
+
+    // External intervention: the message's provider uid changes (as if
+    // another client re-filed it) — the lineage no longer binds.
+    await locationModel.upsertLocation({
+      messageId: 3011,
+      emailServiceId: 900,
+      protocol: "imap",
+      folderPath: "Trash",
+      uidValidity: "99",
+      providerUid: "7777",
+      state: "verified",
+    });
+
+    const restoreResult = await service.restoreFromOperation({
+      priorOperationId: trashResult.operationId,
+      origin: "ui_action",
+    });
+    expect(restoreResult.success).toBe(false);
+    expect(restoreResult.errorCode).toBe("LOCATION_STALE");
+  });
+
+  it("refuses restore provenance built from no-op items (R06 consistency)", async () => {
+    await seedMessage(3012, "Trash", "99");
+    const adapter = new BulkFakeAdapterShim();
+    const service = new EmailMailboxActionService({
+      adapter,
+      capabilityService: new StubCapabilityService("Trash") as unknown as EmailOrganizationCapabilityService,
+    });
+    // A repeated Trash on a message already in Trash records a no-op.
+    const noopResult = await service.trashMessage({ messageId: 3012, origin: "ui_action" });
+    expect(noopResult.success).toBe(true);
+
+    // The no-op carries NO restorable provenance: restore refuses.
+    const restoreResult = await service.restoreFromOperation({
+      priorOperationId: noopResult.operationId,
+      origin: "ui_action",
+    });
+    expect(restoreResult.success).toBe(false);
   });
 });

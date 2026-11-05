@@ -116,6 +116,7 @@ export const emailOrgSearchInputSchema = lazySchema(() =>
     unreadOnly: z.boolean().optional(),
     hasAttachments: z.boolean().optional(),
     pageSize: z.number().int().min(1).max(100).optional(),
+    cursor: z.string().max(512).optional(),
     })
     .refine(
       (value) =>

@@ -115,6 +115,7 @@ const searchEmailsSchema = z
     unread_only: z.boolean().optional(),
     has_attachments: z.boolean().optional(),
     page_size: z.number().int().min(1).max(100).optional(),
+    cursor: z.string().max(512).optional(),
   })
   .refine(
     (value) =>
@@ -344,11 +345,6 @@ export async function sendEmailForward(
     );
     // R10: top-level success only for VERIFIED complete success; partial
     // acceptance, failure and unknowns surface through the envelope.
-    const success =
-      (outcome.status === "submitted" && outcome.outcome === "succeeded") ||
-      (outcome.status === "failed" && false) ||
-      false;
-    void success;
     if (outcome.status === "failed" || outcome.status === "outcome_unknown") {
       return {
         success: false,
@@ -400,6 +396,17 @@ export async function moveEmailToTrash(
             origin: "tool_confirmation",
             actionId: actionIdFor(context),
           });
+    // R10: a refused action is a failure envelope carrying the code — not a
+    // success wrapper around a failed result.
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error ?? result.errorCode ?? result.status,
+        code: result.errorCode ?? undefined,
+        retryable: result.retryable,
+        result: { ...result } as unknown as Record<string, unknown>,
+      };
+    }
     return { success: true, result: { ...result } };
   } catch (error) {
     return failure(error);
@@ -430,6 +437,15 @@ export async function restoreEmail(
             origin: "tool_confirmation",
             actionId: actionIdFor(context),
           });
+    if (!result.success) {
+      return {
+        success: false,
+        error: result.error ?? result.errorCode ?? result.status,
+        code: result.errorCode ?? undefined,
+        retryable: result.retryable,
+        result: { ...result } as unknown as Record<string, unknown>,
+      };
+    }
     return { success: true, result: { ...result } };
   } catch (error) {
     return failure(error);
@@ -480,6 +496,7 @@ export async function searchEmails(
       unreadOnly: input.unread_only,
       hasAttachments: input.has_attachments,
       pageSize: input.page_size,
+      cursor: input.cursor,
     });
     return { success: true, search };
   } catch (error) {

@@ -4374,8 +4374,13 @@ export class AIChatQueryLoop {
               .find((message) => message.role === "user");
             const userText = extractUserMessageText(lastUserMessage);
             const organizationDecision = resolveEmailOrganizationIntent(userText);
+            // R03 (review hardening): the gate's enforcement direction is
+            // BLOCKING — review/draft/negation intents refuse the mutation.
+            // send_now still shows the generic permission card: pasted email
+            // content in the same user message could otherwise self-authorize
+            // a destructive mutation via substring intent matching (AC-13).
             if (organizationDecision.mode === "send_now") {
-              organizationSendGateAllowed = true;
+              organizationSendGateAllowed = false;
             } else {
               yield buildToolCallEvent(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({

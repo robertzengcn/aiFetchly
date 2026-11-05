@@ -306,6 +306,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
         unreadOnly: input.unreadOnly,
         hasAttachments: input.hasAttachments,
         pageSize: input.pageSize,
+        cursor: input.cursor,
       });
     } catch (error) {
       log.error("EMAIL_ORG_SEARCH failed:", error);

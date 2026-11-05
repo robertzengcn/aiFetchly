@@ -371,7 +371,9 @@ export class EmailOrganizationOperationModel extends BaseDb {
       .innerJoin(EmailOrganizationOperationEntity, "op", "op.operationId = item.operationId")
       .where("item.messageId IN (:...messageIds)", { messageIds: [...messageIds] })
       .andWhere("op.kind = :kind", { kind: "trash" })
-      .andWhere("item.status IN (:...statuses)", { statuses: ["succeeded", "noop"] })
+      // R06 consistency: no-ops carry no original provenance (their
+      // before-folder is Trash itself) — only genuine moves restore.
+      .andWhere("item.status = :status", { status: "succeeded" })
       .andWhere("item.beforeFolderPath IS NOT NULL")
       .orderBy("item.id", "DESC")
       .getMany();

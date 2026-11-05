@@ -17,6 +17,7 @@ import {
   EMAIL_ORG_SELECTION_PREPARE,
   EMAIL_ORG_OPERATION_LIST,
   EMAIL_ORG_TRASH_SELECTION_START,
+  EMAIL_ORG_DIAGNOSTICS,
 } from "@/config/channellist";
 import type {
   EmailOrganizationCapabilityDto,
@@ -273,4 +274,13 @@ export async function startTrashSelection(
     selectionId,
     actionId: actionId ?? null,
   });
+}
+
+export interface OrganizationDiagnosticsDto {
+  aggregates: Array<{ kind: string; status: string; count: number }>;
+}
+
+/** PRD §11: local aggregate counts, exported only via the support workflow. */
+export async function getOrganizationDiagnostics(): Promise<OrganizationDiagnosticsDto> {
+  return await windowInvoke(EMAIL_ORG_DIAGNOSTICS, undefined);
 }

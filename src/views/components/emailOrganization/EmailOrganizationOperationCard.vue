@@ -264,11 +264,11 @@ const canCancel = computed(
 );
 
 async function onCancel(): Promise<void> {
-  if (props.operationId === null) return;
+  if (activeOperationId.value === null) return;
   cancelling.value = true;
   errorMessage.value = null;
   try {
-    await cancelEmailOrganizationOperation(props.operationId);
+    await cancelEmailOrganizationOperation(activeOperationId.value);
     await load();
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);

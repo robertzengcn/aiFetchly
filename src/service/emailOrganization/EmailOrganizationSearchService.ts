@@ -154,7 +154,7 @@ export class EmailOrganizationSearchService extends BaseModule {
       totalMatched: result.totalMatched,
       complete: true,
       truncated: result.truncated,
-      nextCursor: result.truncated ? "local-page" : null,
+      nextCursor: null,
       lastSyncAt: service.lastReceiveSyncAt ? service.lastReceiveSyncAt.toISOString() : null,
       limitation:
         excludedFolder !== null
@@ -277,18 +277,17 @@ export class EmailOrganizationSearchService extends BaseModule {
       if (rows.length >= pageSize) break;
     }
     // R15: a page-full exit before the LAST folder means more results exist.
-    const moreFoldersRemain = rows.length >= pageSize && folders.length > 0;
+    // R15-review: the cursor advances to the NEXT folder (candidates within
+    // a folder are not offset-addressable through the bounded SEARCH), so a
+    // page that cuts a folder short discloses the truncation via
+    // complete:false instead of pretending an exact continuation.
     const pageCutShort = rows.length >= pageSize;
     const nextCursor =
-      pageCutShort && folders.length > 0
+      pageCutShort && cursorState.folderIndex + 1 < folders.length
         ? Buffer.from(
-            JSON.stringify({
-              folderIndex: Math.min(cursorState.folderIndex + (rows.length >= pageSize ? 0 : 1), folders.length),
-              uidOffset: 0,
-            })
+            JSON.stringify({ folderIndex: cursorState.folderIndex + 1 })
           ).toString("base64")
         : null;
-    void moreFoldersRemain;
 
     const limitationParts: string[] = [];
     if (capped) {

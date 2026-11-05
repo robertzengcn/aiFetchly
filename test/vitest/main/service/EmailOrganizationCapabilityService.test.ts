@@ -181,6 +181,25 @@ describe("EmailOrganizationCapabilityService (decision matrix)", () => {
     }
   });
 
+  it("fails closed when two \\Trash folders are advertised (review R08)", async () => {
+    adapter.folders = [
+      { path: "INBOX", name: "INBOX", specialUse: null, writable: true },
+      { path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true },
+      { path: "Deleted", name: "Deleted", specialUse: "\\Trash", writable: true },
+    ];
+    try {
+      const dto = await service.getCapabilities(7001, { forceRefresh: true });
+      expect(dto.canMoveToTrash).toBe(false);
+      expect(dto.trashFolderPath).toBeNull();
+      expect(dto.reasonCodes).toContain("TRASH_AMBIGUOUS");
+    } finally {
+      adapter.folders = [
+        { path: "INBOX", name: "INBOX", specialUse: null, writable: true },
+        { path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true },
+      ];
+    }
+  });
+
   it("withholds move capability when the server lacks MOVE", async () => {
     adapter.moveCapability = false;
     try {

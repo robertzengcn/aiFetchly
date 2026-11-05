@@ -485,18 +485,30 @@ export function relinkCidImages(
   findings: string[]
 ): string | null {
   if (html === null) return null;
-  const byBase64 = new Map<string, { cid: string; selected: boolean }>();
+  // R-review: key by content hash (bounded memory; identical bytes with
+  // different CIDs keep the SELECTED candidate's content-id).
+  const crypto = require("crypto") as typeof import("crypto");
+  const byHash = new Map<string, { cid: string; selected: boolean }>();
   for (const attachment of rawAttachments) {
     if (attachment.cid === null) continue;
-    const key = attachment.content.toString("base64").replace(/\s/g, "");
+    const key = crypto
+      .createHash("sha256")
+      .update(attachment.content)
+      .digest("hex");
     const selected =
       selection.mode === "all" ||
       (selection.mode === "parts" && selection.partIds.includes(attachment.partId));
-    byBase64.set(key, { cid: attachment.cid, selected });
+    const existing = byHash.get(key);
+    if (existing === undefined || (!existing.selected && selected)) {
+      byHash.set(key, { cid: attachment.cid, selected });
+    }
   }
   return html.replace(DATA_URI_PATTERN, (match, _quote: string, _uri: string, base64: string) => {
-    const key = base64.replace(/\s/g, "");
-    const match_ = byBase64.get(key);
+    const key = crypto
+      .createHash("sha256")
+      .update(Buffer.from(base64.replace(/\s/g, ""), "base64"))
+      .digest("hex");
+    const match_ = byHash.get(key);
     if (match_ === undefined) return match; // unrelated embedded data URI
     if (!match_.selected) {
       findings.push("unselected_inline_image_removed");
@@ -510,11 +522,15 @@ export function sanitizeForwardedEmailHtml(html: string): string {
   const schemes = Array.isArray(SANITIZE_OPTIONS.allowedSchemes)
     ? SANITIZE_OPTIONS.allowedSchemes
     : ["http", "https", "mailto"];
-  // data: is allowed so mailparser-inlined CID images survive to the relink
-  // pass; unmatched data: URIs are self-contained (not remote) content.
+  // R-review: data: is scoped to img only — mailparser-inlined CID images
+  // survive to the relink pass, while data:text/html anchor hrefs (a
+  // phishing/script vector) stay blocked. cid: stays img-scoped too.
   return sanitizeHtml(html, {
     ...SANITIZE_OPTIONS,
-    allowedSchemes: [...schemes, "cid", "data"],
+    allowedSchemes: [...schemes, "cid"],
+    allowedSchemesByTag: {
+      img: [...schemes, "cid", "data"],
+    },
   });
 }
 

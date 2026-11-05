@@ -13,6 +13,7 @@ import {
   EmailOrganizationSelectionService,
 } from "@/service/emailOrganization/EmailOrganizationSelectionService";
 import type { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSelection.entity";
+import type { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
 import type {
   EmailMailboxAdapter,
   MoveResult,
@@ -28,7 +29,6 @@ import {
 } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import type { EmailActionResult, EmailActionStatus } from "@/entityTypes/emailOrganizationTypes";
-import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
 
 /**
  * Trash and restore execution (technical design §10.1/§10.2).
@@ -362,7 +362,7 @@ export class EmailMailboxActionService extends BaseModule {
       "trash"
     );
     void this.runSerialized(selection.emailServiceId, async () => {
-      await this.executeBulkLoop(operationId, parsed.messageIds, destinations, input.origin, "trash");
+      await this.executeBulkLoop(operationId, selection, parsed.messageIds, destinations, input.origin, "trash");
     }).catch((error: unknown) => {
       log.error("[EmailMailboxActionService] detached bulk execution failed:", error);
     });
@@ -399,7 +399,14 @@ export class EmailMailboxActionService extends BaseModule {
       "restore"
     );
     void this.runSerialized(selection.emailServiceId, async () => {
-      await this.executeBulkLoop(operationId, parsed.messageIds, parsed.destinations as Record<number, string>, input.origin, "restore");
+      await this.executeBulkLoop(
+        operationId,
+        selection,
+        parsed.messageIds,
+        parsed.destinations as Record<number, string>,
+        input.origin,
+        "restore"
+      );
     }).catch((error: unknown) => {
       log.error("[EmailMailboxActionService] detached bulk restore failed:", error);
     });
@@ -437,6 +444,7 @@ export class EmailMailboxActionService extends BaseModule {
 
   private async executeBulkLoop(
     operationId: string,
+    selection: EmailOrganizationSelectionEntity,
     messageIds: number[],
     destinations: Record<number, string>,
     origin: TrashMessageInput["origin"],
@@ -448,7 +456,7 @@ export class EmailMailboxActionService extends BaseModule {
         await this.operationModule.cancelPending(operationId);
         break;
       }
-      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, kind === "restore" ? { locationVersionsJson: "{}" } as EmailOrganizationSelectionEntity : { locationVersionsJson: "{}" } as EmailOrganizationSelectionEntity, kind, origin);
+      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, selection, kind, origin);
     }
   }
 
@@ -1059,6 +1067,26 @@ export class EmailMailboxActionService extends BaseModule {
     if (!operation) {
       return this.failedResult("OPERATION_NOT_FOUND", "Operation not found.");
     }
+    // R04: kind guard — MOVE reconciliation applies only to mailbox moves.
+    // Forward/SMTP uncertainty is NEVER resolved from the source mailbox
+    // (source presence does not prove a submission did not happen).
+    if (operation.kind !== "trash" && operation.kind !== "restore") {
+      return this.failedResult(
+        "OUTCOME_UNKNOWN",
+        "Forward operations reconcile through SMTP/Sent evidence, not mailbox moves; status remains unknown."
+      );
+    }
+    // R07: reconciliation mutates the same rows as in-flight moves — it runs
+    // under the same per-account lock.
+    return await this.runSerialized(operation.emailServiceId, async () =>
+      await this.reconcileOperationInternal(operation, operationId)
+    );
+  }
+
+  private async reconcileOperationInternal(
+    operation: EmailOrganizationOperationEntity,
+    operationId: string
+  ): Promise<MailboxActionOutcome> {
     const items = await this.operationModule.listItems(operationId);
     const receiveConfig = await this.resolveReceiveConfig(operation.emailServiceId);
     if (!receiveConfig) {

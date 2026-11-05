@@ -219,6 +219,70 @@ describe("R01 — original content and headers preserved in composed output", ()
     expect(result.bodyText).not.toContain("Subject: Fwd: completely rewritten subject");
   });
 
+  it("parts-mode selects a real subset and an unselected inline image is removed (review R02)", async () => {
+    adapter.setSource({
+      status: "fetched",
+      source: Buffer.from(
+        multipartFixture({
+          html: '<p>x <img src="cid:logo1"></p>',
+          inlineImage: true,
+          attachment: true,
+        }),
+        "utf8"
+      ),
+      uidValidity: "4242",
+    });
+    const result = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "parts", partIds: ["part-1"] }, // inline only
+    });
+    expect(result.bodyHtml).toContain('src="cid:logo1"');
+    expect(result.attachments.find((entry) => entry.partId === "part-1")?.selected).toBe(true);
+    expect(
+      result.attachments.find((entry) => entry.displayName === "invoice.pdf")?.selected
+    ).toBe(false);
+    expect(result.selectedAttachmentCount).toBe(1);
+  });
+
+  it("an unselected inline cid image is dropped from the forwarded HTML (review)", async () => {
+    adapter.setSource({
+      status: "fetched",
+      source: Buffer.from(
+        multipartFixture({
+          html: '<p>x <img src="cid:logo1"></p>',
+          inlineImage: true,
+        }),
+        "utf8"
+      ),
+      uidValidity: "4242",
+    });
+    const result = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "none" },
+    });
+    expect(result.bodyHtml).not.toContain("cid:logo1");
+    expect(result.attachments.every((entry) => !entry.selected)).toBe(true);
+  });
+
+  it("forward sanitization strips script/handlers while keeping cid images (review XSS)", async () => {
+    adapter.setSource({
+      status: "fetched",
+      source: Buffer.from(
+        multipartFixture({
+          html: '<p onclick="evil()">x</p><script>alert(1)</script><a href="javascript:alert(2)">y</a><p><img src="cid:logo1"></p>',
+          inlineImage: true,
+        }),
+        "utf8"
+      ),
+      uidValidity: "4242",
+    });
+    const result = await materializer.materialize({ ...baseInput });
+    expect(result.bodyHtml).not.toContain("alert(1)");
+    expect(result.bodyHtml).not.toContain("javascript:");
+    expect(result.bodyHtml).not.toContain("onclick");
+    expect(result.bodyHtml).toContain("cid:logo1");
+  });
+
   it("remote tracking images are stripped while cid references survive sanitization", async () => {
     adapter.setSource({
       status: "fetched",
