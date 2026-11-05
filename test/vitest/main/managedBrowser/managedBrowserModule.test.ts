@@ -581,6 +581,33 @@ describe("ManagedBrowserModule.start gates", () => {
     }
   });
 
+  // F19/S-FR-05: a registered HIGH-ID site (no static manifest row) starts
+  // an account session — the registry row IS the platform definition.
+  it("starts a high-ID registered site without a static manifest entry", async () => {
+    const h = makeHarness({
+      accountLookup: async () => ({
+        platformId: 9101,
+        accountLabel: "AI-registered site",
+      }),
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("ready");
+    // The derived manifest reached the worker: platform id/name come from
+    // the registry row, not the static list.
+    const startMessage = h.clients[0].sent[0];
+    expect(startMessage.type).toBe("START_SESSION");
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.platform).toMatchObject({
+      platformId: 9101,
+      platformName: "Mocked Site",
+    });
+  });
+
   it("rejects account_in_use without touching the worker", async () => {
     const h = makeHarness({
       nextLease: { status: "account_in_use" },

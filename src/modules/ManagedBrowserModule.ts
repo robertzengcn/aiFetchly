@@ -486,6 +486,27 @@ export class ManagedBrowserModule {
     }
 
     // 4. Platform manifest + pilot allowlist.
+    // F19/S-FR-05: the SITE REGISTRY is consulted FIRST — it replaces the
+    // pilot allowlist, and a registered site IS a platform definition
+    // (high-ID AI-created sites start account sessions without a static
+    // manifest entry). The static manifest remains a fallback for seeded
+    // rows.
+    let siteMatch: import("@/modules/BrowserSiteModule").SiteMatch | null =
+      null;
+    if (!publicBrowsing) {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      siteMatch =
+        (await getDefaultBrowserSiteModule().getSite(account.platformId)) ??
+        null;
+      if (!siteMatch) {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "platform_not_in_pilot"
+        );
+      }
+    }
     const manifest: PlatformSessionDefinition | undefined = publicBrowsing
       ? {
           platformId: 0,
@@ -496,30 +517,18 @@ export class ManagedBrowserModule {
           requiredDomainSuffixes: [],
           browserProfileImportEnabled: false,
         }
-      : getPlatformManifest(account.platformId);
-    if (!manifest) {
-      throw new ManagedBrowserError(
-        "managed_browser_disabled",
-        "platform_not_in_pilot"
-      );
-    }
-    // S-FR-05: the site registry replaces the pilot allowlist — any
-    // registered site is eligible for an account session (seeded rows
-    // keep the legacy platform IDs; AI-created sites extend eligibility).
-    if (!publicBrowsing) {
-      const { getDefaultBrowserSiteModule } = await import(
-        "@/modules/BrowserSiteModule"
-      );
-      const siteMatch =
-        (await getDefaultBrowserSiteModule().getSite(account.platformId)) ??
-        null;
-      if (!siteMatch) {
-        throw new ManagedBrowserError(
-          "managed_browser_disabled",
-          "platform_not_in_pilot"
-        );
-      }
-    }
+      : (getPlatformManifest(account.platformId) ?? {
+          platformId: siteMatch!.siteId,
+          platformName: siteMatch!.name,
+          loginUrl: siteMatch!.loginUrl ?? `https://${siteMatch!.registrableDomain}`,
+          verificationUrl:
+            siteMatch!.verificationUrl ??
+            siteMatch!.loginUrl ??
+            `https://${siteMatch!.registrableDomain}`,
+          allowedDomainSuffixes: [...siteMatch!.allowedDomainSuffixes],
+          requiredDomainSuffixes: [...siteMatch!.requiredDomainSuffixes],
+          browserProfileImportEnabled: false,
+        });
 
     // 4a. PRD P-FR-01: explicit proxy choice at session start. Selection
     // is fail-closed: SOCKS/unknown/unusable proxies are rejected, and an
@@ -1384,7 +1393,11 @@ record.currentUrl = message.observation.url || record.currentUrl;
       if (!parsed.success || parsed.data.length === 0) {
         return; // keep last valid snapshot
       }
-      const manifest = getPlatformManifest(record.platformId);
+      // F19: derive the cookie policy from the site registry when the
+      // static manifest has no row (high-ID AI-created sites).
+      const manifest =
+        getPlatformManifest(record.platformId) ??
+        (await this.deriveManifestFromSite(record.platformId));
       if (!manifest) {
         return;
       }
@@ -1685,6 +1698,42 @@ record.currentUrl = message.observation.url || record.currentUrl;
         }`
       );
       return null;
+    }
+  }
+
+  /**
+   * F19/S-FR-05: a registered site IS a platform definition — derive
+   * the session manifest from the registry row when no static manifest
+   * exists for the platform id.
+   */
+  private async deriveManifestFromSite(
+    platformId: number
+  ): Promise<PlatformSessionDefinition | undefined> {
+    try {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const site = await getDefaultBrowserSiteModule().getSite(platformId);
+      if (!site) {
+        return undefined;
+      }
+      return {
+        platformId: site.siteId,
+        platformName: site.name,
+        loginUrl: site.loginUrl ?? `https://${site.registrableDomain}`,
+        verificationUrl:
+          site.verificationUrl ??
+          site.loginUrl ??
+          `https://${site.registrableDomain}`,
+        allowedDomainSuffixes:
+          site.allowedDomainSuffixes.length > 0
+            ? [...site.allowedDomainSuffixes]
+            : [site.registrableDomain],
+        requiredDomainSuffixes: [...site.requiredDomainSuffixes],
+        browserProfileImportEnabled: false,
+      };
+    } catch {
+      return undefined;
     }
   }
 
