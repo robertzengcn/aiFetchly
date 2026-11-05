@@ -29,8 +29,32 @@ export interface SemanticActionDescriptor {
   readonly optionId: string | null;
 }
 
+/**
+ * F13: the fingerprint binds the WHOLE program semantics — including
+ * the if/repeat STRUCTURE (condition, discriminator, iteration cap),
+ * not just the flattened leaf list. A flat action and a repeated or
+ * conditional one must never collide.
+ */
+export type SemanticActionNode =
+  | { readonly kind: "leaf"; readonly descriptor: SemanticActionDescriptor }
+  | {
+      readonly kind: "if";
+      readonly condition: string;
+      /** Semantic target (role/name) or a digest of url/text — never raw page text. */
+      readonly conditionTarget: string | null;
+      readonly then: readonly SemanticActionNode[];
+      readonly else: readonly SemanticActionNode[];
+    }
+  | {
+      readonly kind: "repeat";
+      readonly condition: string;
+      readonly conditionTarget: string | null;
+      readonly maxIterations: number;
+      readonly body: readonly SemanticActionNode[];
+    };
+
 export interface ApprovalFingerprintInput {
-  readonly actions: readonly SemanticActionDescriptor[];
+  readonly actions: readonly SemanticActionNode[];
   readonly siteRegistrableDomain: string | null;
 }
 

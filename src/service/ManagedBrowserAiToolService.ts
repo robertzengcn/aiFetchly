@@ -8,6 +8,7 @@ import {
   computeApprovalFingerprint,
   digestSecretValue,
   type SemanticActionDescriptor,
+  type SemanticActionNode,
 } from "@/service/browserDecision/BrowserApprovalFingerprint";
 import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
@@ -1588,7 +1589,7 @@ export function buildSemanticActionDescriptors(
     readonly role: string;
     readonly name: string;
   } | null
-): SemanticActionDescriptor[] {
+): SemanticActionNode[] {
   const describe = (action: BrowserLeafAction): SemanticActionDescriptor => {
     const target =
       "ref" in action && typeof action.ref === "string"
@@ -1610,20 +1611,55 @@ export function buildSemanticActionDescriptors(
       key: action.type === "press_key" ? action.key : null,
       optionId:
         action.type === "select" && action.values.length > 0
-          ? action.values.join(",")
+          ? // F13: CANONICAL serialization of the whole value list — a
+            // join(',') collides ('a,b','c' vs 'a','b,c').
+            digestSecretValue(JSON.stringify(action.values))
           : null,
     };
   };
-  const walk = (nodes: readonly BrowserAction[]): SemanticActionDescriptor[] =>
-    nodes.flatMap((node) =>
-      node.type === "if"
-        ? // R22/D-FR-27: the else branch's actions must also be bound —
-          // a changed else action changes the semantic fingerprint.
-          [...walk(node.then), ...walk(node.else ?? [])]
-        : node.type === "repeat"
-          ? walk(node.body)
-          : [describe(node)]
-    );
+  // F13: semantic target of an if/repeat CONDITION — the resolved
+  // role/name for a ref, or a DIGEST of url/text (page text never enters
+  // the approval binding in the clear). Raw refs are excluded: they change
+  // on every reobservation.
+  const conditionTarget = (
+    node: { ref?: string; url?: string; text?: string }
+  ): string | null => {
+    if (node.ref) {
+      const target = descriptorFor(node.ref);
+      return target ? `${target.role}:${target.name}` : null;
+    }
+    if (node.url) {
+      return `url:${digestSecretValue(node.url)}`;
+    }
+    if (node.text) {
+      return `text:${digestSecretValue(node.text)}`;
+    }
+    return null;
+  };
+  const walk = (nodes: readonly BrowserAction[]): SemanticActionNode[] =>
+    nodes.map((node) => {
+      if (node.type === "if") {
+        // R22/D-FR-27: the else branch's actions must also be bound —
+        // a changed else action changes the semantic fingerprint.
+        return {
+          kind: "if" as const,
+          condition: node.condition,
+          conditionTarget: conditionTarget(node),
+          then: walk(node.then),
+          else: walk(node.else ?? []),
+        };
+      }
+      if (node.type === "repeat") {
+        return {
+          kind: "repeat" as const,
+          condition: node.condition,
+          conditionTarget: conditionTarget(node),
+          maxIterations: node.maxIterations,
+          body: walk(node.body),
+        };
+      }
+      return { kind: "leaf" as const, descriptor: describe(node) };
+    });
   return walk(program.actions);
 }
 
