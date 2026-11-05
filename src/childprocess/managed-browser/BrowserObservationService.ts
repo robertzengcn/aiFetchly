@@ -192,9 +192,14 @@ export function shapeElementRecord(
     // BEFORE budgeting (GAP-04).
     // F09/A-AC-01: credential fields also redact their accessible name —
     // a sentinel used as a value attribute can leak through the name.
-    name: record.isCredential
-      ? "[credential]"
-      : budgetName(redactSecretsInText(record.name || "")),
+    // F09: EVERY password-typed input masks its accessible name — not
+    // only fields our filler marked — because the name chain
+    // (aria-label/placeholder/title/value) is page-authored and can
+    // carry a secret we cannot recognize by shape.
+    name:
+      record.isCredential || record.inputType === "password"
+        ? "[credential]"
+        : budgetName(redactSecretsInText(record.name || "")),
     disabled: record.disabled,
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
@@ -272,9 +277,10 @@ export async function buildObservation(
       // F02: register with the RAW name so the live descriptor comparison
       // in withElement matches (the LLM summary still uses the masked
       // name via toSummaryFields).
-      const rawName = record.isCredential
-        ? budgetName(record.name || "")
-        : shaped.name;
+      const rawName =
+        record.isCredential || record.inputType === "password"
+          ? budgetName(record.name || "")
+          : shaped.name;
       const ref = input.registry.register({
         element: handle,
         role: shaped.role,

@@ -350,3 +350,214 @@ describe("two-step login + credential stamping (T21/A-AC-04)", () => {
     expect(p.getAttribute("data-mb-cred")).toBe("1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// F09: deterministic selection, recipient-set safety, stable identities
+// ---------------------------------------------------------------------------
+
+describe("F09: form selection and recipient-set safety", () => {
+  /** Make an element visible/hit-testable for the page function's Layer A. */
+  function rectify(el: Element): void {
+    el.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 100, bottom: 20, width: 100, height: 20, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  }
+
+  function runFill(extra: {
+    usernameField?: string | null;
+    passwordField?: string | null;
+    usernameFilled?: boolean;
+    username?: string;
+    password?: string;
+  }): ReturnType<typeof fillLoginPageFunction> {
+    return fillLoginPageFunction({
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      username: "user@example.test",
+      password: "sentinel-password-123",
+      submitVia: "form",
+      ...extra,
+    });
+  }
+
+  it("refuses two username-only forms with no distinguishing evidence", () => {
+    document.body.innerHTML = "";
+    for (const name of ["q", "login"]) {
+      const form = document.createElement("form");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.name = name;
+      form.append(input);
+      document.body.append(form);
+      rectify(input);
+    }
+    document.elementFromPoint = () => document.querySelector("input")!;
+    const result = runFill({});
+    expect(result.ok).toBe(false);
+    expect(result.reasonCode).toBe("ambiguous_login_form");
+    // Nothing was filled anywhere.
+    for (const el of Array.from(document.querySelectorAll("input"))) {
+      expect(el.value).toBe("");
+    }
+  });
+
+  it("prefers the autocomplete=username form over an earlier search form", () => {
+    document.body.innerHTML = "";
+    const searchForm = document.createElement("form");
+    const search = document.createElement("input");
+    search.type = "text";
+    search.name = "q";
+    searchForm.append(search);
+    document.body.append(searchForm);
+
+    const loginForm = document.createElement("form");
+    const login = document.createElement("input");
+    login.type = "email";
+    login.name = "account";
+    login.setAttribute("autocomplete", "username");
+    loginForm.append(login);
+    document.body.append(loginForm);
+    for (const el of [search, login]) {
+      rectify(el);
+    }
+    document.elementFromPoint = () => login;
+    const result = runFill({});
+    expect(result.ok).toBe(true);
+    expect(result.usernameOnlySubmitted).toBe(true);
+    // The search box never received the username.
+    expect(search.value).toBe("");
+    expect(login.value).toBe("user@example.test");
+  });
+
+  it("refuses equally eligible password-bearing forms instead of picking [0]", () => {
+    document.body.innerHTML = "";
+    for (const name of ["userA", "userB"]) {
+      const form = document.createElement("form");
+      const user = document.createElement("input");
+      user.type = "text";
+      user.name = name;
+      const pass = document.createElement("input");
+      pass.type = "password";
+      pass.name = `pass${name}`;
+      form.append(user, pass);
+      document.body.append(form);
+      for (const el of [user, pass]) {
+        rectify(el);
+      }
+    }
+    document.elementFromPoint = () =>
+      document.querySelector("input[type='password']")!;
+    const result = runFill({});
+    expect(result.ok).toBe(false);
+    expect(result.reasonCode).toBe("ambiguous_login_form");
+    for (const el of Array.from(document.querySelectorAll("input"))) {
+      expect(el.value).toBe("");
+    }
+  });
+
+  it("aborts when an input is REMOVED during the fill (recipient-set equality)", () => {
+    document.body.innerHTML = "";
+    const form = document.createElement("form");
+    const user = document.createElement("input");
+    user.type = "text";
+    user.name = "username";
+    const pass = document.createElement("input");
+    pass.type = "password";
+    pass.name = "password";
+    const search = document.createElement("input");
+    search.type = "text";
+    search.name = "search";
+    form.append(user, pass, search);
+    document.body.append(form);
+    for (const el of [user, pass, search]) {
+      rectify(el);
+    }
+    document.elementFromPoint = () => pass;
+    user.addEventListener("input", () => {
+      search.remove(); // the page mutates the form mid-fill
+    });
+    const result = runFill({});
+    expect(result.ok).toBe(false);
+    expect(result.reasonCode).toBe("recipient_set_changed");
+    expect(user.value).toBe("");
+    expect(pass.value).toBe("");
+  });
+
+  it("detects a copied secret that replaced an equal-length placeholder", () => {
+    document.body.innerHTML = "";
+    const form = document.createElement("form");
+    const user = document.createElement("input");
+    user.type = "text";
+    user.name = "username";
+    const pass = document.createElement("input");
+    pass.type = "password";
+    pass.name = "password";
+    // An 8-character placeholder — the same length as the password below.
+    const echo = document.createElement("input");
+    echo.type = "text";
+    echo.name = "echo";
+    echo.value = "12345678";
+    form.append(user, pass, echo);
+    document.body.append(form);
+    for (const el of [user, pass, echo]) {
+      rectify(el);
+    }
+    document.elementFromPoint = () => pass;
+    // A page handler copies the password while it is being typed.
+    pass.addEventListener("input", () => {
+      echo.value = pass.value;
+    });
+    const result = runFill({ username: "user", password: "12345678" });
+    expect(result.ok).toBe(false);
+    expect(result.reasonCode).toBe("unexpected_field_change");
+    // The copied secret is gone from the echo field AND the password field.
+    expect(echo.value).toBe("");
+    expect(pass.value).toBe("");
+  });
+
+  it("reports STABLE stamps — never the per-observation data-mb-obs ordinal", () => {
+    document.body.innerHTML = "";
+    const form = document.createElement("form");
+    const user = document.createElement("input");
+    user.type = "text";
+    user.name = "username";
+    user.setAttribute("data-mb-obs", "7");
+    const pass = document.createElement("input");
+    pass.type = "password";
+    pass.name = "password";
+    pass.setAttribute("data-mb-obs", "8");
+    form.append(user, pass);
+    document.body.append(form);
+    for (const el of [user, pass]) {
+      rectify(el);
+    }
+    document.elementFromPoint = () => pass;
+    const result = runFill({});
+    expect(result.ok).toBe(true);
+    expect(result.stamps).toEqual(["username", "password"]);
+    expect(result.filledFields).toEqual({
+      username: "username",
+      password: "password",
+    });
+  });
+
+  it("never resubmits a username-only form that did not transition", () => {
+    document.body.innerHTML = "";
+    const form = document.createElement("form");
+    const user = document.createElement("input");
+    user.type = "email";
+    user.name = "username";
+    form.append(user);
+    document.body.append(form);
+    rectify(user);
+    document.elementFromPoint = () => user;
+
+    const first = runFill({ usernameFilled: false });
+    expect(first.ok).toBe(true);
+    expect(first.usernameOnlySubmitted).toBe(true);
+
+    // Same document (no transition) — the second round must refuse.
+    const second = runFill({ usernameFilled: true });
+    expect(second.ok).toBe(false);
+    expect(second.reasonCode).toBe("two_step_no_transition");
+  });
+});

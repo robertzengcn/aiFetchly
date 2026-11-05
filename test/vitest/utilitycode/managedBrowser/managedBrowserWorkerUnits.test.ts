@@ -57,17 +57,28 @@ class FakeHandle implements ExecutorElementHandle {
     return true;
   }
   async evaluate<T>(script: unknown): Promise<T> {
-    const source = String(script);
-    if (source.includes("aria-label")) {
-      // Live-descriptor read (executor revalidation, GAP-01/03).
-      return (this.liveDescriptor ?? { role: "", name: "" }) as T;
-    }
-    if (source.includes("type')") || source.includes("getAttribute('type')")) {
-      return this.inputType as T;
-    }
-    if (source.includes("el.value = ''")) {
+    // F02: the executor passes REAL page functions — identify them by
+    // their (transpile-stable) name, not by source-string matching.
+    if (typeof script === "function") {
+      const fnName = script.name;
+      if (fnName === "readElementDescriptor") {
+        return (this.liveDescriptor ?? { role: "", name: "" }) as T;
+      }
+      if (fnName === "probeInputElementTypeFn") {
+        return this.inputType as T;
+      }
+      if (
+        fnName === "clearElementValueFn" ||
+        fnName === "clearElementWithEventFn"
+      ) {
+        return undefined as T;
+      }
+      if (fnName === "extractElementDataFn") {
+        return this.extractValue as T;
+      }
       return undefined as T;
     }
+    const source = String(script);
     if (source.includes("innerText")) {
       return this.extractValue as T;
     }
@@ -333,6 +344,35 @@ describe("buildObservation", () => {
       visibleRecord({ inputType: "password", value: "supersecret" })
     );
     expect(shaped.valueSummary).toBe("[password-like]");
+  });
+
+  it("F09: masks the accessible name of UNMARKED password fields too", () => {
+    // A password field our filler never marked can still carry a
+    // secret in its page-authored name chain (aria-label/placeholder/
+    // title/value) — the summary must mask it unconditionally.
+    const shaped = shapeElementRecord(
+      visibleRecord({
+        tag: "input",
+        role: "textbox",
+        name: "sentinel-password-123",
+        inputType: "password",
+        value: "",
+      })
+    );
+    expect(shaped.name).toBe("[credential]");
+    // Marked fields keep the same masking.
+    const marked = shapeElementRecord(
+      visibleRecord({
+        tag: "input",
+        role: "textbox",
+        name: "sentinel-password-123",
+        inputType: "password",
+        value: "sentinel-password-123",
+        isCredential: true,
+      })
+    );
+    expect(marked.name).toBe("[credential]");
+    expect(marked.valueSummary).toBe("[credential]");
   });
 });
 
@@ -820,11 +860,15 @@ describe("TODO-MSB-010 action vocabulary", () => {
     const { ref, handle } = registerElement(registry, "textbox", "Search");
     let cleared = false;
     handle.evaluate = async <T,>(script: unknown): Promise<T> => {
-      if (String(script).includes("el.value = ''")) {
+      if (typeof script === "function" && script.name === "clearElementWithEventFn") {
         cleared = true;
+        return undefined as T;
       }
-      if (String(script).includes("aria-label")) {
+      if (typeof script === "function" && script.name === "readElementDescriptor") {
         return { role: "textbox", name: "Search" } as T;
+      }
+      if (typeof script === "function" && script.name === "probeInputElementTypeFn") {
+        return "text" as T;
       }
       return null as T;
     };

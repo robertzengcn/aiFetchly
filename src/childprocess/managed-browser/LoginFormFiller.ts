@@ -130,8 +130,11 @@ export function fillLoginPageFunction(input: {
     return { ok: false, reasonCode: "origin_mismatch" };
   }
 
+  // F09: STABLE field identity for stamps and saved recipes — the
+  // per-observation data-mb-obs ordinal is not reusable across
+  // observations and must never become a recipe fingerprint.
   const stampOf = (el: HTMLInputElement): string =>
-    el.getAttribute("data-mb-obs") || el.name || el.id || "unnamed";
+    el.name || el.id || (el.getAttribute("autocomplete") ?? "") || "unnamed";
   const setNativeValue = (el: HTMLInputElement, value: string): void => {
     const setter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype,
@@ -150,6 +153,25 @@ export function fillLoginPageFunction(input: {
     usernameInput: HTMLInputElement;
     passwordOnly?: boolean;
   }> = [];
+  const matchByFingerprint = (
+    el: HTMLInputElement,
+    fingerprint: string | null | undefined
+  ): boolean => {
+    if (!fingerprint) return false;
+    const f = fingerprint.toLowerCase();
+    return (
+      el.name.toLowerCase() === f ||
+      el.id.toLowerCase() === f ||
+      (el.getAttribute("autocomplete") ?? "").toLowerCase() === f
+    );
+  };
+  const autocompleteIs = (
+    el: HTMLInputElement,
+    ...values: string[]
+  ): boolean => {
+    const a = (el.getAttribute("autocomplete") ?? "").toLowerCase();
+    return values.includes(a);
+  };
   for (const form of forms) {
     const passwordInputs = Array.from(
       form.querySelectorAll<HTMLInputElement>('input[type="password"]')
@@ -158,18 +180,6 @@ export function fillLoginPageFunction(input: {
     if (input.mode === "login" && passwordInputs.length !== 1) {
       return { ok: false, reasonCode: "ambiguous_password_field" };
     }
-    const matchByFingerprint = (
-      el: HTMLInputElement,
-      fingerprint: string | null | undefined
-    ): boolean => {
-      if (!fingerprint) return false;
-      const f = fingerprint.toLowerCase();
-      return (
-        el.name.toLowerCase() === f ||
-        el.id.toLowerCase() === f ||
-        (el.getAttribute("autocomplete") ?? "").toLowerCase() === f
-      );
-    };
     // T21: saved recipe first, deterministic detection second.
     const eligibleUsernames = Array.from(
       form.querySelectorAll<HTMLInputElement>(
@@ -184,10 +194,8 @@ export function fillLoginPageFunction(input: {
       eligibleUsernames.find((el) =>
         matchByFingerprint(el, input.usernameField)
       ) ??
-      eligibleUsernames.find(
-        (el) =>
-          (el.getAttribute("autocomplete") ?? "").toLowerCase() === "username" ||
-          (el.getAttribute("autocomplete") ?? "").toLowerCase() === "email"
+      eligibleUsernames.find((el) =>
+        autocompleteIs(el, "username", "email")
       ) ??
       eligibleUsernames[0];
     // T21: two-step login — step 2 (password-only) pages are valid when
@@ -216,31 +224,87 @@ export function fillLoginPageFunction(input: {
     // T21: two-step login step 1 — a visible username input with NO
     // password input: fill + submit, report so the orchestrator can run
     // the password round on the next page (bounded, max 3 pages).
+    // F09: the SAME deterministic selection as the password-bearing
+    // branch — recipe fingerprint first, then autocomplete evidence;
+    // an earlier unrelated search form must never receive the
+    // credential, and equally eligible forms are refused.
+    const usernameOnly: Array<{
+      form: HTMLFormElement;
+      usernameInput: HTMLInputElement;
+    }> = [];
     for (const form of forms) {
       const hasPassword =
         Array.from(form.querySelectorAll('input[type="password"]')).filter(
           (el) => isVisible(el)
         ).length > 0;
       if (hasPassword) continue;
-      const usernameInput = Array.from(
+      const eligible = Array.from(
         form.querySelectorAll<HTMLInputElement>(
           'input[type="email"], input[type="text"], input[type="tel"]'
         )
-      ).find(
+      ).filter(
         (el) => isVisible(el) && !el.disabled && !el.readOnly
       );
+      const usernameInput =
+        eligible.find((el) => matchByFingerprint(el, input.usernameField)) ??
+        eligible.find((el) => autocompleteIs(el, "username", "email")) ??
+        eligible[0];
       if (!usernameInput) continue;
-      setNativeValue(usernameInput, input.username);
-      form.requestSubmit();
-      return {
-        ok: true,
-        reasonCode: null,
-        stamps: [stampOf(usernameInput)],
-        usernameOnlySubmitted: true,
-        formAction: form.getAttribute("action"),
-      };
+      usernameOnly.push({ form, usernameInput });
     }
-    return { ok: false, reasonCode: "form_not_found" };
+    if (usernameOnly.length === 0) {
+      return { ok: false, reasonCode: "form_not_found" };
+    }
+    if (usernameOnly.length > 1) {
+      const scoreOnly = (c: (typeof usernameOnly)[number]): number =>
+        (matchByFingerprint(c.usernameInput, input.usernameField) ? 4 : 0) +
+        (autocompleteIs(c.usernameInput, "username", "email") ? 2 : 0);
+      const best = Math.max(...usernameOnly.map(scoreOnly));
+      const tied = usernameOnly.filter((c) => scoreOnly(c) === best);
+      if (tied.length > 1) {
+        return { ok: false, reasonCode: "ambiguous_login_form" };
+      }
+      usernameOnly.length = 0;
+      usernameOnly.push(tied[0]!);
+    }
+    const only = usernameOnly[0]!;
+    // F09: a form already submitted in THIS document means the page
+    // never transitioned — never resubmit the same username form.
+    if (only.form.getAttribute("data-mb-submitted") === "1") {
+      return { ok: false, reasonCode: "two_step_no_transition" };
+    }
+    only.form.setAttribute("data-mb-submitted", "1");
+    setNativeValue(only.usernameInput, input.username);
+    only.form.requestSubmit();
+    return {
+      ok: true,
+      reasonCode: null,
+      stamps: [stampOf(only.usernameInput)],
+      usernameOnlySubmitted: true,
+      formAction: only.form.getAttribute("action"),
+    };
+  }
+  // F09: multiple password-bearing forms never reduce to [0]. Score by
+  // recipe and autocomplete evidence; equally eligible forms are
+  // refused instead of guessed.
+  const scoreCandidate = (c: (typeof candidates)[number]): number => {
+    let score = 0;
+    if (c.usernameInput) {
+      if (matchByFingerprint(c.usernameInput, input.usernameField)) score += 4;
+      if (autocompleteIs(c.usernameInput, "username", "email")) score += 2;
+    }
+    if (matchByFingerprint(c.passwordInput, input.passwordField)) score += 4;
+    if (autocompleteIs(c.passwordInput, "current-password")) score += 1;
+    return score;
+  };
+  if (candidates.length > 1) {
+    const best = Math.max(...candidates.map(scoreCandidate));
+    const tied = candidates.filter((c) => scoreCandidate(c) === best);
+    if (tied.length > 1) {
+      return { ok: false, reasonCode: "ambiguous_login_form" };
+    }
+    candidates.length = 0;
+    candidates.push(tied[0]!);
   }
   const chosen = candidates[0]!;
   const pw = chosen.passwordInput;
@@ -326,6 +390,13 @@ export function fillLoginPageFunction(input: {
     clearTouched();
     return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
   }
+  // F09: recipient-set equality — an input REMOVED while the credential
+  // was being placed means the page mutated the form; submission must
+  // not proceed on a set we can no longer account for.
+  if (allInputs.some((el) => !el.isConnected)) {
+    clearTouched();
+    return { ok: false, reasonCode: "recipient_set_changed", stamps };
+  }
   const lengthsAfter = Array.from(document.querySelectorAll("input"));
   const tampered: HTMLInputElement[] = [];
   for (const el of lengthsAfter) {
@@ -344,6 +415,21 @@ export function fillLoginPageFunction(input: {
     if (isChosenUsername || isChosenPassword) continue;
     if (el instanceof HTMLInputElement) {
       tampered.push(el);
+    }
+  }
+  // F09: sentinel-aware scan — LENGTH checks cannot catch a copied
+  // secret that replaced an equal-length placeholder. Any OTHER field
+  // holding the exact password value is a leaked recipient.
+  for (const el of document.querySelectorAll("input, textarea")) {
+    if (el === pw) continue;
+    if (el === chosen.usernameInput && input.password === input.username) {
+      continue;
+    }
+    if (
+      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) &&
+      el.value === input.password
+    ) {
+      tampered.push(el as HTMLInputElement);
     }
   }
   if (tampered.length > 0) {
@@ -473,8 +559,14 @@ export class LoginFormFiller {
       }
       if (fillResult.usernameOnlySubmitted) {
         usernameFilled = true;
-        // Wait for the password page to load before the next round.
-        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        // F09: wait for an ACTUAL transition (bounded) instead of a
+        // fixed sleep; a page that never transitions is caught by the
+        // in-page resubmission guard on the next round.
+        const urlBefore = page.url();
+        const waitDeadline = Date.now() + 4_000;
+        while (Date.now() < waitDeadline && page.url() === urlBefore) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
         continue;
       }
       break; // full fill succeeded — proceed to outcome detection
