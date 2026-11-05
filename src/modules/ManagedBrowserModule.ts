@@ -153,6 +153,9 @@ interface ActiveSessionRecord {
   readonly platformLabel: string;
   state: ManagedBrowserSessionState;
   currentOrigin: string | null;
+  /** F18: the FULL sanitized URL (path/query) — a proxy switch must
+   * reopen the page the user was on, not just its origin (P-FR-02). */
+  currentUrl: string | null;
   pageTitle: string | null;
   pageRevision: number;
   authenticated: boolean | null;
@@ -673,6 +676,7 @@ export class ManagedBrowserModule {
         platformLabel: manifest.platformName,
         state: "starting",
         currentOrigin: null,
+        currentUrl: null,
         pageTitle: null,
         pageRevision: 0,
         authenticated: null,
@@ -1085,6 +1089,7 @@ export class ManagedBrowserModule {
     // Track the live origin for the sign-in site gate (A-FR-02) and the
     // approval fingerprint's site component (D-FR-27).
     record.currentOrigin = message.observation.origin || record.currentOrigin;
+record.currentUrl = message.observation.url || record.currentUrl;
     // Cache the sanitized observation so risk classification can resolve
     // element refs to their role/name descriptors (GAP-01).
     record.lastObservation = message.observation;
@@ -1122,6 +1127,7 @@ export class ManagedBrowserModule {
         record.pageRevision = message.observation.pageRevision;
         record.lastObservation = message.observation;
         record.currentOrigin = message.observation.origin || record.currentOrigin;
+record.currentUrl = message.observation.url || record.currentUrl;
       }
     }
     return message;
@@ -1873,8 +1879,9 @@ export class ManagedBrowserModule {
     }
     const accountId = record.accountId;
     const conversation = record.conversationId ?? undefined;
-    // T10: the switch reopens the page the user was on (P-FR-02).
-    const lastUrl = record.currentOrigin ?? undefined;
+    // T10/F18: the switch reopens the page the user was on (P-FR-02) —
+    // the FULL URL with path/query, not just the origin.
+    const lastUrl = record.currentUrl ?? record.currentOrigin ?? undefined;
     // P-FR-05: the cap is per SESSION LINEAGE, not per record — each
     // switch stops this record and starts a fresh one, so the count is
     // carried in a module-level map keyed by the lineage.

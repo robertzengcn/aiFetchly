@@ -72,7 +72,19 @@ export type ProxySelectionResult =
 
 async function toResolvedProxy(row: ProxyRow): Promise<ResolvedSessionProxy> {
   const protocol = (row.protocol ?? "http").toLowerCase();
+  // F18/P-FR: validate the endpoint BEFORE launch — a nonempty host and
+  // a finite integer port in range; anything else must never reach the
+  // browser process as a silent NaN/garbage endpoint.
+  const host = (row.host ?? "").trim();
   const port = Number(row.port);
+  if (
+    host.length === 0 ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
+    return { mode: "unresolvable", reasonCode: "proxy_invalid_endpoint" };
+  }
   const decrypted = await ProxyCredentialCodec.decryptForUse(row.pass ?? null);
   if (!decrypted.password && row.pass) {
     return { mode: "unresolvable", reasonCode: "proxy_resolution_failed" };

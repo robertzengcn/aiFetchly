@@ -146,3 +146,38 @@ describe("ProxyCredentialCodec (P-FR-08)", () => {
     }
   });
 });
+
+describe("F18 endpoint validation before launch", () => {
+  it("rejects a nonempty-host violation and out-of-range/NaN ports", async () => {
+    const cases: Array<Partial<ProxyRow>> = [
+      { host: "" },
+      { host: "   " },
+      { port: "0" },
+      { port: "70000" },
+      { port: "-1" },
+      { port: "not-a-number" },
+    ];
+    for (const override of cases) {
+      const result = await selectProxyForSession({
+        selection: { kind: "proxy_id", proxyId: 9 },
+        linkedProxies: [],
+        loadProxyById: async () => row({ id: 9, ...override }),
+        isAccountSession: false,
+      });
+      expect(result).toEqual({
+        status: "unresolvable",
+        reasonCode: "proxy_invalid_endpoint",
+      });
+    }
+  });
+
+  it("still resolves a valid endpoint at the range boundaries", async () => {
+    const result = await selectProxyForSession({
+      selection: { kind: "proxy_id", proxyId: 9 },
+      linkedProxies: [],
+      loadProxyById: async () => row({ id: 9, port: "65535" }),
+      isAccountSession: false,
+    });
+    expect(result.status).toBe("resolved");
+  });
+});
