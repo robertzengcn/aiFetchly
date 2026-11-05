@@ -562,3 +562,190 @@ describe("DecisionClients (D-FR-16..19)", () => {
 
 import { CHAT_DECISION_SYSTEM_PROMPT } from "@/service/browserDecision/DecisionClients";
 const CHAT_PROMPT_CONTAINS_ESCALATE_GUIDANCE = CHAT_DECISION_SYSTEM_PROMPT.includes("ESCALATE");
+
+describe("F05 lifecycle checks at every await boundary", () => {
+  const decisionInput: import("@/entityTypes/browserDecisionTypes").BrowserDecisionInput = {
+    schema_version: 1 as const,
+    request_id: "r",
+    task_id: "t",
+    step_id: "s",
+    observation_id: "o",
+    page_revision: 1,
+    goal: "g",
+    constraints: [],
+    url: "u",
+    title: "t",
+    candidates: [
+      { candidate_id: "c1", role: "button", name: "Go", allowed_operations: ["CLICK"] },
+    ],
+    recent_actions: [],
+    allowed_operations: ["CLICK"],
+    deadline_ms: 1000,
+  };
+
+  it("stop during the fresh DONE observation yields cancelled, not completed", async () => {
+    const aborter = new AbortController();
+    const deps = makeRunnerDeps([doneEntry()]);
+    let observeCalls = 0;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      observeCalls++;
+      // 1st: loop-top observe. 2nd: the fresh DONE verification observe —
+      // the user's Stop lands while it is in flight.
+      if (observeCalls === 2) {
+        aborter.abort();
+      }
+      return observation();
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f05a",
+        conversationId: "conv-1",
+        goal: "finish",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      { ...deps, signal: aborter.signal }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("cancelled");
+    expect(result.reason).toBe("task_cancelled");
+  });
+
+  it("an action held across a pause+resume during persistActionIntent is discarded, never dispatched", async () => {
+    let runner: BrowserTaskRunner;
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const dispatched: RunnerAction[] = [];
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    // A user pause+resume (takeover round-trip) lands while the journal
+    // write is in flight — generation bumps and the held action is stale.
+    const persistActionIntent = async (): Promise<void> => {
+      deps.control.setState(runner.taskId, "paused");
+      deps.control.resume(runner.taskId);
+    };
+    runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f05b",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      { ...deps, persistActionIntent }
+    );
+    const result = await runner.run();
+    // The held CLICK never reached the page.
+    expect(dispatched).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("action_discarded_after_resume");
+  });
+
+  it("chat client never invokes complete() on an already-aborted signal", async () => {
+    let calls = 0;
+    const client = new ChatCompletionDecisionClient(
+      async () => {
+        calls++;
+        return {};
+      }
+    );
+    const controller = new AbortController();
+    controller.abort();
+    const decision = await client.decide(decisionInput, controller.signal);
+    expect(calls).toBe(0);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
+
+  it("chat client discards a response when the provider config changed in flight", async () => {
+    let configKey: string | null = "k1";
+    const client = new ChatCompletionDecisionClient(
+      async () => {
+        // The provider change lands WHILE the request is in flight.
+        configKey = "k2";
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  operation: "CLICK",
+                  target_id: "c1",
+                  option_id: null,
+                  key: null,
+                  url: null,
+                }),
+              },
+            },
+          ],
+        };
+      },
+      undefined,
+      () => configKey
+    );
+    client.freezeRoute("k1");
+    const decision = await client.decide(decisionInput, new AbortController().signal);
+    expect(decision).toEqual({
+      status: "provider_error",
+      reason_code: "provider_config_changed",
+    });
+  });
+
+  it("chat client discards a late response that arrives after the abort", async () => {
+    const controller = new AbortController();
+    const client = new ChatCompletionDecisionClient(
+      async (_request, signal) => {
+        controller.abort(); // the deadline/task abort lands while awaiting
+        void signal;
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  operation: "CLICK",
+                  target_id: "c1",
+                  option_id: null,
+                  key: null,
+                  url: null,
+                }),
+              },
+            },
+          ],
+        };
+      }
+    );
+    const decision = await client.decide(decisionInput, controller.signal);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
+
+  it("hosted client never posts on an already-aborted signal", async () => {
+    let calls = 0;
+    const client = new HostedDecisionClient(
+      async () => {
+        calls++;
+        return {};
+      }
+    );
+    const controller = new AbortController();
+    controller.abort();
+    const decision = await client.decide(decisionInput, controller.signal);
+    expect(calls).toBe(0);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
+});

@@ -254,6 +254,16 @@ export class BrowserTaskRunner {
             signal.removeEventListener("abort", onOuterAbort);
           }
           this.decisionRequests++;
+          // F05: a decision that returns after its request deadline (or
+          // task abort) is stale — it must never become an executable
+          // action. The runner checks the OUTER signal elsewhere; the
+          // attempt deadline needs its own check here.
+          if (signal.aborted) {
+            return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+          }
+          if (attemptController.signal.aborted) {
+            return this.terminal("failed", "decision_deadline_exceeded", evidence, extracted, observation);
+          }
         } catch (error) {
           return this.terminal(
             "failed",
@@ -305,12 +315,22 @@ export class BrowserTaskRunner {
           observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
+        // F05: active runtime is re-checked AFTER inference — an
+        // over-budget result must not act.
+        if (control.activeTimeMs(this.taskId) > this.budget.activeRuntimeMs) {
+          return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
+        }
         const action = decision.action;
         if (action.operation === "DONE") {
           // D-AC-09/R16: verification uses FRESH state. If the fresh
           // observation FAILS, the task is partial/unverified — never
           // completed using the stale pre-action snapshot.
           const freshObservation = await this.deps.observe(this.input.sessionId);
+          // F05: Stop during the fresh observation must not be
+          // overwritten by completed when the observation resolves.
+          if (signal.aborted) {
+            return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+          }
           if (!freshObservation) {
             return this.terminal(
               "partial",
@@ -403,6 +423,16 @@ export class BrowserTaskRunner {
           }
           this.leafSteps++;
           await this.deps.persistActionIntent?.(action.operation);
+          // F05: stop during the journal write must prevent dispatch;
+          // a resume across the same await discards the held action.
+          if (signal.aborted) {
+            return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+          }
+          if (control.getResumeGeneration(this.taskId) > generationBeforeDecide) {
+            evidence.push("action_discarded_after_resume");
+            observation = await this.deps.observe(this.input.sessionId);
+            continue;
+          }
           const execution = await this.deps.runActions(this.input.sessionId, {
             actions: [programAction],
           });
@@ -467,6 +497,16 @@ export class BrowserTaskRunner {
 
         this.leafSteps++;
         await this.deps.persistActionIntent?.(action.operation);
+        // F05: stop during the journal write must prevent dispatch;
+        // a resume across the same await discards the held action.
+        if (signal.aborted) {
+          return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+        }
+        if (control.getResumeGeneration(this.taskId) > generationBeforeDecide) {
+          evidence.push("action_discarded_after_resume");
+          observation = await this.deps.observe(this.input.sessionId);
+          continue;
+        }
         const execution = await this.deps.runActions(this.input.sessionId, {
           actions: [programAction],
         });

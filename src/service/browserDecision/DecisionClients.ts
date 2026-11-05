@@ -50,11 +50,19 @@ export class HostedDecisionClient implements BrowserDecisionClient {
     input: BrowserDecisionInput,
     signal: AbortSignal
   ): Promise<BrowserDecisionResult> {
+    // F05: an already-aborted signal never reaches the provider.
+    if (signal.aborted) {
+      return { status: "provider_error", reason_code: "request_aborted" };
+    }
     try {
       const raw = await this.postDecision(
         input,
         signal
       );
+      // F05: a late response after the deadline is discarded.
+      if (signal.aborted) {
+        return { status: "provider_error", reason_code: "request_aborted" };
+      }
       return normalizeWireResult(raw);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -100,6 +108,15 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
     this.frozenConfigKey = configKey;
   }
 
+  /** F05: has the provider configuration changed since admission? */
+  private configChanged(): boolean {
+    return (
+      this.getConfigKey !== undefined &&
+      this.frozenConfigKey !== null &&
+      this.getConfigKey() !== this.frozenConfigKey
+    );
+  }
+
   public async getCapabilities(signal: AbortSignal): Promise<BrowserDecisionCapabilities> {
     void signal;
     return {
@@ -122,13 +139,13 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
     // D-FR-18: at most 2 actual provider attempts per logical decision —
     // one retry for a parse failure, never an open repair loop.
     for (let attempt = 0; attempt < 2; attempt++) {
+      // F05: an already-aborted signal never reaches the provider.
+      if (signal.aborted) {
+        return { status: "provider_error", reason_code: "request_aborted" };
+      }
       // D-FR-02: a mid-task provider configuration change aborts the
       // task — page data is never silently redirected to another provider.
-      if (
-        this.getConfigKey &&
-        this.frozenConfigKey !== null &&
-        this.getConfigKey() !== this.frozenConfigKey
-      ) {
+      if (this.configChanged()) {
         return { status: "provider_error", reason_code: "provider_config_changed" };
       }
       try {
@@ -136,6 +153,13 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         // same 2-attempt ceiling — never an open retry loop.
         if (attempt === 1) {
           await new Promise((resolve) => setTimeout(resolve, 1_000));
+          // F05: validity is re-checked after the backoff await too.
+          if (signal.aborted) {
+            return { status: "provider_error", reason_code: "request_aborted" };
+          }
+          if (this.configChanged()) {
+            return { status: "provider_error", reason_code: "provider_config_changed" };
+          }
         }
         const response = await this.complete(
           {
@@ -149,6 +173,15 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
           },
           signal
         );
+        // F05: a late response (the deadline abort landed while
+        // awaiting) and a provider change DURING the in-flight request
+        // are both discarded — the output is never used.
+        if (signal.aborted) {
+          return { status: "provider_error", reason_code: "request_aborted" };
+        }
+        if (this.configChanged()) {
+          return { status: "provider_error", reason_code: "provider_config_changed" };
+        }
         const content = response.choices?.[0]?.message?.content ?? "";
         const parsed: unknown = JSON.parse(content);
         const normalized = normalizeWireResult(parsed);
