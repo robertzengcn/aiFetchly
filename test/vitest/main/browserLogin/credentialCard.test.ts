@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   getCredentialCardWaitRegistry,
   BrowserCredentialLoginService,
@@ -64,13 +64,13 @@ vi.mock("@/modules/socialAccountModule", () => {
   return {
     SocialAccountModule: class {
       async getAccountsForSite() {
-        return [];
+        return fakeAccounts;
       }
       async isSignInCoolingDown() {
-        return false;
+        return fakeCoolingDown();
       }
       async getCredentialForLogin() {
-        return null;
+        return fakeCredential;
       }
       async saveSubmittedCredential(input: { username: string; password: string }) {
         savedCredentials.push(input);
@@ -88,6 +88,13 @@ vi.mock("@/modules/socialAccountModule", () => {
 
 const savedCredentials: Array<{ username: string; password: string }> = [];
 const failures: string[] = [];
+// F12: per-test fixture state read lazily by the mocked module class.
+const fakeAccounts: Array<{ id: number; user: string }> = [];
+let fakeCredential: unknown = {
+  ok: false as const,
+  reason: "credential_unavailable" as const,
+};
+let fakeCoolingDown: () => boolean | Promise<boolean> = () => false;
 
 describe("credential card wait registry (A-FR-05/06)", () => {
   it("creates a request bound to the conversation and consumes it once", async () => {
@@ -188,5 +195,103 @@ describe("BrowserCredentialLoginService no-account path (A-AC-05)", () => {
     expect(result.status).toBe("handoff_required");
     expect(result.reasonCode).toBe("user_cancelled");
     expect(failures).toHaveLength(0);
+  });
+});
+
+describe("F12 attempt reservation, stop-vs-cancel, refusal reasons", () => {
+  beforeEach(() => {
+    fakeAccounts.length = 0;
+    fakeCredential = { ok: false as const, reason: "credential_unavailable" as const };
+    fakeCoolingDown = () => false;
+  });
+
+  it("reserves the account BEFORE the awaited cooldown check (no TOCTOU)", async () => {
+    fakeAccounts.push({ id: 101, user: "user@example.test" });
+    fakeCredential = {
+      ok: true as const,
+      username: "user@example.test",
+      password: "sentinel-f12-password",
+    };
+    // The cooldown check awaits — a concurrent caller must already see the
+    // reservation.
+    let coolingChecks = 0;
+    fakeCoolingDown = () => {
+      coolingChecks++;
+      // An awaited (non-settled) cooldown check: the first attempt parks
+      // here, so the reservation is genuinely held when the second
+      // concurrent call arrives.
+      return new Promise<boolean>((resolve) =>
+        setTimeout(() => resolve(false), 150)
+      );
+    };
+    const reg = getCredentialCardWaitRegistry();
+    const service = new BrowserCredentialLoginService();
+    const first = service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-race",
+      intent: "login",
+      accountId: 101,
+    });
+    // Give the first attempt time to reserve and reach the cooldown await.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(coolingChecks).toBeGreaterThan(0);
+    // The second concurrent attempt hits the SYNCHRONOUS reservation.
+    const second = await service.signIn({
+      sessionId: "mb_signin0002",
+      conversationId: "conv-race-2",
+      intent: "login",
+      accountId: 101,
+    });
+    expect(second.status).toBe("failed");
+    expect(second.reasonCode).toBe("cooldown");
+    // Let the first attempt finish (username-only card would block; the
+    // credential is complete so it fills directly).
+    const firstResult = await first;
+    expect(firstResult.status).toBe("signed_in");
+    void reg;
+  });
+
+  it("a domain refusal is a failed sign-in — never a password card", async () => {
+    fakeAccounts.push({ id: 101, user: "user@example.test" });
+    fakeCredential = { ok: false as const, reason: "domain_mismatch" as const };
+    const reg = getCredentialCardWaitRegistry();
+    const service = new BrowserCredentialLoginService();
+    const result = await service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-domain",
+      intent: "login",
+      accountId: 101,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.reasonCode).toBe("domain_mismatch");
+    // No card was posted for the session.
+    expect(reg.listForConversation("conv-domain")).toHaveLength(0);
+  });
+
+  it("a STOP during the card wait terminates without opening a handoff", async () => {
+    const reg = getCredentialCardWaitRegistry();
+    const service = new BrowserCredentialLoginService();
+    const controller = new AbortController();
+    const pendingPromise = service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-stop",
+      intent: "login",
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const pending = reg.listForConversation("conv-stop");
+    expect(pending).toHaveLength(1);
+    controller.abort(); // Stop resolves the card wait as cancelled
+    const result = await pendingPromise;
+    expect(result.status).toBe("failed");
+    expect(result.reasonCode).toBe("cancelled");
+    // A Stop never opens the handoff dialog.
+    const { getDefaultManagedBrowserModule } = await import(
+      "@/modules/ManagedBrowserModule"
+    );
+    const module = getDefaultManagedBrowserModule() as unknown as {
+      requestHandoff: ReturnType<typeof vi.fn>;
+    };
+    expect(module.requestHandoff).not.toHaveBeenCalled();
   });
 });

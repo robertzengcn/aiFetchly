@@ -400,15 +400,31 @@ export class SocialAccountModule extends BaseModule {
    * matches the CURRENT page's registrable domain — the caller derives that
    * identity from the live page URL, never from the LLM.
    */
+  /**
+   * F12: the credential read reports WHY it refused — a missing account, a
+   * missing site, a domain mismatch and a missing/undecryptable password
+   * are distinct outcomes; only the last one legitimately asks the user
+   * for a password through the card.
+   */
   public async getCredentialForLogin(
     accountId: number,
     currentRegistrableDomain: string
-  ): Promise<{ username: string; password: string } | null> {
+  ): Promise<
+    | { ok: true; username: string; password: string }
+    | {
+        ok: false;
+        reason:
+          | "account_not_found"
+          | "site_not_found"
+          | "domain_mismatch"
+          | "credential_unavailable";
+      }
+  > {
     await this.ensureConnection();
     // T27: repository access lives in the Model layer.
     const account = await this.socialAccountModel.findRowById(accountId);
     if (!account) {
-      return null;
+      return { ok: false, reason: "account_not_found" };
     }
     // The account's site must match the page domain (fail closed).
     // R21: legacy rows with site_id = null CANNOT skip the domain check —
@@ -421,7 +437,7 @@ export class SocialAccountModule extends BaseModule {
       .getDefaultBrowserSiteModule();
     const site = await siteModule.getSite(siteToCheck);
     if (!site) {
-      return null;
+      return { ok: false, reason: "site_not_found" };
     }
     const { hostnameAllowedBySuffixes } =
       await import("@/service/browserDecision/RegistrableDomain");
@@ -431,13 +447,13 @@ export class SocialAccountModule extends BaseModule {
         site.allowedDomainSuffixes
       )
     ) {
-      return null;
+      return { ok: false, reason: "domain_mismatch" };
     }
     const password = await this.decryptPass(account.pass, account.id);
     if (!password || !account.user) {
-      return null;
+      return { ok: false, reason: "credential_unavailable" };
     }
-    return { username: account.user, password };
+    return { ok: true, username: account.user, password };
   }
 
   /** R21/A-FR-06: update the password of an existing account (encrypted). */

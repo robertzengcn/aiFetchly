@@ -147,8 +147,21 @@ export function getCredentialCardWaitRegistry(): CredentialCardWaitRegistry {
 }
 
 export class BrowserCredentialLoginService {
-  /** A-FR-10: one automated attempt per account at a time (TOCTOU guard). */
-  private readonly inFlightAccounts = new Set<number>();
+  /**
+   * A-FR-10/F12: one automated attempt per account (and per session for
+   * one-time/new card credentials) at a time. Keys are reserved
+   * SYNCHRONOUSLY before any awaited check — the old has→await→add
+   * window admitted concurrent callers.
+   */
+  private readonly inFlightAccounts = new Set<string>();
+
+  private static accountAttemptKey(accountId: number): string {
+    return `account:${accountId}`;
+  }
+
+  private static sessionAttemptKey(sessionId: string): string {
+    return `session:${sessionId}`;
+  }
 
   public async signIn(input: BrowserSignInInput): Promise<BrowserSignInResult> {
     const browserModule = getDefaultManagedBrowserModule();
@@ -238,6 +251,10 @@ export class BrowserCredentialLoginService {
         }
       }
       if (submitted.cancelled) {
+        if (input.signal?.aborted) {
+          // F12: a STOP (job abort) terminates — it never opens a handoff.
+          return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
+        }
         // T16: 'I'll sign in myself'/cancel opens the handoff dialog so
         // the user can complete sign-in manually (C-FR-13).
         await browserModule
@@ -245,9 +262,13 @@ export class BrowserCredentialLoginService {
           .catch(() => undefined);
         return { status: "handoff_required", reasonCode: "user_cancelled", siteId: site.siteId };
       }
+      if (input.signal?.aborted) {
+        // F12: a STOP terminates the sign-in — never a handoff.
+        return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
+      }
       if (!submitted.save) {
         // One-time in-memory credential (never persisted, never logged).
-        return this.fillAndAssess(input, site, {
+        return this.fillWithSessionReservation(input, site, {
           username: submitted.username,
           password: submitted.password,
           accountId: null,
@@ -260,7 +281,7 @@ export class BrowserCredentialLoginService {
         password: submitted.password,
         save: true,
       });
-      return this.fillAndAssess(input, site, {
+      return this.fillWithSessionReservation(input, site, {
         username: submitted.username,
         password: submitted.password,
         accountId: newAccountId,
@@ -275,10 +296,13 @@ export class BrowserCredentialLoginService {
       };
     }
 
-    // A-FR-10: cooldown — never retry a password the site rejected, and
-    // never run two automated attempts for one account concurrently (the
-    // cooldown check-then-act window would otherwise admit both).
-    if (this.inFlightAccounts.has(chosen.id)) {
+    // A-FR-10/F12: reserve FIRST (synchronously), then the awaited
+    // cooldown check — the check-then-act window can no longer admit two
+    // concurrent attempts for one account.
+    const attemptKey = BrowserCredentialLoginService.accountAttemptKey(
+      chosen.id
+    );
+    if (this.inFlightAccounts.has(attemptKey)) {
       return {
         status: "failed",
         accountId: chosen.id,
@@ -286,24 +310,60 @@ export class BrowserCredentialLoginService {
         reasonCode: "cooldown",
       };
     }
-    if (await accountModule.isSignInCoolingDown(chosen.id)) {
-      return {
-        status: "failed",
-        accountId: chosen.id,
-        siteId: site.siteId,
-        reasonCode: "cooldown",
-      };
-    }
-    this.inFlightAccounts.add(chosen.id);
+    this.inFlightAccounts.add(attemptKey);
     try {
+      if (await accountModule.isSignInCoolingDown(chosen.id)) {
+        return {
+          status: "failed",
+          accountId: chosen.id,
+          siteId: site.siteId,
+          reasonCode: "cooldown",
+        };
+      }
       return await this.attemptCredentialSignIn(
         input,
         site,
         accountModule,
-        chosen
+        chosen,
+        candidates
       );
     } finally {
-      this.inFlightAccounts.delete(chosen.id);
+      this.inFlightAccounts.delete(attemptKey);
+    }
+  }
+
+  /**
+   * F12: one-time and new-card credential attempts reserve the SESSION —
+   * the account+site attempt window applies to every automated path, not
+   * only chosen saved accounts.
+   */
+  private async fillWithSessionReservation(
+    input: BrowserSignInInput,
+    site: SiteMatch,
+    credential: {
+      readonly username: string;
+      readonly password: string;
+      readonly accountId: number | null;
+    }
+  ): Promise<BrowserSignInResult> {
+    const sessionKey = BrowserCredentialLoginService.sessionAttemptKey(
+      input.sessionId
+    );
+    if (this.inFlightAccounts.has(sessionKey)) {
+      return {
+        status: "failed",
+        ...(credential.accountId !== null
+          ? { accountId: credential.accountId }
+          : {}),
+        siteId: site.siteId,
+        reasonCode: "cooldown",
+      };
+    }
+    this.inFlightAccounts.add(sessionKey);
+    try {
+      return await this.fillAndAssess(input, site, credential);
+    } finally {
+      this.inFlightAccounts.delete(sessionKey);
     }
   }
 
@@ -311,16 +371,32 @@ export class BrowserCredentialLoginService {
     input: BrowserSignInInput,
     site: SiteMatch,
     accountModule: SocialAccountModule,
-    chosen: { id: number; user: string }
+    chosen: { id: number; user: string },
+    candidates: ReadonlyArray<{ id: number; user: string }>
   ): Promise<BrowserSignInResult> {
 
+    // F12: a Stop that landed before dispatch terminates — no fill.
+    if (input.signal?.aborted) {
+      return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
+    }
     // A-FR-07: the ONLY decrypting read, gated on the live page's domain.
     const registrableDomain = site.registrableDomain;
-    const credential = await accountModule.getCredentialForLogin(
+    const credentialResult = await accountModule.getCredentialForLogin(
       chosen.id,
       registrableDomain
     );
-    if (!credential) {
+    if (!credentialResult.ok) {
+      // F12: domain refusal / missing account / missing site are
+      // REFUSALS — never a password card (only a username-only account
+      // legitimately asks for its password).
+      if (credentialResult.reason !== "credential_unavailable") {
+        return {
+          status: "failed",
+          accountId: chosen.id,
+          siteId: site.siteId,
+          reasonCode: credentialResult.reason,
+        };
+      }
       // T16: a username-only account (saved without a password) asks for
       // the password through the card instead of failing.
       const { request, promise: cardPromise } = registry.create({
@@ -363,6 +439,10 @@ export class BrowserCredentialLoginService {
         }
       }
       if (submitted.cancelled) {
+        if (input.signal?.aborted) {
+          // F12: a STOP terminates — never a handoff.
+          return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
+        }
         await getDefaultManagedBrowserModule()
           .requestHandoff(input.sessionId, "user_requested")
           .catch(() => undefined);
@@ -372,6 +452,21 @@ export class BrowserCredentialLoginService {
           siteId: site.siteId,
           reasonCode: "user_cancelled",
         };
+      }
+      // F12: the password-only card may EDIT the username — persisting
+      // or binding against chosen.id would mix account identities.
+      // Re-resolve the account by the submitted username; with no match,
+      // fill WITHOUT saving or binding.
+      if (submitted.username !== chosen.user) {
+        const edited = candidates.find((c) => c.user === submitted.username);
+        if (!edited) {
+          return this.fillWithSessionReservation(input, site, {
+            username: submitted.username,
+            password: submitted.password,
+            accountId: null,
+          });
+        }
+        chosen = { id: edited.id, user: edited.user };
       }
       if (submitted.save) {
         // R21: update the EXISTING account's password, not a new row.
@@ -387,8 +482,8 @@ export class BrowserCredentialLoginService {
       });
     }
     return this.fillAndAssess(input, site, {
-      username: credential.username,
-      password: credential.password,
+      username: credentialResult.username,
+      password: credentialResult.password,
       accountId: chosen.id,
     });
   }
