@@ -26,6 +26,8 @@ const i18n = createI18n({
         undo_action: "Undo",
         check_status_action: "Check status",
         count_completed: "{n} completed",
+        recipient_outcome: { accepted: "Accepted", rejected: "Rejected", unknown: "Unknown" },
+        error_code: { CAPABILITY_UNSUPPORTED: "Not supported by this account" },
       },
     },
   },
@@ -169,8 +171,71 @@ describe("EmailOrganizationOperationCard", () => {
     });
     const wrapper = mountCard();
     await flushPromises();
-    expect(wrapper.text()).toContain("CAPABILITY_UNSUPPORTED");
+    // R4-16: the error code is localized through the error_code map.
+    expect(wrapper.text()).toContain("Not supported by this account");
+    expect(wrapper.text()).not.toContain("CAPABILITY_UNSUPPORTED");
     expect(wrapper.find("[data-testid='org-op-undo']").exists()).toBe(false);
+  });
+
+  it("renders address-level recipient outcomes per item (R4-16/AC-18)", async () => {
+    mockGet.mockResolvedValue({
+      operation: operationFixture({
+        kind: "forward",
+        status: "partially_succeeded",
+        itemCounts: { completed: 1, failed: 0, unresolved: 0, pending: 0, cancelled: 0 },
+        items: [
+          {
+            itemId: 7,
+            messageId: 42,
+            status: "partially_succeeded",
+            beforeFolderPath: null,
+            destinationFolderPath: null,
+            errorCode: null,
+            sanitizedError: null,
+            recipientOutcomes: [
+              { address: "accepted@x.test", outcome: "accepted" },
+              { address: "rejected@x.test", outcome: "rejected" },
+              { address: "mystery@x.test", outcome: "unknown" },
+            ],
+          },
+        ],
+      }),
+    });
+    const wrapper = mountCard();
+    await flushPromises();
+
+    const recipients = wrapper.findAll("[data-testid='org-op-recipient']");
+    expect(recipients.length).toBe(3);
+    expect(recipients[0].text()).toContain("accepted@x.test");
+    expect(recipients[0].text()).toContain("Accepted");
+    expect(recipients[1].text()).toContain("rejected@x.test");
+    expect(recipients[1].text()).toContain("Rejected");
+    expect(recipients[2].text()).toContain("mystery@x.test");
+    expect(recipients[2].text()).toContain("Unknown");
+  });
+
+  it("localizes an error code through the error_code map (R4-16)", async () => {
+    mockGet.mockResolvedValue({
+      operation: operationFixture({
+        status: "failed",
+        items: [
+          {
+            itemId: 3,
+            messageId: 42,
+            status: "failed",
+            beforeFolderPath: "INBOX",
+            destinationFolderPath: "Trash",
+            errorCode: "CAPABILITY_UNSUPPORTED",
+            sanitizedError: null,
+            recipientOutcomes: [],
+          },
+        ],
+      }),
+    });
+    const wrapper = mountCard();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Not supported by this account");
+    expect(wrapper.text()).not.toContain("CAPABILITY_UNSUPPORTED");
   });
 
   it("renders nothing meaningful for a missing operation id", async () => {
