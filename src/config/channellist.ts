@@ -769,6 +769,8 @@ export const MANAGED_BROWSER_APPROVAL_EVENT =
 export const MANAGED_BROWSER_CHAT_NOTICE_EVENT = "managed-browser:chat-notice";
 export const MANAGED_BROWSER_CACHE_PROGRESS_EVENT =
   "managed-browser:cache-progress";
+/** F21: live browser-batch task state for the batch control card. */
+export const MANAGED_BROWSER_BATCH_EVENT = "managed-browser:batch-event";
 
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";

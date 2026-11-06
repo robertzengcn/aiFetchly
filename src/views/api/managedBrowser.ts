@@ -23,6 +23,11 @@ import {
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+  BROWSER_TASK_PAUSE,
+  BROWSER_TASK_RESUME,
+  BROWSER_TASK_STOP,
+  BROWSER_BATCH_RETURN_NOW,
+  MANAGED_BROWSER_BATCH_EVENT,
 } from "@/config/channellist";
 import type {
   EffectiveManagedBrowserSettings,
@@ -215,6 +220,65 @@ export function onManagedBrowserStatusChanged(
   return () => {
     window.api.removeListener(MANAGED_BROWSER_STATUS_EVENT, handler);
   };
+}
+
+/** F21: live browser-batch task state (batch control card). */
+export interface BrowserBatchEvent {
+  readonly batchId: string;
+  readonly phase: "started" | "task" | "finished";
+  readonly taskId?: string;
+  readonly label?: string;
+  readonly state?:
+    | "running"
+    | "waiting_for_user"
+    | "paused"
+    | "cancelling"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  readonly summary?: string;
+}
+
+export function onManagedBrowserBatchEvent(
+  callback: (event: BrowserBatchEvent) => void
+): () => void {
+  const handler = (event: unknown): void => {
+    callback(event as BrowserBatchEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_BATCH_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_BATCH_EVENT, handler);
+  };
+}
+
+/** F21: task-control verbs backed by the existing validated IPC. */
+export async function pauseBrowserTask(input: {
+  taskId: string;
+  sessionId?: string;
+}): Promise<{ ok: boolean }> {
+  return await windowInvoke(BROWSER_TASK_PAUSE, input);
+}
+
+export async function resumeBrowserTask(input: {
+  taskId: string;
+  sessionId?: string;
+  instructions?: string;
+}): Promise<{ ok: boolean }> {
+  return await windowInvoke(BROWSER_TASK_RESUME, input);
+}
+
+export async function stopBrowserTask(input: {
+  taskId: string;
+  sessionId?: string;
+}): Promise<{ ok: boolean }> {
+  return await windowInvoke(BROWSER_TASK_STOP, input);
+}
+
+export async function browserBatchReturnNow(input: {
+  batchId: string;
+}): Promise<{ ok: boolean }> {
+  return await windowInvoke(BROWSER_BATCH_RETURN_NOW, input);
 }
 
 export function onManagedBrowserChatNotice(

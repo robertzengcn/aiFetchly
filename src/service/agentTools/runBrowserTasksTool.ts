@@ -160,6 +160,42 @@ const liveBatches = new Map<string, AbortController>();
  */
 const liveChildren = new Map<string, AbortController>();
 
+/**
+ * F21: live batch events reach the renderer's batch control card
+ * through this sink (registered by the main-process IPC bridge).
+ */
+export interface BrowserBatchEvent {
+  readonly batchId: string;
+  readonly phase: "started" | "task" | "finished";
+  readonly taskId?: string;
+  readonly label?: string;
+  readonly state?:
+    | "running"
+    | "waiting_for_user"
+    | "paused"
+    | "cancelling"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  readonly summary?: string;
+}
+type BatchEventSink = (event: BrowserBatchEvent) => void;
+let batchEventSink: BatchEventSink | null = null;
+
+/** Register the renderer sink (main-process IPC bridge). */
+export function setBrowserBatchEventSink(sink: BatchEventSink | null): void {
+  batchEventSink = sink;
+}
+
+function emitBatchEvent(event: BrowserBatchEvent): void {
+  try {
+    batchEventSink?.(event);
+  } catch {
+    // A dead renderer never breaks the batch.
+  }
+}
+
 /** Abort a batch's child tasks (C-FR-11 Return results now / M-FR-09 Stop). */
 export function abortBatch(batchId: string): number {
   const controller = liveBatches.get(batchId);
@@ -193,6 +229,8 @@ export async function runBrowserTasks(
   signal.addEventListener("abort", onOuterAbort, { once: true });
   liveBatches.set(batchId, batchAbort);
   const control = deps.control ?? getDefaultAgentTaskControlService();
+  // F21: the batch card lives from the first lane start.
+  emitBatchEvent({ batchId, phase: "started" });
 
   let results: BrowserBatchTaskResult[];
   try {
@@ -215,6 +253,7 @@ export async function runBrowserTasks(
         };
       }
       control.register(taskId, conversationId);
+      emitBatchEvent({ batchId, phase: "task", taskId, label: task.goal, state: "running" });
       const childAbort = new AbortController();
       liveChildren.set(taskId, childAbort);
       const onParentAbort = (): void => childAbort.abort();
@@ -367,6 +406,23 @@ export async function runBrowserTasks(
     liveBatches.delete(batchId);
     signal.removeEventListener("abort", onOuterAbort);
   }
+  // F21: the card shows final per-task states.
+  for (const result of results) {
+    emitBatchEvent({
+      batchId,
+      phase: "task",
+      taskId: `${batchId}:${result.task_index}`,
+      state: result.status === "completed"
+        ? "completed"
+        : result.status === "failed"
+          ? "failed"
+          : result.status === "cancelled"
+            ? "cancelled"
+            : "interrupted",
+      summary: result.summary,
+    });
+  }
+  emitBatchEvent({ batchId, phase: "finished" });
   return { batchId, results };
 }
 

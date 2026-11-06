@@ -280,6 +280,12 @@ export class ManagedBrowserAiToolService {
     string,
     { programDigest: string; pageRevision: number; requestId: string }
   >();
+  /**
+   * F16: session-long RUNNER ownership — while a decision runner is
+   * executing a task on a session, no other runner (and no legacy tool
+   * path) may interleave decisions/programs on the SAME session.
+   */
+  private readonly runnerOwnedSessions = new Map<string, string>();
   private readonly settings: ManagedBrowserSettingsModule;
   private readonly classifier: BrowserActionRiskClassifier;
   private readonly cacheModule: NonNullable<
@@ -1131,6 +1137,16 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_execute_task", parsed.error)
       );
     }
+    // F16: one runner per session at a time — a second runner on the
+    // same session would interleave decisions and steal the page. The
+    // ownership check is synchronous and precedes every awaited gate.
+    if (this.runnerOwnedSessions.has(parsed.data.session_id)) {
+      throw new ManagedBrowserAiToolError(
+        "session_not_owned",
+        undefined,
+        "session_owned_by_active_runner"
+      );
+    }
     await this.ensureBrowserEnabled();
     // T25/T29: acceleration kill switch — disabling returns future tasks
     // to the existing browser tools.
@@ -1359,6 +1375,8 @@ export class ManagedBrowserAiToolService {
     // R03: durable admission AFTER the runner is constructed — one taskId
     // from admission through journal to result (no separate admission ID).
     awaitedResultRef.taskId = runner.taskId;
+    // F16: the runner owns the session for its whole lifetime.
+    this.runnerOwnedSessions.set(parsed.data.session_id, runner.taskId);
     try {
       const { getDefaultBrowserTaskModule } = await import(
         "@/modules/BrowserTaskModule"
@@ -1403,6 +1421,14 @@ export class ManagedBrowserAiToolService {
     } catch (error) {
       this.wrapModuleError(error);
       throw error;
+    } finally {
+      // F16: the ownership lease dies with the runner — every exit path.
+      if (
+        this.runnerOwnedSessions.get(parsed.data.session_id) ===
+        runner.taskId
+      ) {
+        this.runnerOwnedSessions.delete(parsed.data.session_id);
+      }
     }
   }
 

@@ -858,3 +858,44 @@ describe("awaitRunnerApproval (F06)", () => {
     expect(resolution).toBe("expired");
   });
 });
+
+// ---------------------------------------------------------------------------
+// F16: session-long runner ownership lease
+// ---------------------------------------------------------------------------
+
+describe("executeTask runner ownership (F16)", () => {
+  it("refuses a second runner on a session that is already owned", async () => {
+    const service = makeService({});
+    // An active runner owns the session (registered at its admission).
+    (
+      service as unknown as {
+        runnerOwnedSessions: Map<string, string>;
+      }
+    ).runnerOwnedSessions.set(SESSION_ID, "task_owner1");
+    await expect(
+      service.executeTask(
+        { session_id: SESSION_ID, goal: "second runner" },
+        { conversationId: CTX.conversationId, toolCallId: "call-f16" }
+      )
+    ).rejects.toMatchObject({
+      code: "session_not_owned",
+      reasonCode: "session_owned_by_active_runner",
+    });
+  });
+
+  it("admits a runner when no ownership is registered", async () => {
+    const service = makeService({});
+    // The ownership check passes; the flow proceeds past it (the follow-up
+    // gates may fail on fakes, but NOT with session_owned_by_active_runner).
+    try {
+      await service.executeTask(
+        { session_id: SESSION_ID, goal: "single runner" },
+        { conversationId: CTX.conversationId, toolCallId: "call-f16" }
+      );
+    } catch (error) {
+      expect((error as { reasonCode?: string }).reasonCode).not.toBe(
+        "session_owned_by_active_runner"
+      );
+    }
+  });
+});

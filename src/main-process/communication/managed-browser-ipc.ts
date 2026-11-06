@@ -29,6 +29,7 @@ import {
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_BATCH_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
 import {
@@ -137,6 +138,14 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     sendToRenderer(win, MANAGED_BROWSER_CHAT_NOTICE_EVENT, notice);
   browserModule.setNoticeSink(forwardNotice);
   cacheModule.setNoticeSink(forwardNotice);
+  // F21: live browser-batch events stream to the batch control card.
+  void import("@/service/agentTools/runBrowserTasksTool").then(
+    ({ setBrowserBatchEventSink }) => {
+      setBrowserBatchEventSink((event) =>
+        sendToRenderer(win, MANAGED_BROWSER_BATCH_EVENT, event)
+      );
+    }
+  );
   cacheModule.setProgressSink((progress) =>
     sendToRenderer(win, MANAGED_BROWSER_CACHE_PROGRESS_EVENT, progress)
   );
