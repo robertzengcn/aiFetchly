@@ -2,7 +2,7 @@
  * F23: webServer entry for the Playwright harness — boots the deterministic
  * login fixture on the port the specs hardcode (8443 default).
  */
-import { startFakeLoginSite } from "./fakeLoginSite";
+import { startFakeLoginSite } from "./fakeLoginSite.ts";
 
 const port = Number(process.env.E2E_LOGIN_SITE_PORT ?? 8_443);
 

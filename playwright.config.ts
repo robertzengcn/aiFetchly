@@ -27,6 +27,10 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    // F23: the browser specs drive the SELF-SIGNED local login fixture
+    // (https://localhost:8443) — verification is off for the loopback
+    // fixture only; nothing real is ever contacted.
+    ignoreHTTPSErrors: true,
   },
   outputDir: "./test-results/playwright",
   // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
