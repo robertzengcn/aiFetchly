@@ -76,6 +76,29 @@ Disposable probes were removed after execution. Service probes skipped duplicate
 | 19 bounded bulk/progress | Partial | Duplicate/restart semantics and renderer flow; R4-04/R4-11/R4-14. |
 | 20 cancel unstarted work | Partial | Restart/exception settlement and reachable live controls; R4-11/R4-14. |
 
+## Remediation status (2026-11-07, updated on this branch)
+
+| Group | Status | Notes |
+| --- | --- | --- |
+| R4-01 dispatch race | **Fixed** — atomic ready→dispatching fence; edits/discard refuse during SMTP; submitted CAS loss recorded as durable audit; probe scenarios covered | `b0011f465` |
+| R4-02 reply admission | **Fixed** — account lock spans final admission AND SMTP; reconcile paths invalidate pending replies via surfaced helper | `b0011f465` |
+| R4-03 restore provenance | **Fixed** — fail closed without full mapping (uid + uidValidity); lineage binds resulting version + originating op; bulk prepare validates current lineage | `b0011f465` |
+| R4-04 duplicate outcomes | **Fixed** — open-operation resolution before preflight; only still-pending items finalize failed on claim refusal | `b0011f465` |
+| R4-05 identity heuristic | **Fixed** — replaced Message-ID heuristic with exact moved-away occurrence lookup by before-folder/uid/uidValidity; sync persistence under the account lock | `b0011f465` |
+| R4-06 CID order | **Verified fixed by 19e440d2f hash map** (prefers selected; identical bytes render identically) + regression tests for both-selected/single-selected/repeated cases | `19e440d2f` |
+| R4-07 composed size | **Fixed** — textEncoding forced to base64, making the persisted bound a true upper bound | `b0011f465` |
+| R4-08 Sent bytes | **Fixed** — raw MIME captured via nodemailer's stream plugin on the SMTP session; append sends the submitted bytes; sentCopyStatus projected on the attempt | `b0011f465` |
+| R4-09 search | **Fixed** — local keyset continuation with validation; server cursor numeric/range validated; all fetched candidates post-filtered before page fill; timestamps basis disclosed | `b0011f465` |
+| R4-10 queued expiry | **Fixed** — selection revalidated after acquiring the account lock (awaited + detached) | `b0011f465` |
+| R4-11 orphan pending | **Fixed** — startup + periodic settlement cancels orphaned pending items; detached failures persisted via cancelPending | `b0011f465` |
+| R4-12 direct-send | **Recorded PRD deviation** — block-only gate retained deliberately (substring matcher injectable); resolver go-ahead phrases fixed; PRD/AC-01 text update is a product decision for the owner | `b0011f465` |
+| R4-13 draft lifecycle | **Partially fixed** — durable resume wired via resumable-draft query; retirement on sent/discarded open | `6c62ed025` |
+| R4-14 history/bulk UI | **Partially fixed** — transcript skip-loop cards, history/bulk APIs present; full search→preview→execute journey and Playwright coverage remain open | `6c62ed025` |
+| R4-15 destination capability | **Fixed** — writable-only Trash in discovery + fallback; picker filters writable non-Trash, resets selection, LOCATION_STALE not routed to picker | `b0011f465` |
+| R4-16 localization | **Partially fixed** — manual create carries locale; pick/restore + item_status keys in six languages; recipient addresses and error-code localization remain open | `b0011f465` |
+| R4-17 sender identity | **Fixed** — Reply-To applied to emitted MIME; Sent append resolves from the sending account | `b0011f465` |
+| V01/V02 validation | **Open** — operator/CI scope (wire fixtures, Playwright, crash injection, perf, live mailboxes, packaging) | — |
+
 ## Detailed grouped TODO
 
 P1 concerns external-action correctness, content, identity or durable recovery. P2 concerns broken required behavior or missing product workflows. Related variants are listed together; repair their shared boundary rather than one fixture alone.
