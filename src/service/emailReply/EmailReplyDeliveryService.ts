@@ -19,6 +19,7 @@ import {
   correlationIdForMessage,
   newRequestCorrelationId,
 } from "@/service/emailReply/EmailReplyCorrelation";
+import { runWithAccountLock } from "@/service/emailOrganization/accountMutex";
 import { classifySubmissionResult } from "@/service/emailReply/EmailSubmissionClassifier";
 import {
   buildSendIdempotencyKey,
@@ -1013,14 +1014,19 @@ export class EmailReplyDeliveryService {
         parentMessageId: message.messageId,
         parentReferences: message.referencesHeader,
       });
-      const raw = await sender.sendReplyEmail({
-        receiver: headers.recipientAddress,
-        subject: headers.subject,
-        text: revision.bodyText,
-        html: revision.bodyHtml,
-        inReplyTo: headers.thread.inReplyTo,
-        references: headers.thread.references.join(" "),
-      });
+      // T07: SMTP dispatch runs under the shared per-account lock so a
+      // Trash/restore MOVE on the same account cannot race this submission's
+      // admission/persistence window (PRD §12 stale reply-approval rule).
+      const raw = await runWithAccountLock(emailServiceId, async () =>
+        sender.sendReplyEmail({
+          receiver: headers.recipientAddress,
+          subject: headers.subject,
+          text: revision.bodyText,
+          html: revision.bodyHtml,
+          inReplyTo: headers.thread.inReplyTo,
+          references: headers.thread.references.join(" "),
+        })
+      );
       const classified = classifySubmissionResult(raw);
       certainty = classified.certainty;
       providerMessageId = classified.providerMessageId;

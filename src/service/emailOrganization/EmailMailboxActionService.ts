@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { AsyncMutex } from "@/utils/asyncMutex";
+import { runWithAccountLock } from "@/service/emailOrganization/accountMutex";
 import { log } from "@/modules/Logger";
 import { BaseModule } from "@/modules/baseModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
@@ -88,22 +88,11 @@ export class EmailMailboxActionService extends BaseModule {
   }
 
   /** R07: per-account coordination spanning preflight→claim→I/O→persist. */
-  private static accountMutexes = new Map<number, AsyncMutex>();
-
-  private static lockAccount(emailServiceId: number): AsyncMutex {
-    let mutex = EmailMailboxActionService.accountMutexes.get(emailServiceId);
-    if (mutex === undefined) {
-      mutex = new AsyncMutex();
-      EmailMailboxActionService.accountMutexes.set(emailServiceId, mutex);
-    }
-    return mutex;
-  }
-
   private async runSerialized<T>(
     emailServiceId: number,
     work: () => Promise<T>
   ): Promise<T> {
-    return await EmailMailboxActionService.lockAccount(emailServiceId).run(work);
+    return await runWithAccountLock(emailServiceId, work);
   }
 
   async trashMessage(input: TrashMessageInput): Promise<MailboxActionOutcome> {
