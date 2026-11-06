@@ -35,16 +35,29 @@ export default defineConfig({
   // server lifecycle (readiness = HTTP 200 on the renderer origin), reuses an
   // already-running server locally, and pins the port so a second server
   // fails loudly instead of silently double-serving.
-  webServer: {
-    command: `yarn dev:renderer --port ${
-      process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
-    } --strictPort --host 127.0.0.1`,
-    url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    // Poll instead of inotify: the worktree's file count can exceed the host's
-    // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
-    // startup. Polling is heavier but never hits the watcher cap.
-    env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
-  },
+  webServer: [
+    {
+      command: `yarn dev:renderer --port ${
+        process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
+      } --strictPort --host 127.0.0.1`,
+      url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      // Poll instead of inotify: the worktree's file count can exceed the host's
+      // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
+      // startup. Polling is heavier but never hits the watcher cap.
+      env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
+    },
+    // F23: the deterministic login/search fixture the browser specs drive
+    // (https://localhost:8443). Self-signed; specs/consumers disable
+    // verification.
+    {
+      command:
+        "node --experimental-strip-types test/e2e/fixtures/fakeLoginSiteBoot.ts",
+      url: "https://localhost:8443/__e2e__/submit-count",
+      ignoreHTTPSErrors: true,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
 });
