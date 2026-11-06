@@ -404,6 +404,8 @@ Workspace chat generator streaming proposal: [product requirements](docs/prd/ai-
 
 AI chat automatic titles and manual renaming proposal: [product requirements](docs/prd/ai-chat-automatic-titles-prd.md) and [technical design](docs/prd/ai-chat-automatic-titles-technical-design.md).
 
+Universal Agent Skills and explicit project trust proposal (`.agents/skills/`, shared global paths, source precedence, and revocation): [product requirements](docs/superpowers/specs/2026-11-06-universal-agent-skills-and-project-trust-prd.md) and [technical design](docs/superpowers/specs/2026-11-06-universal-agent-skills-and-project-trust-technical-design.md).
+
 The official application website is [aifetchly.com](https://www.aifetchly.com).
 
 ## Support aiFetchly
