@@ -490,6 +490,20 @@ const startSessionMessageSchema = z.strictObject({
   cookies: z.array(normalizedCookieSchema).max(3000),
 });
 
+const bindPlatformMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("BIND_PLATFORM"),
+  /**
+   * F11: after a public→account bind the session adopts the account's
+   * platform definition — the worker re-targets its adapter and cookie
+   * capture policy instead of staying platformId=0 (public), where
+   * captureAndSendRefreshedCookies is a no-op.
+   */
+  platform: platformDefinitionSchema,
+  /** Whether to immediately capture+send refreshed cookies. */
+  captureCookies: z.boolean(),
+});
+
 const observeMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("OBSERVE"),
@@ -599,6 +613,7 @@ const evaluateScriptMessageSchema = z.strictObject({
 export const managedBrowserInboundSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     startSessionMessageSchema,
+    bindPlatformMessageSchema,
     observeMessageSchema,
     runActionsMessageSchema,
     captureScreenshotMessageSchema,

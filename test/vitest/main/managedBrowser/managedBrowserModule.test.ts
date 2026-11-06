@@ -291,6 +291,8 @@ class FakeWorkerClient {
           stateChangedReply(deps.sessionId, "running", "cancelled"),
         RESUME_HANDOFF: () =>
           stateChangedReply(deps.sessionId, "ready", "resumed"),
+        BIND_PLATFORM: () =>
+          stateChangedReply(deps.sessionId, "running", "platform_bound"),
         ...script,
       })
     );
@@ -1745,6 +1747,15 @@ describe("ManagedBrowserModule.bindAccountToSession (F03)", () => {
     const status = h.module.getStatus(started.sessionId);
     expect(status?.accountId).toBe(ACCOUNT_ID);
     expect(status?.authenticated).toBe(true);
+    // F11: the account's platform definition reached the WORKER — a
+    // bound session captures refreshed cookies (never stays platformId=0).
+    const bindMessage = h.clients[0].sent.find((m) => m.type === "BIND_PLATFORM");
+    expect(bindMessage).toBeDefined();
+    if (bindMessage?.type === "BIND_PLATFORM") {
+      expect(bindMessage.platform.platformId).toBe(2);
+      expect(bindMessage.captureCookies).toBe(true);
+    }
+    expect(status?.platformId).toBe(2);
   });
 
   it("refuses at the global session cap WITHOUT releasing the public lease", async () => {

@@ -811,6 +811,47 @@ export class WorkerSession {
     }
   }
 
+  /**
+   * F11: adopt a platform definition after a public→account bind. The
+   * adapter re-targets (public → generic/account), and when requested a
+   * cookie capture flows immediately — a signed_in result must carry a
+   * persistent account session, not a still-public worker.
+   */
+  public async bindPlatform(
+    requestId: string,
+    payload: {
+      platform: StartSessionPayload["platform"];
+      captureCookies: boolean;
+    }
+  ): Promise<void> {
+    const page = this.requirePage(requestId);
+    if (!page) {
+      return;
+    }
+    this.platformDefinition = payload.platform;
+    if (
+      payload.platform.platformId !== 0 &&
+      payload.platform.platformId !== 2
+    ) {
+      this.adapter = new GenericSignInAdapter({
+        platformId: payload.platform.platformId,
+        key: payload.platform.platformName,
+        allowedOrigins: payload.platform.allowedDomainSuffixes,
+        loginUrl: payload.platform.loginUrl,
+        verificationUrl: payload.platform.verificationUrl,
+      });
+    }
+    this.send({
+      ...this.base(requestId),
+      type: "SESSION_STATE_CHANGED",
+      state: this.runtime.getState(),
+      reasonCode: "platform_bound",
+    });
+    if (payload.captureCookies) {
+      await this.captureAndSendRefreshedCookies(requestId);
+    }
+  }
+
   /** PRD D-FR-15a: pin/unpin an observation epoch (pending approvals). */
   public pinObservation(observationId: string): boolean {
     return this.registry.pinObservation(observationId);

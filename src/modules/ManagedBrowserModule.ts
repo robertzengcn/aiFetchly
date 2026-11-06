@@ -1808,6 +1808,34 @@ record.currentUrl = message.observation.url || record.currentUrl;
     (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
     (record as { accountId: number }).accountId = accountId;
     record.authenticated = true;
+    // F11: the account's platform definition reaches the WORKER too — a
+    // still-public worker (platformId=0) never captures refreshed
+    // cookies, so a signed_in result would lack the promised persistent
+    // account session. The record's platform metadata follows the
+    // account.
+    const account = await this.accountLookup(accountId);
+    const bindManifest =
+      getPlatformManifest(account?.platformId ?? 0) ??
+      (await this.deriveManifestFromSite(account?.platformId ?? 0));
+    if (account && bindManifest) {
+      (record as { platformId: number; platformLabel: string }).platformId =
+        account.platformId;
+      (record as { platformLabel: string }).platformLabel =
+        bindManifest.platformName;
+      (record as { accountLabel: string }).accountLabel =
+        account.accountLabel;
+      await record.client
+        .request(
+          {
+            type: "BIND_PLATFORM",
+            platform: toWorkerPlatform(bindManifest),
+            captureCookies: true,
+          },
+          MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+          (m) => m.type === "SESSION_STATE_CHANGED"
+        )
+        .catch(() => undefined);
+    }
     this.pushStatus(record);
   }
 

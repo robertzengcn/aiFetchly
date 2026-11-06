@@ -239,6 +239,12 @@ parentPort.on("message", async (event: { data: unknown }) => {
           password: message.password,
         });
         return;
+      case "BIND_PLATFORM":
+        await session.bindPlatform(message.requestId, {
+          platform: message.platform,
+          captureCookies: message.captureCookies,
+        });
+        return;
       case "PIN_OBSERVATION":
         // PRD D-FR-15a: keep a pending observation's refs resolvable.
         if (message.pinned) {
