@@ -95,7 +95,7 @@ Disposable probes were removed after execution. Service probes skipped duplicate
 | R4-13 draft lifecycle | **Partially fixed** — durable resume wired via resumable-draft query; retirement on sent/discarded open | `6c62ed025` |
 | R4-14 history/bulk UI | **Partially fixed** — transcript skip-loop cards, history/bulk APIs present; full search→preview→execute journey and Playwright coverage remain open | `6c62ed025` |
 | R4-15 destination capability | **Fixed** — writable-only Trash in discovery + fallback; picker filters writable non-Trash, resets selection, LOCATION_STALE not routed to picker | `b0011f465` |
-| R4-16 localization | **Partially fixed** — manual create carries locale; pick/restore + item_status keys in six languages; recipient addresses and error-code localization remain open | `b0011f465` |
+| R4-16 localization | **Fixed** — manual create carries locale; pick/restore, item_status, recipient_outcome and error_code keys localized in six languages; the operation card shows address-level recipient outcomes with te() fallbacks | `b0011f465`, `8bc74a622` |
 | R4-17 sender identity | **Fixed** — Reply-To applied to emitted MIME; Sent append resolves from the sending account | `b0011f465` |
 | V01/V02 validation | **Open** — operator/CI scope (wire fixtures, Playwright, crash injection, perf, live mailboxes, packaging) | — |
 
