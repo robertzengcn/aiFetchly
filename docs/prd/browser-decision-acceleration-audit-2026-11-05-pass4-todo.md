@@ -47,6 +47,17 @@ Implementation HEAD after this round: `662f34a75`. Every closure below was commi
 | F19 | PARTIAL (session manifests): the SITE REGISTRY is consulted FIRST — a registered high-ID site IS the platform definition (account sessions start without a static manifest row), and the cookie-refresh policy derives from the registry when no manifest exists. Still open: SocialAccountModule/socialaccount UI label consumers, proposal/confirmation state machine for extra domains. | `662f34a75` |
 | F11/F15/F16/F21–F24 | Still open as detailed below (cookie lifecycle/adapter assessment, planner/progress state machine, ownership mapping, card mounting, hosted/native parity, E2E + performance evidence). | — |
 
+## 0d. Pass-8 implementation round (2026-11-06) — decision/options/assessment closures
+
+Implementation HEAD after this round: `591918f97`. Every closure below was committed with regression tests. Final validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgents + managedBrowser 474 tests pass; managedBrowserWorkerUnits 40 pass.
+
+| Family | Status this round | Commit(s) |
+| --- | --- | --- |
+| F14 | CLOSED (SELECT chain): the collector gathers bounded observed SELECT options (20, sanitized value+label); element summaries and candidates carry positional `o_N` option ids + labels + real values (schema + entity + worker→main contract); the runner maps the decided `o_N` back to the OBSERVED value before dispatch (an unobserved option never dispatches) — valid SELECT is no longer rejected `unknown_option`. | `352cbf304` |
+| F11 | PARTIAL (assessment + cookie bridge): the generic authentication assessment incorporates the CHALLENGE PROBE — an OTP-only /verify, CAPTCHA, passkey or recovery page is a CHALLENGE, never authenticated (reproduced); `BIND_PLATFORM` propagates the account's platform definition to the WORKER on public→account bind (adapter re-target + immediate refreshed-cookie capture + record metadata), so a signed_in result carries a persistent account session instead of a still-public worker. Still open: SocialAccountModule/UI label consumers, proposal/confirmation state machine for extra domains. | `d8910dc62`, `7c1408368` |
+| F15 | PARTIAL: recovery requests run under the SAME bounded machinery as the main path (own abortable timer capped by the decision deadline AND the remaining active runtime; late responses discarded); the progress digest covers FORM STATE (a successful fill counts as progress even when URL/text stand still) and completion-criterion progress (a newly satisfied criterion is progress); untargeted steps count toward the progress interval. Still open: planner/field-helper/cache paths. | `591918f97` |
+| F16/F21–F24 | Still open as detailed below (ownership mapping, card mounting, hosted/native parity, E2E + performance evidence). | — |
+
 ## 1. Current validation and evidence
 
 | Check | Result |
