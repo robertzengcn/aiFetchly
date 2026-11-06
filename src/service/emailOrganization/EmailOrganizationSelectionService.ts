@@ -154,7 +154,9 @@ export class EmailOrganizationSelectionService extends BaseModule {
           false
         );
       }
-      destinations = recorded;
+      destinations = Object.fromEntries(
+        uniqueIds.map((id) => [id, recorded[id].folder])
+      );
     }
 
     const payloadHash = crypto

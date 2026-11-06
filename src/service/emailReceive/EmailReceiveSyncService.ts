@@ -32,6 +32,8 @@ import {
   normalizedIdsMatch,
 } from "@/service/emailReceive/EmailReplyIdentity";
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { runWithAccountLock } from "@/service/emailOrganization/accountMutex";
 import type { UpsertLocationInput } from "@/model/EmailMessageLocation.model";
 
 /** Result of a manual or AI-triggered sync. */
@@ -61,6 +63,7 @@ export class EmailReceiveSyncService {
   private messageModule: EmailReceivedMessageModule;
   private auditModule: EmailReplyAuditLogModule;
   private conversationModule: EmailConversationModule;
+  private operationModule: EmailOrganizationOperationModule;
   private locationModule: EmailMessageLocationModule;
   private readonly clientFactory: (
     protocol: EmailReceiveProtocol
@@ -75,6 +78,7 @@ export class EmailReceiveSyncService {
     this.conversationModule = new EmailConversationModule();
     this.auditModule = new EmailReplyAuditLogModule();
     this.locationModule = new EmailMessageLocationModule();
+    this.operationModule = new EmailOrganizationOperationModule();
     this.clientFactory =
       options?.clientFactory ??
       ((protocol: EmailReceiveProtocol) =>
@@ -215,7 +219,11 @@ export class EmailReceiveSyncService {
 
     const messageIds: number[] = [];
     for (const p of parsed) {
-      const saved = await this.storeFetchedMessage(emailServiceId, p);
+      // R4-05: persistence runs under the shared account lock so a delayed
+      // old-source observation cannot interleave with a MOVE/adoption.
+      const saved = await runWithAccountLock(emailServiceId, async () =>
+        this.storeFetchedMessage(emailServiceId, p)
+      );
       messageIds.push(saved.id);
       await this.recordMessageLocation(saved.id, emailServiceId, p);
       await this.normalizeAndAssociate(emailServiceId, p, saved.id);
@@ -284,22 +292,25 @@ export class EmailReceiveSyncService {
       }
     }
 
-    // T17: a delayed OLD-source fetch after a MOVE must not become a new
-    // application identity. If the same RFC message-id already exists on a
-    // message whose verified location is operation-authored elsewhere, the
-    // observation is obsolete — return the original row unchanged.
-    if (p.messageId !== null) {
-      const obsolete = await this.messageModule.findObsoleteSourceObservation(
+    // R4-05: exact occurrence lineage replaces the Message-ID heuristic —
+    // if an operation MOVED AWAY from the observed position, this stale
+    // observation is suppressed; a legitimate copy in an unrelated folder
+    // (no matching operation lineage) inserts normally.
+    const namespaced = parseNamespacedProviderUid(p.providerUid);
+    if (p.providerFolder !== null && namespaced !== null) {
+      const movedAway = await this.operationModule.findMovedAwayOccurrence({
         emailServiceId,
-        p.messageId,
-        p.providerFolder
-      );
-      if (obsolete !== null) {
+        folderPath: p.providerFolder,
+        uidValidity: namespaced.uidValidity,
+        providerUid: namespaced.uid,
+      });
+      if (movedAway !== null) {
         log.info(
-          `[EmailReceiveSync] obsolete source observation for message ${obsolete.id} ` +
-            `(old folder ${String(p.providerFolder)}); skipped duplicate insertion`
+          `[EmailReceiveSync] stale source observation for message ${movedAway.messageId} ` +
+            `(operation ${movedAway.operationId} moved away from ${p.providerFolder}); skipped duplicate insertion`
         );
-        return obsolete;
+        const original = await this.messageModule.read(movedAway.messageId);
+        if (original !== null) return original;
       }
     }
 

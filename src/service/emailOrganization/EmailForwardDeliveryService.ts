@@ -367,10 +367,16 @@ export class EmailForwardDeliveryService extends BaseModule {
         from: revision.fromName
           ? { name: revision.fromName, address: revision.fromAddress }
           : revision.fromAddress,
+        // R4-17: the approved Reply-To identity is applied to the emitted MIME.
+        ...(revision.replyToAddress ? { replyTo: revision.replyToAddress } : {}),
         to: toRecipients,
         ...(ccRecipients.length > 0 ? { cc: ccRecipients } : {}),
         ...(bccRecipients.length > 0 ? { bcc: bccRecipients } : {}),
         subject: revision.subject,
+        // R4-07: base64 text encoding makes the composed-size estimator's
+        // base64+folding bound a TRUE upper bound (quoted-printable expands
+        // mixed Unicode up to 4x and bypassed the limit).
+        textEncoding: "base64",
         text: bodyText,
         html: bodyHtml,
         messageId: revision.composedMessageId,
@@ -381,15 +387,14 @@ export class EmailForwardDeliveryService extends BaseModule {
 
       await this.operationModule.markAttemptDispatched(claim.attemptId);
 
-      // T03: the LAST pre-SMTP gate sits between dispatch marking and the
-      // submission itself — the narrowest honest window. An edit/discard
-      // committing inside the prior awaits is caught here.
-      const finalAdmission = await this.draftModule.readDraft(draft.id);
-      if (
-        finalAdmission === null ||
-        finalAdmission.status !== "ready" ||
-        finalAdmission.currentRevisionId !== revision.id
-      ) {
+      // R4-01: revision-bound dispatch fence — the atomic ready→dispatching
+      // CAS fences edit/discard for the whole SMTP window. Losing the CAS
+      // means an edit/discard won; the old content never leaves.
+      const dispatchFenced = await this.draftModule.markDispatching(
+        draft.id,
+        revision.id
+      );
+      if (!dispatchFenced) {
         return await this.failNoDispatch(
           claim.itemId,
           operation.operationId,

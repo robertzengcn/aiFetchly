@@ -166,9 +166,34 @@ export function closeSmtpTransporter(
 export class OutboundSmtpSession {
   private mode: SmtpTlsMode = "configured";
   private transporter: Transporter;
+  /** T16/R4-08: raw MIME captured by the stream plugin of the last send. */
+  private lastRawMessage: Buffer | null = null;
 
   constructor(private readonly param: EmailServiceEntitydata) {
     this.transporter = createOutboundSmtpTransporter(param);
+    // R4-08: the 'stream' plugin stage runs AFTER nodemailer compiled
+    // mail.message — tee the raw bytes so the Sent-copy append sends the
+    // same bytes that were submitted (production replaces the audit's
+    // injected-buffer fixture).
+    this.transporter.use("stream", (mail: { message?: { createReadStream(): NodeJS.ReadableStream } }, callback: () => void) => {
+      const chunks: Buffer[] = [];
+      const stream = mail.message?.createReadStream();
+      if (stream === undefined) {
+        callback();
+        return;
+      }
+      stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      stream.on("error", () => callback());
+      stream.on("end", () => {
+        this.lastRawMessage = Buffer.concat(chunks);
+        callback();
+      });
+    });
+  }
+
+  /** Raw composed MIME of the last send, when the stream stage captured it. */
+  capturedRawMessage(): Buffer | null {
+    return this.lastRawMessage;
   }
 
   async sendMail(

@@ -1127,6 +1127,8 @@ export default {
     description_hint: "Ingrese la descripción del filtro",
   },
   emailOrganization: {
+    pick_restore_folder: "Elegir carpeta de destino para restaurar",
+    restore_button: "Restaurar",
     already_attempted: "Este reenvío ya se había intentado",
     item_status: {
       pending: "Pendiente",

@@ -83,8 +83,10 @@ export class EmailOrganizationCapabilityService extends BaseModule {
         }
         // R08: fail closed on ambiguity — multiple \\Trash advertisements
         // cannot be resolved by guessing the first one.
+        // R4-15: the Trash destination must be writable — a read-only
+        // advertised Trash is unusable for mutation.
         const trashFolders = probe.folders.filter(
-          (folder) => folder.specialUse === "\\Trash"
+          (folder) => folder.specialUse === "\\Trash" && folder.writable
         );
         if (trashFolders.length === 1) {
           trashFolderPath = trashFolders[0].path;

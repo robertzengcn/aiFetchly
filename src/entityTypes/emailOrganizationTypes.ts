@@ -81,7 +81,13 @@ export type EmailOrganizationOrigin =
   | "tool_confirmation";
 
 /** Draft lifecycle. `ready` means a validated, reviewable revision exists. */
-export type EmailForwardDraftStatus = "draft" | "ready" | "submitted" | "discarded";
+export type EmailForwardDraftStatus =
+  | "draft"
+  | "ready"
+  /** R4-01: revision-bound dispatch fence — edits/discard refuse while set. */
+  | "dispatching"
+  | "submitted"
+  | "discarded";
 
 /** Sent-copy tracking, independent from SMTP submission (design §9.4). */
 export type EmailSentCopyStatus =

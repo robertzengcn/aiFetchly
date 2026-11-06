@@ -30,6 +30,8 @@ export const emailOrgAttachmentSelectionSchema = lazySchema(() =>
 export const emailForwardDraftCreateInputSchema = lazySchema(() =>
   z.strictObject({
     messageId: positiveInt,
+    /** R4-16: UI locale for generated header labels. */
+    locale: z.enum(["en", "zh", "es", "fr", "de", "ja"]).optional(),
     // Optional at review time: the dialog is inspectable before recipients
     // are typed; delivery refuses an empty envelope at send time.
     to: recipientList.optional(),

@@ -146,7 +146,11 @@ describe("EmailForwardReviewDialog", () => {
     const wrapper = mountDialog();
     await flushPromises();
 
-    expect(mockCreate).toHaveBeenCalledWith({ messageId: 33, attachments: { mode: "all" } });
+    expect(mockCreate).toHaveBeenCalledWith({
+      messageId: 33,
+      locale: "en",
+      attachments: { mode: "all" },
+    });
     const text = wrapper.text();
     // Subject is an editable input value; the manifest and preview are text.
     const inputs = wrapper.findAll("input");

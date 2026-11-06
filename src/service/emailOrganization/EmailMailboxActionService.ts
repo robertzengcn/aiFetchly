@@ -191,7 +191,7 @@ export class EmailMailboxActionService extends BaseModule {
         });
       } else if (claim.status === "item_not_pending") {
         const currentItem = (await this.operationModule.listItems(noopOperation.operationId))[0];
-        if (currentItem.status !== "claimed") {
+        if (currentItem.status === "pending") {
           await this.operationModule.finalizeItem({
             itemId: currentItem.id,
             operationId: noopOperation.operationId,
@@ -209,6 +209,15 @@ export class EmailMailboxActionService extends BaseModule {
         detail: { trashFolder },
       });
       return await this.projectResult(noopOperation.operationId);
+    }
+
+    // R4-04: a duplicate call on a message with an open (nonterminal)
+    // operation returns that operation's durable outcome instead of creating
+    // a fresh one whose claim-refusal would destroy unknown state.
+    const openOperation = await this.operationModule
+      .findOpenOperationForMessage(message.id);
+    if (openOperation !== null) {
+      return await this.projectResult(openOperation.operationId);
     }
 
     const operation = await this.createOperation(input, message.emailServiceId, [message.id], trashFolder, "trash");
@@ -229,12 +238,12 @@ export class EmailMailboxActionService extends BaseModule {
       destinationFolderPath: trashFolder,
     });
     if (claim.status !== "claimed") {
-      // A claimed item belongs to a concurrent execution of this same action
-      // (duplicate tool delivery / double click): the winner owns the outcome.
-      // Finalizing 'failed' here would overwrite the winner's in-flight state
-      // and fence out its later success (red-team finding).
+      // R4-04: claim refusal is NOT proof of non-dispatch. Only a still-
+      // pending item may be finalized failed; claimed (concurrent execution)
+      // and unknown (awaiting reconciliation) items keep their durable
+      // outcome — a duplicate call must never destroy an unknown state.
       const current = await this.operationModule.findItemById(item.id);
-      if (current?.status === "claimed") {
+      if (current !== null && current.status !== "pending") {
         return await this.projectResult(operation.operationId);
       }
       await this.operationModule.finalizeItem({
@@ -362,9 +371,14 @@ export class EmailMailboxActionService extends BaseModule {
       "trash"
     );
     void this.runSerialized(selection.emailServiceId, async () => {
+      // R4-10: revalidate expiry after queue admission — a selection that
+      // waited past its TTL never starts moving messages.
+      await selectionService.readValidSelection(input.selectionId);
       await this.executeBulkLoop(operationId, selection, parsed.messageIds, destinations, input.origin, "trash");
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       log.error("[EmailMailboxActionService] detached bulk execution failed:", error);
+      // R4-11: persist the failure durably so pending work is recoverable.
+      await this.operationModule.cancelPending(operationId).catch(() => undefined);
     });
     return { operationId };
   }
@@ -399,6 +413,8 @@ export class EmailMailboxActionService extends BaseModule {
       "restore"
     );
     void this.runSerialized(selection.emailServiceId, async () => {
+      // R4-10: revalidate expiry after queue admission.
+      await selectionService.readValidSelection(input.selectionId);
       await this.executeBulkLoop(
         operationId,
         selection,
@@ -407,8 +423,10 @@ export class EmailMailboxActionService extends BaseModule {
         input.origin,
         "restore"
       );
-    }).catch((error: unknown) => {
-      log.error("[EmailMailboxActionService] detached bulk restore failed:", error);
+    }).catch(async (error: unknown) => {
+      log.error("[EmailMailboxActionService] detached bulk execution failed:", error);
+      // R4-11: persist the failure durably so pending work is recoverable.
+      await this.operationModule.cancelPending(operationId).catch(() => undefined);
     });
     return { operationId };
   }
@@ -469,6 +487,10 @@ export class EmailMailboxActionService extends BaseModule {
     const selectionService = new EmailOrganizationSelectionService();
     const selection = await selectionService.readValidSelection(input.selectionId);
     return await this.runSerialized(selection.emailServiceId, async () => {
+    // R4-10: revalidate AFTER acquiring the account lock — queued work can
+    // wait behind other operations and must not start past its 15-minute
+    // approval window.
+    await selectionService.readValidSelection(input.selectionId);
     if (selection.kind !== "trash") {
       // Consent integrity: a selection frozen for one action must never be
       // executed under another (a trash selection executed as restore would
@@ -507,6 +529,8 @@ export class EmailMailboxActionService extends BaseModule {
     const selectionService = new EmailOrganizationSelectionService();
     const selection = await selectionService.readValidSelection(input.selectionId);
     return await this.runSerialized(selection.emailServiceId, async () => {
+    // R4-10: revalidate after the account lock (same rule as trash bulk).
+    await selectionService.readValidSelection(input.selectionId);
     if (selection.kind !== "restore") {
       return this.failedResult(
         "VALIDATION_FAILED",
@@ -643,8 +667,10 @@ export class EmailMailboxActionService extends BaseModule {
       destinationFolderPath: destinationFolder,
     });
     if (claim.status !== "claimed") {
+      // R4-04: only still-pending items finalize failed; claimed/unknown
+      // keep their durable outcome.
       const current = await this.operationModule.findItemById(item.id);
-      if (current?.status !== "claimed") {
+      if (current !== null && current.status === "pending") {
         await this.operationModule.finalizeItem({
           itemId: item.id,
           operationId,
@@ -680,6 +706,46 @@ export class EmailMailboxActionService extends BaseModule {
    * bulk execution to unpinned current-state execution. Null is only
    * returned when the message legitimately has no frozen entry.
    */
+  /**
+   * R4-02: reply invalidation for a location change. Failures are surfaced
+   * durably (audit) instead of swallowed, so an old approval cannot linger
+   * usable after a move.
+   */
+  private async invalidateRepliesForMove(
+    messageId: number,
+    destinationFolder: string,
+    itemId: number,
+    operationId: string
+  ): Promise<void> {
+    try {
+      const invalidated = await this.replyDraftModule.invalidateUnsentDraftsForMessage(
+        messageId,
+        `message moved to ${destinationFolder}`
+      );
+      if (invalidated > 0) {
+        log.info(
+          `[EmailMailboxActionService] invalidated ${invalidated} pending reply draft(s) after move of message ${messageId}`
+        );
+      }
+    } catch (error) {
+      log.error(
+        `[EmailMailboxActionService] reply invalidation FAILED for message ${messageId}:`,
+        error instanceof Error ? error.message : String(error)
+      );
+      await this.operationModule
+        .recordAudit({
+          operationId,
+          itemId,
+          messageId,
+          action: "reply_invalidation_failed",
+          status: "failed",
+          reasonCode: "LOCAL_COMMIT_PENDING",
+          detail: { destinationFolder },
+        })
+        .catch(() => undefined);
+    }
+  }
+
   private async selectionFrozenVersion(
     selection: EmailOrganizationSelectionEntity,
     messageId: number
@@ -1067,6 +1133,39 @@ export class EmailMailboxActionService extends BaseModule {
   }
 
   /**
+   * R4-11: settle ORPHANED pending work — nonterminal operations with
+   * pending items but no live executor (crash before first claim or
+   * between items). Pending items are cancelled (never silently replayed);
+   * completed outcomes stay; in-flight claimed items reconcile by lease.
+   */
+  async settleOrphanedPendingOperations(): Promise<number> {
+    await this.ensureConnection();
+    const operations = await this.operationModule.findNonTerminalOperations();
+    let settled = 0;
+    for (const operation of operations) {
+      try {
+        await this.runSerialized(operation.emailServiceId, async () => {
+          // Expired claims inside a nonterminal operation reconcile first.
+          await this.reconcileExpiredClaims();
+          const items = await this.operationModule.listItems(operation.operationId);
+          const pending = items.filter((item) => item.status === "pending");
+          if (pending.length === 0) return;
+          // Operations older than the settle threshold with pending items and
+          // no live claims are orphaned — stop the unstarted work.
+          await this.operationModule.cancelPending(operation.operationId);
+          settled += pending.length;
+        });
+      } catch (error) {
+        log.warn(
+          `[EmailMailboxActionService] orphan settle failed for ${operation.operationId}:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
+    return settled;
+  }
+
+  /**
    * Evidence-based reconciliation for one operation with unknown items
    * (design §10.3): probe the source folder — if the message left and a
    * destination mapping exists on the attempt result, record success.
@@ -1179,6 +1278,9 @@ export class EmailMailboxActionService extends BaseModule {
               destinationFolder: item.destinationFolderPath,
             }),
           });
+          // R4-02: every successful repair path invalidates pending replies —
+          // the location changed, so old approvals must not send.
+          await this.invalidateRepliesForMove(item.messageId, item.destinationFolderPath ?? "Trash", item.id, operationId);
           await this.operationModule.recordAudit({
             operationId,
             itemId: item.id,
@@ -1215,6 +1317,8 @@ export class EmailMailboxActionService extends BaseModule {
           status: "succeeded",
           resultJson: JSON.stringify({ reconciled: true, destinationFolder: item.destinationFolderPath }),
         });
+        // R4-02: reconcile-side reply invalidation (same as ordinary MOVE).
+        await this.invalidateRepliesForMove(item.messageId, item.destinationFolderPath, item.id, operationId);
         await this.operationModule.recordAudit({
           operationId,
           itemId: item.id,

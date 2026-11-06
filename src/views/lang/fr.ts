@@ -1116,6 +1116,8 @@ export default {
     description_hint: "input filter description",
   },
   emailOrganization: {
+    pick_restore_folder: "Choisir le dossier de destination de la restauration",
+    restore_button: "Restaurer",
     already_attempted: "Ce transfert a déjà été tenté",
     item_status: {
       pending: "En attente",

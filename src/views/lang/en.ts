@@ -1127,6 +1127,8 @@ export default {
     description_hint: "input filter description",
   },
   emailOrganization: {
+    pick_restore_folder: "Choose a restore destination folder",
+    restore_button: "Restore",
     already_attempted: "This forward was already attempted",
     item_status: {
       pending: "Pending",

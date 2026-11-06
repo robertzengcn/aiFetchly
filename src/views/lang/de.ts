@@ -1126,6 +1126,8 @@ export default {
     description_hint: "Filterbeschreibung eingeben",
   },
   emailOrganization: {
+    pick_restore_folder: "Wiederherstellungs-Zielordner wählen",
+    restore_button: "Wiederherstellen",
     already_attempted: "Diese Weiterleitung wurde bereits versucht",
     item_status: {
       pending: "Ausstehend",

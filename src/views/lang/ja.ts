@@ -1107,6 +1107,8 @@ export default {
     description_hint: "フィルターの説明を入力",
   },
   emailOrganization: {
+    pick_restore_folder: "復元先のフォルダーを選択",
+    restore_button: "復元",
     already_attempted: "この転送は既に試行済みです",
     item_status: {
       pending: "待機中",

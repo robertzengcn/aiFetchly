@@ -362,9 +362,26 @@ export class EmailOrganizationOperationModel extends BaseDb {
    * trash item per message — the durable source for restore-selection
    * destinations. Only verified trash provenance qualifies (design §10.2).
    */
+  /**
+   * R4-03: restore provenance carries the full after-locator (folder, uid,
+   * uidValidity, resulting version, originating operation id) so prepare AND
+   * execution can bind the exact current lineage — not just a historical
+   * folder string.
+   */
   async findSucceededTrashDestinations(
     messageIds: readonly number[]
-  ): Promise<Record<number, string>> {
+  ): Promise<
+    Record<
+      number,
+      {
+        folder: string;
+        destinationUid: string | null;
+        destinationUidValidity: string | null;
+        resultingVersion: number;
+        originOperationId: string;
+      }
+    >
+  > {
     if (messageIds.length === 0) return {};
     const rows = await this.itemRepository
       .createQueryBuilder("item")
@@ -377,11 +394,51 @@ export class EmailOrganizationOperationModel extends BaseDb {
       .andWhere("item.beforeFolderPath IS NOT NULL")
       .orderBy("item.id", "DESC")
       .getMany();
-    const destinations: Record<number, string> = {};
-    for (const item of rows) {
-      if (destinations[item.messageId] === undefined && item.beforeFolderPath !== null) {
-        destinations[item.messageId] = item.beforeFolderPath;
+    const destinations: Record<
+      number,
+      {
+        folder: string;
+        destinationUid: string | null;
+        destinationUidValidity: string | null;
+        resultingVersion: number;
+        originOperationId: string;
       }
+    > = {};
+    for (const item of rows) {
+      if (destinations[item.messageId] !== undefined || item.beforeFolderPath === null) {
+        continue;
+      }
+      let destinationUid: string | null = null;
+      let destinationUidValidity: string | null = null;
+      const attempts = await this.attemptRepository
+        .find({ where: { itemId: item.id }, order: { attemptNumber: "DESC" } });
+      for (const attempt of attempts) {
+        if (attempt.resultJson === null) continue;
+        try {
+          const evidence = JSON.parse(attempt.resultJson) as {
+            destinationUid?: string | null;
+            destinationUidValidity?: string | null;
+          };
+          if (destinationUid === null && typeof evidence.destinationUid === "string") {
+            destinationUid = evidence.destinationUid;
+          }
+          if (
+            destinationUidValidity === null &&
+            typeof evidence.destinationUidValidity === "string"
+          ) {
+            destinationUidValidity = evidence.destinationUidValidity;
+          }
+        } catch {
+          // malformed evidence → uid stays null
+        }
+      }
+      destinations[item.messageId] = {
+        folder: item.beforeFolderPath,
+        destinationUid,
+        destinationUidValidity,
+        resultingVersion: (item.beforeLocationVersion ?? 0) + 1,
+        originOperationId: item.operationId,
+      };
     }
     return destinations;
   }
@@ -486,6 +543,58 @@ export class EmailOrganizationOperationModel extends BaseDb {
           count: Number(row.count),
         }))
       );
+  }
+
+  /**
+   * R4-05: detects that an observed (account, folder, uidValidity, uid)
+   * position was MOVED AWAY by a succeeded operation — the exact durable
+   * occurrence lineage for stale-source suppression, replacing the
+   * Message-ID heuristic.
+   */
+  async findMovedAwayOccurrence(input: {
+    readonly emailServiceId: number;
+    readonly folderPath: string;
+    readonly uidValidity: string;
+    readonly providerUid: string;
+  }): Promise<{ messageId: number; operationId: string } | null> {
+    const rows = await this.itemRepository
+      .createQueryBuilder("item")
+      .innerJoin(EmailOrganizationOperationEntity, "op", "op.operationId = item.operationId")
+      .where("item.emailServiceId IS NULL OR item.emailServiceId = :emailServiceId", {
+        emailServiceId: input.emailServiceId,
+      })
+      .andWhere("item.beforeFolderPath = :folderPath", { folderPath: input.folderPath })
+      .andWhere("item.beforeUidValidity = :uidValidity", { uidValidity: input.uidValidity })
+      .andWhere("item.beforeProviderUid = :providerUid", { providerUid: input.providerUid })
+      .andWhere("op.kind IN (:...kinds)", { kinds: ["trash", "restore"] })
+      .andWhere("item.status IN (:...statuses)", { statuses: ["succeeded", "noop"] })
+      .orderBy("item.id", "DESC")
+      .take(1)
+      .getMany();
+    const item = rows[0];
+    if (item === undefined) return null;
+    return { messageId: item.messageId, operationId: item.operationId };
+  }
+
+  /**
+   * R4-04: the open (nonterminal) operation covering a message, if any.
+   * Duplicate callers resolve to this durable outcome instead of creating a
+   * competing operation whose claim refusal would destroy unknown state.
+   */
+  async findOpenOperationForMessage(
+    messageId: number
+  ): Promise<EmailOrganizationOperationEntity | null> {
+    const rows = await this.operationRepository
+      .createQueryBuilder("op")
+      .innerJoin(EmailOrganizationOperationItemEntity, "item", "item.operationId = op.operationId")
+      .where("item.messageId = :messageId", { messageId })
+      .andWhere("op.status IN (:...statuses)", {
+        statuses: ["prepared", "awaiting_approval", "authorized", "running", "needs_reconciliation"],
+      })
+      .orderBy("op.requestedAt", "DESC")
+      .take(1)
+      .getMany();
+    return rows[0] ?? null;
   }
 
   /**

@@ -111,12 +111,60 @@ export class EmailOrganizationOperationModule extends BaseModule {
 
   async findSucceededTrashDestinations(
     messageIds: readonly number[]
-  ): Promise<Record<number, string>> {
+  ): Promise<
+    Record<
+      number,
+      {
+        folder: string;
+        destinationUid: string | null;
+        destinationUidValidity: string | null;
+        resultingVersion: number;
+        originOperationId: string;
+      }
+    >
+  > {
     try {
       await this.ensureConnection();
       return await this.operationModel.findSucceededTrashDestinations(messageIds);
     } catch (error) {
       log.error("Error finding succeeded trash destinations:", error);
+      throw error;
+    }
+  }
+
+  async findMovedAwayOccurrence(input: {
+    readonly emailServiceId: number;
+    readonly folderPath: string;
+    readonly uidValidity: string;
+    readonly providerUid: string;
+  }): Promise<{ messageId: number; operationId: string } | null> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.findMovedAwayOccurrence(input);
+    } catch (error) {
+      log.error("Error finding moved-away occurrence:", error);
+      throw error;
+    }
+  }
+
+  async findOpenOperationForMessage(
+    messageId: number
+  ): Promise<EmailOrganizationOperationEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.findOpenOperationForMessage(messageId);
+    } catch (error) {
+      log.error("Error finding open operation for message:", error);
+      throw error;
+    }
+  }
+
+  async findNonTerminalOperations(): Promise<EmailOrganizationOperationEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.findNonTerminalOperations();
+    } catch (error) {
+      log.error("Error finding non-terminal operations:", error);
       throw error;
     }
   }

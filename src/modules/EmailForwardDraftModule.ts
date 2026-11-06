@@ -98,6 +98,28 @@ export class EmailForwardDraftModule extends BaseModule {
     }
   }
 
+  /** R4-01: atomic ready→dispatching fence (edits/discard refuse while set). */
+  async markDispatching(draftId: number, revisionId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.markDispatching(draftId, revisionId);
+    } catch (error) {
+      log.error("Error marking draft dispatching:", error);
+      throw error;
+    }
+  }
+
+  /** R4-01: returns a pre-SMTP-fenced draft to ready. */
+  async releaseDispatching(draftId: number, revisionId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.releaseDispatching(draftId, revisionId);
+    } catch (error) {
+      log.error("Error releasing draft dispatching:", error);
+      throw error;
+    }
+  }
+
   async markSubmitted(draftId: number, revisionId: number): Promise<boolean> {
     try {
       await this.ensureConnection();

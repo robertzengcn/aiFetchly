@@ -1869,7 +1869,8 @@ function initialize() {
         // interval so no operation is left running indefinitely.
         const leaseSweepTimer = setInterval(
           () => {
-            void new EmailMailboxActionService()
+            const actionService = new EmailMailboxActionService();
+            void actionService
               .reconcileExpiredClaims()
               .catch((err: unknown) => {
                 log.warn(
@@ -1877,10 +1878,28 @@ function initialize() {
                   err instanceof Error ? err.message : String(err)
                 );
               });
+            // R4-11: settle orphaned pending work so crash-interrupted
+            // operations never retain unexplained pending items.
+            void actionService
+              .settleOrphanedPendingOperations()
+              .catch((err: unknown) => {
+                log.warn(
+                  "[email-organization] orphan settle failed:",
+                  err instanceof Error ? err.message : String(err)
+                );
+              });
           },
           5 * 60 * 1000
         );
         leaseSweepTimer.unref();
+        void new EmailMailboxActionService()
+          .settleOrphanedPendingOperations()
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] startup orphan settle failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
         void new EmailMailboxActionService()
           .reconcileExpiredClaims()
           .then((reconciled: number) => {

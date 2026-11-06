@@ -94,6 +94,8 @@ export interface SendForwardResultDto {
 
 export interface CreateForwardDraftInput {
   messageId: number;
+  /** R4-16: UI locale for generated header labels. */
+  locale?: "en" | "zh" | "es" | "fr" | "de" | "ja";
   /** Optional while drafting; delivery refuses an empty envelope at send. */
   to?: string[];
   cc?: string[];

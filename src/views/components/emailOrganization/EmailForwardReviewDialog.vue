@@ -173,7 +173,7 @@ const emit = defineEmits<{
   (event: "draft-saved", draftId: number): void;
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -248,6 +248,8 @@ async function openForMessage(messageId: number): Promise<void> {
     }
     const created = await createForwardDraft({
       messageId,
+      // R4-16: generated headers use the active UI locale.
+      locale: locale.value as "en" | "zh" | "es" | "fr" | "de" | "ja",
       attachments: { mode: "all" },
     });
     draftId.value = created.draftId;

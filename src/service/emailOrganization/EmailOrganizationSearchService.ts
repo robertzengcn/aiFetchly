@@ -152,9 +152,17 @@ export class EmailOrganizationSearchService extends BaseModule {
         hasAttachments: row.hasAttachments === 1,
       })),
       totalMatched: result.totalMatched,
-      complete: true,
+      complete: !result.truncated,
       truncated: result.truncated,
-      nextCursor: null,
+      nextCursor:
+        result.truncated && result.rows.length > 0
+          ? Buffer.from(
+              JSON.stringify({
+                receivedAt: result.rows[result.rows.length - 1].receivedAt.toISOString(),
+                id: result.rows[result.rows.length - 1].id,
+              })
+            ).toString("base64")
+          : null,
       lastSyncAt: service.lastReceiveSyncAt ? service.lastReceiveSyncAt.toISOString() : null,
       limitation:
         excludedFolder !== null

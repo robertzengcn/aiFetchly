@@ -1084,6 +1084,8 @@ export default {
     description_hint: "输入过滤器描述",
   },
   emailOrganization: {
+    pick_restore_folder: "选择恢复目标文件夹",
+    restore_button: "恢复",
     already_attempted: "此转发已尝试过",
     item_status: {
       pending: "等待中",

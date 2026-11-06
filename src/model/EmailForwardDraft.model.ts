@@ -113,6 +113,39 @@ export class EmailForwardDraftModel extends BaseDb {
     return await this.revisionRepository.findOne({ where: { id } });
   }
 
+  /**
+   * R4-01: atomic ready→dispatching fence. While dispatching, edits and
+   * discard refuse (their CAS statuses exclude dispatching), so a revision
+   * cannot change mid-SMTP. Cleared by markSubmitted (→ submitted) or
+   * releaseDispatching (→ ready on pre-SMTP failure).
+   */
+  async markDispatching(draftId: number, revisionId: number): Promise<boolean> {
+    const result = await this.draftRepository
+      .createQueryBuilder()
+      .update(EmailForwardDraftEntity)
+      .set({ status: "dispatching" })
+      .where(
+        "id = :draftId AND currentRevisionId = :revisionId AND status = :ready",
+        { draftId, revisionId, ready: "ready" }
+      )
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
+  /** R4-01: returns a failed/pre-SMTP-fenced draft to ready. */
+  async releaseDispatching(draftId: number, revisionId: number): Promise<boolean> {
+    const result = await this.draftRepository
+      .createQueryBuilder()
+      .update(EmailForwardDraftEntity)
+      .set({ status: "ready" })
+      .where(
+        "id = :draftId AND currentRevisionId = :revisionId AND status = :dispatching",
+        { draftId, revisionId, dispatching: "dispatching" }
+      )
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
   /** Conditional submit marker; fails when the revision changed meanwhile. */
   async markSubmitted(draftId: number, revisionId: number): Promise<boolean> {
     const result = await this.draftRepository
@@ -121,7 +154,7 @@ export class EmailForwardDraftModel extends BaseDb {
       .set({ status: "submitted", submittedAt: new Date() })
       .where(
         "id = :draftId AND currentRevisionId = :revisionId AND status IN (:...allowed)",
-        { draftId, revisionId, allowed: ["ready", "draft"] }
+        { draftId, revisionId, allowed: ["ready", "dispatching"] }
       )
       .execute();
     return (result.affected ?? 0) === 1;

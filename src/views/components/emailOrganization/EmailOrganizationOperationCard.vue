@@ -343,11 +343,10 @@ async function onUndo(): Promise<void> {
       // outcome never re-arms Undo.
       displayOperationId.value = result.operationId;
       await load();
-    } else if (
-      result.errorCode === "DESTINATION_INVALID" ||
-      result.errorCode === "LOCATION_STALE"
-    ) {
+    } else if (result.errorCode === "DESTINATION_INVALID") {
       // AC-16: removed original folder — offer a replacement explicitly.
+      // R4-15: LOCATION_STALE is NOT routed here — stale lineage needs a
+      // refresh of the message, not a destination retry.
       await showFolderPicker();
     } else {
       errorMessage.value = result.errorCode ?? result.status;
@@ -382,9 +381,12 @@ async function showFolderPicker(): Promise<void> {
       return;
     }
     const result = await listEmailOrganizationFolders(emailServiceId);
+    // R4-15: offer only valid writable replacement destinations, excluding
+    // Trash; reset any previous selection.
     folderOptions.value = result.folders.filter(
-      (folder) => folder.specialUse !== "\\Trash"
+      (folder) => folder.specialUse !== "\\Trash" && folder.writable
     );
+    selectedFolderPath.value = null;
     folderPickerVisible.value = true;
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error);

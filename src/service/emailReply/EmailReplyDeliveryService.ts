@@ -859,7 +859,12 @@ export class EmailReplyDeliveryService {
     // it. A crash clears the in-memory mark (restart = quiescence).
     markSubmitterRunning(attemptId);
     try {
-      return await this.runClaimedSendToFinalization({
+      // R4-02: the account lock spans final admission (freshness gate + fence)
+    // AND SMTP, so a Trash/restore MOVE on the same account cannot invalidate
+    // the approval between admission and dispatch. The post-claim freshness
+    // gate revalidates AFTER acquiring the lock.
+    return await runWithAccountLock(emailServiceId, async () =>
+      await this.runClaimedSendToFinalization({
         message,
         draft,
         revision,
@@ -870,7 +875,8 @@ export class EmailReplyDeliveryService {
         attemptId,
         requestCorrelationId,
         assistedProbe,
-      });
+      })
+    );
     } finally {
       // EncompassingSettlement (F02): gate refusals (which finalize + throw),
       // fence refusals, SMTP outcomes and unexpected throws all settle here —
@@ -1014,19 +1020,17 @@ export class EmailReplyDeliveryService {
         parentMessageId: message.messageId,
         parentReferences: message.referencesHeader,
       });
-      // T07: SMTP dispatch runs under the shared per-account lock so a
-      // Trash/restore MOVE on the same account cannot race this submission's
-      // admission/persistence window (PRD §12 stale reply-approval rule).
-      const raw = await runWithAccountLock(emailServiceId, async () =>
-        sender.sendReplyEmail({
-          receiver: headers.recipientAddress,
-          subject: headers.subject,
-          text: revision.bodyText,
-          html: revision.bodyHtml,
-          inReplyTo: headers.thread.inReplyTo,
-          references: headers.thread.references.join(" "),
-        })
-      );
+      // T07: SMTP runs under the account lock acquired by the caller
+      // (R4-02) — AsyncMutex is not re-entrant, so a second acquisition
+      // here would self-deadlock.
+      const raw = await sender.sendReplyEmail({
+        receiver: headers.recipientAddress,
+        subject: headers.subject,
+        text: revision.bodyText,
+        html: revision.bodyHtml,
+        inReplyTo: headers.thread.inReplyTo,
+        references: headers.thread.references.join(" "),
+      });
       const classified = classifySubmissionResult(raw);
       certainty = classified.certainty;
       providerMessageId = classified.providerMessageId;
