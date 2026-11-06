@@ -58,6 +58,16 @@ Implementation HEAD after this round: `591918f97`. Every closure below was commi
 | F15 | PARTIAL: recovery requests run under the SAME bounded machinery as the main path (own abortable timer capped by the decision deadline AND the remaining active runtime; late responses discarded); the progress digest covers FORM STATE (a successful fill counts as progress even when URL/text stand still) and completion-criterion progress (a newly satisfied criterion is progress); untargeted steps count toward the progress interval. Still open: planner/field-helper/cache paths. | `591918f97` |
 | F16/F21–F24 | Still open as detailed below (ownership mapping, card mounting, hosted/native parity, E2E + performance evidence). | — |
 
+## 0e. Pass-9 implementation round (2026-11-07) — runtime controls + batch card closures
+
+Implementation HEAD after this round: `5340731d0`. Final validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgents + managedBrowser 476 tests pass; worker units 40 pass; browser card component files 39 pass (5 files incl. the new BrowserControlCards suite); vue-tsc on the new component is clean (the repo's one pre-existing EditSearchTaskDialog error remains, unrelated).
+
+| Family | Status this round | Commit(s) |
+| --- | --- | --- |
+| F21 | PARTIAL (batch card LIVE): `runBrowserTasks` emits per-task batch events (`started` / per-task `running`+final states / `finished`) through a registered sink; a new `MANAGED_BROWSER_BATCH_EVENT` channel bridges them to the renderer (channellist + preload + view API `onManagedBrowserBatchEvent`); task-control verbs (`pause/resume/stop` per task, `return-now` per batch) are exposed as validated view-API calls over the existing IPC handlers; a new `BrowserControlCards.vue` container is MOUNTED in AiChatV2 next to the session card and renders `BrowserTaskBatchCard` with live rows (state updates replace rows in place; finished batches linger 30s for review). Covered by a component suite driving the events + asserting the IPC verbs. Still open: account-picker request flow and site-confirm proposal state machine (the other two cards remain unmounted), batch cost/token caps. | `5340731d0` |
+| F16 | PARTIAL: session-long RUNNER ownership — `executeTask` refuses a second runner on a session that already has one (synchronous check before every awaited gate, reason `session_owned_by_active_runner`); the lease is registered at runner admission and released on EVERY exit path. Still open: root-conversation threading through query-loop invocation, scoped batch consent lease, enforced no-consequential child policy, provider/batch budget caps. | `5340731d0` |
+| F22/F23/F24 | Still open (hosted/native routing parity, E2E harness, performance qualification — require real environments/operator evidence per AGENTS.md). | — |
+
 ## 1. Current validation and evidence
 
 | Check | Result |
