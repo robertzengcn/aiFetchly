@@ -490,6 +490,18 @@ export class BrowserTaskRunner {
             extracted.push(...execution.extracted);
           }
           observation = await this.deps.observe(this.input.sessionId);
+          // F15: untargeted actions participate in progress accounting —
+          // 5 untargeted steps that change nothing are still no progress.
+          if (observation) {
+            const untargetedProgress = await this.checkProgress(
+              observation,
+              decisionInput,
+              signal
+            );
+            if (untargetedProgress === "no_progress") {
+              return this.terminal("partial", "no_progress", evidence, extracted, observation);
+            }
+          }
           continue;
         }
 
@@ -689,11 +701,42 @@ export class BrowserTaskRunner {
       ].slice(-6),
     };
     try {
-      const result = await this.deps.decisionClient.decide(
-        recoveryInput,
-        signal
+      // F15: recovery uses the SAME bounded request machinery as the main
+      // path — its own abortable timer capped by the decision deadline and
+      // the remaining active runtime; a late response is discarded, never
+      // executed (the outer signal alone is not a deadline).
+      const control =
+        this.deps.control ?? getDefaultAgentTaskControlService();
+      const remainingActiveMs = Math.max(
+        0,
+        this.budget.activeRuntimeMs - control.activeTimeMs(this.taskId)
       );
-      if (result.status === "decided") {
+      const deadlineMs = Math.max(
+        0,
+        Math.min(recoveryInput.deadline_ms, remainingActiveMs)
+      );
+      if (deadlineMs === 0) {
+        return false;
+      }
+      const attemptController = new AbortController();
+      const onOuterAbort = (): void => attemptController.abort();
+      signal.addEventListener("abort", onOuterAbort, { once: true });
+      const timer = setTimeout(() => attemptController.abort(), deadlineMs);
+      let result: BrowserDecisionResult;
+      try {
+        result = await this.deps.decisionClient.decide(
+          recoveryInput,
+          attemptController.signal
+        );
+      } finally {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onOuterAbort);
+      }
+      if (
+        result.status === "decided" &&
+        !attemptController.signal.aborted &&
+        !signal.aborted
+      ) {
         this.pendingRecovery = result;
         return true;
       }
@@ -718,8 +761,20 @@ export class BrowserTaskRunner {
       return "ok";
     }
     this.stepsSinceProgressCheck = 0;
-    const digest = `${observation.url}|${observation.visibleText.slice(0, 200)}`;
-    if (this.lastProgressDigest !== null && digest === this.lastProgressDigest) {
+    // F15: the digest covers FORM STATE (field values change on a
+    // successful fill even when the URL/text stand still) and criterion
+    // progress — newly satisfied completion criteria count as progress.
+    const formSignature = observation.elements
+      .slice(0, 60)
+      .map((el) => `${el.ref}:${el.valueSummary ?? ""}`)
+      .join("|");
+    const criterionProgress = this.verifyCompletion(observation, []).verified;
+    const digest = `${observation.url}|${observation.visibleText.slice(0, 200)}|${formSignature}|${criterionProgress ? "criterion" : ""}`;
+    if (
+      this.lastProgressDigest !== null &&
+      digest === this.lastProgressDigest &&
+      !criterionProgress
+    ) {
       const recovered = await this.recoverOnce(
         decisionInput,
         "no progress for 5 steps; the page did not change - try a DIFFERENT approach or ESCALATE",

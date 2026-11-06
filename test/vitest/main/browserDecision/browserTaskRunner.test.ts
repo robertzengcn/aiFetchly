@@ -1074,3 +1074,125 @@ describe("BrowserTaskRunner F14 SELECT option mapping", () => {
     expect(result.status).toBe("completed");
   });
 });
+
+describe("BrowserTaskRunner F15 progress and recovery", () => {
+  it("a successful FILL counts as progress even when URL/text stand still", async () => {
+    // A mutable observation: each FILL changes the field's valueSummary.
+    const obs = observation();
+    const mutableElements = obs.elements as Array<{
+      ref: string;
+      role: string;
+      name: string;
+      valueSummary?: string;
+    }>;
+    const deps = makeRunnerDeps(
+      Array.from({ length: 7 }, (_, i) => ({
+        status: "decided" as const,
+        action: {
+          operation: i === 6 ? ("DONE" as const) : ("FILL" as const),
+          target_id: "e_aaa",
+          option_id: null,
+          key: null,
+          url: null,
+          text: `query ${i}`,
+        },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      })),
+      obs
+    );
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      // The fill mutates the page state: the next observation's field
+      // summary differs.
+      const kept = mutableElements.filter((el) => el.ref !== "e_aaa");
+      mutableElements.length = 0;
+      mutableElements.push(
+        ...kept,
+        {
+          ref: "e_aaa",
+          role: "textbox",
+          name: "Search",
+          valueSummary: `query-${Date.now()}-${Math.random()}`,
+        },
+      );
+      return { effect: "known", pageRevision: obs.pageRevision, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f15fill",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // 6 fills + DONE: form-state progress kept the task alive to DONE.
+    expect(result.status).toBe("completed");
+  });
+
+  it("5+ steps that change NOTHING end as no_progress", async () => {
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async (input: unknown) => {
+        // The recovery attempt FAILS (llm_required): no alternative exists.
+        if ((input as { step_id?: string }).step_id?.includes("_recovery")) {
+          return { status: "llm_required", reason_code: "no_alternative" };
+        }
+        return {
+          status: "decided" as const,
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable" as const, confidence: null },
+        };
+      },
+    } as unknown as typeof deps.decisionClient;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f15stuck", conversationId: "conv-1", goal: "click" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("no_progress");
+  });
+
+  it("recovery decide runs under its OWN bounded attempt signal, not the outer one", async () => {
+    // 5 no-progress steps trigger recovery; the recovery decide captures
+    // the signal it received — it must be a DIFFERENT (bounded) signal.
+    let recoverySignal: AbortSignal | null = null;
+    let recoveryCalls = 0;
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async (input: unknown, signal: AbortSignal) => {
+        if ((input as { step_id?: string }).step_id?.includes("_recovery")) {
+          recoveryCalls++;
+          recoverySignal = signal;
+          // The recovery proposal: ESCALATE ends the task honestly.
+          return {
+            status: "decided" as const,
+            action: { operation: "ESCALATE", target_id: null, option_id: null, key: null, url: null, text: null },
+            uncertainty: { source: "unavailable" as const, confidence: null },
+          };
+        }
+        return {
+          status: "decided" as const,
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable" as const, confidence: null },
+        };
+      },
+    } as unknown as typeof deps.decisionClient;
+    const outer = new AbortController();
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f15rec", conversationId: "conv-1", goal: "click" },
+      { ...deps, signal: outer.signal }
+    );
+    const result = await runner.run();
+    expect(recoveryCalls).toBe(1);
+    // A DIFFERENT signal than the outer task signal (bounded attempt).
+    expect(recoverySignal).not.toBe(outer.signal);
+    expect(recoverySignal!.aborted).toBe(false);
+    // The ESCALATE recovery proposal ends the task as an escalation.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated_by_decision");
+  });
+});
