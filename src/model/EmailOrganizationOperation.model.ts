@@ -560,7 +560,7 @@ export class EmailOrganizationOperationModel extends BaseDb {
     const rows = await this.itemRepository
       .createQueryBuilder("item")
       .innerJoin(EmailOrganizationOperationEntity, "op", "op.operationId = item.operationId")
-      .where("item.emailServiceId IS NULL OR item.emailServiceId = :emailServiceId", {
+      .where("op.emailServiceId = :emailServiceId", {
         emailServiceId: input.emailServiceId,
       })
       .andWhere("item.beforeFolderPath = :folderPath", { folderPath: input.folderPath })

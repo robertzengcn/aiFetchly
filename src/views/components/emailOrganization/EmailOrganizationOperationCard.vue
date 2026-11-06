@@ -66,6 +66,16 @@
         >
           <v-icon size="x-small" :icon="itemIcon(item.status)" class="mr-1"></v-icon>
           {{ itemSummary(item) }}
+          <!-- R4-16/AC-18: address-level recipient outcomes (Bcc stays private). -->
+          <div
+            v-for="outcome in item.recipientOutcomes"
+            :key="`${item.itemId}-${outcome.address}`"
+            class="text-caption text-medium-emphasis ml-4"
+            data-testid="org-op-recipient"
+          >
+            {{ outcome.address }} ·
+            {{ tOrRaw(`emailOrganization.recipient_outcome.${outcome.outcome}`, outcome.outcome) }}
+          </div>
         </div>
       </div>
     </v-card-text>
@@ -296,7 +306,10 @@ function itemSummary(item: EmailOrganizationOperationDto["items"][number]): stri
       `Recipients: ${accepted} accepted, ${rejected} rejected, ${unknown} unknown`
     );
   }
-  const codeSuffix = item.errorCode !== null ? ` · ${item.errorCode}` : "";
+  const codeSuffix =
+    item.errorCode !== null
+      ? ` · ${tOrRaw(`emailOrganization.error_code.${item.errorCode}`, item.errorCode)}`
+      : "";
   // R14: an intended destination is not a completed move — only completed
   // items say 'moved to'; pending/failed items report status + error.
   const completed = item.status === "succeeded" || item.status === "noop";
