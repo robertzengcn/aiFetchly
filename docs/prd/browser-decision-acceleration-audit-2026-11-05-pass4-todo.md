@@ -68,6 +68,16 @@ Implementation HEAD after this round: `5340731d0`. Final validation: `tsc --noEm
 | F16 | PARTIAL: session-long RUNNER ownership — `executeTask` refuses a second runner on a session that already has one (synchronous check before every awaited gate, reason `session_owned_by_active_runner`); the lease is registered at runner admission and released on EVERY exit path. Still open: root-conversation threading through query-loop invocation, scoped batch consent lease, enforced no-consequential child policy, provider/batch budget caps. | `5340731d0` |
 | F22/F23/F24 | Still open (hosted/native routing parity, E2E harness, performance qualification — require real environments/operator evidence per AGENTS.md). | — |
 
+## 0f. Pass-10 round (2026-11-07) — packaging policy + E2E fixture harness
+
+Implementation HEAD after this round: fixture harness committed. AGENTS.md: local electron-forge packaging is now PERMITTED by machine-owner decision (the historical FORBIDDEN gate is lifted; `yarn package`/`yarn make` may run locally for packaged-delivery evidence).
+
+| Family | Status this round | Commit(s) |
+| --- | --- | --- |
+| AGENTS.md | The FORBIDDEN-locally rule for `yarn package` is replaced by an explicit ALLOW with the operator-history note (machine-owner decision, 2026-11-07). | main-repo `dev` `ca1a7aa9c` |
+| F23 | PARTIAL (fixture harness COMPLETE): the deterministic HTTPS login/search fixture the browser specs document now EXISTS — `test/e2e/fixtures/fakeLoginSite.ts` serves https://localhost:8443 with `/login` (decoy search box + single real login form + show-password toggle + JSON submit echo), `/search`, and the `/__e2e__/{seed,mode,last-submit,submit-count}` harness APIs; openssl-generated loopback certs; verified standalone (form + decoy + endpoints). Wired into playwright.config as a second webServer (readiness poll, `ignoreHTTPSErrors` loopback-only) and the Chromium browser installed. `browserSignIn` now reaches the fixture, loads the page, and runs its assertions; the remaining failures are exactly the documented NEXT layer: the app-side E2E hooks (`window.__e2eSignIn`, seed→app account injection) that drive the real app through the Electron launch — the app-hook integration is the remaining F23 work. | `b26df51ed`, follow-up commit |
+| F24 | Still open: performance qualification needs the packaged/launched app with real sessions; the packaging policy now ALLOWS this locally, but the measurement run was not executed in this round. | — |
+
 ## 1. Current validation and evidence
 
 | Check | Result |
