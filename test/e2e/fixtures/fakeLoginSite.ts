@@ -37,6 +37,9 @@ export function startFakeLoginSite(
   let lastSubmit: LoginSubmit | null = null;
   let submitCount = 0;
   let rejectLogins = false;
+  // F23: the seed the specs injected (account + site) — the app-hook layer
+  // reads it back with GET /__e2e__/seed.
+  let lastSeed: unknown = null;
 
   // F23: a locally generated self-signed pair via openssl (present in
   // the project's Git Bash environment) — the fixture is loopback only
@@ -128,7 +131,19 @@ export function startFakeLoginSite(
         req.on("data", (chunk: Buffer) => {
           raw += String(chunk);
         });
-        req.on("end", () => sendJson(200, { seeded: raw.length > 0 }));
+        req.on("end", () => {
+          try {
+            lastSeed = JSON.parse(raw || "null");
+          } catch {
+            lastSeed = null;
+          }
+          sendJson(200, { seeded: lastSeed !== null });
+        });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/__e2e__/seed") {
+        sendJson(200, lastSeed ?? {});
         return;
       }
 
