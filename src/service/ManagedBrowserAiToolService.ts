@@ -511,6 +511,17 @@ export class ManagedBrowserAiToolService {
     }
   }
 
+  /** F16/P0: ordinary mutation tools never interleave with a runner. */
+  private assertNoRunnerOwnership(sessionId: string): void {
+    if (this.runnerOwnedSessions.has(sessionId)) {
+      throw new ManagedBrowserAiToolError(
+        "session_not_owned",
+        undefined,
+        "session_owned_by_active_runner"
+      );
+    }
+  }
+
   public async navigate(
     args: Record<string, unknown>,
     context?: BrowserToolExecutionContext
@@ -520,6 +531,8 @@ export class ManagedBrowserAiToolService {
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
+    // F16/P0: an active runner owns this session — legacy tools wait.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context?.conversationId);
     const assessment = this.classifier.classify({
       actionType: "navigate",
@@ -553,6 +566,8 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_run_actions", parsed.error)
       );
     }
+    // F16/P0: an active runner owns this session — legacy tools wait.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     const sessionStatus = this.ensureSession(parsed.data.session_id, context?.conversationId);
     const program = parsed.data.program as BrowserActionProgram;
 
@@ -1137,9 +1152,10 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_execute_task", parsed.error)
       );
     }
-    // F16: one runner per session at a time — a second runner on the
-    // same session would interleave decisions and steal the page. The
-    // ownership check is synchronous and precedes every awaited gate.
+    // F16/P0: one runner per session at a time — the ownership is
+    // RESERVED SYNCHRONOUSLY (before any await): a later set may not
+    // overwrite the first owner, and the outer finally below releases
+    // the reservation on EVERY early return and exception.
     if (this.runnerOwnedSessions.has(parsed.data.session_id)) {
       throw new ManagedBrowserAiToolError(
         "session_not_owned",
@@ -1147,6 +1163,8 @@ export class ManagedBrowserAiToolService {
         "session_owned_by_active_runner"
       );
     }
+    this.runnerOwnedSessions.set(parsed.data.session_id, "pending");
+    try {
     await this.ensureBrowserEnabled();
     // T25/T29: acceleration kill switch — disabling returns future tasks
     // to the existing browser tools.
@@ -1325,9 +1343,14 @@ export class ManagedBrowserAiToolService {
             "@/modules/BrowserTaskModule"
           );
           if (awaitedResultRef.taskId) {
-            await getDefaultBrowserTaskModule()
-              .recordActionIntent({ taskId: awaitedResultRef.taskId, actionType })
-              .catch(() => undefined);
+            // P0/D-FR-09: a swallowed storage failure would let the
+            // runner dispatch a mutation WITHOUT its durable intent —
+            // the rejection MUST propagate and the runner must fail
+            // before dispatch.
+            await getDefaultBrowserTaskModule().recordActionIntent({
+              taskId: awaitedResultRef.taskId,
+              actionType,
+            });
           }
         },
         persistActionOutcome: async (outcome) => {
@@ -1421,14 +1444,12 @@ export class ManagedBrowserAiToolService {
     } catch (error) {
       this.wrapModuleError(error);
       throw error;
+    }
     } finally {
-      // F16: the ownership lease dies with the runner — every exit path.
-      if (
-        this.runnerOwnedSessions.get(parsed.data.session_id) ===
-        runner.taskId
-      ) {
-        this.runnerOwnedSessions.delete(parsed.data.session_id);
-      }
+      // F16/P0: the lease (or the synchronous reservation) dies on
+      // EVERY exit path — exception, early return, or terminal. No other
+      // writer could have taken the entry while it was held.
+      this.runnerOwnedSessions.delete(parsed.data.session_id);
     }
   }
 

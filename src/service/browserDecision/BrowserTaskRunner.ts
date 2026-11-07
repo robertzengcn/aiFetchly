@@ -450,7 +450,19 @@ export class BrowserTaskRunner {
             continue;
           }
           this.leafSteps++;
-          await this.deps.persistActionIntent?.(action.operation);
+          try {
+            await this.deps.persistActionIntent?.(action.operation);
+          } catch (error) {
+            // P0/D-FR-09: no durable intent — NO dispatch. The task
+            // fails before any browser input with the storage reason.
+            return this.terminal(
+              "failed",
+              `intent_persistence_failed:${error instanceof Error ? error.message : "unknown"}`,
+              evidence,
+              extracted,
+              observation
+            );
+          }
           // F05: stop during the journal write must prevent dispatch;
           // a resume across the same await discards the held action.
           if (signal.aborted) {
@@ -538,7 +550,19 @@ export class BrowserTaskRunner {
         }
 
         this.leafSteps++;
-        await this.deps.persistActionIntent?.(action.operation);
+        try {
+          await this.deps.persistActionIntent?.(action.operation);
+        } catch (error) {
+          // P0/D-FR-09: no durable intent — NO dispatch. The task fails
+          // before any browser input with the storage reason.
+          return this.terminal(
+            "failed",
+            `intent_persistence_failed:${error instanceof Error ? error.message : "unknown"}`,
+            evidence,
+            extracted,
+            observation
+          );
+        }
         // F05: stop during the journal write must prevent dispatch;
         // a resume across the same await discards the held action.
         if (signal.aborted) {

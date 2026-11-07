@@ -1196,3 +1196,36 @@ describe("BrowserTaskRunner F15 progress and recovery", () => {
     expect(result.reason).toBe("escalated_by_decision");
   });
 });
+
+describe("BrowserTaskRunner P0 durable intent before input", () => {
+  it("a persistActionIntent storage failure prevents dispatch entirely", async () => {
+    const dispatched: RunnerAction[] = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const persistActionIntent = async (): Promise<void> => {
+      throw new Error("SQLITE_BUSY");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_p0intent", conversationId: "conv-1", goal: "click" },
+      { ...deps, persistActionIntent }
+    );
+    const result = await runner.run();
+    // The mutation NEVER dispatched; the task failed before any input with
+    // the storage reason surfaced.
+    expect(dispatched).toEqual([]);
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("intent_persistence_failed:SQLITE_BUSY");
+  });
+});

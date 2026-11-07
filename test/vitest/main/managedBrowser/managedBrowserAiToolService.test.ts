@@ -899,3 +899,83 @@ describe("executeTask runner ownership (F16)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// F16/P0: synchronous runner admission serialization
+// ---------------------------------------------------------------------------
+
+describe("executeTask admission serialization (F16/P0)", () => {
+  it("rejects a second runner while the first reservation is pending", async () => {
+    const service = makeService({});
+    // The first runner reserved synchronously and is still inside its
+    // awaited admission (pending) or running — either way the second
+    // admission is refused BEFORE any await.
+    (
+      service as unknown as {
+        runnerOwnedSessions: Map<string, string>;
+      }
+    ).runnerOwnedSessions.set(SESSION_ID, "pending");
+    await expect(
+      service.executeTask(
+        { session_id: SESSION_ID, goal: "overlapping" },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-b" }
+      )
+    ).rejects.toMatchObject({
+      code: "session_not_owned",
+      reasonCode: "session_owned_by_active_runner",
+    });
+    // The refused admission did NOT evict the first owner.
+    expect(
+      (service as unknown as { runnerOwnedSessions: Map<string, string> })
+        .runnerOwnedSessions.get(SESSION_ID)
+    ).toBe("pending");
+  });
+
+  it("releases the reservation when admission fails before ownership", async () => {
+    const service = makeService({ browserEnabled: false });
+    await expect(
+      service.executeTask(
+        { session_id: SESSION_ID, goal: "will fail the gate" },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-c" }
+      )
+    ).rejects.toBeDefined();
+    // The synchronous reservation was released on the early return.
+    expect(
+      (service as unknown as { runnerOwnedSessions: Map<string, string> })
+        .runnerOwnedSessions.has(SESSION_ID)
+    ).toBe(false);
+    // A retry is admitted (past the ownership check).
+    try {
+      await service.executeTask(
+        { session_id: SESSION_ID, goal: "retry" },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-d" }
+      );
+    } catch (error) {
+      expect((error as { reasonCode?: string }).reasonCode).not.toBe(
+        "session_owned_by_active_runner"
+      );
+    }
+  });
+
+  it("ordinary mutation tools are refused while a runner owns the session", async () => {
+    const service = makeService({});
+    (
+      service as unknown as {
+        runnerOwnedSessions: Map<string, string>;
+      }
+    ).runnerOwnedSessions.set(SESSION_ID, "task_owner1");
+    await expect(
+      service.navigate(
+        {
+          session_id: SESSION_ID,
+          url: "https://www.youtube.com/",
+          page_revision: 1,
+        },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-e" }
+      )
+    ).rejects.toMatchObject({
+      code: "session_not_owned",
+      reasonCode: "session_owned_by_active_runner",
+    });
+  });
+});
