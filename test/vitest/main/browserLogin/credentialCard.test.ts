@@ -232,8 +232,15 @@ describe("F12 attempt reservation, stop-vs-cancel, refusal reasons", () => {
       intent: "login",
       accountId: 101,
     });
-    // Give the first attempt time to reserve and reach the cooldown await.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Give the first attempt time to reserve and reach the cooldown await —
+    // poll (bounded) instead of a fixed sleep so CI load cannot flake it.
+    for (
+      let waited = 0;
+      coolingChecks === 0 && waited < 5_000;
+      waited += 25
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     expect(coolingChecks).toBeGreaterThan(0);
     // The second concurrent attempt hits the SYNCHRONOUS reservation.
     const second = await service.signIn({

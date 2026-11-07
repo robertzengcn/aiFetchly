@@ -63,8 +63,15 @@ describe("awaitUserResolution (F06)", () => {
       taskId: "f06-res",
       pollIntervalMs: 1,
     });
-    // The task is waiting while the window is open.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The task is waiting while the window is open — poll (bounded) so
+    // CI load cannot flake the state transition.
+    for (
+      let waited = 0;
+      control.getState("f06-res") !== "waiting_for_user" && waited < 5_000;
+      waited += 25
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     expect(control.getState("f06-res")).toBe("waiting_for_user");
     // The user resolves through the dialog: the session becomes operable.
     statuses.set("mb_x2", { state: "running", handoffReason: null });
