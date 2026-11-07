@@ -26,6 +26,14 @@ All six traced production-call defects are fixed and committed, each with the re
 
 Validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgents + managedBrowser **485** tests pass; worker units **42** pass; browser card components **40** pass.
 
+## Additional round 2026-11-07b (implementation HEAD: `3d36669d5`)
+
+| Area | Landed this round | Commit |
+| --- | --- | --- |
+| Planning and verification (D-FR-24) | **Completion criteria now reach the model input** — the runner's decision input carries bounded `completion_criteria` (`kind:value` strings, max 8), the wire schema accepts them, and the chat prompt serializes them (DONE is an informed decision; verification stays independent). | `3d36669d5` |
+| Site registry (S-FR-04) | **Authoritative per-session redirect ledger** — `ManagedBrowserModule` records every visited origin's registrable domain (bounded 16/session) at both observation-cache sites and exposes `getSessionVisitedDomains`; extra-domain confirmation proposals must be filtered against THIS ledger instead of trusting supplied `visitedDomains`. Also restored the `proxySwitchCounts` field that an earlier mis-anchor had silently displaced. | `3d36669d5` |
+| Release evidence (six languages) | **i18n key-parity gate** — a unit suite asserts the `browserSignIn`/`browserTasks`/`browserSite` namespaces have IDENTICAL key sets across en/zh/es/fr/de/ja (currently passing). | `3d36669d5` |
+
 ## Remaining implementation and acceptance work
 
 | Area | Open TODO and completion evidence |
