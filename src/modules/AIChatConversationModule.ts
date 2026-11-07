@@ -1,5 +1,6 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
+import { AIChatConversationEntity } from "@/entity/AIChatConversation.entity";
 import { AIChatRunModel } from "@/model/AIChatRun.model";
 import { WorkspaceModel } from "@/model/Workspace.model";
 import { AIChatMessageModel } from "@/model/AIChatMessage.model";
@@ -649,7 +650,7 @@ export class AIChatConversationModule extends BaseModule {
     previewText: string;
     generatedTitle?: string | null;
     timestamp: Date;
-  }): Promise<void> {
+  }): Promise<AIChatConversationEntity> {
     await this.ensureConnection();
     // Use the binding's already-persisted stable key — no FS resolution in
     // the message hot path. Unresolved bindings leave the projection null
@@ -658,10 +659,24 @@ export class AIChatConversationModule extends BaseModule {
       await this.workspaceModel().findWorkspaceKeyForConversation(
         input.conversationId
       );
-    await this.convModel().recordMessagePersisted({
+    const entity = await this.convModel().recordMessagePersisted({
       ...input,
       workspaceKey,
     });
+    // FR-01: immediately broadcast the provisional excerpt title when seeded
+    if (entity?.title && entity.titleSource === "excerpt" && !input.isResult) {
+      import("@/service/aiChatWorkspaceRuntime")
+        .then(({ sharedWorkspaceEventRouter }) => {
+          sharedWorkspaceEventRouter.broadcastTitleUpdate({
+            conversationId: input.conversationId,
+            title: entity.title!,
+            titleRevision: entity.titleRevision,
+            titleSource: "excerpt",
+          });
+        })
+        .catch(() => undefined);
+    }
+    return entity;
   }
 
   /**
@@ -782,10 +797,25 @@ export class AIChatConversationModule extends BaseModule {
   ): Promise<void> {
     await this.ensureConnection();
     const existing = await this.convModel().getByConversationId(conversationId);
-    if (existing) return;
+    if (existing) {
+      if (
+        existing.messageCount === 0 &&
+        existing.title === null &&
+        !existing.titleIsUserSet &&
+        existing.titleSource === "legacy"
+      ) {
+        await this.convModel().repository.update(
+          { conversationId },
+          { titleSource: "placeholder", titleGenerationStatus: "pending" }
+        );
+      }
+      return;
+    }
     await this.convModel().createProjection({
       conversationId,
       workspaceKey: workspaceKey ?? null,
+      titleSource: "placeholder",
+      titleGenerationStatus: "pending",
     });
   }
 

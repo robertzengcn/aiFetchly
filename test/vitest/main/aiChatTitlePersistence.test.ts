@@ -1352,4 +1352,47 @@ describe("AIChatTitle module policy", () => {
     const result = await module.reconcileTitleStateOnStartup();
     expect(result).toEqual({ interrupted: 1, repaired: 1 });
   });
+
+  it("ensureConversationProjection creates a projection ready for auto title generation", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    await module.ensureConversationProjection("v2-ensure-init", "workspace-1");
+    const row = await model.getByConversationId("v2-ensure-init");
+    expect(row).not.toBeNull();
+    expect(row?.title).toBeNull();
+    expect(row?.titleSource).toBe("placeholder");
+    expect(row?.titleGenerationStatus).toBe("pending");
+    expect(row?.workspaceKey).toBe("workspace-1");
+
+    // When the first user message is persisted, it seeds the excerpt and remains pending for AI title
+    await module.recordMessagePersisted({
+      conversationId: "v2-ensure-init",
+      isResult: false,
+      previewText: "search the web for crypto",
+      generatedTitle: "search the web for crypto",
+      timestamp: new Date(),
+    });
+    const updated = await model.getByConversationId("v2-ensure-init");
+    expect(updated?.title).toBe("search the web for crypto");
+    expect(updated?.titleSource).toBe("excerpt");
+    expect(updated?.titleGenerationStatus).toBe("pending");
+  });
+
+  it("ensureConversationProjection repairs legacy suppressed empty conversation projection", async () => {
+    await SqliteDb.ensureInitialized();
+    const model = new AIChatConversationModel(tmpDir);
+    const module = new AIChatConversationModule();
+    // Simulate empty row created by older bug
+    await model.createProjection({ conversationId: "v2-repair-test" });
+    let row = await model.getByConversationId("v2-repair-test");
+    expect(row?.titleSource).toBe("legacy");
+    expect(row?.titleGenerationStatus).toBe("suppressed");
+
+    // Calling ensureConversationProjection repairs the empty placeholder row
+    await module.ensureConversationProjection("v2-repair-test");
+    row = await model.getByConversationId("v2-repair-test");
+    expect(row?.titleSource).toBe("placeholder");
+    expect(row?.titleGenerationStatus).toBe("pending");
+  });
 });

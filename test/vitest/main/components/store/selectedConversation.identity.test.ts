@@ -579,5 +579,26 @@ describe("selectedConversation durable run identity (audit R2 N04)", () => {
         ordinal: 1,
       });
     });
+
+    it("FR-01: seeds the provisional excerpt title immediately when sending in an untitled conversation", async () => {
+      const workspaceStore = useChatWorkspaceStore();
+      workspaceStore.upsertLocalConversation({
+        conversationId: "conv-new",
+        workspaceKey: null,
+        title: "",
+        preview: "",
+        lastActivityAt: new Date().toISOString(),
+        unread: false,
+        attention: "none",
+        runtimeStatus: "idle",
+        activeRunId: null,
+      });
+      await selectId("conv-new");
+      acceptRun("conv-new", "run-1", "running");
+      await submitText("conv-new", "search the web for ethereum price today");
+      const summary = workspaceStore.conversationsById.get("conv-new");
+      expect(summary?.title).toBe("search the web for ethereum price today");
+      expect(summary?.titleRevision).toBe(0);
+    });
   });
 });
