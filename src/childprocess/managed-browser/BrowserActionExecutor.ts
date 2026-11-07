@@ -138,6 +138,25 @@ function clearElementWithEventFn(el: HTMLInputElement): void {
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+/**
+ * P1/D-FR-17: resolve positional o_N tokens against the LIVE select's
+ * options — the exact native value (however long) is used, so truncated
+ * display summaries can never select the wrong option.
+ */
+function resolveSelectOptionsFn(
+  el: HTMLSelectElement,
+  values: string[]
+): string[] {
+  return values.map((value) => {
+    const match = /^o_(\d+)$/.exec(value);
+    if (!match) {
+      return value;
+    }
+    const option = el.options?.[Number(match[1])];
+    return option ? option.value : value;
+  });
+}
+
 function extractElementDataFn(el: Element): {
   tag: string | null;
   text: string;
@@ -369,7 +388,13 @@ export class BrowserActionExecutor {
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
             dispatch.inputSent = true;
-            await entry.element.select(...action.values);
+            // P1/D-FR-17: positional tokens resolve against the LIVE
+            // element's native options before the selection.
+            const resolved = await entry.element.evaluate<string[]>(
+              resolveSelectOptionsFn,
+              action.values
+            );
+            await entry.element.select(...resolved);
             return { success: true };
           });
         case "press_key":

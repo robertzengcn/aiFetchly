@@ -87,30 +87,52 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
   // Strip stamps from earlier passes first: an element that left the
   // selector set must not be picked up by the stamped-handle query.
   document.querySelectorAll('[${OBS_ELEMENT_STAMP_ATTRIBUTE}]').forEach(el => el.removeAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}'));
-  const scanned = [];
   const all = Array.from(document.querySelectorAll(selector));
   const scanTruncatedRaw = all.length > SCAN_CAP;
-  all.slice(0, SCAN_CAP).forEach((el, docIndex) => {
+  const scanChunk = (start, end) => all.slice(start, end).map((el, offset) => {
     const style = window.getComputedStyle(el);
     const visible = style.display !== 'none'
       && style.visibility !== 'hidden'
       && el.offsetParent !== null
       && !(el.tagName === 'INPUT' && el.type === 'hidden');
-    scanned.push({ el, docIndex, visible });
+    return { el, docIndex: start + offset, visible };
   });
-  // F08: VISIBLE controls are chosen FIRST (in document order), hidden
-  // ones only fill the remaining budget — the pairing with the stamped
-  // handle query stays exact because the chosen subset is re-stamped in
-  // document order below.
-  const visibleSet = scanned.filter((entry) => entry.visible);
-  const hiddenSet = scanned.filter((entry) => !entry.visible);
-  const chosenVisible = visibleSet.slice(0, CAP);
+  let scanned = scanChunk(0, SCAN_CAP);
+  let visibleSet = scanned.filter((entry) => entry.visible);
+  let hiddenSet = scanned.filter((entry) => !entry.visible);
+  // P1: BOUNDED CONTINUATION — a page that hides the only visible control
+  // behind more than SCAN_CAP hidden predecessors is still recoverable:
+  // one continuation pass scans the next chunk when the first found too
+  // few visible controls.
+  if (scanTruncatedRaw && visibleSet.length < CAP && all.length > SCAN_CAP) {
+    const more = scanChunk(SCAN_CAP, SCAN_CAP * 2);
+    visibleSet = visibleSet.concat(more.filter((entry) => entry.visible));
+    hiddenSet = hiddenSet.concat(more.filter((entry) => !entry.visible));
+  }
+  // P1: FOCUSED and DIALOG controls are prioritized — they outrank plain
+  // page controls for the shortlist regardless of document position.
+  const priorityEls = new Set();
+  if (
+    document.activeElement instanceof Element &&
+    document.activeElement.matches(selector)
+  ) {
+    priorityEls.add(document.activeElement);
+  }
+  document
+    .querySelectorAll('[role="dialog"], dialog[open]')
+    .forEach((dialogEl) => {
+      dialogEl.querySelectorAll(selector).forEach((el) => priorityEls.add(el));
+    });
+  const visibleOrdered = visibleSet
+    .filter((entry) => priorityEls.has(entry.el))
+    .concat(visibleSet.filter((entry) => !priorityEls.has(entry.el)));
+  const chosenVisible = visibleOrdered.slice(0, CAP);
   const chosenHidden = hiddenSet.slice(0, CAP);
   const chosen = chosenVisible.concat(chosenHidden)
     .sort((a, b) => a.docIndex - b.docIndex)
     .slice(0, CAP * 2);
   const truncated =
-    scanTruncatedRaw || visibleSet.length > CAP || hiddenSet.length > CAP;
+    scanTruncatedRaw || visibleOrdered.length > CAP || hiddenSet.length > CAP;
   const out = [];
   chosen.forEach((entry, obsIndex) => {
     const htmlEl = entry.el;

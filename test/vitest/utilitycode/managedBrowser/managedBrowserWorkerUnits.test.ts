@@ -49,7 +49,10 @@ class FakeHandle implements ExecutorElementHandle {
   async type(text: string): Promise<void> {
     this.typed = text;
   }
+  public resolvedSelectValues: string[] = [];
+  public lastSelectedValues: string[] | null = null;
   async select(...values: string[]): Promise<string[]> {
+    this.lastSelectedValues = values;
     return values;
   }
   async scrollIntoView(): Promise<void> {}
@@ -75,6 +78,11 @@ class FakeHandle implements ExecutorElementHandle {
       }
       if (fnName === "extractElementDataFn") {
         return this.extractValue as T;
+      }
+      // P1/D-FR-17: the live option resolution — the fake returns the
+      // values the test configured for the o_N token mapping.
+      if (fnName === "resolveSelectOptionsFn") {
+        return this.resolvedSelectValues as T;
       }
       return undefined as T;
     }
@@ -1005,5 +1013,46 @@ describe("isWriteCapableScriptSource (TODO-MSB-009)", () => {
     expect(
       isWriteCapableScriptSource("document.title")
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1/D-FR-17: SELECT tokens resolve against the LIVE element's options
+// ---------------------------------------------------------------------------
+
+describe("BrowserActionExecutor select token resolution (P1)", () => {
+  it("a positional o_N token selects the live native value — not a truncated display value", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "combobox", "Country");
+    // The live option's REAL value is far longer than the display bound.
+    handle.resolvedSelectValues = ["livingstonedaily-9f3a-exact-native-value"];
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "select", ref, pageRevision: 1, values: ["o_1"] },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.results[0].success).toBe(true);
+    expect(handle.lastSelectedValues).toEqual([
+      "livingstonedaily-9f3a-exact-native-value",
+    ]);
+  });
+
+  it("a plain value passes through the resolution untouched", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "combobox", "Country");
+    handle.resolvedSelectValues = ["fr"];
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "select", ref, pageRevision: 1, values: ["fr"] },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.results[0].success).toBe(true);
+    expect(handle.lastSelectedValues).toEqual(["fr"]);
   });
 });

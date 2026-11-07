@@ -88,7 +88,7 @@ describe("BrowserControlCards (F21 live batch card)", () => {
 
   it("mounts the batch card with live task rows from batch events", async () => {
     const wrapper = mountCard();
-    emit({ batchId: "batch_live1", phase: "started" });
+    emit({ batchId: "batch_live1", conversationId: "conv-a", phase: "started" });
     emit({
       batchId: "batch_live1",
       phase: "task",
@@ -125,7 +125,7 @@ describe("BrowserControlCards (F21 live batch card)", () => {
 
   it("control verbs call the validated task-control IPC", async () => {
     const wrapper = mountCard();
-    emit({ batchId: "batch_live2", phase: "started" });
+    emit({ batchId: "batch_live2", conversationId: "conv-a", phase: "started" });
     emit({
       batchId: "batch_live2",
       phase: "task",
@@ -152,5 +152,53 @@ describe("BrowserControlCards (F21 live batch card)", () => {
     expect(invokeMock).toHaveBeenCalledWith("BROWSER_TASK_STOP", {
       taskId: "batch_live2:0",
     });
+  });
+});
+
+describe("BrowserControlCards P1 conversation routing", () => {
+  function mountWith(conversationId: string | null) {
+    return mount(BrowserControlCards, {
+      props: { conversationId },
+      global: { plugins: [i18n] },
+    });
+  }
+
+  it("a second batch never discards the first; each shows for its own conversation", async () => {
+    const wrapperA = mountWith("conv-a");
+    emit({ batchId: "batch_A", conversationId: "conv-a", phase: "started" });
+    emit({
+      batchId: "batch_A",
+      conversationId: "conv-a",
+      phase: "task",
+      taskId: "batch_A:0",
+      label: "batch A task",
+      state: "running",
+    });
+    await flushPromises();
+    expect(wrapperA.findComponent({ name: "BrowserTaskBatchCard" }).exists()).toBe(true);
+
+    // Batch B starts in ANOTHER conversation — A stays retained and the
+    // conversation-B mount shows B.
+    const wrapperB = mountWith("conv-b");
+    emit({ batchId: "batch_B", conversationId: "conv-b", phase: "started" });
+    emit({
+      batchId: "batch_B",
+      conversationId: "conv-b",
+      phase: "task",
+      taskId: "batch_B:0",
+      label: "batch B task",
+      state: "running",
+    });
+    await flushPromises();
+
+    // A's card still shows ITS task (not replaced by B).
+    const cardA = wrapperA.findComponent({ name: "BrowserTaskBatchCard" });
+    expect(cardA.props("batchId")).toBe("batch_A");
+    // B's card shows B.
+    const cardB = wrapperB.findComponent({ name: "BrowserTaskBatchCard" });
+    expect(cardB.props("batchId")).toBe("batch_B");
+    // A conversation that owns neither shows nothing.
+    const wrapperC = mountWith("conv-other");
+    expect(wrapperC.findComponent({ name: "BrowserTaskBatchCard" }).exists()).toBe(false);
   });
 });

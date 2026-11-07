@@ -961,17 +961,15 @@ export class BrowserTaskRunner {
         if (!action.option_id) {
           return null;
         }
-        // F14: the decided option id is POSITIONAL (o_N) into the
-        // observed option list — it maps to the REAL value here, so the
-        // executor selects an option that actually exists.
-        const optionMatch = /^o_(\d+)$/.exec(action.option_id);
+        // P1/D-FR-17: the decided option id is POSITIONAL (o_N) into the
+        // observed option list. The TOKEN is dispatched and the worker
+        // resolves it against the LIVE element's options — exact native
+        // identity, never a truncated display value (long values and
+        // duplicate labels stay distinguishable).
         const element = observation.elements.find(
           (el) => el.ref === target.candidate_id
         );
-        const optionIndex = optionMatch ? Number(optionMatch[1]) : -1;
-        const optionValue =
-          element?.option_values != null ? element.option_values[optionIndex] : undefined;
-        if (optionValue === undefined) {
+        if (!element?.option_ids?.includes(action.option_id)) {
           return null; // unsupported: the option is not in the observed list
         }
         return {
@@ -979,7 +977,7 @@ export class BrowserTaskRunner {
           ref: target.candidate_id,
           pageRevision: observation.pageRevision,
           ...expected,
-          values: [optionValue],
+          values: [action.option_id],
         };
       }
       case "HOVER":

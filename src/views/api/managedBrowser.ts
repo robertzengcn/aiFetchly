@@ -225,6 +225,7 @@ export function onManagedBrowserStatusChanged(
 /** F21: live browser-batch task state (batch control card). */
 export interface BrowserBatchEvent {
   readonly batchId: string;
+  readonly conversationId: string;
   readonly phase: "started" | "task" | "finished";
   readonly taskId?: string;
   readonly label?: string;

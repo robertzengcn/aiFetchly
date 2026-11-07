@@ -256,7 +256,7 @@
       <!-- F21: live browser-batch control card (Return-now / Pause /
            Resume / Stop per task). Renders nothing without an active
            batch. -->
-      <BrowserControlCards />
+      <BrowserControlCards :conversation-id="activeConversationId" />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves

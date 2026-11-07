@@ -1023,8 +1023,9 @@ describe("BrowserTaskRunner F14 SELECT option mapping", () => {
       deps
     );
     const result = await runner.run();
-    // o_1 resolved to the REAL observed value "fr" — never the raw token.
-    expect(seen[0]).toMatchObject({ type: "select", values: ["fr"] });
+    // The observed o_1 token dispatches; the WORKER resolves it against
+    // the live element (exact native identity, P1/D-FR-17).
+    expect(seen[0]).toMatchObject({ type: "select", values: ["o_1"] });
     expect(result.status).toBe("completed");
   });
 

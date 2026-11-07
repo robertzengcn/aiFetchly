@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import BrowserTaskBatchCard from "./BrowserTaskBatchCard.vue";
 import {
   browserBatchReturnNow,
@@ -44,11 +44,33 @@ interface BrowserBatchTaskRow {
 
 interface BatchState {
   batchId: string;
+  conversationId: string;
   tasks: BrowserBatchTaskRow[];
   finishedAt: number | null;
 }
 
-const activeBatch = ref<BatchState | null>(null);
+// P1/M-FR-08: MULTIPLE batches are retained — starting batch B never
+// discards running batch A. The card shows the newest UNFINISHED batch of
+// the ACTIVE conversation only (never another chat's rows).
+const props = defineProps<{ conversationId: string | null }>();
+const batches = ref(new Map<string, BatchState>());
+
+const activeBatch = computed<BatchState | null>(() => {
+  let newest: BatchState | null = null;
+  for (const batch of batches.value.values()) {
+    // A missing conversation prop (null/undefined) disables the filter.
+    if (props.conversationId != null && batch.conversationId !== props.conversationId) {
+      continue;
+    }
+    if (batch.finishedAt !== null) {
+      continue;
+    }
+    if (newest === null) {
+      newest = batch;
+    }
+  }
+  return newest;
+});
 const finishedBatches = new Map<string, number>();
 
 const LABEL_FALLBACK = "Browser task";
@@ -56,18 +78,20 @@ const LABEL_FALLBACK = "Browser task";
 function applyEvent(event: BrowserBatchEvent): void {
   if (event.phase === "started") {
     finishedBatches.delete(event.batchId);
-    activeBatch.value = {
+    batches.value.set(event.batchId, {
       batchId: event.batchId,
+      conversationId: event.conversationId,
       tasks: [],
       finishedAt: null,
-    };
+    });
     return;
   }
   if (event.phase === "task") {
-    if (activeBatch.value?.batchId !== event.batchId || !event.taskId) {
+    const batch = batches.value.get(event.batchId);
+    if (!batch || !event.taskId) {
       return;
     }
-    const tasks = activeBatch.value.tasks;
+    const tasks = batch.tasks;
     const existing = tasks.find((task) => task.taskId === event.taskId);
     const row: BrowserBatchTaskRow = {
       taskId: event.taskId,
@@ -84,8 +108,9 @@ function applyEvent(event: BrowserBatchEvent): void {
     }
     return;
   }
-  if (event.phase === "finished" && activeBatch.value?.batchId === event.batchId) {
-    activeBatch.value.finishedAt = Date.now();
+  if (event.phase === "finished" && batches.value.has(event.batchId)) {
+    const batch = batches.value.get(event.batchId)!;
+    batch.finishedAt = Date.now();
     finishedBatches.set(event.batchId, Date.now());
   }
 }
@@ -100,9 +125,7 @@ onMounted(() => {
     for (const [batchId, finishedAt] of finishedBatches) {
       if (Date.now() - finishedAt > 30_000) {
         finishedBatches.delete(batchId);
-        if (activeBatch.value?.batchId === batchId) {
-          activeBatch.value = null;
-        }
+        batches.value.delete(batchId);
       }
     }
   }, 5_000);

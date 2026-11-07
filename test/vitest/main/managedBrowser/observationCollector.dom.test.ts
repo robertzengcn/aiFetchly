@@ -137,3 +137,50 @@ describe("collector SELECT options (F14)", () => {
     expect(shaped.option_values).toEqual(["de", "fr"]);
   });
 });
+
+describe("P1: controls beyond the scan window + dialog/focus priority", () => {
+  it("one continuation pass recovers a visible control after SCAN_CAP hidden ones", () => {
+    document.body.innerHTML = "";
+    // SCAN_CAP = 4 * CAP. Flood beyond it with hidden inputs, then place
+    // the only visible button AFTER the first scan window.
+    for (let i = 0; i < 4 * 130; i++) {
+      const hidden = document.createElement("input");
+      hidden.type = "hidden";
+      hidden.name = `h${i}`;
+      document.body.append(hidden);
+    }
+    const button = document.createElement("button");
+    button.textContent = "Deep target";
+    document.body.append(button);
+    rectify(button);
+
+    const records = runCollector();
+    const visible = records.filter((r) => r.visible);
+    expect(visible.some((r) => r.name === "Deep target")).toBe(true);
+  });
+
+  it("a focused control inside a dialog is prioritized into the shortlist", () => {
+    document.body.innerHTML = "";
+    // Many plain visible buttons first; the dialog button is LAST.
+    for (let i = 0; i < 130; i++) {
+      const filler = document.createElement("button");
+      filler.textContent = `filler ${i}`;
+      document.body.append(filler);
+      rectify(filler);
+    }
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const dialogButton = document.createElement("button");
+    dialogButton.textContent = "Confirm dialog";
+    dialog.append(dialogButton);
+    document.body.append(dialog);
+    rectify(dialogButton);
+
+    const records = runCollector();
+    const visible = records.filter((r) => r.visible);
+    const confirmIndex = visible.findIndex((r) => r.name === "Confirm dialog");
+    // The dialog control made the shortlist even with a full page of
+    // plain buttons ahead of it.
+    expect(confirmIndex).toBeGreaterThanOrEqual(0);
+  });
+});

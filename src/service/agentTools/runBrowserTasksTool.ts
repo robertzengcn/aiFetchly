@@ -166,6 +166,8 @@ const liveChildren = new Map<string, AbortController>();
  */
 export interface BrowserBatchEvent {
   readonly batchId: string;
+  /** P1/M-FR-08: the owning conversation — the card filters by it. */
+  readonly conversationId: string;
   readonly phase: "started" | "task" | "finished";
   readonly taskId?: string;
   readonly label?: string;
@@ -230,7 +232,7 @@ export async function runBrowserTasks(
   liveBatches.set(batchId, batchAbort);
   const control = deps.control ?? getDefaultAgentTaskControlService();
   // F21: the batch card lives from the first lane start.
-  emitBatchEvent({ batchId, phase: "started" });
+  emitBatchEvent({ batchId, conversationId, phase: "started" });
 
   let results: BrowserBatchTaskResult[];
   try {
@@ -253,7 +255,7 @@ export async function runBrowserTasks(
         };
       }
       control.register(taskId, conversationId);
-      emitBatchEvent({ batchId, phase: "task", taskId, label: task.goal, state: "running" });
+      emitBatchEvent({ batchId, conversationId, phase: "task", taskId, label: task.goal, state: "running" });
       const childAbort = new AbortController();
       liveChildren.set(taskId, childAbort);
       const onParentAbort = (): void => childAbort.abort();
@@ -410,6 +412,7 @@ export async function runBrowserTasks(
   for (const result of results) {
     emitBatchEvent({
       batchId,
+      conversationId,
       phase: "task",
       taskId: `${batchId}:${result.task_index}`,
       state: result.status === "completed"
@@ -422,7 +425,7 @@ export async function runBrowserTasks(
       summary: result.summary,
     });
   }
-  emitBatchEvent({ batchId, phase: "finished" });
+  emitBatchEvent({ batchId, conversationId, phase: "finished" });
   return { batchId, results };
 }
 
