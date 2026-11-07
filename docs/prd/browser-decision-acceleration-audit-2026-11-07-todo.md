@@ -34,6 +34,12 @@ Validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgent
 | Site registry (S-FR-04) | **Authoritative per-session redirect ledger** — `ManagedBrowserModule` records every visited origin's registrable domain (bounded 16/session) at both observation-cache sites and exposes `getSessionVisitedDomains`; extra-domain confirmation proposals must be filtered against THIS ledger instead of trusting supplied `visitedDomains`. Also restored the `proxySwitchCounts` field that an earlier mis-anchor had silently displaced. | `3d36669d5` |
 | Release evidence (six languages) | **i18n key-parity gate** — a unit suite asserts the `browserSignIn`/`browserTasks`/`browserSite` namespaces have IDENTICAL key sets across en/zh/es/fr/de/ja (currently passing). | `3d36669d5` |
 
+## Additional round 2026-11-07c (implementation HEAD: `1a8937368`)
+
+| Area | Landed this round | Commit |
+| --- | --- | --- |
+| Site registry (S-FR-04, completion evidence row) | **End-to-end ledger wiring**: `proposeExtraDomainsFromSession(sessionId, siteId)` proposes extra login domains exclusively from the session's authoritative redirect ledger (`getSessionVisitedDomains`), and the recorder is synchronous (static import) so the ledger is committed the moment an observation lands. Test: a driven observation lands `youtube.com` in the ledger and a model-invented domain can never appear. | `1a8937368` |
+
 ## Remaining implementation and acceptance work
 
 | Area | Open TODO and completion evidence |
