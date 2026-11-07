@@ -274,9 +274,15 @@ export class ManagedBrowserModule {
 
   private readonly sessions = new Map<string, ActiveSessionRecord>();
 
-  /** Approval decisions keyed by requestId (consumed by the AI tool layer). */
   /** P-FR-05: proxy switches per session lineage (capped at 3). */
   private readonly proxySwitchCounts = new Map<string, number>();
+  private readonly runnerOwnedSessions = new Map<string, string>();
+  /**
+   * P1/S-FR-04: the AUTHORITATIVE per-session redirect ledger — the
+   * registrable domains the session actually visited (bounded). Extra-
+   * domain proposals must come from THIS ledger, never from model text.
+   */
+  private readonly sessionRedirectLedger = new Map<string, Set<string>>();
   private readonly approvalDecisions = new Map<
     string,
     {
@@ -1098,6 +1104,7 @@ export class ManagedBrowserModule {
     // Track the live origin for the sign-in site gate (A-FR-02) and the
     // approval fingerprint's site component (D-FR-27).
     record.currentOrigin = message.observation.origin || record.currentOrigin;
+this.recordVisitedDomain(record, record.currentOrigin);
 record.currentUrl = message.observation.url || record.currentUrl;
     // Cache the sanitized observation so risk classification can resolve
     // element refs to their role/name descriptors (GAP-01).
@@ -1136,6 +1143,7 @@ record.currentUrl = message.observation.url || record.currentUrl;
         record.pageRevision = message.observation.pageRevision;
         record.lastObservation = message.observation;
         record.currentOrigin = message.observation.origin || record.currentOrigin;
+this.recordVisitedDomain(record, record.currentOrigin);
 record.currentUrl = message.observation.url || record.currentUrl;
       }
     }
@@ -1699,6 +1707,48 @@ record.currentUrl = message.observation.url || record.currentUrl;
       );
       return null;
     }
+  }
+
+  /** P1/S-FR-04: record a visited origin's registrable domain (bounded). */
+  private async recordVisitedDomain(
+    record: ActiveSessionRecord,
+    origin: string | null
+  ): Promise<void> {
+    if (!origin) {
+      return;
+    }
+    try {
+      const { registrableDomainOf } = await import(
+        "@/service/browserDecision/RegistrableDomain"
+      );
+      const domain = registrableDomainOf(new URL(origin).hostname);
+      if (!domain) {
+        return;
+      }
+      let ledger = this.sessionRedirectLedger.get(record.sessionId);
+      if (!ledger) {
+        ledger = new Set<string>();
+        this.sessionRedirectLedger.set(record.sessionId, ledger);
+      }
+      ledger.add(domain);
+      if (ledger.size > 16) {
+        // Bounded: drop the oldest insertion.
+        const oldest = ledger.values().next().value;
+        if (oldest !== undefined) {
+          ledger.delete(oldest);
+        }
+      }
+    } catch {
+      /* unparsable origins are simply not recorded */
+    }
+  }
+
+  /**
+   * P1/S-FR-04: the session's authoritative visited-domain list for
+   * extra-domain confirmation proposals.
+   */
+  public getSessionVisitedDomains(sessionId: string): readonly string[] {
+    return [...(this.sessionRedirectLedger.get(sessionId) ?? [])];
   }
 
   /**

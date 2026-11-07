@@ -62,6 +62,8 @@ export const decisionInputSchema = z.object({
   goal: z.string().min(1).max(2000),
   subgoal: z.string().max(1000).nullable().optional(),
   constraints: z.array(z.string().max(256)).max(16),
+  // P1/D-FR-24: completion criteria reach the model input.
+  completion_criteria: z.array(z.string().max(256)).max(8).optional(),
   url: z.string().max(2048),
   title: z.string().max(512),
   candidates: z.array(decisionCandidateSchema).max(120),

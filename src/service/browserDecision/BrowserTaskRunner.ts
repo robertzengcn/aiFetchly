@@ -685,6 +685,11 @@ export class BrowserTaskRunner {
       goal: this.input.goal.slice(0, 2000),
       subgoal: null,
       constraints: [...(this.input.constraints ?? [])].slice(0, 16),
+      // P1/D-FR-24: the model sees the completion criteria (DONE is
+      // then an informed decision; verification stays independent).
+      completion_criteria: (this.input.completionCriteria ?? []).map(
+        (criterion) => `${criterion.kind}:${criterion.value}`
+      ),
       url: observation.url,
       title: observation.title.slice(0, 512),
       candidates: candidates as BrowserDecisionInput["candidates"],

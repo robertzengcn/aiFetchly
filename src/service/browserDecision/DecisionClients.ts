@@ -293,6 +293,8 @@ export function buildChatDecisionPrompt(input: BrowserDecisionInput): string {
     // without it the model cannot know what went wrong or what to try.
     subgoal: input.subgoal ?? undefined,
     constraints: input.constraints,
+    // P1/D-FR-24: DONE is informed by the visible completion criteria.
+    completion_criteria: input.completion_criteria,
     url: input.url,
     title: input.title,
     candidates: input.candidates,

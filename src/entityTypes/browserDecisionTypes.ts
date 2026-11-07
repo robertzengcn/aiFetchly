@@ -75,6 +75,9 @@ export interface BrowserDecisionInput {
   readonly goal: string;
   readonly subgoal?: string | null;
   readonly constraints: readonly string[];
+  /** P1/D-FR-24: the completion criteria ride to the model so DONE is
+   * an informed decision, not a guess. */
+  readonly completion_criteria?: readonly string[];
   readonly url: string;
   readonly title: string;
   readonly candidates: readonly BrowserDecisionCandidate[];
