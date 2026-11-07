@@ -80,6 +80,49 @@
       data-testid="workspace-tree"
       @keydown="onTreeKeydown"
     >
+      <!-- BUGFIX 2026-11-02: visible section header with manual refresh + tree
+           collapse so users can re-project the folder list on demand (e.g.
+           after Run Now on a schedule task assigned a workspace while the
+           events were missed). -->
+      <div class="tree-header" data-testid="workspace-tree-header">
+        <span class="tree-header-label">
+          {{ t('workspaceChat.sidebar.projects') || 'Project' }}
+        </span>
+        <span class="tree-header-actions">
+          <v-btn
+            icon
+            variant="text"
+            size="x-small"
+            class="tree-header-btn"
+            :loading="treeRefreshing"
+            :aria-label="t('workspaceChat.sidebar.refresh') || 'Refresh projects'"
+            data-testid="workspace-tree-refresh"
+            @click="refreshTree"
+          >
+            <v-icon icon="mdi-refresh" size="16" aria-hidden="true" />
+          </v-btn>
+          <v-btn
+            icon
+            variant="text"
+            size="x-small"
+            class="tree-header-btn"
+            :aria-expanded="!treeCollapsed"
+            :aria-label="
+              treeCollapsed
+                ? (t('workspaceChat.sidebar.expand') || 'Expand projects')
+                : (t('workspaceChat.sidebar.collapse') || 'Collapse projects')
+            "
+            data-testid="workspace-tree-collapse"
+            @click="treeCollapsed = !treeCollapsed"
+          >
+            <v-icon
+              :icon="treeCollapsed ? 'mdi-chevron-down' : 'mdi-chevron-up'"
+              size="16"
+              aria-hidden="true"
+            />
+          </v-btn>
+        </span>
+      </div>
       <p v-if="bootstrapError" class="sidebar-message error" role="alert">
         {{ t('workspaceChat.sidebar.loadError') || 'Failed to load workspaces' }}
         <button type="button" class="inline-action" @click="emit('retry')">
@@ -93,6 +136,7 @@
         {{ t('workspaceChat.sidebar.empty') || 'No conversations yet' }}
       </p>
 
+      <template v-if="!treeCollapsed">
       <section
         v-for="group in visibleGroups"
         :key="group.workspaceKey"
@@ -129,7 +173,11 @@
           </span>
         </button>
         <ul v-if="!group.collapsed" class="conversation-list">
-          <li v-for="conversation in group.conversations" :key="conversation.conversationId">
+          <li
+            v-for="conversation in group.conversations"
+            :key="conversation.conversationId"
+            class="conversation-item"
+          >
             <button
               type="button"
               class="conversation-row"
@@ -162,12 +210,35 @@
                 :aria-label="t('workspaceChat.status.completedUnread') || 'Completed, unread'"
               />
             </button>
+            <v-menu>
+              <template #activator="{ props: menuProps }">
+                <button
+                  type="button"
+                  class="row-menu-button"
+                  v-bind="menuProps"
+                  :data-testid="`workspace-row-menu-${conversation.conversationId}`"
+                  :aria-label="t('workspaceChat.renameDialog.menuButtonLabel') || 'Conversation actions'"
+                  @click.stop
+                >
+                  <v-icon icon="mdi-dots-horizontal" size="16" aria-hidden="true" />
+                </button>
+              </template>
+              <v-list density="compact" role="menu">
+                <v-list-item
+                  role="menuitem"
+                  :title="t('workspaceChat.renameDialog.renameAction') || 'Rename chat'"
+                  prepend-icon="mdi-pencil-outline"
+                  :data-testid="`workspace-row-rename-${conversation.conversationId}`"
+                  @click="emit('rename', conversation.conversationId)"
+                />
+              </v-list>
+            </v-menu>
           </li>
         </ul>
       </section>
 
       <section
-        v-if="visibleUnassigned.length > 0"
+        v-if="!treeCollapsed && visibleUnassigned.length > 0"
         class="workspace-group"
         aria-label="Unassigned"
       >
@@ -203,7 +274,11 @@
           </span>
         </button>
         <ul v-if="!unassignedCollapsed" class="conversation-list">
-          <li v-for="conversation in visibleUnassigned" :key="conversation.conversationId">
+          <li
+            v-for="conversation in visibleUnassigned"
+            :key="conversation.conversationId"
+            class="conversation-item"
+          >
             <button
               type="button"
               class="conversation-row"
@@ -225,16 +300,40 @@
                 class="row-indicator"
               />
               <span class="row-main">
-                <span class="row-title">
+                <span class="row-title" :title="conversation.title">
                   {{ conversation.title || (t('workspaceChat.newChat') || 'New chat') }}
                 </span>
                 <span class="row-preview">{{ conversation.preview }}</span>
               </span>
               <span v-if="conversation.unread" class="unread-dot" />
             </button>
+            <v-menu>
+              <template #activator="{ props: menuProps }">
+                <button
+                  type="button"
+                  class="row-menu-button"
+                  v-bind="menuProps"
+                  :data-testid="`workspace-row-menu-${conversation.conversationId}`"
+                  :aria-label="t('workspaceChat.renameDialog.menuButtonLabel') || 'Conversation actions'"
+                  @click.stop
+                >
+                  <v-icon icon="mdi-dots-horizontal" size="16" aria-hidden="true" />
+                </button>
+              </template>
+              <v-list density="compact" role="menu">
+                <v-list-item
+                  role="menuitem"
+                  :title="t('workspaceChat.renameDialog.renameAction') || 'Rename chat'"
+                  prepend-icon="mdi-pencil-outline"
+                  :data-testid="`workspace-row-rename-${conversation.conversationId}`"
+                  @click="emit('rename', conversation.conversationId)"
+                />
+              </v-list>
+            </v-menu>
           </li>
         </ul>
       </section>
+      </template>
     </nav>
 
     <!-- Zone 3: fixed account zone (PRD §10.1) -->
@@ -253,11 +352,14 @@ import type { WorkspaceConversationSummary } from "@/entityTypes/aiChatWorkspace
 import WorkspaceStatusIndicator from "./WorkspaceStatusIndicator.vue";
 import AccountMenu from "@/views/components/appShell/AccountMenu.vue";
 import { conversationStatusVisual } from "./workspaceStatusUtil";
+import { enqueueRoutePush } from "@/views/utils/enqueueRoutePush";
 
 const emit = defineEmits<{
   (e: "select", conversationId: string): void;
   (e: "new-chat"): void;
   (e: "retry"): void;
+  /** Chat-titles FR-06: row-scoped rename (targets THIS row's conversation). */
+  (e: "rename", conversationId: string): void;
 }>();
 
 const { t, te } = useI18n();
@@ -279,6 +381,24 @@ const bootstrapError = computed(() => workspaceStore.bootstrapError);
 /** Whether the "Other chats" (unassigned) folder is collapsed. Defaults to
  * collapsed so unassigned chats are hidden until the user expands it. */
 const unassignedCollapsed = ref(true);
+
+/**
+ * BUGFIX 2026-11-02: visible Project header state — the whole tree can be
+ * folded to a header (local fold, never disables the keyboard nav data), and
+ * the refresh button re-runs the authoritative bootstrap on demand.
+ */
+const treeCollapsed = ref(false);
+const treeRefreshing = ref(false);
+
+async function refreshTree(): Promise<void> {
+  if (treeRefreshing.value) return;
+  treeRefreshing.value = true;
+  try {
+    await workspaceStore.bootstrap();
+  } finally {
+    treeRefreshing.value = false;
+  }
+}
 
 const unassignedAttention = computed<{
   conversations: readonly WorkspaceConversationSummary[];
@@ -317,7 +437,7 @@ function groupAttentionCount(group: {
 }
 
 function goTo(path: string): void {
-  void router.push(path);
+  void enqueueRoutePush(router, path);
 }
 
 /**
@@ -403,6 +523,35 @@ function onTreeKeydown(event: KeyboardEvent): void {
 </script>
 
 <style scoped>
+/* Chat-titles FR-06/§7.4: sibling actions control — never inside the nav
+   button, never part of the data-nav-row roving-focus chain. */
+.conversation-item {
+  position: relative;
+}
+.row-menu-button {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.row-menu-button:hover,
+.row-menu-button:focus-visible,
+.conversation-item:hover .row-menu-button,
+.conversation-item:focus-within .row-menu-button {
+  opacity: 1;
+}
+
 .workspace-sidebar {
   display: flex;
   flex-direction: column;
@@ -458,6 +607,37 @@ function onTreeKeydown(event: KeyboardEvent): void {
   padding: 14px 6px 4px;
   margin-top: 8px;
   border-top: 1px solid rgba(var(--v-border-color, 0, 0, 0), 0.1);
+}
+
+/* Visible tree section header with manual refresh + fold (bugfix 2026-11-02). */
+.tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px 6px;
+}
+
+.tree-header-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.tree-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tree-header-btn {
+  opacity: 0.7;
+}
+
+.tree-header-btn:hover {
+  opacity: 1;
 }
 
 .sidebar-footer {

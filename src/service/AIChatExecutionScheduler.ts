@@ -207,6 +207,11 @@ export class AIChatExecutionScheduler {
     return this.queue.some((e) => e.runId === runId);
   }
 
+  /** Titles B10: count of currently DISPATCHED (active) assignments. */
+  activeCount(): number {
+    return this.active.size;
+  }
+
   isActive(runId: string): boolean {
     return this.active.has(runId);
   }

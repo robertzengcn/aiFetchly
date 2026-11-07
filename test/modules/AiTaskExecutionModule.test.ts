@@ -1476,69 +1476,23 @@ describe("AiTaskExecutionModule (Mocha)", function () {
       else process.env.WORKER_TYPE = previous;
     });
 
-    it("refuses createExecution from a worker process", async () => {
-      const mod = new AiTaskExecutionModule();
-      let threw = false;
-      try {
-        await mod.startExecution({
-          conversationId: "conv-w",
-          sourceUserMessageId: "msg-w",
-          submissionId: "sub-w",
-          requestHash: "sha256:w",
-          origin: { type: "manual", submissionId: "sub-w" },
-          route: "task_verified",
-          completionOwner: "standalone",
-          budgetLimits: MANUAL_BUDGET_DEFAULTS,
-        });
-      } catch (e) {
-        threw = true;
-        expect(String(e)).to.match(/worker/i);
-      }
-      expect(threw).to.equal(true);
+    it("refuses createExecution from a worker process", () => {
+      // The worker guard is enforced at BaseDb construction (assertNotWorker
+      // runs before any model wiring), so building the module under
+      // WORKER_TYPE throws — a worker can never wire these tables at all.
+      expect(() => new AiTaskExecutionModule()).to.throw(/worker/i);
     });
 
-    it("refuses finalizeExecution from a worker process", async () => {
-      const mod = new AiTaskExecutionModule();
-      let threw = false;
-      try {
-        await mod.finalizeExecution({
-          executionId: "exec-w",
-          expectedVersion: 0,
-          outcome: "verified_complete",
-          reasonCode: "CRITERIA_SATISFIED",
-          summary: "x",
-          evidenceIds: [],
-          remainingWork: [],
-        });
-      } catch (e) {
-        threw = true;
-        expect(String(e)).to.match(/worker/i);
-      }
-      expect(threw).to.equal(true);
+    it("refuses finalizeExecution from a worker process", () => {
+      expect(() => new AiTaskExecutionModule()).to.throw(/worker/i);
     });
 
-    it("refuses getExecution from a worker process", async () => {
-      const mod = new AiTaskExecutionModule();
-      let threw = false;
-      try {
-        await mod.getExecution("exec-w");
-      } catch (e) {
-        threw = true;
-        expect(String(e)).to.match(/worker/i);
-      }
-      expect(threw).to.equal(true);
+    it("refuses getExecution from a worker process", () => {
+      expect(() => new AiTaskExecutionModule()).to.throw(/worker/i);
     });
 
-    it("refuses getUnfinalizedExecutions from a worker process", async () => {
-      const mod = new AiTaskExecutionModule();
-      let threw = false;
-      try {
-        await mod.getUnfinalizedExecutions();
-      } catch (e) {
-        threw = true;
-        expect(String(e)).to.match(/worker/i);
-      }
-      expect(threw).to.equal(true);
+    it("refuses getUnfinalizedExecutions from a worker process", () => {
+      expect(() => new AiTaskExecutionModule()).to.throw(/worker/i);
     });
   });
 

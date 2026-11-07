@@ -27,6 +27,8 @@ export interface WorkspaceRecord {
   readonly rootPath: string;
   readonly label: string | null;
   readonly approvalState: WorkspaceApprovalState;
+  /** Stable grouping key (WorkspaceKeyService). Null while unresolved. */
+  readonly workspaceKey: string | null;
   readonly createdAt: string;
   readonly approvedAt: string | null;
   readonly revokedAt: string | null;

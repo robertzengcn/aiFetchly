@@ -16,8 +16,14 @@ vi.mock("https", () => ({
   get: vi.fn(),
 }));
 
+vi.mock("http", () => ({
+  get: vi.fn(),
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import * as https from "https";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import * as http from "http";
 import {
   PluginHttpDownloadService,
   allowlistRedirectPolicy,
@@ -100,5 +106,109 @@ describe("PluginHttpDownloadService default HTTPS transport", () => {
     if (!result.success) return;
     expect(result.bytesWritten).toBe(body.length);
     expect(fs.readFileSync(dest).equals(body)).toBe(true);
+  });
+});
+
+const E2E_KEY = "AIFETCHLY_E2E";
+const ROOT_KEY = "AIFETCHLY_E2E_ROOT";
+
+/** Shared mock-implementation shape: Node-like ClientRequest + deferred res. */
+function installServingMock(
+  target: { mockImplementation: (impl: (...args: unknown[]) => unknown) => void },
+  body: Buffer
+): void {
+  target.mockImplementation(
+    (_url: unknown, _opts: unknown, callback?: unknown): unknown => {
+      const resListeners = {
+        data: [] as ((chunk: Buffer) => void)[],
+        end: [] as (() => void)[],
+        error: [] as ((e: Error) => void)[],
+      };
+      queueMicrotask(() => {
+        (callback as (res: unknown) => void)({
+          statusCode: 200,
+          headers: { "content-length": String(body.length) },
+          on: (event: string, listener: (...args: never[]) => void) => {
+            if (event === "data") resListeners.data.push(listener as (chunk: Buffer) => void);
+            if (event === "end") resListeners.end.push(listener as () => void);
+            if (event === "error") resListeners.error.push(listener as (e: Error) => void);
+          },
+        });
+        resListeners.data.forEach((l) => l(body));
+        resListeners.end.forEach((l) => l());
+      });
+      return {
+        on: vi.fn((_event: string, _listener: (e: Error) => void) => undefined),
+        destroy: vi.fn(() => undefined),
+      };
+    }
+  );
+}
+
+describe("PluginHttpDownloadService default transport E2E loopback exception", () => {
+  const originalE2E = process.env[E2E_KEY];
+  const originalRoot = process.env[ROOT_KEY];
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (originalE2E === undefined) delete process.env[E2E_KEY];
+    else process.env[E2E_KEY] = originalE2E;
+    if (originalRoot === undefined) delete process.env[ROOT_KEY];
+    else process.env[ROOT_KEY] = originalRoot;
+  });
+
+  it("fetches the launcher-gated loopback http zip URL over the http transport", async () => {
+    process.env[E2E_KEY] = "1";
+    process.env[ROOT_KEY] = "/tmp/aifetchly-e2e/worker";
+    const body = Buffer.from("PK-loopback-e2e");
+    installServingMock(http.get as unknown as Parameters<typeof installServingMock>[0], body);
+
+    const svc = new PluginHttpDownloadService();
+    const dest = path.join(tmp, "loopback.zip");
+    const result = await svc.downloadToFile({
+      url: new URL("http://127.0.0.1:3999/zips/fixture.zip"),
+      destinationPath: dest,
+      headers: {},
+      maxBytes: 1024 * 1024,
+      timeoutMs: 5_000,
+      maxRedirects: 5,
+      redirectPolicy: () => false,
+    });
+
+    expect((http.get as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1);
+    expect(mockedGet.mock.calls).toHaveLength(0);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.bytesWritten).toBe(body.length);
+    expect(fs.readFileSync(dest).equals(body)).toBe(true);
+  });
+
+  it("keeps plain http targets on the https transport without the E2E gate", async () => {
+    delete process.env[E2E_KEY];
+    process.env[ROOT_KEY] = "/tmp/aifetchly-e2e/worker";
+    installServingMock(
+      mockedGet as unknown as Parameters<typeof installServingMock>[0],
+      Buffer.from("ignored")
+    );
+
+    const svc = new PluginHttpDownloadService();
+    const dest = path.join(tmp, "reject.zip");
+    await svc.downloadToFile({
+      url: new URL("http://127.0.0.1:3999/zips/fixture.zip"),
+      destinationPath: dest,
+      headers: {},
+      maxBytes: 1024 * 1024,
+      timeoutMs: 5_000,
+      maxRedirects: 5,
+      redirectPolicy: () => false,
+    });
+
+    // Production invariant: the http URL is handed to the https transport,
+    // which throws TypeError: Protocol "http:" not supported — the same
+    // failure surface as before the E2E exception existed.
+    expect((http.get as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
+    expect(mockedGet.mock.calls).toHaveLength(1);
+    expect((mockedGet.mock.calls[0][0] as URL).protocol).toBe("http:");
   });
 });

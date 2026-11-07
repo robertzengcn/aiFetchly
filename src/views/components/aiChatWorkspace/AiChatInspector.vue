@@ -62,9 +62,16 @@
 
     <div class="inspector-body">
       <AiChatArtifactsPanel
-        v-if="activeTab === 'artifacts'"
+        v-if="activeTab === 'artifacts' && specializedResultsEnabled"
         :conversation-id="conversationId"
       />
+      <div
+        v-else-if="activeTab === 'artifacts'"
+        class="inspector-artifacts-fallback"
+        data-testid="workspace-inspector-artifacts-fallback"
+      >
+        {{ t("workspaceChat.inspector.artifactsDisabled") || "Artifact results are unavailable while the specialized-results rollout adapter is rolled back." }}
+      </div>
       <AiChatActivityPanel
         v-if="activeTab === 'activity'"
         :conversation-id="conversationId"
@@ -74,7 +81,9 @@
         v-if="activeTab === 'context'"
         :conversation-id="conversationId"
         :messages="messages"
+        :show-memory="voiceMemoryEnabled"
         @compact="emit('compact')"
+        @open-memory="emit('open-memory')"
       />
     </div>
   </aside>
@@ -87,6 +96,9 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatArtifactsPanel from "./AiChatArtifactsPanel.vue";
 import AiChatActivityPanel from "./AiChatActivityPanel.vue";
 import AiChatContextPanel from "./AiChatContextPanel.vue";
+import {
+  useWorkspaceRolloutAdapters,
+} from "@/views/composables/aiChatWorkspace/useWorkspaceRolloutAdapters";
 
 const props = defineProps<{
   activeTab: "artifacts" | "activity" | "context";
@@ -101,10 +113,17 @@ const emit = defineEmits<{
   (e: "update:tab", tab: "artifacts" | "activity" | "context"): void;
   (e: "update:width", width: number): void;
   (e: "compact"): void;
+  (e: "open-memory"): void;
   (e: "close"): void;
 }>();
 
 const { t } = useI18n();
+
+/** A02 (§23.1): artifacts degrade to a placeholder when the adapter is off. */
+const rolloutAdapters = useWorkspaceRolloutAdapters();
+const specializedResultsEnabled = rolloutAdapters.specializedResults;
+/** A02 (§23.1): the memory entry gate mirrors the badge (adapter answer). */
+const voiceMemoryEnabled = rolloutAdapters.voiceMemory;
 
 /** Resizing applies on wide screens only (design §15.8). */
 const resizable = computed(() => props.overlay !== true);
@@ -215,18 +234,14 @@ function onResizerKeydown(event: KeyboardEvent): void {
 }
 
 /*
- * Docked (wide-mode) variant: the inspector host TELEPORTS this element to
- * <body>, outside the shell's flex layout — without fixed positioning it
- * renders in normal flow below the full-height app. Dock it to the viewport's
- * right edge (the inline width style still applies, and the resizer works).
+ * Docked (wide-mode) variant: the inspector host renders INLINE inside the
+ * shell's flex row (dock-column change 2026-10-26) — the panel is the row's
+ * third column: real layout space, not a floating panel. The inline width
+ * style still applies and the resizer works; height follows the shell row.
  */
 .workspace-inspector.docked {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 25;
-  box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
+  position: relative;
+  height: 100%;
 }
 
 .inspector-body {
@@ -234,5 +249,12 @@ function onResizerKeydown(event: KeyboardEvent): void {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.inspector-artifacts-fallback {
+  flex: 1;
+  padding: 16px;
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.64);
 }
 </style>

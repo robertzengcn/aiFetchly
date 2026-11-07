@@ -199,6 +199,45 @@ describe("AI Chat V2 — generated-image save-to-workspace IPC", () => {
     expect(mockSaveToolResultMessage).not.toHaveBeenCalled();
   });
 
+  // FR-IMG-013 defect (found by the E2E save journey): the Electron preload
+  // transport stringifies invoke payloads, so the handler must unwrap the
+  // JSON string exactly like registerValidatedHandler does — otherwise every
+  // renderer Save-to-workspace request is denied as unreadable.
+  it("unwraps the stringified payload the renderer transport sends", async () => {
+    mockAuthorizeOnly.mockResolvedValueOnce(authorizedSource());
+    mockResolveWorkspace.mockResolvedValue({
+      workspaceId: 1,
+      rootPath: tempState.workspaceRoot,
+    });
+
+    const result = await callHandler(
+      JSON.stringify({
+        conversationId: CONVERSATION_ID,
+        reference: { messageId: MESSAGE_ID, imageIndex: 0 },
+      })
+    );
+
+    expect(mockAuthorizeOnly).toHaveBeenCalledTimes(1);
+    expect(mockAuthorizeOnly).toHaveBeenCalledWith({
+      conversationId: CONVERSATION_ID,
+      references: [{ messageId: MESSAGE_ID, imageIndex: 0 }],
+    });
+    expect(result).toMatchObject({
+      status: true,
+      data: { status: "exported" },
+    });
+    expect(mockSaveToolResultMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a malformed string payload without authorization work", async () => {
+    const result = await callHandler("{not-json");
+
+    expect(result.status).toBe(false);
+    expect(result.msg).toBe("Malformed request payload");
+    expect(mockAuthorizeOnly).not.toHaveBeenCalled();
+    expect(mockSaveToolResultMessage).not.toHaveBeenCalled();
+  });
+
   it("rejects a forged reference with the safe typed error code", async () => {
     mockAuthorizeOnly.mockRejectedValueOnce(
       new GeneratedImageReferenceError("generated_image_not_owned")

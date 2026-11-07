@@ -112,7 +112,7 @@ export interface ManagedBrowserAiToolServiceDeps {
 export interface BrowserModuleLike {
   start(
     input: {
-      accountId: number;
+      accountId?: number;
       purpose: string;
       requestedStartUrl?: string;
       conversationId?: string;
@@ -305,6 +305,26 @@ export class ManagedBrowserAiToolService {
       );
       return { ...status, notice: null };
     } catch (error) {
+      // A saved profile is optional for visiting any site. Missing accounts
+      // and unsupported social adapters must not prevent a fresh browser
+      // from opening; the user can sign in there. Preserve all other errors,
+      // including settings gates and account proxy failures.
+      const unavailableAccount = error instanceof ManagedBrowserError && (
+        error.code === "account_not_found" ||
+        (error.code === "managed_browser_disabled" && error.reasonCode === "platform_not_in_pilot")
+      );
+      if (parsed.data.account_id !== undefined && unavailableAccount) {
+        try {
+          const status = await this.browserModule.start({
+            purpose: parsed.data.purpose,
+            requestedStartUrl: parsed.data.requested_start_url,
+            conversationId: context.conversationId,
+          }, { aiEntryPoint: true });
+          return { ...status, notice: "saved_account_unavailable_using_account_free_browser" };
+        } catch (fallbackError) {
+          this.wrapModuleError(fallbackError);
+        }
+      }
       this.wrapModuleError(error);
     }
   }
@@ -776,6 +796,7 @@ export class ManagedBrowserAiToolService {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
     const status = this.ensureSession(parsed.data.session_id);
+    if (status.accountId === 0) return { cleared: false, reasonCode: "ephemeral_public_browser" };
     try {
       const result = await this.cacheModule.clearCache({
         scope: "account",

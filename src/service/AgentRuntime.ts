@@ -193,6 +193,12 @@ function failureText(error: unknown): string {
  * prompt assembly, and output parsing.
  */
 export class AgentRuntime {
+  /**
+   * T5 (audit FR-INT-004): live per-task abort controllers so a user cancel
+   * can target EXACTLY one agent task — never the parent conversation run
+   * and never a sibling task. Registered at loop start, removed at settle.
+   */
+  private readonly liveTaskAborts = new Map<string, AbortController>();
   private readonly policy = new AgentToolPolicyService();
   private readonly promptBuilder = new AgentPromptBuilder();
   private readonly outputParser = new AgentOutputParser();
@@ -505,6 +511,7 @@ export class AgentRuntime {
 
     // 5. Run with abort controller + runtime timeout.
     const abortController = new AbortController();
+    this.liveTaskAborts.set(agentTaskId, abortController);
     const abortFromParent = (): void => abortController.abort();
     if (deps?.signal?.aborted) {
       abortController.abort();
@@ -616,6 +623,10 @@ export class AgentRuntime {
     } finally {
       clearTimeout(timer);
       deps?.signal?.removeEventListener("abort", abortFromParent);
+      // Review fix: release the live-controller registration on EVERY exit
+      // path (a thrown loop.run previously leaked the entry, and a later
+      // cancelTask would abort the dead controller and report success).
+      this.liveTaskAborts.delete(agentTaskId);
     }
 
     // 6. Parse output.
@@ -879,6 +890,41 @@ export class AgentRuntime {
       sourceUrls: [],
       errorMessage: message,
     };
+  }
+
+  /**
+   * T5 (audit FR-INT-004): cancel exactly one agent task. A live task is
+   * aborted through its own controller (the loop then reports `cancelled`,
+   * which the run flow persists with its partial transcript). A task that is
+   * not live (queued/recovering rows, restart leftovers) transitions to
+   * cancelled directly when non-terminal. Returns false for unknown or
+   * already-terminal tasks.
+   */
+  async cancelTask(agentTaskId: string): Promise<boolean> {
+    if (!agentTaskId) return false;
+    const live = this.liveTaskAborts.get(agentTaskId);
+    if (live) {
+      live.abort();
+      return true;
+    }
+    try {
+      const snapshot = await this.taskModule.getSnapshot(agentTaskId);
+      if (!snapshot) return false;
+      if (
+        snapshot.status === "completed" ||
+        snapshot.status === "failed" ||
+        snapshot.status === "cancelled" ||
+        snapshot.status === "timeout"
+      ) {
+        return false;
+      }
+      await this.taskModule.setStatus(agentTaskId, "cancelled", {
+        finishedAt: new Date(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private buildResult(

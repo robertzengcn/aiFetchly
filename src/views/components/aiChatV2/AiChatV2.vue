@@ -207,22 +207,6 @@
           icon
           size="small"
           variant="text"
-          data-testid="toggle-reasoning"
-          @click="toggleReasoningVisible"
-          :title="
-            showReasoning
-              ? t('aiChatV2.hide_reasoning') || 'Hide reasoning'
-              : t('aiChatV2.show_reasoning') || 'Show reasoning'
-          "
-        >
-          <v-icon size="small" :color="showReasoning ? 'primary' : undefined">
-            mdi-brain
-          </v-icon>
-        </v-btn>
-        <v-btn
-          icon
-          size="small"
-          variant="text"
           @click="onClearMessages"
           :disabled="messages.length === 0"
           :title="t('aiChatV2.clear_chat') || 'Clear chat'"
@@ -247,11 +231,6 @@
         :recovery-info="recoveryInfo"
         :workspace-root="activeWorkspace?.rootPath ?? ''"
         :show-reasoning="showReasoning"
-        :pending-messages="activePendingMessages"
-        :runtime-status="authoritativeRuntimeStatus"
-        @steer-pending="onSteerPending"
-        @cancel-pending="onCancelPending"
-        @resume-pending="onResumePending"
         :reported-message-ids="reportedMessageIds"
         :awaiting-tool-message-ids="awaitingToolMessageIds"
         @grant-permission="handleSkillPermissionGrant"
@@ -273,7 +252,6 @@
            session (account, state, handoff controls) whenever one is
            active. Renders nothing when no session is running. -->
       <ManagedBrowserSessionCard />
-      <ManagedBrowserStartPanel />
 
       <!-- Pinned action cards: permission + question + plan approval while awaiting user input.
            After the user approves/rejects/requests changes, the plan card moves
@@ -385,6 +363,7 @@
           class="mb-1"
           @request-set-workspace="handleWorkspaceSetupRequest"
           @request-open-memory="openWorkspaceMemory"
+          @request-remove-workspace="onWorkspaceRemoveRequest"
         />
         <WorkspaceRequiredCard
           v-if="showWorkspaceRequired && activeConversationId"
@@ -438,55 +417,19 @@
            list (see handleScheduledStream) so they look identical to
            interactive responses. No separate running-area bubble. -->
 
-      <!-- TTS prerequisite notice: shown when the user tries to enable spoken
-           responses (the header speaker toggle) before a TTS model is installed.
-           Mirrors the STT model-missing notice in AiChatV2Composer so the user
-           is guided to install instead of seeing silent failures on every reply. -->
-      <div
-        v-if="voiceTtsInstallPrompt"
-        class="v2-shell__tts-notice"
-        role="status"
-        aria-live="polite"
-      >
-        <v-icon size="x-small" color="warning" class="mr-1">mdi-volume-off</v-icon>
-        <span class="v2-shell__tts-notice-text">
-          {{
-            t("aiChatV2.voice.tts_model_missing") ||
-            "Spoken responses need a speech model. Install it to enable."
-          }}
-        </span>
-        <v-btn
-          size="x-small"
-          color="primary"
-          variant="tonal"
-          class="ml-2"
-          data-testid="install-tts-model"
-          :loading="voiceModelInstalling"
-          :disabled="voiceModelInstalling"
-          @click="handleInstallTtsModel"
-        >
-          {{
-            voiceModelInstalling
-              ? t("aiChatV2.voice.installing_model") || "Installing..."
-              : t("aiChatV2.voice.install_tts_model") || "Install speech model"
-          }}
-        </v-btn>
-        <v-btn
-          size="x-small"
-          variant="text"
-          class="ml-1"
-          :aria-label="t('aiChatV2.voice.open_model_settings') || 'Open settings'"
-          @click="openAIProviderSettings"
-        >
-          {{ t("aiChatV2.voice.open_model_settings") || "Open settings" }}
-        </v-btn>
-      </div>
-
       <AiChatSelectedContext
         v-if="historyUiEnabled"
         :selections="selectedContextItems"
         @remove="removeSelectedContext"
         @clear="clearSelectedContext"
+      />
+
+      <AiChatV2QueuedMessages
+        :pending-messages="activePendingMessages"
+        :runtime-status="authoritativeRuntimeStatus"
+        @steer="onSteerPending"
+        @cancel="onCancelPending"
+        @resume="onResumePending"
       />
 
       <AiChatV2Composer
@@ -567,118 +510,21 @@
       @cancel="onScheduledLoopApprovalCancel"
     />
 
-    <!-- Ambiguity chooser: several generated images could match the request;
-         the user picks one to proceed as the sole reference. Persistent so an
-         outside click cannot dismiss it and strand a stale pending send. -->
-    <v-dialog
+    <!-- Ambiguity chooser (shared component — capability parity FR-IMG-006). -->
+    <GeneratedImageChooserDialog
       v-model="showGeneratedImageChooser"
-      max-width="420"
-      persistent
-      data-testid="ai-chat-generated-chooser"
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.generatedImageRefs.referenceTrayTitle") ||
-              "Reference images"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t(
-                "aiChatV2.generatedImageRefs.errors.generated_image_ambiguous"
-              ) || "Several images could match your request."
-            }}
-          </p>
-          <div class="d-flex flex-wrap ga-2">
-            <v-btn
-              v-for="(candidate, idx) in ambiguityCandidates"
-              :key="`${candidate.reference.messageId}:${candidate.reference.imageIndex}`"
-              variant="outlined"
-              size="small"
-              :data-testid="`ai-chat-generated-candidate-${idx}`"
-              @click="chooseAmbiguityCandidate(candidate)"
-            >
-              <img
-                v-if="candidate.thumbUrl"
-                :src="candidate.thumbUrl"
-                :alt="
-                  candidate.fileName ||
-                  t('aiChatV2.generatedImageRefs.useAsReference') ||
-                  'Reference image'
-                "
-                class="mr-1"
-                style="max-height: 32px; max-width: 48px; border-radius: 4px"
-              />
-              <v-icon v-else size="small" class="mr-1">mdi-image-outline</v-icon>
-              {{ candidate.fileName || `#${idx + 1}` }}
-            </v-btn>
-          </div>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            data-testid="ai-chat-generated-chooser-cancel"
-            @click="cancelAmbiguityChooser"
-          >
-            {{ t("aiChatV2.cancel") || "Cancel" }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :candidates="ambiguityCandidates"
+      @select="chooseAmbiguityCandidate"
+      @cancel="cancelAmbiguityChooser"
+    />
 
-    <!-- Batch confirmation: more than 3 images inferred; confirm sends plain
-         text (main process runs them as a batch), decline aborts. -->
-    <v-dialog
+    <!-- Batch confirmation (shared component — capability parity FR-IMG-008). -->
+    <GeneratedImageBatchConfirmDialog
       v-model="showBatchConfirmDialog"
-      max-width="420"
-      persistent
-      data-testid="ai-chat-generated-batch-confirm"
-    >
-      <v-card>
-        <v-card-title class="d-flex align-center">
-          <v-icon class="mr-2" color="primary">mdi-image-multiple-outline</v-icon>
-          <span>
-            {{
-              t("aiChatV2.generatedImageRefs.batchConfirmTitle") ||
-              "Process as batch?"
-            }}
-          </span>
-        </v-card-title>
-        <v-card-text>
-          <p class="text-body-2 mb-3">
-            {{
-              t("aiChatV2.generatedImageRefs.batchConfirmBody", {
-                count: pendingGeneratedImageBatchCount,
-              }) ||
-              "Each selected image will be edited independently in a background batch. This may take a while."
-            }}
-          </p>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn
-            variant="text"
-            data-testid="ai-chat-generated-batch-decline"
-            @click="declineGeneratedImageBatch"
-          >
-            {{ t("aiChatV2.cancel") || "Cancel" }}
-          </v-btn>
-          <v-btn
-            color="primary"
-            data-testid="ai-chat-generated-batch-confirm-accept"
-            @click="confirmGeneratedImageBatch"
-          >
-            {{ t("aiChatV2.generatedImageRefs.send") || "Send" }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
+      :count="pendingGeneratedImageBatchCount"
+      @confirm="confirmGeneratedImageBatch"
+      @decline="declineGeneratedImageBatch"
+    />
 
     <!-- Generated-image preflight errors (fusion limit, reference limit). -->
     <v-snackbar
@@ -728,6 +574,17 @@
       :progress-text="voiceRuntimeInstallProgressText"
       :percent="voiceRuntimeInstallPercent"
       @confirm="confirmInstallVoiceRuntime"
+    />
+
+    <!-- Spoken-response speech-model install popup: opens when the user
+         enables spoken responses before a TTS model is installed, and lets
+         them install it in place (spec 2026-10-26). -->
+    <AiChatVoiceTtsModelInstallDialog
+      v-model="voiceTtsInstallPrompt"
+      :installing="voiceModelInstalling"
+      :error="voiceModelInstallError"
+      @confirm="handleInstallTtsModel"
+      @open-settings="openAIProviderSettings"
     />
 
     <!-- Conversation history dialog -->
@@ -864,6 +721,7 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { handleAiNavigationToolResult } from "@/views/utils/aiNavigationResultHandler";
 import { MessageType } from "@/entityTypes/commonType";
+import { useChatReportState } from "@/views/store/chatReportState";
 import type {
   AIChatPendingCreateResult,
   AIChatPendingMessageEvent,
@@ -926,6 +784,7 @@ import {
   denyChatV2ToolPermission,
 } from "@/views/api/aiChatV2";
 import { cancelVoiceJob } from "@/views/api/aiChatV2Voice";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import { useAiChatVoice } from "@/views/composables/useAiChatVoice";
 import * as aiChatV2Api from "@/views/api/aiChatV2";
 import {
@@ -939,13 +798,13 @@ import {
   onAifetchlyConfigChanged,
 } from "@/views/api/slashCommands";
 import AiChatV2Messages from "./AiChatV2Messages.vue";
+import AiChatV2QueuedMessages from "./AiChatV2QueuedMessages.vue";
 import AiChatV2Composer from "./AiChatV2Composer.vue";
 import AiChatV2ModeSelector from "./AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "./AiChatV2ModelSelector.vue";
 import AiChatV2ToolApprovalModeSelector from "./AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2QuestionCard from "./AiChatV2QuestionCard.vue";
 import ManagedBrowserSessionCard from "./ManagedBrowserSessionCard.vue";
-import ManagedBrowserStartPanel from "./ManagedBrowserStartPanel.vue";
 import AiChatV2PlanApprovalCard from "./AiChatV2PlanApprovalCard.vue";
 import AiChatV2PlanStatusBadge from "./AiChatV2PlanStatusBadge.vue";
 import TaskExecutionStatusBadge from "./TaskExecutionStatusBadge.vue";
@@ -953,7 +812,7 @@ import AiChatV2ContextBadge from "./AiChatV2ContextBadge.vue";
 import AiChatCompactionStatus from "./AiChatCompactionStatus.vue";
 import AiChatHistoryDrawer from "./AiChatHistoryDrawer.vue";
 import AiChatSelectedContext from "./AiChatSelectedContext.vue";
-import type { SelectedContextItem } from "./AiChatSelectedContext.vue";
+import type { SelectedContextItem } from "./selectedContextTypes";
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
 import type { CompactionStatusSnapshot } from "@/service/AIChatCompactionCoordinator";
 import FileOperationBadge from "../aiChat/FileOperationBadge.vue";
@@ -961,13 +820,18 @@ import SkillApprovalCard from "../aiChat/SkillApprovalCard.vue";
 import MCPToolManager from "../aiChat/MCPToolManager.vue";
 import AgentTaskListDialog from "./AgentTaskListDialog.vue";
 import ScheduledLoopToolApprovalDialog from "./ScheduledLoopToolApprovalDialog.vue";
+import GeneratedImageChooserDialog from "./GeneratedImageChooserDialog.vue";
+import { cancelAgentTask } from "@/views/api/agentRuntime";
+import GeneratedImageBatchConfirmDialog from "./GeneratedImageBatchConfirmDialog.vue";
 import WorkspaceBadge from "./WorkspaceBadge.vue";
 import WorkspaceRequiredCard from "./WorkspaceRequiredCard.vue";
 import WorkspaceMemoryPanel from "./WorkspaceMemoryPanel.vue";
 import WorkspaceTrustCard from "./WorkspaceTrustCard.vue";
 import AiChatVoiceOutputToggle from "./AiChatVoiceOutputToggle.vue";
 import AiChatVoiceRuntimeInstallDialog from "./AiChatVoiceRuntimeInstallDialog.vue";
+import AiChatVoiceTtsModelInstallDialog from "./AiChatVoiceTtsModelInstallDialog.vue";
 import { useConversationWorkspace } from "@/views/composables/useConversationWorkspace";
+import { useConversationScopedOverlays } from "@/views/composables/aiChatWorkspace/useConversationScopedOverlays";
 import {
   createGoal,
   getActiveGoal,
@@ -997,7 +861,6 @@ import {
   subscribeConversationUpdated,
   unsubscribeConversationUpdated,
   subscribeScheduledStream,
-  unsubscribeScheduledStream,
 } from "@/views/api/aiChatScheduledLoop";
 import type { AIChatGoalView } from "@/entityTypes/aiChatGoalTypes";
 import type {
@@ -1016,8 +879,10 @@ import type { FileOperationRecord } from "@/entityTypes/fileOperationTypes";
 import {
   extractArtifactMetadata,
   extractToolOutputDescriptors,
+  extractPluginArtifacts,
   ensureArtifactMetadata,
   ensureToolOutputMetadata,
+  ensurePluginArtifactMetadata,
 } from "./artifactMetadata";
 import {
   extractFileOperationsFromMessages,
@@ -1045,7 +910,6 @@ import { isPlanStateActive } from "./planStateUtil";
 import {
   AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
   readAiChatReasoningVisible,
-  writeAiChatReasoningVisible,
   type AiChatReasoningVisibilityChangedDetail,
 } from "@/views/utils/aiChatReasoningPreference";
 import {
@@ -1126,7 +990,10 @@ const conversationReportDialogOpen = ref(false);
 const conversationReportSnapshot = ref<
   ReturnType<typeof buildChatV2ConversationSnapshot> | null
 >(null);
-const reportedMessageIds = ref<Set<string>>(new Set());
+// R9 B04 (FR-RPT-009 / AD-005): the module-scope session singleton is the
+// owner; it survives remounts. Same pattern as useInnerPageShellFlag.
+const chatReportState = useChatReportState();
+const reportedMessageIds = chatReportState.reportedMessageIds;
 const singleReportDialogOpen = ref(false);
 const activeSingleDescriptor = ref<ReportableOutputDescriptor | null>(null);
 
@@ -1251,6 +1118,10 @@ interface ParkedQueuedTurn {
 }
 const parkedQueuedTurns = new Map<string, ParkedQueuedTurn>();
 let unsubscribePendingEvents: (() => void) | null = null;
+// Per-listener teardown for the shared scheduled-stream channel (bugfix
+// 2026-11-02): the selected-conversation store owns its own listener on the
+// same channel, so unmount must remove exactly this listener.
+let unsubscribeScheduledStreamListener: (() => void) | null = null;
 
 const upsertPendingMessage = (view: AIChatPendingMessageView): void => {
   const current =
@@ -1622,6 +1493,8 @@ function onRetryGeneratedImageBatch(payload: {
   instruction: string;
 }): void {
   if (payload.references.length === 0) return;
+  // R8 §2: batch retry action count (labels only).
+  void recordWorkspaceActionCount("image", "batch_retry", "ok");
   void onSend(payload.instruction, undefined, {
     bypassGeneratedImageInference: true,
     confirmedBatchReferences: [...payload.references],
@@ -1727,7 +1600,17 @@ function confirmGeneratedImageBatch(): void {
   const confirmed = pending?.confirmedReferences;
   pendingGeneratedImageSend.value = null;
   showBatchConfirmDialog.value = false;
+  // R8 §2: batch-confirmation action count (labels only).
+  void recordWorkspaceActionCount("image", "batch_confirm", "ok");
   if (!pending || !confirmed || confirmed.length === 0) return;
+  // FR-IMG-015 P1-2: same stale-dialog guard as the ambiguity chooser —
+  // a confirm click after the user switched conversations must never
+  // submit conv-A's confirmed batch into the newly active conversation.
+  if (
+    pending.conversationId !== draftKeyFor(activeConversationId.value)
+  ) {
+    return;
+  }
   void onSend(pending.text, pending.files, {
     ...pending.options,
     bypassGeneratedImageInference: true,
@@ -1740,6 +1623,7 @@ function confirmGeneratedImageBatch(): void {
 function declineGeneratedImageBatch(): void {
   pendingGeneratedImageSend.value = null;
   showBatchConfirmDialog.value = false;
+  void recordWorkspaceActionCount("image", "batch_confirm", "declined");
 }
 
 
@@ -1877,15 +1761,38 @@ async function loadToolApprovalMode(conversationId: string | null): Promise<void
 }
 
 function handleAgentTaskCancel(agentTaskId: string): void {
-  // Agent task cancellation is wired in a later milestone.
-  console.log("[AiChatV2] cancel-task requested:", agentTaskId);
+  // T5 (audit FR-INT-004): cancel exactly the emitted task through the
+  // shared agent-runtime API (same handler the workspace center uses).
+  void cancelAgentTask(agentTaskId).catch(() => undefined);
 }
 
 async function onToolApprovalModeChange(mode: ChatToolApprovalMode): Promise<void> {
   toolApprovalMode.value = mode;
   if (!activeConversationId.value) return;
+  await writeToolApprovalMode(activeConversationId.value, mode);
+}
+
+/**
+ * Persist a non-default selector mode once a conversation id exists.
+ *
+ * The selector can show Full access before a conversation id exists, and
+ * that choice is only kept in memory. A scheduled run reads the persisted
+ * mode, so the id must be saved before the loop is created.
+ */
+async function persistCurrentToolApprovalMode(
+  conversationId: string
+): Promise<void> {
+  if (toolApprovalMode.value === "ask_for_approval") return;
+  await writeToolApprovalMode(conversationId, toolApprovalMode.value);
+}
+
+async function writeToolApprovalMode(
+  conversationId: string,
+  mode: ChatToolApprovalMode
+): Promise<void> {
+  if (!conversationId) return;
   try {
-    const saved = await setChatV2ToolApprovalMode(activeConversationId.value, mode);
+    const saved = await setChatV2ToolApprovalMode(conversationId, mode);
     toolApprovalMode.value = saved;
   } catch (err) {
     console.error("[AiChatV2] failed to save tool approval mode:", err);
@@ -1971,6 +1878,11 @@ function handleWorkspaceSetupRequest(): void {
   // the previous one once approved (see WorkspaceModule.setWorkspace).
   ensureWorkspaceConversationId();
   conversationWorkspace.requestSetup();
+}
+
+/** FR-WSP-002 remove affordance — classic-chat parity with the chat center. */
+function onWorkspaceRemoveRequest(): void {
+  void conversationWorkspace.removeWorkspace();
 }
 
 /**
@@ -2480,7 +2392,12 @@ function cancelTaskExecution(): void {
 }
 
 /** Handle /loop: validate bounds + active goal, then start the loop run. */
-async function runLoopCommand(count: number | null): Promise<void> {
+/**
+ * R11: returns TRUE only when the loop actually started — the caller clears
+ * the composer draft exclusively on that outcome, so validation failures
+ * and start failures leave the retryable command input in place.
+ */
+async function runLoopCommand(count: number | null): Promise<boolean> {
   const command = `/loop${count === null ? "" : ` ${count}`}`;
   if (count === null) {
     appendLocalCommandExchange(
@@ -2488,7 +2405,7 @@ async function runLoopCommand(count: number | null): Promise<void> {
       command,
       t("aiChatV2.goalLoop.countRequired") || "Please provide an iteration count."
     );
-    return;
+    return false;
   }
   if (!isValidLoopCount(count)) {
     appendLocalCommandExchange(
@@ -2497,7 +2414,7 @@ async function runLoopCommand(count: number | null): Promise<void> {
       t("aiChatV2.goalLoop.countRange") ||
         "Iteration count must be between 1 and 10."
     );
-    return;
+    return false;
   }
   const goal = activeGoal.value;
   if (!goal) {
@@ -2507,7 +2424,7 @@ async function runLoopCommand(count: number | null): Promise<void> {
       t("aiChatV2.goalLoop.noActiveGoal") ||
         "Set a goal first with /goal <objective>."
     );
-    return;
+    return false;
   }
   try {
     const started = await startGoalLoop({
@@ -2518,12 +2435,15 @@ async function runLoopCommand(count: number | null): Promise<void> {
     if (!started) {
       streamError.value =
         t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+      return false;
     }
   } catch {
     streamError.value =
       t("aiChatV2.goalLoop.startFailed") || "Could not start the loop.";
+    return false;
   }
   await refreshActiveGoal();
+  return true;
 }
 
 /** Stop the active loop run (user pressed Stop). */
@@ -2579,8 +2499,45 @@ function resetScheduledLoopViewState(): void {
   liveScheduledAssistant.value = null;
   scheduledRefreshPending.value = false;
   pendingScheduledLoop.value = null;
+  stagedScheduledLoopAccept = null;
   showScheduledLoopApproval.value = false;
 }
+
+// ---------------------------------------------------------------------------
+// Conversation-bound overlay ownership (G01, AD-008): this surface registers
+// its selection-bound dialogs with the SAME shared host the workspace
+// center uses, replacing the scattered per-dialog watch(selectedId) resets
+// that drifted out of sync. A dialog can never describe — or submit into —
+// a conversation the user navigated away from.
+// ---------------------------------------------------------------------------
+const scopedOverlays = useConversationScopedOverlays(
+  () => activeConversationId.value
+);
+// An open report dialog must never describe a conversation the user
+// navigated away from — close without submitting so a later open rebuilds
+// a fresh snapshot (Journey 11.5, §19; FR-RPT-008 rebinds single-output).
+scopedOverlays.registerSelectionBoundOverlay("report-dialogs", () => {
+  if (conversationReportDialogOpen.value) {
+    conversationReportDialogOpen.value = false;
+    conversationReportSnapshot.value = null;
+  }
+  if (singleReportDialogOpen.value) {
+    singleReportDialogOpen.value = false;
+    activeSingleDescriptor.value = null;
+  }
+});
+// Conversation switch: image-dialog state never replays into the newly
+// selected chat (stale chooser state is discarded, not replayed).
+scopedOverlays.registerSelectionBoundOverlay("generated-image-dialogs", () => {
+  pendingGeneratedImageSend.value = null;
+  ambiguityCandidates.value = [];
+  showGeneratedImageChooser.value = false;
+  showBatchConfirmDialog.value = false;
+});
+// Conversation-scoped staging never leaks across selections (FR-CMD-008).
+scopedOverlays.registerSelectionBoundOverlay("scheduled-loop-staging", () => {
+  resetScheduledLoopViewState();
+});
 
 /**
  * Handle the auto full-compact broadcast: the main process compacted the
@@ -2910,7 +2867,12 @@ function handleScheduledStream(event: ChatV2ScheduledStreamEvent): void {
   }
 }
 
-/** Handle /loop <duration> <prompt>: create a bounded scheduled loop. */
+/**
+ * Handle /loop <duration> <prompt>: create a bounded scheduled loop (FR-16).
+ * R11-1: returns TRUE only when the loop is durably persisted — the caller
+ * fires the composer acceptance exactly once on that outcome; a failed
+ * create keeps the retryable draft in the composer.
+ */
 async function runScheduledLoopCreate(
   action: {
     intervalMs: number;
@@ -2926,8 +2888,9 @@ async function runScheduledLoopCreate(
     allowMcp: boolean;
     allowSubagents: boolean;
   }
-): Promise<void> {
+): Promise<boolean> {
   const conversationId = ensureWorkspaceConversationId();
+  await persistCurrentToolApprovalMode(conversationId);
   try {
     const created = await createScheduledLoop({
       conversationId,
@@ -2948,7 +2911,7 @@ async function runScheduledLoopCreate(
         "Could not create the scheduled loop.";
       appendLocalCommandExchange(conversationId, rawCommand, message);
       streamError.value = message;
-      return;
+      return false;
     }
     // The backend persisted the command + confirmation rows; switch to the
     // resolved conversation and reload history so they render immediately.
@@ -2961,6 +2924,7 @@ async function runScheduledLoopCreate(
     await loadHistory(created.conversationId);
     void loadConversations();
     await refreshScheduledLoopStatus();
+    return true;
   } catch (e) {
     const message =
       e instanceof Error
@@ -2969,20 +2933,23 @@ async function runScheduledLoopCreate(
           "Could not create the scheduled loop.";
     appendLocalCommandExchange(conversationId, rawCommand, message);
     streamError.value = message;
+    return false;
   }
 }
 
-
-/** Handle /loop pause|resume|stop (conversation-scoped control). */
+/**
+ * Handle /loop pause|resume|stop (conversation-scoped control).
+ * R11: returns TRUE only when the control ran — see runLoopCommand.
+ */
 async function runScheduledLoopControl(
   operation: "pause" | "resume" | "stop"
-): Promise<void> {
+): Promise<boolean> {
   const id = activeConversationId.value;
   if (!id) {
     streamError.value =
       t("aiChatV2.scheduledLoop.noActiveLoop") ||
       "No active conversation for this command.";
-    return;
+    return false;
   }
   try {
     await controlScheduledLoop(id, operation);
@@ -2993,7 +2960,9 @@ async function runScheduledLoopControl(
         ? e.message
         : t("aiChatV2.scheduledLoop.controlFailed") ||
           "Could not update the scheduled loop.";
+    return false;
   }
+  return true;
 }
 
 /**
@@ -3011,13 +2980,12 @@ function onWorkspaceApproved(
 }
 
 // Workspace badge refresh on conversation change is owned by the shared
-// useConversationWorkspace composable (design §9.1).
+// useConversationWorkspace composable (design §9.1). The scheduled-loop /
+// ambiguity-chooser / dialog resets moved to the shared overlay host above
+// (G01, AD-008) — this watcher keeps only the draft stash/restore and the
+// per-conversation refreshes.
 watch(activeConversationId, (id, previousId) => {
   if (id !== previousId) {
-    resetScheduledLoopViewState();
-    // Drop any stale ambiguity-chooser / pending send from the previous
-    // conversation so it can never replay into the newly active one.
-    cancelAmbiguityChooser();
     // Per-conversation drafts (§13.3): stash the outgoing draft and restore
     // the incoming one so switching preserves work without cross-chat leaks.
     if (previousId) {
@@ -3150,12 +3118,6 @@ const handleReasoningVisibilityChanged = (event: Event): void => {
       ? customEvent.detail.visible
       : readAiChatReasoningVisible();
 };
-const toggleReasoningVisible = (): void => {
-  const next = !showReasoning.value;
-  showReasoning.value = next;
-  writeAiChatReasoningVisible(next);
-};
-
 const resolveContextWindowLocal = (model?: string): number =>
   resolveContextWindow(modelContextWindows.value, model);
 
@@ -3649,8 +3611,19 @@ type PendingScheduledLoop = {
 };
 const pendingScheduledLoop = ref<PendingScheduledLoop | null>(null);
 const showScheduledLoopApproval = ref(false);
+/**
+ * R11-1: the composer's acceptance callback captured when a scheduled loop
+ * was staged. Staging is NOT acceptance (R11): the callback fires exactly
+ * once, when the approval durably persists the loop; a failed create keeps
+ * the retryable draft in the composer.
+ */
+let stagedScheduledLoopAccept: (() => void) | null = null;
 
-/** Confirm tool approval and create the staged scheduled loop. */
+/**
+ * Confirm tool approval and create the staged scheduled loop (FR-16).
+ * R11-1: acceptance follows DURABLE creation only — a failed create already
+ * surfaced its error and keeps the composer draft for retry.
+ */
 async function onScheduledLoopApprovalConfirm(payload: {
   allowedTools: string[];
   autoApproveTools: boolean;
@@ -3665,12 +3638,19 @@ async function onScheduledLoopApprovalConfirm(payload: {
   }
   pendingScheduledLoop.value = null;
   showScheduledLoopApproval.value = false;
-  await runScheduledLoopCreate(staged.action, staged.rawCommand, payload);
+  // Consume the stashed acceptance BEFORE the durable-create await: a loop
+  // re-staged mid-confirm can never inherit this callback (exactly once).
+  const accept = stagedScheduledLoopAccept;
+  stagedScheduledLoopAccept = null;
+  if (await runScheduledLoopCreate(staged.action, staged.rawCommand, payload)) {
+    accept?.();
+  }
 }
 
 /** Cancel staged scheduled-loop creation (user closed the approval dialog). */
 function onScheduledLoopApprovalCancel(): void {
   pendingScheduledLoop.value = null;
+  stagedScheduledLoopAccept = null;
   showScheduledLoopApproval.value = false;
 }
 /** Set when a scheduled turn completes while an interactive stream is active;
@@ -3921,15 +3901,8 @@ const conversationReportDisabledReason = computed(() => {
   return "";
 });
 
-// Journey 11.5, §19: if the active conversation changes while the report
-// dialog is open, the frozen snapshot would describe a conversation the user
-// is no longer viewing. Close the dialog without submitting so a later open
-// rebuilds a fresh snapshot against the new conversation.
-watch(activeConversationId, () => {
-  if (!conversationReportDialogOpen.value) return;
-  conversationReportDialogOpen.value = false;
-  conversationReportSnapshot.value = null;
-});
+// Journey 11.5, §19: the report dialog's close-on-switch rule moved to the
+// shared overlay host registration above (G01, AD-008) — no local watcher.
 
 /**
  * Map a backend-mapped error string to a user-facing, translated message.
@@ -3966,6 +3939,15 @@ const mapStreamErrorMessage = (raw: string): string => {
     return (
       t("aiChatV2.generatedImageRefs.errors.image_edit_provider_failed") ||
       "The AI provider failed to edit the image. Retry, or check the provider configuration."
+    );
+  }
+  // R8 P2-8: the former English prose became a stable sentinel (shared with
+  // workspaceErrorLocalization); map it back to the identical copy so the
+  // Chat V2 banner does not regress.
+  if (raw === "CONTEXT_WINDOW_EXCEEDED") {
+    return (
+      t("aiChatV2.context_window_exceeded") ||
+      "The conversation is too long for the model's context window. Please start a new conversation or clear some history."
     );
   }
   return raw;
@@ -4163,8 +4145,13 @@ const loadHistory = async (conversationId: string): Promise<void> => {
     // live under `metadata.toolResult` in persisted rows but are read at the
     // top level by `AiChatV2Message.vue`. Lifting them on load keeps the
     // receipt card visible after a restart (PRD §11 cross-restart durability).
+    // Host-registered plugin result artifacts (design §13.4) nest under
+    // `metadata.toolResult` the same way; without the lift the result-file
+    // card disappears on conversation reopen.
     const persistedMessages = (resp?.messages ?? []).map((m) =>
-      ensureToolOutputMetadata(ensureArtifactMetadata(m))
+      ensurePluginArtifactMetadata(
+        ensureToolOutputMetadata(ensureArtifactMetadata(m))
+      )
     );
     // Seed pending bubbles from the durable queue (FR-43).
     patchConversationRuntimeState(conversationId, {
@@ -4525,6 +4512,7 @@ const upsertToolResultMessage = (
     typeof chunk.fullContent === "string" && chunk.fullContent.trim().length > 0
       ? chunk.fullContent
       : JSON.stringify(toolResult, null, 2);
+  const pluginArtifactsMetadata = extractPluginArtifacts(toolResult);
   const existingIdx = chunk.replacesPermissionPromptForToolId
     ? currentMessages.findIndex(
         (message) =>
@@ -4559,6 +4547,10 @@ const upsertToolResultMessage = (
     // renders during a live stream — the descriptors are present but nested
     // under `metadata.toolResult`, where `preservedOutput` does not read.
     ...(extractToolOutputDescriptors(toolResult) ?? {}),
+    // Host-registered plugin result artifacts (design §13.4): same live
+    // boundary — the host attaches validated `pa_…` descriptors to the tool
+    // payload, so lift them to the top-level slot the result-file card reads.
+    ...(pluginArtifactsMetadata ? { pluginArtifacts: pluginArtifactsMetadata } : {}),
   };
 
   if (existingIdx !== -1) {
@@ -5078,6 +5070,9 @@ function runGeneratedImagePreflight(
           candidate.thumbUrl,
       }));
       showGeneratedImageChooser.value = true;
+      // R8 §2: renderer-side image actions count into the workspace
+      // action counter (fire-and-forget, labels only).
+      void recordWorkspaceActionCount("image", "chooser_open", "ok");
       return null;
     }
     if (
@@ -5159,11 +5154,11 @@ const onSend = async (
   if (isCommandLike && chatIsRunning.value) {
     return;
   }
-  // The composer owns the draft and clears it only after this handler accepts
-  // the request. Runtime status can change between the child's render and this
-  // synchronous guard (especially while switching conversations), so clearing
-  // before acknowledgement would silently discard a rejected message.
-  options?.onAccepted?.();
+  // R11 (PRD acceptance 36 / §3.4): the composer clears text/files/paste ONLY
+  // when this handler reports acceptance — after successful command handling
+  // or a DURABLE enqueue. Validation failures (goal objective, skill lookup,
+  // loop syntax), attachment preparation errors, image-chooser parking and
+  // transport rejections all leave the retryable draft in place.
   streamError.value = null;
   // Drafted history selections are submitted as OPAQUE ARCHIVE REFERENCES ONLY
   // (§13.3) — never the passage text. The backend re-resolves each reference
@@ -5190,22 +5185,29 @@ const onSend = async (
   // /goal and /loop need stateful handling before the generic slash dispatcher.
   // The unified /loop parser classifies goal-loop vs scheduled-loop vs control.
   if (loopCmd.type === "goal_loop") {
-    await runLoopCommand(loopCmd.maxIterations);
+    if (await runLoopCommand(loopCmd.maxIterations)) {
+      options?.onAccepted?.();
+    }
     return;
   }
   if (loopCmd.type === "scheduled_loop") {
     // Stage the parsed loop and ask the user to approve any read-only tools
     // before persisting (FR-16). Unattended execution cannot prompt at run
-    // time, so approval happens once, up front.
+    // time, so approval happens once, up front. R11 + R11-1: staging is NOT
+    // acceptance — the draft survives until the approval persists the loop
+    // (a cancelled dialog must leave the command retryable), and the stashed
+    // acceptance fires exactly once on durable creation.
     pendingScheduledLoop.value = { action: loopCmd, rawCommand: text };
+    stagedScheduledLoopAccept = options?.onAccepted ?? null;
     showScheduledLoopApproval.value = true;
     return;
   }
   if (loopCmd.type === "scheduled_loop_control") {
     if (loopCmd.operation === "status") {
       await refreshScheduledLoopStatus();
-    } else {
-      await runScheduledLoopControl(loopCmd.operation);
+      options?.onAccepted?.();
+    } else if (await runScheduledLoopControl(loopCmd.operation)) {
+      options?.onAccepted?.();
     }
     return;
   }
@@ -5218,7 +5220,9 @@ const onSend = async (
   let modelMessage = text;
   let requestMode: ChatV2Mode = mode.value;
   if (cmd.type === "loop") {
-    await runLoopCommand(cmd.count);
+    if (await runLoopCommand(cmd.count)) {
+      options?.onAccepted?.();
+    }
     return;
   }
   // `/skill <name> [task]` — explicit prompt-skill invocation (PRD §9.5):
@@ -5307,11 +5311,20 @@ const onSend = async (
     cmd.type === "none" &&
     text.trim().startsWith("/")
   ) {
-    const handled = await handleSlashCommandSubmission(
+    const outcome = await handleSlashCommandSubmission(
       text.trim(),
-      options?.pastedContents
+      options?.pastedContents,
+      options?.onAccepted
     );
-    if (handled) return;
+    // R11: handled commands accept; expansions accept inside their own send;
+    // failures retain the draft; unhandled falls through to the ordinary
+    // send, which accepts at durable enqueue below.
+    if (outcome !== "unhandled") {
+      if (outcome === "handled") {
+        options?.onAccepted?.();
+      }
+      return;
+    }
   }
 
   // Process attachments if present
@@ -6226,6 +6239,10 @@ const onSend = async (
           "The message could not be queued. Please try again."
       );
     }
+    // R11: the durable pending row exists — THIS is acceptance. Both the
+    // dispatched and the parked-behind-running-turn dispositions keep the
+    // row, so the draft clears exactly once, after durability.
+    options?.onAccepted?.();
     if (receipt.disposition === "dispatch_scheduled") {
       await queuedTurn.promise;
       return;
@@ -6269,10 +6286,23 @@ const onSend = async (
   }
 };
 
+/**
+ * R11 outcome contract:
+ *  - "handled":   the command completed (receipt/clear) — the caller accepts.
+ *  - "expanded":  a submit_prompt expansion was submitted through onSend;
+ *                 acceptance belongs to THAT send's durable enqueue (the
+ *                 composer's onAccepted is threaded through), never to the
+ *                 outer command — so an enqueue failure keeps the draft.
+ *  - "failed":    transport failure or an explicit server denial — the local
+ *                 receipt explains it and the draft is RETAINED for retry
+ *                 (FR-SUB-002/003; mirrors the workspace B07 contract).
+ *  - "unhandled": not registry-owned — continue the ordinary send path.
+ */
 async function handleSlashCommandSubmission(
   rawInput: string,
-  pastedContents?: Record<string, string>
-): Promise<boolean> {
+  pastedContents?: Record<string, string>,
+  onAccepted?: () => void
+): Promise<"handled" | "expanded" | "failed" | "unhandled"> {
   const conversationId = ensureWorkspaceConversationId();
   let result: Awaited<ReturnType<typeof dispatchSlashCommand>>;
   try {
@@ -6286,12 +6316,12 @@ async function handleSlashCommandSubmission(
       rawInput,
       err instanceof Error ? err.message : String(err)
     );
-    return true;
+    return "failed";
   }
 
   if (!result.status) {
     appendLocalCommandExchange(conversationId, rawInput, result.msg);
-    return true;
+    return "failed";
   }
 
   if (result.action === "submit_prompt") {
@@ -6301,17 +6331,18 @@ async function handleSlashCommandSubmission(
     await onSend(result.prompt, [], {
       isExpandedPrompt: true,
       pastedContents,
+      onAccepted,
     });
-    return true;
+    return "expanded";
   }
 
   if (result.commandId === "built-in:command:clear") {
     await clearCurrentConversation();
-    return true;
+    return "handled";
   }
 
   appendLocalCommandExchange(conversationId, rawInput, result.content);
-  return true;
+  return "handled";
 }
 
 function appendLocalCommandExchange(
@@ -6465,8 +6496,13 @@ onMounted(() => {
   });
   // Scheduled-loop turn completions arrive as a narrow refresh-hint broadcast.
   subscribeConversationUpdated(handleConversationUpdated);
-  // Live scheduled-turn token stream (strict routing renderer-side).
-  subscribeScheduledStream(handleScheduledStream);
+  // Live scheduled-turn token stream (strict routing renderer-side). Capture
+  // the per-listener unsubscribe: the channel is shared with the workspace
+  // selected-conversation store now, so teardown must remove exactly this
+  // listener (bugfix 2026-11-02) instead of wiping the whole channel.
+  unsubscribeScheduledStreamListener = subscribeScheduledStream(
+    handleScheduledStream
+  );
   // Phase 13 (Plan 04) + Phase 14 (Plan 14-04): subscribe to AiFetchly
   // config-changed events so the local command cache refreshes whenever
   // the main process reloads the global config OR a workspace-config
@@ -6516,10 +6552,8 @@ function onConversationReportSubmitted(payload: {
   reportId: string;
   selectedMessageIds: string[];
 }): void {
-  reportedMessageIds.value = new Set([
-    ...reportedMessageIds.value,
-    ...payload.selectedMessageIds,
-  ]);
+  // R9 B04: the session-scoped store owns the markers.
+  chatReportState.markReported(payload.selectedMessageIds);
   // FR-5.5 / Journey 11.1 step 8: keep the dialog OPEN so the user can see
   // and copy the report reference; the dialog itself owns closing on dismiss.
 }
@@ -6534,7 +6568,8 @@ function onSingleReportRequest(
 function onSingleReportSubmitted(): void {
   const id = activeSingleDescriptor.value?.context.messageId;
   if (id) {
-    reportedMessageIds.value = new Set([...reportedMessageIds.value, id]);
+    // R9 B04: the session-scoped store owns the markers.
+    chatReportState.markReported([id]);
   }
 }
 
@@ -6554,7 +6589,10 @@ onBeforeUnmount(() => {
   );
   unsubscribeFromFileOperations();
   unsubscribeConversationUpdated();
-  unsubscribeScheduledStream();
+  // Precise teardown (bugfix 2026-11-02): the scheduled-stream channel is
+  // shared with the workspace store — remove only this page's listener.
+  unsubscribeScheduledStreamListener?.();
+  unsubscribeScheduledStreamListener = null;
   unsubscribeAutoCompacted();
   unsubscribeCompactionProgress();
   if (searchDebounceTimer) {
@@ -6613,22 +6651,6 @@ defineExpose({ handleSkillPermissionDeny, onSelectConversation });
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-}
-.v2-shell__tts-notice {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 4px;
-  margin: 0 12px;
-  padding: 4px 8px;
-  border-radius: 4px;
-  background: rgba(255, 152, 0, 0.1);
-  color: rgba(0, 0, 0, 0.7);
-  font-size: 12px;
-}
-.v2-shell__tts-notice-text {
-  min-width: 0;
-  flex: 1 1 auto;
 }
 .v2-shell__plan-panel {
   flex: 0 0 auto;

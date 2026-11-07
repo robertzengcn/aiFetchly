@@ -136,4 +136,38 @@ describe("AiChatV2Message skill install card", () => {
     const updated = wrapper.findComponent(SkillInstallCard);
     expect(updated.props("snapshot").state).toBe("ready");
   });
+
+  it("passes the structured plan through from the persisted tool result (P1-4)", async () => {
+    const safePlan = {
+      source: "https://github.com/a/video-use",
+      revision: "abc123def456",
+      skills: [
+        {
+          name: "video-use",
+          kind: "prompt" as const,
+          description: "Edit and produce videos",
+        },
+      ],
+      dependencies: [],
+      credentials: [],
+      mode: "managed-copy" as const,
+      commands: [],
+      warnings: [],
+    };
+    const wrapper = mountMessage("skill_install_prepare", {
+      ...makeSnapshot(),
+      safePlan,
+    });
+    await flushPromises();
+
+    const card = wrapper.findComponent(SkillInstallCard);
+    expect(card.exists()).toBe(true);
+    // The card receives the plan so the historical card renders the same
+    // structured review as the live one.
+    expect(card.props("snapshot").safePlan).toEqual(safePlan);
+    expect(
+      wrapper.find('[data-testid="skill-install-plan"]').exists()
+    ).toBe(true);
+    expect(wrapper.text()).toContain("video-use");
+  });
 });

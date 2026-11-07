@@ -114,9 +114,9 @@ describe("D6 — shared memoized EmailReplyDetectionService across requests", ()
     expect(service).not.toMatch(/^new EmailReplyDetectionService\(/m);
   });
 
-  it("source contract: all three production fallbacks use the shared getter, not bare `new`", () => {
+  it("source contract: send and the check tool use the shared getter, not bare `new`", () => {
     const gen = readSrc(GENERATION_SRC);
-    expect(gen).toContain("getSharedEmailReplyDetectionService()");
+    expect(gen).not.toContain("getSharedEmailReplyDetectionService()");
     expect(gen).not.toContain("new EmailReplyDetectionService()");
 
     const delivery = readSrc(DELIVERY_SRC);
@@ -128,11 +128,10 @@ describe("D6 — shared memoized EmailReplyDetectionService across requests", ()
     expect(module).not.toContain("new EmailReplyDetectionService()");
   });
 
-  it("source contract: injected detectionServiceFactory still takes precedence in outer services", () => {
-    // The factory seam must still be consulted first so tests that inject a
-    // fake detection service are not polluted by the shared singleton.
+  it("source contract: draft generation does not probe; send still injects detection", () => {
     const gen = readSrc(GENERATION_SRC);
-    expect(gen).toMatch(/this\.detectionServiceFactory/);
+    expect(gen).not.toMatch(/this\.detectionServiceFactory/);
+    expect(gen).not.toMatch(/runPreDraftDetection/);
     const delivery = readSrc(DELIVERY_SRC);
     expect(delivery).toMatch(/this\.detectionServiceFactory/);
   });

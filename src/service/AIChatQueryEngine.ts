@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
@@ -59,6 +60,10 @@ import {
   ToolResultPipeline,
   ToolResultPublicationError,
 } from "@/service/toolResult/ToolResultPipeline";
+import {
+  TOOL_RESULT_CONFIG,
+  BATCH_PREVIEW_TOOL_NAMES as TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES,
+} from "@/config/toolResultConfig";
 import { ToolResultStorageService } from "@/service/toolResult/ToolResultStorageService";
 import { getToolResultStorageRoot } from "@/service/toolResult/toolResultRoot";
 import {
@@ -134,7 +139,39 @@ import type {
 } from "@/api/aiChatApi";
 import { openAIContentToString } from "@/api/aiChatApi";
 import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
-import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import type {
+  AIChatPlanStateView,
+  AIChatPlanQuestionView,
+  AskUserQuestionAnswer,
+} from "@/entityTypes/aiChatPlanTypes";
+
+/**
+ * Loop events that publish a plan lifecycle transition (PRD §12.4). Each one
+ * carries the authoritative `planState` view, so the persisting event sink
+ * can write the matching durable display row (see `savePlanEventMessage`).
+ */
+const PLAN_LOOP_EVENT_TYPES = new Set<string>([
+  "plan_state",
+  "ask_user_question",
+  "plan_submitted",
+  "plan_approved",
+  "plan_rejected",
+  "plan_changes_requested",
+  "plan_blocked_tool",
+]);
+
+/**
+ * One queued event-save of the persisting sink. `strict` keeps the Stage A
+ * §3.3 contract for tool receipts (a failed save gates execution); plan
+ * lifecycle rows are presentation aids and never gate.
+ */
+type PersistedEventSave = {
+  readonly kind: "tool_call" | "tool_result" | "plan_event";
+  readonly strict?: boolean;
+  readonly toolCallId: string;
+  readonly promise: Promise<unknown>;
+};
+
 import type {
   ToolCatalog,
   ToolCatalogModeDecision,
@@ -750,11 +787,7 @@ export class AIChatQueryEngine {
   private readonly streamImplementation: AIChatStreamImplementationConfigProvider;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
-    Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }>
+    PersistedEventSave[]
   >();
   /** Tracks which conversations have already fired SessionStart. */
   private readonly startedConversations = new Set<string>();
@@ -1986,6 +2019,11 @@ export class AIChatQueryEngine {
 
       // Build user-message metadata (source + attachments + @-mentions).
       const userMetadata: ChatV2MessageMetadata = {
+      // Titles B01: raw visible typed text (bounded) — persisted BEFORE any
+      // attachment/mention/pasted enrichment so naming never sees it.
+      safeTypedText: (request.message ?? "").slice(0, 2000),
+        // r3 G01: bind the user row to the provider executing its turn.
+        sourceProviderVersion: currentProviderConfigVersion(),
         source: scheduledContext ? "scheduled-loop" : "chat-v2",
         ...(generatedImageRefMetadata
           ? { generatedImageReferences: generatedImageRefMetadata }
@@ -2018,7 +2056,11 @@ export class AIChatQueryEngine {
         pastedTextResolution.pastedBlocks.length > 0 ||
         !!scheduledContext ||
         !!generatedImageRefMetadata ||
-        selectionResolution.metadata.length > 0;
+        selectionResolution.metadata.length > 0 ||
+        // Titles F04/B01: the safe typed-text projection must persist on the
+        // plain direct-save path too — without metadata the titles Module
+        // refuses raw content and a plain typed request can never be named.
+        (request.message ?? "").trim().length > 0;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
@@ -2919,6 +2961,34 @@ export class AIChatQueryEngine {
       // ignore lookup failures
     }
     const isPlanMode = request.mode === "plan" || isActivePlanState(planState);
+    // Direct-path parity (runTurn resolves plan state the same way): a queued
+    // turn may arrive in Plan Mode (e.g. the /goal plan prompt is sent with
+    // mode "plan") before any plan row exists. Without creating the draft
+    // here, runPersistedTurn advertises AskUserQuestion/SubmitPlanForApproval
+    // while planContext stays undefined, so the loop never intercepts those
+    // tools and the model's calls fall through to ToolExecutor, which fails
+    // with "Unknown tool: SubmitPlanForApproval".
+    if (isPlanMode && !planState) {
+      try {
+        planState = await planModule.ensurePlanForConversation({
+          conversationId,
+          title: (request.message || modelContent).slice(0, 80) || "New plan",
+          objective: (request.message || modelContent).slice(0, 500),
+        });
+      } catch (err) {
+        // Direct-path parity: a draft-creation failure fails the turn with a
+        // surfaced error instead of running a plan-mode turn that cannot
+        // handle its own plan tools.
+        log.error("[ai-chat-v2] queued plan ensure failed:", err);
+        void redirectToLoginOnAuthExpired(err);
+        eventSink.emit({
+          type: "error",
+          conversationId,
+          errorMessage: userSafeError(err),
+        });
+        return { type: "failed", conversationId, assistantMessageId: "" };
+      }
+    }
     const module = new AIChatV2Module();
 
     // Queue-dispatched turns bypass submitMessage's persistence path, so bind
@@ -2977,20 +3047,90 @@ export class AIChatQueryEngine {
       log.error("[outbound-email-intent] queued resolve failed:", err);
     }
 
+    // Codex P2: queued turns resolve selected archive passages IDENTICALLY
+    // to the direct path (§13.3) — opaque ids re-validate here (ownership/
+    // epoch/budget), accepted excerpts fold into the model message, and the
+    // ack ids ride the start event so the renderer's chips clear.
+    let historySelectionAcceptedIds: readonly string[] = [];
+    let historySelectionChangedIds: readonly string[] = [];
+    let historySelectionRejectedIds: readonly string[] = [];
+    let resolvedSelectionMetadata: readonly ChatV2HistorySelectionMetadata[] = [];
+    let assemblyContent = modelContent;
+    let selectedHistoryBlock = "";
+    try {
+      const selectionResolution = await this.resolveSelectedHistory(
+        conversationId,
+        savedUser.messageId,
+        request.historySelectionIds ?? []
+      );
+      resolvedSelectionMetadata = selectionResolution.metadata;
+      selectedHistoryBlock = buildSelectedHistoryContextBlock(
+        selectionResolution.excerpts
+      );
+      if (selectedHistoryBlock.length > 0) {
+        assemblyContent = `${modelContent}\n\n${selectedHistoryBlock}`;
+      }
+      historySelectionAcceptedIds = selectionResolution.metadata.map(
+        (m) => m.sourceId
+      );
+      historySelectionChangedIds = selectionResolution.changedIds;
+      historySelectionRejectedIds = selectionResolution.rejectedIds;
+    } catch (err) {
+      if (err instanceof RecoverableHistoryError) {
+        // Turn-BLOCKING by contract (§13.3): the selected passages cannot fit
+        // the budget — the user must narrow the selection. Re-throw so the
+        // dispatch fails instead of silently running without the context the
+        // chips already acknowledged.
+        throw err;
+      }
+      // Non-capacity failures never block the turn (§13.3).
+      log.error("[ai-chat-v2] queued history-selection resolve failed:", err);
+    }
+
+    // AC-18/G02: persist the ACCEPTED references onto the promoted user
+    // row (references/provenance only — never the text; §13.3). The direct
+    // path attaches this metadata at row creation; the queued path promotes
+    // first and resolves after, so it merges here. Best-effort: a metadata
+    // write failure logs but never blocks the turn.
+    if (resolvedSelectionMetadata.length > 0) {
+      try {
+        await module.mergeMessageMetadata(savedUser.messageId, {
+          historySelections: resolvedSelectionMetadata,
+        } as Record<string, unknown>);
+      } catch (metaErr) {
+        log.error(
+          "[ai-chat-v2] queued history-selection provenance persist failed:",
+          metaErr
+        );
+      }
+    }
+
+    // Codex P2 (round 3): when persisted image contentParts exist, the
+    // assembler uses THEM (not currentUserMessage) — fold the resolved
+    // history block into the leading text part or the model never sees the
+    // selected passages despite the chips acknowledging acceptance.
+    const contentPartsForAssembly =
+      input.contentParts && selectedHistoryBlock.length > 0
+        ? input.contentParts.map((part, index) =>
+            index === 0 && part.type === "text"
+              ? { ...part, text: assemblyContent }
+              : part
+          )
+        : input.contentParts;
     let messages: OpenAIChatMessage[];
     try {
       const basePrompt =
         request.systemPrompt ?? module.getDefaultSystemPrompt();
       const assembled = await this.contextAssembler.assemble({
         conversationId,
-        currentUserMessage: modelContent,
+        currentUserMessage: assemblyContent,
         currentUserMessageId: savedUser.messageId,
         baseSystemPrompt: basePrompt,
         mode: isPlanMode ? "plan" : "chat",
         model: request.model,
         maxTokens: request.maxTokens,
         planState,
-        currentUserContentParts: input.contentParts,
+        currentUserContentParts: contentPartsForAssembly,
       });
       messages = [...assembled.messages];
 
@@ -3017,14 +3157,14 @@ export class AIChatQueryEngine {
             if (compacted) {
               const reassembled = await this.contextAssembler.assemble({
                 conversationId,
-                currentUserMessage: modelContent,
+                currentUserMessage: assemblyContent,
                 currentUserMessageId: savedUser.messageId,
                 baseSystemPrompt: basePrompt,
                 mode: isPlanMode ? "plan" : "chat",
                 model: request.model,
                 maxTokens: request.maxTokens,
                 planState,
-                currentUserContentParts: input.contentParts,
+                currentUserContentParts: contentPartsForAssembly,
               });
               messages = [...reassembled.messages];
             }
@@ -3052,6 +3192,9 @@ export class AIChatQueryEngine {
       `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     return await this.runPersistedTurn({
+      historySelectionAcceptedIds,
+      historySelectionChangedIds,
+      historySelectionRejectedIds,
       conversationId,
       assistantMessageId,
       messages,
@@ -3149,6 +3292,20 @@ export class AIChatQueryEngine {
     /** T15 route classification, threaded from runTurn. */
     readonly taskRoute?: TaskExecutionRoute;
   }): Promise<AIChatTurnTerminalEvent> {
+    // r3 G01: the queue promotes the durable user row BEFORE the engine
+    // assigns the turn — stamp the association onto that row so the
+    // exchange identity is complete on both sides (best-effort bounded
+    // metadata merge; failure degrades association to role order only).
+    if (input.turnId && input.sourceUserMessageId) {
+      const module0 = new AIChatV2Module();
+      await module0
+        .stampUserMessageTurnIdentity(
+          input.sourceUserMessageId,
+          input.turnId,
+          currentProviderConfigVersion()
+        )
+        .catch(() => undefined);
+    }
     const {
       conversationId,
       assistantMessageId,
@@ -4130,6 +4287,17 @@ export class AIChatQueryEngine {
               previewKind: Array.isArray(toolResult.result)
                 ? "records"
                 : "text",
+              // Batch aggregate receipts are parsed by the renderer's batch
+              // progress card, so their preview needs the larger budget —
+              // a 2KB default cut lands mid-JSON and the card cannot render.
+              ...(TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES.has(
+                matchedByToolId.toolName
+              )
+                ? {
+                    previewMaxBytes:
+                      TOOL_RESULT_CONFIG.batchPreviewMaxBytes,
+                  }
+                : {}),
               sourceCompleteness: toolResult.partial ? "partial" : "complete",
               isEmpty:
                 Object.keys(toolResult.result).length === 0 &&
@@ -4155,12 +4323,16 @@ export class AIChatQueryEngine {
           toolContent = prepared.modelContent;
           if (prepared.receipt) {
             // Rebuilt from the trusted outcome plus bounded descriptors: the
-            // legacy payload spread the producer's whole body.
+            // legacy payload spread the producer's whole body. The LIVE
+            // metadata uses the SAME display envelope the durable row saves
+            // (toolResultReceiptUiMetadata) — the preparation service's own
+            // snake_case uiMetadata would otherwise make the renderer two
+            // shapes (live event camelCase vs durable row) for one receipt.
             toolPayload = {
               success: toolResult.success,
               executionTimeMs: toolResult.execution_time_ms,
               toolResultReceipt: prepared.receipt,
-              ...prepared.uiMetadata,
+              ...toolResultReceiptUiMetadata(prepared.receipt),
             } as Record<string, unknown>;
           }
         } catch (err: unknown) {
@@ -4410,15 +4582,24 @@ export class AIChatQueryEngine {
       });
     }
 
-    // The CALLER persisted the answer before claiming; the ack message was
-    // built from it. Re-serialize the standard answered ack here from the
-    // persisted question state.
-    const answerContent = serializeToolResultContent({
-      success: true,
-      status: "answered",
-      questionId: pending.questionId,
-    });
-    void answerContent;
+    // The CALLER persisted the answer before claiming; the ack sent back to
+    // the model must carry the user's ACTUAL answers — an opaque
+    // "answered" ack forced the model to guess what was chosen (observed in
+    // the /goal flow where it fabricated "assumptions" from prior context).
+    // Read the authoritative answered question from the module layer.
+    const planModule = new AIChatPlanModule();
+    let answeredAnswers: AskUserQuestionAnswer[] | undefined;
+    try {
+      const answeredQuestion = await planModule.getQuestionById(
+        pending.questionId
+      );
+      answeredAnswers = answeredQuestion?.answers;
+    } catch (err) {
+      log.warn(
+        "[ai-chat-v2] failed to load answered question for ack:",
+        err
+      );
+    }
 
     const toolMsgIndex = pending.conversationMessages.findIndex(
       (m) => m.role === "tool" && m.tool_call_id === pending.toolCallId
@@ -4427,6 +4608,7 @@ export class AIChatQueryEngine {
       success: true,
       status: "answered",
       questionId: pending.questionId,
+      ...(answeredAnswers ? { answers: answeredAnswers } : {}),
     });
     if (toolMsgIndex >= 0) {
       pending.conversationMessages[toolMsgIndex] = {
@@ -4442,7 +4624,6 @@ export class AIChatQueryEngine {
       });
     }
 
-    const planModule = new AIChatPlanModule();
     const planState = await planModule.getPlanStateByPlanId(pending.planId);
     const toolFunctions = await SkillRegistry.getAllToolFunctions();
     const allOpenAITools = [
@@ -4505,6 +4686,28 @@ export class AIChatQueryEngine {
 
     const module = new AIChatV2Module();
     const eventSink = this.createPersistingEventSink(module, baseSink);
+
+    // Parked-question answer publication (R03-family): the answer moved the
+    // plan out of awaiting_question, but the renderer's pinned surface is
+    // derived from persisted plan metadata which still holds the parked
+    // snapshot (status awaiting_question + pending question). Publish the
+    // authoritative post-answer view so the question card releases as soon
+    // as the continuation starts.
+    if (planState) {
+      try {
+        eventSink.emit({
+          type: "plan_state",
+          conversationId,
+          messageId: pending.assistantMessageId,
+          planState,
+        });
+      } catch (err) {
+        log.warn(
+          "[ai-chat-v2] post-answer plan state publication failed:",
+          err
+        );
+      }
+    }
 
     try {
       const result = await this.runLoopSegment(
@@ -4682,6 +4885,37 @@ export class AIChatQueryEngine {
     taskExecutionBinding?: LoopTaskExecutionBinding
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
+    // r3 G01: durable exchange identity for every terminal assistant save —
+    // the still-registered active turn carries the turnId this exchange was
+    // executed under (cleared only after these saves).
+    // (r3 G01) Only terminal variants carry a conversationId; pause variants
+    // persist via their resumed turn instead.
+    const g01ConversationId =
+      result.type === "completed" ||
+      result.type === "cancelled" ||
+      result.type === "failed"
+        ? result.conversationId
+        : null;
+    const g01TurnId = g01ConversationId
+      ? this.activeTurns.get(g01ConversationId)?.turnId
+      : undefined;
+    const g01ProviderVersion = currentProviderConfigVersion();
+    // Scheduled turns reuse their stable user message id (`scheduled-user-…`,
+    // ScheduledAiMessageRunner §14.2) as the turn id — their terminal rows
+    // must never masquerade as interactive chat-v2.
+    const g01Source: "chat-v2" | "scheduled-loop" = g01TurnId?.startsWith(
+      "scheduled-user-"
+    )
+      ? "scheduled-loop"
+      : "chat-v2";
+    /** Spread into each terminal assistant metadata block below. */
+    const g01Identity: {
+      turnId?: string;
+      sourceProviderVersion: number;
+    } = {
+      ...(g01TurnId ? { turnId: g01TurnId } : {}),
+      sourceProviderVersion: g01ProviderVersion,
+    };
     // Persist deferred-catalog discovered state on terminal results so it
     // survives app restart / conversation reload (FR-5/AC-8). Pause variants
     // carry the snapshot on `pending` and persist via the resumed turn.
@@ -4717,7 +4951,8 @@ export class AIChatQueryEngine {
             model: result.model,
             tokensUsed: result.totalTokens,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
               ...buildReasoningMetadata(result.reasoningContent, result.model),
@@ -4942,7 +5177,8 @@ export class AIChatQueryEngine {
             messageId: assistantMessageId,
             model: result.model,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: "cancelled",
               cancelled: true,
@@ -5042,7 +5278,8 @@ export class AIChatQueryEngine {
             messageId: assistantMessageId,
             model: result.model,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: "error",
               error: userSafeError(result.error),
@@ -5791,11 +6028,12 @@ export class AIChatQueryEngine {
     // STRICT — flush() rejects with AIChatRequiredPersistenceError so the
     // loop's persist-before-execute barrier blocks dependent work. The emit
     // path still forwards first so the UI stays responsive.
-    const saves: Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }> = [];
+    // Plan lifecycle rows (PRD §12.4) are PRESENTATION aids and therefore
+    // NON-strict: a failed plan-row write logs and continues — the durable
+    // plan tables remain authoritative for decisions, and a later transition
+    // persists a fresh row.
+    // Each save entry declares its own strictness; the flush reads it.
+    const saves: PersistedEventSave[] = [];
     // Track the latest server-reported usage so it can be attributed to
     // intermediate tool_call messages. Without this, every tool_call row
     // is persisted with null tokensUsed/model, losing per-round cost data.
@@ -5819,6 +6057,7 @@ export class AIChatQueryEngine {
         if (event.type === "tool_call") {
           saves.push({
             kind: "tool_call",
+            strict: true,
             toolCallId: event.toolCallId,
             promise: module.saveToolCallMessage({
               conversationId: event.conversationId,
@@ -5849,6 +6088,7 @@ export class AIChatQueryEngine {
           // AIChatRequiredPersistenceError so dependent execution blocks.
           saves.push({
             kind: "tool_result",
+            strict: true,
             toolCallId: event.toolCallId,
             promise: module.saveToolResultMessage({
               conversationId: event.conversationId,
@@ -5863,6 +6103,34 @@ export class AIChatQueryEngine {
             }),
           });
         }
+        if (PLAN_LOOP_EVENT_TYPES.has(event.type)) {
+          // FR-12 (PRD §12.4): the plan lifecycle surface is a projection of
+          // the transcript — persist the transition as a durable display row
+          // so a re-seeded snapshot (reload, reopen, notification click)
+          // keeps rendering the decision card / question / receipt. The
+          // deterministic row id upserts replays of the same transition.
+          const planState = (event as { planState?: AIChatPlanStateView })
+            .planState;
+          const question = (event as { question?: AIChatPlanQuestionView })
+            .question;
+          if (planState?.planId) {
+            saves.push({
+              kind: "plan_event",
+              strict: false,
+              toolCallId: "",
+              promise: module.savePlanEventMessage({
+                conversationId: event.conversationId,
+                eventType: event.type as Parameters<
+                  typeof module.savePlanEventMessage
+                >[0]["eventType"],
+                planState,
+                ...(event.type === "ask_user_question" && question
+                  ? { question }
+                  : {}),
+              }),
+            });
+          }
+        }
       },
       flush: async () => {
         await this.flushPendingEventSaves(saves);
@@ -5873,11 +6141,7 @@ export class AIChatQueryEngine {
   }
 
   private async flushPendingEventSaves(
-    saves: Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }>
+    saves: PersistedEventSave[]
   ): Promise<void> {
     if (saves.length === 0) {
       return;
@@ -5886,20 +6150,32 @@ export class AIChatQueryEngine {
     const settled = await Promise.allSettled(
       batch.map((save) => save.promise)
     );
-    const failedIndex = settled.findIndex((r) => r.status === "rejected");
-    if (failedIndex >= 0) {
-      const failed = settled[failedIndex];
+    // Plan lifecycle rows are non-strict presentation aids (PRD §12.4): a
+    // rejected write is logged and swallowed — the durable plan tables stay
+    // authoritative and the next transition writes a fresh row. Tool
+    // receipts keep the strict Stage A contract (first failure gates).
+    for (let i = 0; i < settled.length; i += 1) {
+      const entry = settled[i];
+      if (entry.status !== "rejected") continue;
+      const meta = batch[i];
+      if (meta.kind === "plan_event" || meta.strict === false) {
+        log.warn(
+          `[ai-chat-v2] non-required ${meta.kind} save failed:`,
+          entry.status === "rejected" ? entry.reason : undefined
+        );
+        continue;
+      }
       const reason =
-        failed.status === "rejected" ? failed.reason : undefined;
+        entry.status === "rejected" ? entry.reason : undefined;
       log.error(
-        `[ai-chat-v2] required ${batch[failedIndex].kind} save failed:`,
+        `[ai-chat-v2] required ${meta.kind} save failed:`,
         reason
       );
       throw new AIChatRequiredPersistenceError(
-        batch[failedIndex].kind === "tool_call"
+        meta.kind === "tool_call"
           ? "tool_call_persist_failed"
           : "tool_result_persist_failed",
-        batch[failedIndex].toolCallId,
+        meta.toolCallId,
         reason
       );
     }

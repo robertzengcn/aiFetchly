@@ -2,9 +2,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PortableMemoryConflictDialog from "@/views/components/aiChatV2/PortableMemoryConflictDialog.vue";
-import {
-  portableWorkspaceMemoryApi,
-} from "@/views/api/portableWorkspaceMemory";
+import { portableWorkspaceMemoryApi } from "@/views/api/portableWorkspaceMemory";
 
 vi.mock("@/views/api/portableWorkspaceMemory", () => ({
   portableWorkspaceMemoryApi: {
@@ -91,6 +89,23 @@ describe("PortableMemoryConflictDialog", () => {
     expect(text).toContain("External body content.");
   });
 
+  it("falls back to the first conflicted record when opened without a memoryId (banner path)", async () => {
+    vi.mocked(portableWorkspaceMemoryApi.conflictsList).mockResolvedValue({
+      status: true,
+      msg: "",
+      data: [conflict],
+    } as never);
+    const wrapper = mountDialog({ memoryId: null });
+    await flushPromises();
+    const text = wrapper.text();
+    expect(portableWorkspaceMemoryApi.conflictsList).toHaveBeenCalledWith(
+      "conv-1"
+    );
+    expect(text).toContain(conflict.relativePath);
+    expect(text).toContain("External title");
+    expect(text).not.toContain("No conflict found.");
+  });
+
   it("seeds the merge editor from the file content", async () => {
     const wrapper = mountDialog({});
     await flushPromises();
@@ -111,7 +126,9 @@ describe("PortableMemoryConflictDialog", () => {
     const wrapper = mountDialog({});
     await flushPromises();
     expect(wrapper.text()).toContain("No conflict found.");
-    const resolveBtn = wrapper.findAll("button").find((b) => b.text() === "Resolve");
+    const resolveBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Resolve");
     expect(resolveBtn?.attributes("disabled")).toBeDefined();
   });
 
@@ -120,7 +137,9 @@ describe("PortableMemoryConflictDialog", () => {
     await flushPromises();
     const vm = wrapper.vm as unknown as { action: string };
     vm.action = "use-file";
-    const resolveBtn = wrapper.findAll("button").find((b) => b.text() === "Resolve");
+    const resolveBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Resolve");
     await resolveBtn?.trigger("click");
     await flushPromises();
     expect(portableWorkspaceMemoryApi.resolveConflict).toHaveBeenCalledWith(
@@ -144,7 +163,9 @@ describe("PortableMemoryConflictDialog", () => {
     vm.action = "merge";
     vm.mergeTitle = "";
     await wrapper.vm.$nextTick();
-    const resolveBtn = wrapper.findAll("button").find((b) => b.text() === "Resolve");
+    const resolveBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Resolve");
     expect(resolveBtn?.attributes("disabled")).toBeDefined();
 
     vm.mergeTitle = "Merged title";
@@ -173,7 +194,9 @@ describe("PortableMemoryConflictDialog", () => {
     vm.mergeVisibility = "team";
     vm.mergeConfidence = 75;
     await wrapper.vm.$nextTick();
-    const resolveBtn = wrapper.findAll("button").find((b) => b.text() === "Resolve");
+    const resolveBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Resolve");
     await resolveBtn?.trigger("click");
     await flushPromises();
     expect(portableWorkspaceMemoryApi.resolveConflict).toHaveBeenCalledWith(
@@ -187,5 +210,36 @@ describe("PortableMemoryConflictDialog", () => {
         }),
       })
     );
+  });
+
+  it("sends the file-seeded merged document for the use-app action", async () => {
+    const wrapper = mountDialog({});
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      action: string;
+      mergeTitle: string;
+      mergeContent: string;
+    };
+    // use-app requires a caller-supplied draft; the dialog seeds it from the
+    // current file content (the editor lets callers adjust it before sending).
+    vm.action = "use-app";
+    await wrapper.vm.$nextTick();
+    const resolveBtn = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Resolve");
+    await resolveBtn?.trigger("click");
+    await flushPromises();
+    expect(portableWorkspaceMemoryApi.resolveConflict).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv-1",
+        memoryId: DOC_ID,
+        action: "use-app",
+        mergedDocument: expect.objectContaining({
+          title: "External title",
+          content: expect.stringContaining("External body content."),
+        }),
+      })
+    );
+    expect(wrapper.emitted("resolved")).toHaveLength(1);
   });
 });

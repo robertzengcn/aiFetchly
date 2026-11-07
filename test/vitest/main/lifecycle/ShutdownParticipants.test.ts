@@ -18,17 +18,20 @@ const shutdownAll = vi.fn(async () => undefined);
 const listSessions = vi.fn(() => ["session-1"]);
 const maintenanceStop = vi.fn(() => undefined);
 const toolJobShutdown = vi.fn(() => undefined);
+const toolJobShutdownAndAwait = vi.fn(async (_graceMs: number) => undefined);
 const scheduleShutdown = vi.fn(async () => undefined);
 const wsCleanup = vi.fn(() => undefined);
 const watcherShutdown = vi.fn(async () => undefined);
-const ypTerminateAll = vi.fn(async () => undefined);
 const contactCleanup = vi.fn(async () => true);
 const reconcileExtractions = vi.fn(async (_reason: string) => []);
 const tokenRefreshStop = vi.fn(() => undefined);
 const settingsGetter = vi.fn(async () => ({ clearCacheOnExit: false }));
 
 vi.mock("@/service/ToolJobRegistry", () => ({
-  getDefaultToolJobRegistry: () => ({ shutdown: toolJobShutdown }),
+  getDefaultToolJobRegistry: () => ({
+    shutdown: toolJobShutdown,
+    shutdownAndAwaitCleanup: toolJobShutdownAndAwait,
+  }),
 }));
 vi.mock("@/service/ManagedBrowserSupervisor", () => ({
   getDefaultManagedBrowserSupervisor: () => ({
@@ -63,11 +66,6 @@ vi.mock("@/main-process/communication/websocket-ipc", () => ({
 }));
 vi.mock("@/service/workspaceWatch/WorkspaceWatchManagerSingleton", () => ({
   getWorkspaceWatchManager: () => ({ shutdown: watcherShutdown }),
-}));
-vi.mock("@/modules/YellowPagesProcessManager", () => ({
-  YellowPagesProcessManager: {
-    getInstance: () => ({ terminateAllProcesses: ypTerminateAll }),
-  },
 }));
 vi.mock("@/main-process/communication/contactExtraction-ipc", () => ({
   cleanupContactExtractionWorker: contactCleanup,
@@ -124,6 +122,8 @@ describe("createShutdownParticipants — owner mapping", () => {
     await new Promise((r) => setImmediate(r));
     expect(toolJobShutdown).toHaveBeenCalledTimes(1);
     await toolJobs.stop(contextOf(10_000));
+    expect(toolJobShutdownAndAwait).toHaveBeenCalledTimes(1);
+    expect(toolJobShutdownAndAwait.mock.calls[0][0]).toBe(5_000);
   });
 
   it("managed-browsers caps its budget at 5s and the remaining deadline", async () => {
@@ -185,15 +185,13 @@ describe("createShutdownParticipants — owner mapping", () => {
     expect(tokenRefreshStop).toHaveBeenCalled(); // timer still stops
   });
 
-  it("websocket, workspace-watch, yellow-pages map to their owners", async () => {
+  it("websocket and workspace-watch map to their owners", async () => {
     const participants = createShutdownParticipants(makeDeps());
     const ctx = contextOf(10_000);
     await participants.find((p) => p.id === "marketing-websocket")!.stop(ctx);
     await participants.find((p) => p.id === "workspace-watch")!.stop(ctx);
-    await participants.find((p) => p.id === "yellow-pages")!.stop(ctx);
     expect(wsCleanup).toHaveBeenCalledTimes(1);
     expect(watcherShutdown).toHaveBeenCalledTimes(1);
-    expect(ypTerminateAll).toHaveBeenCalledTimes(1);
   });
 
   it("app-resources finalizes housekeeping in the finalize stage only", async () => {

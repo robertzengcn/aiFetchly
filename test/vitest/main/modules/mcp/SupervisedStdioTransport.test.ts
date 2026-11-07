@@ -6,6 +6,12 @@
 // real SupervisedStdioTransport against a spawned fake MCP stdio server.
 import { describe, it, expect, afterEach } from "vitest";
 import { join } from "path";
+import * as fs from "fs";
+import * as os from "os";
+import {
+  PluginMcpRuntimeResolver,
+  setPluginMcpRuntimeResolverForTest,
+} from "@/service/PluginMcpRuntimeResolver";
 import { MCPClient } from "@/modules/MCPClient";
 import {
   SupervisedStdioTransport,
@@ -173,5 +179,87 @@ describe("SupervisedStdioTransport + MCPClient (stdio, official SDK)", () => {
     // The server exits immediately after initialize; the next call must
     // reject rather than hang.
     await expect(client.listTools()).rejects.toThrow();
+  });
+});
+
+describe("trusted host-runtime launch (aifetchly-node)", () => {
+  it("spawns the host executable with the validated entry and injects ELECTRON_RUN_AS_NODE after sanitization", async () => {
+    const tmp = fs.mkdtempSync(join(os.tmpdir(), "yp-trust-"));
+    const pluginRoot = join(tmp, "demo-plugin");
+    fs.mkdirSync(join(pluginRoot, "dist"), { recursive: true });
+    // Entry wrapper: enables env reporting on the shared fixture.
+    fs.writeFileSync(
+      join(pluginRoot, "dist", "entry.mjs"),
+      `import { pathToFileURL } from "node:url";
+process.argv.push("--env-report");
+await import(pathToFileURL(${JSON.stringify(FIXTURE)}).href);`
+    );
+    const restore = () => fs.rmSync(tmp, { recursive: true, force: true });
+    try {
+      setPluginMcpRuntimeResolverForTest(
+        new PluginMcpRuntimeResolver({
+          tmpRoot: join(tmp, "ctx"),
+          installRootFor: () => pluginRoot,
+          executionIdFactory: () => "trust-exec-1",
+        })
+      );
+      const client = track(
+        new MCPClient({
+          transport: "stdio",
+          command: "ignored-in-runtime-mode",
+          timeout: 8_000,
+          // Declaration-supplied ELECTRON_RUN_AS_NODE must be REJECTED by the
+          // sanitizer; the trusted injection then supplies "1".
+          env: { MY_VAR: "hello", ELECTRON_RUN_AS_NODE: "0" },
+          hostRuntime: {
+            pluginName: "demo-plugin",
+            entry: "dist/entry.mjs",
+          },
+        })
+      );
+      await client.connect();
+      const tools = await client.listTools();
+      expect(tools.map((t) => t.name)).toContain("echo");
+
+      const result = await client.callToolContent("echo", {});
+      expect(result.structuredContent).toMatchObject({
+        runAsNode: "1",
+        myVar: "hello",
+      });
+      await client.disconnect();
+    } finally {
+      setPluginMcpRuntimeResolverForTest(undefined);
+      restore();
+    }
+  });
+
+  it("rejects a runtime entry that escapes the plugin root", async () => {
+    const tmp = fs.mkdtempSync(join(os.tmpdir(), "yp-trust-escape-"));
+    const pluginRoot = join(tmp, "demo-plugin");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    try {
+      setPluginMcpRuntimeResolverForTest(
+        new PluginMcpRuntimeResolver({
+          tmpRoot: join(tmp, "ctx"),
+          installRootFor: () => pluginRoot,
+        })
+      );
+      const client = track(
+        new MCPClient({
+          transport: "stdio",
+          command: "unused",
+          timeout: 8_000,
+          hostRuntime: {
+            pluginName: "demo-plugin",
+            entry: "../../../etc/passwd",
+          },
+        })
+      );
+      await expect(client.connect()).rejects.toThrow(/plugin root/i);
+      await client.disconnect().catch(() => undefined);
+    } finally {
+      setPluginMcpRuntimeResolverForTest(undefined);
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

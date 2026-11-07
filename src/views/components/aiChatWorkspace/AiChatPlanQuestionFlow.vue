@@ -38,7 +38,7 @@
           @click="toggle(index)"
         >
           <v-icon
-            :icon="currentQuestion.multiSelect ? 'mdi-checkbox-outline' : 'mdi-radiobox-blank'"
+            :icon="optionIcon(isSelected(index), currentQuestion.multiSelect === true)"
             size="16"
             aria-hidden="true"
           />
@@ -205,6 +205,19 @@ function isSelected(optionIndex: number): boolean {
     draft.value.selectedByIndex[currentIndex.value]?.includes(optionIndex) ??
     false
   );
+}
+
+/**
+ * Bullet glyph must follow selection state (blank <-> marked) using the
+ * pairs the installed @mdi/font ships, matching AiChatV2QuestionCard:
+ *  - multi-select: checkbox-blank / checkbox-marked
+ *  - single-select: radiobox-blank (empty circle) / radiobox-marked (dot)
+ */
+function optionIcon(selected: boolean, multiSelect: boolean): string {
+  if (multiSelect) {
+    return selected ? "mdi-checkbox-marked" : "mdi-checkbox-blank";
+  }
+  return selected ? "mdi-radiobox-marked" : "mdi-radiobox-blank";
 }
 
 function toggle(optionIndex: number): void {

@@ -238,6 +238,55 @@ describe("buildToolExecutionGroups (FR-042..050)", () => {
     expect(actionLabelFor("create_html_artifact")).toContain("HTML");
     expect(actionLabelFor("unknown_tool_xyz")).toBe("");
   });
+
+  it("does not project plan-mode UI tool calls as stuck running rows", () => {
+    // Plan-mode UI tools never emit a matching tool_result on success —
+    // the transition renders through plan_state / ask_user_question /
+    // plan_submitted lifecycle surfaces (FR-052). Projecting their call
+    // rows as executable work leaves them "running" forever.
+    for (const toolName of [
+      "EnterPlanMode",
+      "AskUserQuestion",
+      "SubmitPlanForApproval",
+    ]) {
+      const messages = [
+        view(MessageType.MESSAGE, { source: "chat-v2" }, "assistant", "Planning."),
+        view(MessageType.TOOL_CALL, {
+          source: "chat-v2",
+          toolCallId: "tc-plan-ui",
+          toolName,
+          toolArguments: { rationale: "multi-step task" },
+        }),
+        view(MessageType.MESSAGE, {
+          source: "chat-v2",
+          planStateView: planState({ status: "awaiting_approval" }),
+        }),
+      ];
+      const all = buildToolExecutionGroups(messages).flatMap((g) => g.executions);
+      expect(all.find((e) => e.toolName === toolName)).toBeUndefined();
+    }
+  });
+
+  it("still pairs a plan-mode UI tool call when a failure tool_result exists", () => {
+    // Dispatch-level rejections (e.g. "Already in Plan Mode") DO emit a
+    // tool_result — that failure receipt must keep rendering.
+    const messages = [
+      view(MessageType.TOOL_CALL, {
+        source: "chat-v2",
+        toolCallId: "tc-enter-plan",
+        toolName: "EnterPlanMode",
+      }),
+      view(MessageType.TOOL_RESULT, {
+        source: "chat-v2",
+        toolCallId: "tc-enter-plan",
+        toolName: "EnterPlanMode",
+        toolResult: { success: false, error: "Already in Plan Mode." },
+        toolResultStatus: "error",
+      }),
+    ];
+    const row = buildToolExecutionGroups(messages).flatMap((g) => g.executions)[0];
+    expect(row?.status).toBe("failed");
+  });
 });
 
 function planState(overrides: Partial<AIChatPlanStateView>): AIChatPlanStateView {

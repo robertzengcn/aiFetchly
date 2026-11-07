@@ -82,10 +82,21 @@ beforeEach(async () => {
 });
 
 describe("ScheduleManager shutdown persistence", () => {
-  it("persists stopped status once during application shutdown", async () => {
+  it("does not persist stopped status during application shutdown so the master switch survives a restart", async () => {
     const manager = ScheduleManager.getInstance();
 
     await manager.handleAppShutdown();
+
+    // App exit is not a user "stop" toggle: leaving scheduler_status
+    // untouched lets initializeWithDatabaseStatus() auto-restore the
+    // running master switch on the next boot.
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+  });
+
+  it("persists stopped status once when the user explicitly stops the scheduler", async () => {
+    const manager = ScheduleManager.getInstance();
+
+    await manager.stop();
 
     expect(mockUpdateStatus).toHaveBeenCalledTimes(1);
   });
@@ -94,7 +105,7 @@ describe("ScheduleManager shutdown persistence", () => {
     mockIsConnectionOpen.mockReturnValue(false);
     const manager = ScheduleManager.getInstance();
 
-    await manager.handleAppShutdown();
+    await manager.stop();
 
     expect(mockUpdateStatus).not.toHaveBeenCalled();
   });
@@ -105,7 +116,7 @@ describe("ScheduleManager shutdown persistence", () => {
     );
     const manager = ScheduleManager.getInstance();
 
-    await manager.handleAppShutdown();
+    await manager.stop();
 
     expect(mockLogError).not.toHaveBeenCalled();
   });
@@ -114,7 +125,7 @@ describe("ScheduleManager shutdown persistence", () => {
     mockUpdateStatus.mockRejectedValue(new Error("disk is full"));
     const manager = ScheduleManager.getInstance();
 
-    await manager.handleAppShutdown();
+    await manager.stop();
 
     expect(mockLogError).toHaveBeenCalledWith(
       "Failed to persist stopped status:",

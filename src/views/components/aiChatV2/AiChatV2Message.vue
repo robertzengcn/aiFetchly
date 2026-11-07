@@ -120,6 +120,16 @@
             @open="(id: string) => emit('open-artifact', id)"
             @copy-html="(id: string) => emit('copy-artifact-html', id)"
           />
+          <!-- Host-registered plugin result artifacts (design §13.4): the
+               tool card can preview, save, and delete them without any AI
+               call; every action is ownership-verified in the main process. -->
+          <PluginArtifactCard
+            v-if="pluginArtifacts.length > 0 && !executionPending"
+            :conversation-id="String(message.conversationId)"
+            :artifacts="pluginArtifacts"
+            :disabled="disabled"
+            @deleted="onPluginArtifactDeleted"
+          />
           <OutboundEmailBatchCard
             v-if="outboundBatch"
             :batch-id="outboundBatch.batchId"
@@ -312,11 +322,14 @@
           </template>
           <template v-else>{{ displayContent }}</template>
         </div>
+        <!-- Collapsed by default: the summary row shows a one-line preview,
+             the full reasoning text expands on click (native <details>
+             toggle). Keeps workspace transcripts compact while the panel
+             still follows the global "show reasoning" preference. -->
         <details
           v-if="hasReasoning"
           class="v2-message__reasoning"
           data-testid="reasoning"
-          :open="hasReasoning"
         >
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
@@ -325,6 +338,14 @@
                 ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
                 : t("aiChatV2.reasoning_title") || "Reasoning"
             }}
+            <span
+              v-if="reasoningPreview"
+              class="v2-message__reasoning-preview"
+              >{{ reasoningPreview }}</span
+            >
+            <v-icon size="x-small" class="v2-message__reasoning-chevron"
+              >mdi-chevron-right</v-icon
+            >
           </summary>
           <div class="v2-message__reasoning-content">{{ reasoningText }}</div>
         </details>
@@ -547,6 +568,7 @@ import type {
   ChatV2AttachmentMetadata,
   ChatV2GeneratedImage,
   ChatV2GeneratedImageReference,
+  ChatV2MessageMetadata,
   ChatV2MessageView,
 } from "@/entityTypes/aiChatV2Types";
 import type { ChatV2AtMentionMetadata } from "@/entityTypes/aiChatAtMentionTypes";
@@ -566,6 +588,8 @@ import {
 } from "@/views/components/outboundEmail/outboundBatchCardModel";
 import AIContentReportButton from "@/views/components/aiContentReport/AIContentReportButton.vue";
 import AiChatToolResultViewer from "./AiChatToolResultViewer.vue";
+import PluginArtifactCard from "./PluginArtifactCard.vue";
+import type { PluginArtifactView } from "@/views/api/pluginArtifact";
 import { buildChatV2Descriptor } from "@/views/components/aiContentReport/reportableOutput";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 import { AI_FILE_OPEN } from "@/config/channellist";
@@ -939,6 +963,14 @@ const installSnapshot = computed<InstallSnapshot>(() => {
     safeSummary: String(raw.safeSummary ?? ""),
     recoverable: raw.recoverable !== false,
     ...(raw.errorCode ? { errorCode: String(raw.errorCode) } : {}),
+    // P1-4: the installer tool result carries the safePlan alongside the
+    // snapshot — pass it through so a reopened historical card renders the
+    // same structured plan as the live card (refreshSnapshot re-fetches
+    // authoritative state on mount, but the persisted plan is the
+    // reviewable copy of record).
+    ...(raw.safePlan && typeof raw.safePlan === "object"
+      ? { safePlan: raw.safePlan as InstallSnapshot["safePlan"] }
+      : {}),
   };
 });
 // ---------------------------------------------------------------------------
@@ -1013,6 +1045,61 @@ const preservedOutput = computed<PreservedOutputView | null>(() => {
 
   return { outputId, stateLabel, sizeLabel, preview };
 });
+
+// ---------------------------------------------------------------------------
+// Host-registered plugin result artifacts (design §13.4).
+//
+// The payload carries opaque `pa_…` ids from the host artifact store, never
+// filesystem paths. Preview/save/delete go through the plugin-artifact IPC,
+// which re-verifies conversation ownership in the main process. Only ids
+// shaped here are rendered; foreign shapes are dropped, never guessed.
+// ---------------------------------------------------------------------------
+const pluginArtifacts = computed<PluginArtifactView[]>(() => {
+  const rawList = props.message.metadata?.pluginArtifacts;
+  if (!Array.isArray(rawList) || rawList.length === 0) return [];
+  const out: PluginArtifactView[] = [];
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== "object") continue;
+    // Foreign shapes are dropped at runtime: traffic may be stale or hand-
+    // edited, so narrow through unknown instead of trusting the declared
+    // ChatV2PluginArtifactMetadata interface.
+    const rec = raw as unknown as Record<string, unknown>;
+    if (typeof rec.id !== "string" || !rec.id.startsWith("pa_")) continue;
+    if (rec.format !== "json" && rec.format !== "csv") continue;
+    if (
+      typeof rec.recordCount !== "number" ||
+      !Number.isFinite(rec.recordCount)
+    ) {
+      continue;
+    }
+    out.push({
+      id: rec.id,
+      format: rec.format,
+      recordCount: rec.recordCount,
+      ...(typeof rec.sizeBytes === "number" ? { sizeBytes: rec.sizeBytes } : {}),
+      ...(typeof rec.createdAt === "string" ? { createdAt: rec.createdAt } : {}),
+      ...(typeof rec.expiresAt === "string" ? { expiresAt: rec.expiresAt } : {}),
+    });
+  }
+  return out;
+});
+
+/**
+ * Best-effort bookkeeping after a plugin artifact was deleted through the
+ * card: drop the descriptor from this message's metadata lists. Card-local
+ * row hiding remains the visible part; this keeps live-state messages
+ * consistent where the message objects are reactive.
+ */
+function onPluginArtifactDeleted(artifactId: string): void {
+  const meta = props.message.metadata as
+    | (ChatV2MessageMetadata & Record<string, unknown>)
+    | undefined;
+  if (!meta) return;
+  if (Array.isArray(meta.pluginArtifacts)) {
+    const filtered = meta.pluginArtifacts.filter((a) => a.id !== artifactId);
+    meta.pluginArtifacts = filtered.length > 0 ? filtered : undefined;
+  }
+}
 
 /**
  * Open the paged viewer, honouring the `ui` rollout flag.
@@ -1157,6 +1244,26 @@ const executionPending = computed(
 const reasoningText = computed(
   () => props.message.metadata?.reasoning?.content?.trim() ?? ""
 );
+
+/** Max characters of the collapsed-state one-line reasoning preview. */
+const REASONING_PREVIEW_MAX_CHARS = 120;
+
+/**
+ * Collapsed-state preview: the full reasoning text takes too much vertical
+ * space in the workspace transcript, so the summary shows only the first
+ * non-empty line, hard-truncated. Expanding reveals the complete text
+ * (not clipped by this length).
+ */
+const reasoningPreview = computed(() => {
+  const firstLine =
+    reasoningText.value
+      .split(/\r?\n/)
+      .find((line) => line.trim().length > 0)
+      ?.trim() ?? "";
+  return firstLine.length > REASONING_PREVIEW_MAX_CHARS
+    ? `${firstLine.slice(0, REASONING_PREVIEW_MAX_CHARS)}…`
+    : firstLine;
+});
 
 /**
  * Display content with pasted-text references expanded (§13.3 preview):
@@ -1361,6 +1468,63 @@ function asNonNegativeInteger(value: unknown): number | null {
     : null;
 }
 
+/** A record is batch-shaped when it carries a recognized aggregate status. */
+function isBatchShapedRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object") return false;
+  // Capture the status read so the Set-membership call sees the string the
+  // typeof guard proved (re-reading the property loses the narrowing).
+  const status = (value as Record<string, unknown>).status;
+  return typeof status === "string" && BATCH_RESULT_STATUSES.has(status);
+}
+
+/**
+ * Unwrap the serialized batch payload. The settled `process_artifact_batch`
+ * result is externalized by design (SlimmedOutput: no inlined outputs in the
+ * durable tool_result), so the batch record rides in the first
+ * `toolOutputRefs[].toolOutputPreview` JSON string. Preview content is
+ * already producer-sanitized, but unwrapping is still defensive: anything
+ * that does not parse into a batch-shaped record is rejected.
+ */
+function deserializeBatchRecord(
+  result: Record<string, unknown>
+): Record<string, unknown> | null {
+  // Route the guard through an `unknown` alias: narrowing Record<string,
+  // unknown> by its own type predicate would leave the fall-through branch
+  // typed `never` and break the property reads below.
+  const input: unknown = result;
+  if (isBatchShapedRecord(input)) return input;
+  const candidates: readonly unknown[] = [
+    ...(Array.isArray(result.toolOutputRefs) ? result.toolOutputRefs : []),
+    ...(Array.isArray(result.outputRefs) ? result.outputRefs : []),
+    typeof result.toolOutputPreview === "string"
+      ? result.toolOutputPreview
+      : null,
+    typeof result.preview === "string" ? result.preview : null,
+  ];
+  for (const candidate of candidates) {
+    let preview: string | null = null;
+    if (typeof candidate === "string") {
+      preview = candidate;
+    } else if (
+      candidate &&
+      typeof candidate === "object" &&
+      typeof (candidate as Record<string, unknown>).toolOutputPreview ===
+        "string"
+    ) {
+      preview = (candidate as Record<string, unknown>)
+        .toolOutputPreview as string;
+    }
+    if (!preview) continue;
+    try {
+      const parsed = JSON.parse(preview) as unknown;
+      if (isBatchShapedRecord(parsed)) return parsed;
+    } catch {
+      // Not JSON — skip this preview rather than guessing at its content.
+    }
+  }
+  return null;
+}
+
 /** Workspace-file items are identified by file name only — never the path. */
 function pathBaseName(path: string): string {
   const segments = path.split(/[/\\]/).filter((segment) => segment.length > 0);
@@ -1400,7 +1564,11 @@ const batchProgressView = computed<BatchProgressView | null>(() => {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return null;
   }
-  const record = result as Record<string, unknown>;
+  const unwrapped = deserializeBatchRecord(result);
+  if (!unwrapped) {
+    return null;
+  }
+  const record = unwrapped;
   const status =
     typeof record.status === "string" && BATCH_RESULT_STATUSES.has(record.status)
       ? record.status
@@ -1791,6 +1959,7 @@ const pastedChips = computed<PastedChip[]>(() => {
 .v2-message__content {
   white-space: pre-wrap;
   line-height: 1.45;
+  font-size: var(--app-chat-font-size, 14px);
 }
 .v2-message__reasoning {
   margin-top: 8px;
@@ -1806,13 +1975,35 @@ const pastedChips = computed<PastedChip[]>(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+  /* The custom chevron icon conveys the open state; hide the native marker. */
+  list-style: none;
+}
+.v2-message__reasoning summary::-webkit-details-marker {
+  display: none;
+}
+/* Collapsed-state preview: one muted, ellipsized line of reasoning. */
+.v2-message__reasoning-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+}
+.v2-message__reasoning-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.v2-message__reasoning[open] .v2-message__reasoning-chevron {
+  transform: rotate(90deg);
 }
 .v2-message__reasoning-content {
   margin-top: 6px;
   white-space: pre-wrap;
   max-height: 220px;
   overflow: auto;
-  font-size: 13px;
+  font-size: var(--app-chat-font-size, 14px);
   line-height: 1.45;
 }
 .v2-message__images {

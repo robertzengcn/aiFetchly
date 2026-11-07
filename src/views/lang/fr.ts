@@ -14,6 +14,11 @@ export default {
     settings: { localVision: "Vision locale", visualPlanner: "Mode planificateur visuel", stopHotkey: "Raccourci d'arrêt", debugCapture: "Capture de débogage", save: "Enregistrer" },
   },
   common: {
+    back: "Retour",
+    continue: "Continuer",
+    dismiss: "Ignorer",
+    retry: "Réessayer",
+    user: "Vous",
     more: "Plus",
     actions: "Actions",
     confirmation: "Confirmation",
@@ -137,12 +142,6 @@ export default {
     email_extraction_edit: "Modifier la Tâche d'Aperçu des Contacts",
     email_extraction_list: "Liste des Tâches d'Aperçu des Contacts",
     email_extraction_detail: "Détail de l'Aperçu des Contacts",
-    yellow_pages: "Assistant d'Annuaire",
-    yellow_pages_list: "Assistant d'Annuaire",
-    create_yellow_pages_task: "Créer une Tâche d'Assistant d'Annuaire",
-    edit_yellow_pages_task: "Modifier la Tâche d'Assistant d'Annuaire",
-    yellow_pages_task_detail: "Détail de la tâche",
-    yellow_pages_results: "Résultats de la tâche",
     yandex_maps_scraper: "Recherche de Commerces Locaux",
     email_marketing: "Campagne de Prospection",
     bulk_email_task_list: "Liste des tâches e-mail",
@@ -436,7 +435,6 @@ export default {
     analytics_charts: "Graphiques d'analyse et de tendances",
     search_results: "Résultats de recherche",
     emails_extracted: "E-mails extraits",
-    yellow_pages: "Assistant d'Annuaire",
     emails_sent: "E-mails envoyés",
     vs_previous_period: "vs période précédente",
     success_rate: "Taux de succès",
@@ -473,15 +471,6 @@ export default {
     search: "Veille Marché",
     search_scraper: "Explorateur de Veille Marché",
     search_description: "Organisation des données publiques de veille marché",
-    yellowpage: "Assistant d'Annuaire",
-    yellowpage_scraper: "Assistant d'Annuaire",
-    yellowpage_description: "Alignement des données publiques d'annuaire",
-    create_yellow_pages_task: "Créer une Tâche d'Assistant d'Annuaire",
-    edit_yellow_pages_task: "Modifier la Tâche d'Assistant d'Annuaire",
-    configure_yellow_pages_task:
-      "Configurer et créer une nouvelle tâche d'Assistant d'Annuaire",
-    modify_yellow_pages_task:
-      "Modifier une tâche existante d'Assistant d'Annuaire",
     task_configuration: "Configuration de la tâche",
     task_name: "Nom de la tâche",
     task_name_placeholder: "ex. Recherche restaurants - Paris",
@@ -544,11 +533,7 @@ export default {
     create_task_only: "Créer la tâche uniquement",
     update_task: "Mettre à jour la tâche",
     task_created_successfully: "Tâche créée avec succès",
-    task_created_message:
-      "Votre tâche d'Assistant d'Annuaire a été créée avec succès !",
     task_updated_successfully: "Tâche mise à jour avec succès",
-    task_updated_message:
-      "Votre tâche d'Assistant d'Annuaire a été mise à jour avec succès !",
     error_creating_task: "Erreur lors de la création de la tâche",
     view_all_tasks: "Voir toutes les tâches",
     view_task_details: "Voir les détails de la tâche",
@@ -595,10 +580,6 @@ export default {
     account_manage: "Account Manage",
     account_manage_subtitle: "Account Manage",
     account_manage_description: "Manage account in system",
-    // Directory Assistant List Page
-    yellow_pages_task_management: "Gestion des Tâches d'Assistant d'Annuaire",
-    yellow_pages_task_management_description:
-      "Manage data alignment tasks for directory sources",
     new_task: "Nouvelle tâche",
     import: "Importer",
     export: "Exporter",
@@ -1181,6 +1162,13 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "Vérifier la réponse",
+    chatLoading: "Chargement du message…",
+    chatApproveSend: "Approuver et envoyer",
+    chatSending: "Envoi en cours…",
+    chatSent: "Message envoyé",
+    chatError: "Impossible de terminer cette action. Rechargez la conversation pour vérifier le statut.",
+
     drafts_title: "Brouillons de Réponse",
     generate_draft: "Générer un Brouillon",
     regenerate: "Régénérer",
@@ -1296,6 +1284,8 @@ export default {
     unknown_summary: "Statut de livraison inconnu.",
     failed_summary: "Le lot a échoué.",
     discarded_summary: "Lot abandonné.",
+    cancelled_summary: "Lot annulé.",
+    summary_detail: "Envoyés : {sent}/{total} · Raison : {reason}",
     review_title: "Réviser le Courrier Sortant",
     recipient: "Destinataire",
     sender: "Expéditeur",
@@ -1451,6 +1441,9 @@ export default {
     email_template_empty: "email template should not be empty",
     email_filter_empty: "email filter should not be empty",
     email_service_empty: "email service should bot be empty",
+    email_service_not_found:
+      "Le service de messagerie sélectionné n'existe pas. Choisissez un service dans la liste, puis réessayez.",
+    start_send_email_failed: "Impossible de démarrer l'envoi de l'e-mail.",
     choose_at_least_one_souce: "you should choose at least one source",
     avoid_duplicate: "avoid user to receive duplicate email",
     check_email_souce: "please check email source correct",
@@ -1613,6 +1606,21 @@ export default {
       "Sélectionnez le modèle d'embedding utilisé pour la recherche vectorielle et la correspondance de similarité.",
     language_preference: "Langue",
     "language-preference-description": "Préférence de langue de l'interface.",
+    ui_font_scale: "Taille de police de la mise en page",
+    "ui-font-scale-description":
+      "Augmente ou réduit la taille du texte des menus, des pages et du reste de l'interface.",
+    ui_font_scale_decrease: "Réduire la police de la mise en page",
+    ui_font_scale_increase: "Augmenter la police de la mise en page",
+    ui_font_scale_reset: "Réinitialiser",
+    ui_font_scale_smaller: "Plus petite",
+    ui_font_scale_default: "Par défaut",
+    ui_font_scale_larger: "Plus grande",
+    ui_font_scale_large: "Grande",
+    ui_font_scale_largest: "La plus grande",
+    ui_chat_font_size: "Taille de police du chat",
+    "ui-chat-font-size-description":
+      "Taille de police des messages et de la zone de saisie, en pixels (10–32).",
+    ui_chat_font_size_invalid: "Saisissez un nombre entier entre 10 et 32.",
     ai_website_analysis_business_info: "Informations Commerciales",
     "ai-website-analysis-business-info-description":
       "Informations commerciales utilisées lors de l'analyse IA du site web.",
@@ -1728,6 +1736,30 @@ export default {
     user_ai_desktop_notify: "Notification de fin sur le bureau",
     "ai-desktop-notify-description":
       "Affiche une notification en bas à droite lorsque l'agent IA principal a terminé une réponse ou qu'un plan est prêt à être approuvé (uniquement si l'application est en arrière-plan).",
+    "managed-browser-group": "Navigateur géré",
+    "managed-browser-group-description":
+      "Paramètres du navigateur social géré intégré et de son cache de navigateur partagé.",
+    "managed-browser-enabled": "Activer le navigateur géré",
+    "managed-browser-enabled-description":
+      "Active ou désactive le navigateur géré pour les nouvelles sessions.",
+    "managed-browser-cache-enabled": "Activer le cache du navigateur",
+    "managed-browser-cache-enabled-description":
+      "Conserve le cache de navigateur partagé entre les sessions pour accélérer les connexions et réduire les CAPTCHA.",
+    "managed-browser-cache-max-size-mb": "Taille max du cache (Mo)",
+    "managed-browser-cache-max-size-description":
+      "Taille maximale du cache de navigateur partagé en mégaoctets (plage autorisée 100 à 2048).",
+    "managed-browser-cache-clear-on-exit": "Vider le cache à la fermeture",
+    "managed-browser-cache-clear-on-exit-description":
+      "Supprime le cache de navigateur partagé à la fermeture de l'application.",
+    "managed-browser-2captcha-disclosure": "Divulgation d'utilisation de 2Captcha",
+    "managed-browser-2captcha-disclosure-description":
+      "Accepter l'avis selon lequel 2Captcha est utilisé pour résoudre les défis pris en charge.",
+    "managed-browser-2captcha-domains": "Domaines autorisés pour 2Captcha",
+    "managed-browser-2captcha-domains-description":
+      "Liste de domaines (séparés par des virgules) où 2Captcha peut être utilisé. Vide signifie aucun.",
+    "managed-browser-2captcha-non-login": "Autoriser 2Captcha hors connexion",
+    "managed-browser-2captcha-non-login-description":
+      "Autorise 2Captcha à résoudre des défis qui ne font pas partie d'une connexion. Les défis de connexion, de sécurité et de paiement exigent toujours une transmission manuelle.",
   },
   aiMemory: {
     title: "Mémoires de l'IA",
@@ -2156,97 +2188,6 @@ export default {
     reasoning: "Reasoning",
     client_business: "Client Business",
   },
-  yellowPages: {
-    ai_support: "Support IA",
-    ai_support_hint:
-      "Use AI to assist data alignment when selectors fail to read public data",
-    ai_query_keywords: "Générer des mots-clés par IA",
-    ai_query_keywords_default_seed: "entreprise",
-    use_account: "Utiliser un compte",
-    account_required_for_platform: "Compte requis pour la plateforme : {name}",
-    not_set: "Non défini",
-    enabled: "Activé",
-    disabled: "Désactivé",
-    authentication: "Authentification",
-    requires_cookies: "Cookies requis",
-    account_required_for_auth: "Compte requis pour l'authentification",
-    requires_login: "Connexion requise",
-    requires_api_key: "Clé API requise",
-    requires_oauth: "OAuth requis",
-    location_required: "Emplacement requis",
-    platform_requires_location:
-      "Cette plateforme nécessite un emplacement pour la recherche",
-    list_manual_refresh: "Actualisation manuelle",
-    list_auto_refresh_enabled: "Actualisation auto activée (5 s)",
-    list_auto_refresh_paused: "Actualisation auto en pause (page non visible)",
-    list_auto_refresh_disabled: "Actualisation auto désactivée",
-    list_auto_refresh_on: "Actualisation auto ON",
-    list_auto_refresh_paused_btn: "Actualisation auto EN PAUSE",
-    list_auto_refresh_off: "Actualisation auto OFF",
-    list_last_updated: "Dernière mise à jour",
-    list_auto_refresh_interval: "Actualisation auto : {seconds} s",
-    list_search_placeholder: "Rechercher par nom de tâche ou plateforme...",
-    list_filter_search: "Search",
-    list_filter_status: "Statut",
-    list_filter_platform: "Plateforme",
-    list_filter_priority: "Priorité",
-    list_tasks_match_filters:
-      "{total} sur {totalUnfiltered} tâches correspondent aux filtres",
-    list_no_tasks_match_filters: "Aucune tâche ne correspond aux filtres",
-    list_adjust_search_or_clear:
-      "Essayez d'ajuster les critères ou de réinitialiser les filtres",
-    list_clear_all_filters: "Réinitialiser tous les filtres",
-    list_applying_filters: "Application des filtres...",
-    list_task_not_running: "La tâche « {name} » n'est pas en cours d'exécution",
-    list_confirm_stop_task:
-      "Voulez-vous vraiment arrêter la tâche « {name} » (PID : {pid}) ?\n\nCela mettra fin au processus et mettra à jour le statut.",
-    list_task_stopped_success:
-      "Tâche « {name} » arrêtée avec succès.\n\nLe statut a été mis à jour en « En attente » et le tableau sera actualisé.",
-    list_task_stop_failed:
-      "Échec de l'arrêt de la tâche « {name} » : {message}",
-    list_error_stopping_task:
-      "Erreur lors de l'arrêt de la tâche « {name} » : {message}",
-    list_task_pause_failed:
-      "Échec de la pause de la tâche « {name} » : {message}",
-    list_task_resumed_success: "Tâche « {name} » reprise avec succès",
-    list_task_resume_failed:
-      "Échec de la reprise de la tâche « {name} » : {message}",
-    list_task_still_running_results:
-      "Task is still running. Results will be available when data alignment completes.",
-    list_task_no_results_yet: "Cette tâche n'a pas encore de résultats.",
-    list_view_results_anyway_confirm:
-      "Voulez-vous quand même ouvrir la page des résultats ?",
-    list_unknown_error: "Erreur inconnue",
-    list_unknown_error_occurred: "Une erreur inconnue s'est produite",
-    // Task details view
-    detail_task_information: "Informations sur la tâche",
-    detail_task_status: "Statut de la tâche",
-    detail_task_actions: "Actions sur la tâche",
-    detail_field_name: "Nom",
-    detail_field_platform: "Plateforme",
-    detail_field_keywords: "Mots-clés",
-    detail_field_location: "Lieu",
-    detail_field_max_pages: "Pages max.",
-    detail_field_priority: "Priorité",
-    detail_field_status: "Statut",
-    detail_field_progress: "Progrès",
-    detail_field_results_count: "Nombre de résultats",
-    detail_field_created: "Créé",
-    detail_field_last_updated: "Dernière mise à jour",
-    detail_action_start: "Démarrer la tâche",
-    detail_action_stop: "Arrêter la tâche",
-    detail_action_pause: "Mettre en pause",
-    detail_action_resume: "Reprendre",
-    detail_action_view_results: "Voir les résultats",
-    detail_action_edit: "Modifier la tâche",
-    detail_action_delete: "Supprimer la tâche",
-    detail_action_close: "Fermer",
-    detail_status_pending: "En attente",
-    detail_status_running: "En cours",
-    detail_status_completed: "Terminé",
-    detail_status_failed: "Échec",
-    detail_status_paused: "En pause",
-  },
   googleMaps: {
     title: "Recherche de Commerces Locaux",
     description: "Search public local business sources by keyword and location",
@@ -2452,6 +2393,14 @@ export default {
     draft_label: "Brouillon — révision requise",
   },
   aiProvider: {
+    chatTitles: {
+      section: "Titres des conversations",
+      description: "Le nommage automatique utilise un court extrait de la conversation et peut engendrer une légère utilisation du fournisseur.",
+      autoToggle: "Nommer automatiquement les nouvelles conversations",
+      hostedModelHint: "Le mode hébergé utilise le modèle léger du service.",
+      customModelLabel: "Modèle de titres (facultatif)",
+      customModelHint: "Sert à nommer automatiquement les nouvelles conversations. Utilise votre fournisseur configuré.",
+    },
     title: "Fournisseur d'IA",
     description:
       "Les fournisseurs personnalisés peuvent alimenter AI Chat avec votre propre modèle. Les fonctionnalités d'IA hébergée aiFetchly nécessitent toujours un abonnement.",
@@ -2526,8 +2475,6 @@ export default {
       "Consultez et gérez les e-mails entrants reçus via les services configurés.",
     email_reply_description:
       "Examinez et auditez les réponses automatiques générées par IA.",
-    directory_description:
-      "Parcourez les tâches d’annuaire et les fiches d’entreprises collectées.",
     maps_description:
       "Trouvez des entreprises locales depuis les fournisseurs de cartes.",
     outreach_description:
@@ -2555,8 +2502,16 @@ export default {
       "Examinez les réponses générées par l'IA, le statut d'approbation et les journaux d'audit.",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "La conversation est trop longue pour la fenêtre de contexte du modèle. Veuillez démarrer une nouvelle conversation ou effacer une partie de l'historique.",
+  skillSlash: {
+      notFound:
+        "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
+    },
+    cancel: "Annuler",
     queue: {
       queued: "En file d'attente",
+      region: "Messages en file d'attente",
       steering: "Réorientation…",
       applied: "Appliqué",
       dispatching: "Envoi…",
@@ -2870,8 +2825,6 @@ export default {
       retry: "Réessayer",
     },
     title: "Assistant IA",
-    show_reasoning: "Afficher le raisonnement",
-    hide_reasoning: "Masquer le raisonnement",
     reasoning_title: "Raisonnement",
     reasoning_streaming: "Raisonnement…",
     reasoning_unavailable:
@@ -2977,6 +2930,29 @@ export default {
       binary_unsupported: "Cette sortie ne peut pas être affichée comme du texte ; exportez-la",
       close: "Fermer",
     },
+    // Fichiers de résultats de plugins enregistrés par l'hôte (design §13.4).
+    pluginArtifact: {
+      title: "Fichiers de résultats",
+      count_label: "{count} fichier(s)",
+      file_title: "Enregistrements ({format})",
+      saved_at: "Enregistré le {time}",
+      records_count: "{count} enregistrements",
+      preview: "Aperçu",
+      preview_truncated: "… (seules les premières lignes sont affichées)",
+      hide_preview: "Masquer l'aperçu",
+      save: "Enregistrer le fichier",
+      delete: "Supprimer",
+      confirm_delete: "Confirmer la suppression",
+      preview_failed: "Impossible de charger l'aperçu",
+      export_failed: "Impossible d'enregistrer le fichier",
+      delete_failed: "Impossible de supprimer le fichier",
+      deleted_all: "Fichiers supprimés",
+      expires_at: "Expire le {time}",
+      expired_at: "Expiré le {time}",
+      recovered_title: "Exécutions récupérées",
+      recovered_entry: "{plugin} · {time}",
+      recovered_note: "Une exécution antérieure a été interrompue avant l'enregistrement de ses résultats.",
+    },
     generated_image_alt: "Image générée par l'IA",
     open_generated_image: "Ouvrir l'image générée",
     permission_denied: "Permission refusée. L'outil ne sera pas exécuté.",
@@ -2984,6 +2960,8 @@ export default {
       "Impossible de reprendre l'outil après l'autorisation.",
     permission_resume_no_tool_id:
       "Informations d'appel d'outil manquantes ; impossible de continuer.",
+    permission_deny_failed:
+      "Impossible de refuser l'outil ; il reste en pause en attendant l'autorisation.",
     permission_requested_scheduled:
       "Une tâche planifiée demande l'autorisation d'utiliser un outil. Examinez et approuvez ou refusez.",
     auth_expired: "Votre session a expiré. Veuillez vous reconnecter.",
@@ -3024,6 +3002,7 @@ export default {
       document_ready: "Document prêt",
       document_failed: "Échec du traitement du document",
       image_alt: "Image jointe : {name}",
+      text_required: "Ajoutez un message pour envoyer vos pièces jointes.",
     },
     generatedImageRefs: {
       useAsReference: "Utiliser comme référence",
@@ -3485,11 +3464,14 @@ export default {
       "Affichage des résultats partiels ({collected} sur {expected}). L'outil a expiré mais a renvoyé les données collectées.",
   },
   workspace: {
+    chooseHint: "Choisissez un dossier pour que les outils de fichiers de l'IA puissent lire et écrire.",
+    pathUnavailable: "Le dossier de l'espace de travail n'est pas accessible actuellement.",
     title: "Espace de travail",
     badgeLabel: "Espace de travail",
     notSet: "Aucun espace défini",
     selectFolder: "Choisir un dossier",
     changeFolder: "Changer de dossier",
+    removeAction: "Retirer l'espace de travail",
     approve: "Approuver l'espace",
     revoke: "Révoquer l'espace",
     rootPath: "Chemin racine",
@@ -3775,6 +3757,59 @@ export default {
     plugins: "Extensions",
     backToApp: "Retour à l'application",
     loadOlder: "Charger les messages plus anciens",
+    command: {
+      staleAborted: "La sélection a changé — la commande n'a pas été exécutée.",
+      noConversation: "Aucune conversation sélectionnée — la commande n'a pas été exécutée.",
+      busy: "Les commandes sont indisponibles pendant l’exécution de cette conversation. Attendez la fin ou arrêtez-la d’abord.",
+      filesNotSupported: "Cette commande ne prend pas en charge les pièces jointes. Retirez les fichiers ou envoyez votre message sans le préfixe /commande.",
+      loopAttachmentsNotSupported:
+        "Les commandes de boucle ne prennent pas en charge les pièces jointes ni les blocs collés. Envoyez la commande de boucle seule, puis partagez le contenu dans un message suivant.",
+      loopControlFailed: {
+        pause:
+          "Impossible de mettre en pause la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+        resume:
+          "Impossible de reprendre la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+        stop:
+          "Impossible d'arrêter la boucle planifiée. Vérifiez l'état de /loop puis réessayez.",
+      },
+      clearFailed: "Impossible de vider cette conversation. Réessayez.",
+    },
+    errors: {
+      queueLimit:
+        "La file de messages est pleine. Attendez la réponse en cours ou arrêtez-la avant d'envoyer.",
+      contentTooLong: "Le message est trop long. Raccourcissez-le et réessayez.",
+      emptyMessage: "Le message est vide. Écrivez quelque chose avant d'envoyer.",
+      preparationFailed:
+        "Le message n'a pas pu être préparé. Vérifiez les pièces jointes et réessayez.",
+      queueDisabled: "La file de messages est désactivée. L'envoi est indisponible.",
+      aiDisabled:
+        "Les fonctions d'IA ne sont pas activées sur cette formule. Votre brouillon a été conservé.",
+      invalidRequest: "La demande n'est pas valide. Vérifiez le message et réessayez.",
+      pendingNotFound: "Le message en file est introuvable. Il a peut-être été supprimé.",
+      pendingNotClaimable: "Le message en file ne peut plus être envoyé. Renvoyez-le.",
+      conversationMismatch: "Le message en file appartient à une autre conversation.",
+      idempotencyConflict:
+        "Ce message a déjà été envoyé. Vérifiez la conversation avant de renvoyer.",
+      attachmentsNotSteerable:
+        "Les messages avec pièces jointes ne peuvent pas orienter une réponse en cours.",
+      steeringDisabled: "L'orientation de suivi est désactivée.",
+      turnNotSteerable: "Aucune réponse en cours à orienter pour le moment.",
+      steeringCommitRace: "Une autre action a réclamé ce message en premier.",
+      runEnvelopeFailed: "L'exécution n'a pas pu démarrer. Réessayez dans un moment.",
+      dispatchPromoteFailed: "Le message n'a pas pu être envoyé. Réessayez.",
+      runTerminalPersistFailed:
+        "La réponse est terminée mais n'a pas pu être enregistrée. Elle sera récupérée au rechargement.",
+      contextWindow: "La conversation est trop longue pour la fenêtre de contexte du modèle. Démarrez une nouvelle conversation ou effacez une partie de l'historique.",
+    },
+    history: {
+      selectionLimit: "Jusqu'à 20 passages peuvent être joints à un message.",
+      navigateUnavailable: "Ce message n'est plus disponible dans cette conversation.",
+    },
+    recovery: {
+      retry: "Reconnexion… tentative {attempt} sur {max} (attente ~{seconds} s)",
+      recovering: "Récupération via {layer} : {reason}",
+      recoveringDetail: "Récupération via {layer} : {reason} (tentative {attempt} sur {max})",
+    },
     empty: {
       title: "Posez une question ou choisissez une conversation à gauche.",
     },
@@ -3786,6 +3821,10 @@ export default {
       loadError: "Échec du chargement des espaces de travail",
       empty: "Aucune conversation pour le moment",
       unassigned: "Autres discussions",
+      projects: "Projet",
+      refresh: "Actualiser les projets",
+      collapse: "Réduire les projets",
+      expand: "Développer les projets",
       workspace: "Espace de travail",
       needsAttentionCount: "{count} conversations nécessitent votre attention",
     },
@@ -3813,6 +3852,7 @@ export default {
     },
     header: {
       overflow: "Menu de conversation",
+      backgroundAgents: "Agents en arrière-plan",
       rename: "Renommer la discussion",
       renamePrompt: "Renommer la discussion",
       compact: "Compresser la conversation",
@@ -3823,6 +3863,21 @@ export default {
       duplicate: "Dupliquer la conversation",
       deleteConfirm:
         "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
+    },
+    renameDialog: {
+      title: "Renommer la conversation",
+      label: "Nom de la conversation",
+      save: "Enregistrer",
+      cancel: "Annuler",
+      limitHint: "200 caractères max",
+      errorEmpty: "Saisissez un nom pour cette conversation",
+      errorTooLong: "Le nom ne doit pas dépasser 200 caractères",
+      errorInvalid: "Le nom contient des caractères non pris en charge",
+      errorSaveFailed: "Impossible de renommer. Veuillez réessayer.",
+      errorUnavailable: "Cette conversation n'est plus disponible",
+      saving: "Enregistrement…",
+      renameAction: "Renommer la conversation",
+      menuButtonLabel: "Actions de la conversation",
     },
     runStrip: {
       goal: "Objectif : {objective}",
@@ -3846,6 +3901,8 @@ export default {
       activity: "Activité",
       context: "Contexte",
       resize: "Redimensionner l'inspecteur",
+      artifactsDisabled:
+        "Les résultats d'artefacts restent indisponibles tant que l'adaptateur de résultats spécialisés est revenu en arrière.",
     },
     artifacts: {
       selectConversation:
@@ -3891,6 +3948,11 @@ export default {
       revoked: "Révoqué",
     },
     execution: {
+      arguments: "Arguments",
+      details: "Détails",
+      duration: "Durée",
+      finishedAt: "Terminé",
+      resultSummary: "Résultat",
       groupTitle: "Exécution",
       progress: "{completed} sur {total} terminé",
       runningTool: "Exécution de {tool}",
@@ -3898,6 +3960,7 @@ export default {
       artifactCreated: "Rapport HTML créé — ouvrez-le dans Artefacts",
       openArtifact: "Ouvrir",
       imagesGenerated: "Images générées",
+      imagesGeneratedCount: "{count} images générées",
       filesChanged: "Fichiers modifiés — voir Activité",
       permissionNeeded: "Décision d'autorisation requise",
       structuredResult: "Résultat structuré — détails dans Activité",
@@ -3908,6 +3971,9 @@ export default {
       },
     },
     plan: {
+      continuationAborted: "La sélection a changé — la décision du plan est enregistrée, mais son message de suite n'a pas été envoyé. Rouvrez la conversation pour continuer.",
+      continuationPending: "La décision du plan est enregistrée, mais son message de suite n'a pas été envoyé. Utilisez Continuer pour réessayer.",
+      continue: "Continuer",
       version: "Version",
       current: "actuelle",
       changeReason: "Motif de la modification",
@@ -4095,6 +4161,9 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Compte inconnu",
     proxy_active: "Proxy",
+    scope_global: "Navigateur partagé",
+    scope_global_hint:
+      "Cette session de navigation appartient au compte et reste visible quand vous changez de conversation.",
     screenshot: {
       capture: "Actualiser la miniature",
       alt: "Dernière capture du navigateur",
@@ -4196,6 +4265,7 @@ export default {
       verify_login: "Je me suis connecté",
       extend: "Prolonger (10 min)",
       cancel_task: "Annuler la tâche",
+      close: "Fermer",
       reasons: {
         login_required: "Le site exige une connexion pour continuer.",
         login_expired: "La session enregistrée a expiré.",
@@ -4404,8 +4474,11 @@ export default {
       resultFailed: "Échec : {message}",
       output: "Sortie",
     },
+    stateUnknown: "Statut inconnu",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "L'action d'installation a échoué. Réessayez.",
+      statusUnavailable: "Impossible d'actualiser le statut de l'installation. Les approbations restent verrouillées jusqu'à la confirmation du statut : vérifiez la connexion et réessayez.",
       secretFailed:
         "Échec de l'enregistrement de l'identifiant. Il n'a PAS été enregistré.",
     },
@@ -4427,9 +4500,4 @@ export default {
       superseded: "Remplacée",
       awaiting_commands: "Commandes d’installation en attente",
     },
-  },
-  skillSlash: {
-    notFound:
-      "Aucune compétence prompt installée ne correspond à '{name}'. Utilisez /skills pour les lister.",
-  },
-};
+  },};

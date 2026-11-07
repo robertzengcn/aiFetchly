@@ -67,7 +67,7 @@ import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
 import { v4 as uuidv4 } from "uuid";
 import { SocialAccountModule } from "./socialAccountModule";
 import { AIRecoveryHandler } from "./AIRecoveryHandler";
-import { YellowPagesAiSupportHandler } from "./YellowPagesAiSupportHandler";
+import { ScraperAiSupportHandler } from "./ScraperAiSupportHandler";
 import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import type {
@@ -467,7 +467,7 @@ export class SearchModule extends BaseModule {
         if (message && typeof message === "object" && message !== null) {
           const msg = message as Record<string, unknown>;
           if (msg.type === "AI_SUPPORT_REQUEST") {
-            const aiSupportHandler = new YellowPagesAiSupportHandler();
+            const aiSupportHandler = new ScraperAiSupportHandler();
             aiSupportHandler
               .handleAiSupportRequest(
                 msg as unknown as AiSupportRequestMessage,
@@ -486,7 +486,7 @@ export class SearchModule extends BaseModule {
               typeof parsed === "object" &&
               parsed.type === "AI_SUPPORT_REQUEST"
             ) {
-              const aiSupportHandler = new YellowPagesAiSupportHandler();
+              const aiSupportHandler = new ScraperAiSupportHandler();
               aiSupportHandler
                 .handleAiSupportRequest(
                   parsed as AiSupportRequestMessage,

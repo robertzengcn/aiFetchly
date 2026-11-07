@@ -1,3 +1,4 @@
+import { emailReplyDraftId } from "@/views/components/aiChatWorkspace/emailReplyCardModel";
 import { describe, expect, it, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -16,6 +17,13 @@ const i18n = createI18n({
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          progressSummary: "{completed} of {requested} completed",
+          retryFailed: "Retry failed items",
+          stopBatch: "Stop batch",
+          errors: {
+            generated_image_batch_partial: "Some images failed",
+            generated_image_edit_failed: "Edit failed",
+          },
         },
       },
       workspaceChat: {
@@ -35,6 +43,7 @@ const i18n = createI18n({
           groupTitle: "Execution",
           progress: "{completed} of {total} complete",
           legacyReceipt: "Previous tool activity",
+          runningTool: "Running {tool}",
           artifactCreated: "HTML report created",
           imagesGenerated: "Images generated",
           filesChanged: "Files changed",
@@ -68,6 +77,171 @@ function msg(
     metadata: { source: "chat-v2", ...metadata },
   };
 }
+
+function planState(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    planId: "plan-1",
+    conversationId: "v2-test",
+    status: "awaiting_approval",
+    title: "Ship it",
+    objective: "Deliver",
+    currentVersion: 1,
+    ...overrides,
+  };
+}
+
+/** The transcript's root DOM element (template root is a fragment). */
+function transcriptRootEl(wrapper: ReturnType<typeof mount>): HTMLElement {
+  const el = wrapper.element as HTMLElement;
+  if (el.matches('[data-testid="workspace-transcript"]')) return el;
+  const found = el.querySelector('[data-testid="workspace-transcript"]');
+  if (!found) throw new Error("transcript root not found");
+  return found as HTMLElement;
+}
+
+/** Ordered identifiers for the transcript's top-level DOM children. */
+function transcriptChildOrder(wrapper: ReturnType<typeof mount>): string[] {
+  return Array.from(transcriptRootEl(wrapper).children).map((el) => {
+    const testid = el.getAttribute("data-testid");
+    if (testid) return testid;
+    return el.className.split(" ")[0] || el.tagName.toLowerCase();
+  });
+}
+
+describe("AiChatWorkspaceTranscript plan surface position (FR-052, PRD §12.4)", () => {
+  it("pins the awaiting-approval decision card at the BOTTOM of the transcript even when plan events precede later executions", async () => {
+    // Real single-run flow (R07/FR-025: plan_submitted does NOT pause the run):
+    // EnterPlanMode publishes a plan_state row BEFORE the research executions,
+    // and the turn keeps producing messages after plan_submitted. The decision
+    // card reflects the LATEST state — it must render at the very bottom,
+    // not at the first plan row's stale mid-transcript position.
+    const messages = [
+      msg(MessageType.MESSAGE, { planStateView: planState({ status: "draft" }) }),
+      msg(MessageType.MESSAGE, {}, "assistant", "Researching the task."),
+      msg(MessageType.TOOL_CALL, { toolCallId: "tc-r1", toolName: "web_search" }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-r1",
+        toolName: "web_search",
+        toolResultSummary: "3 results",
+      }),
+      msg(MessageType.MESSAGE, { planStateView: planState() }),
+      msg(MessageType.MESSAGE, {}, "assistant", "Plan submitted for approval."),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const order = transcriptChildOrder(wrapper);
+    expect(order).toContain("workspace-plan-decision-card");
+    // The decision card is the LAST surface in the chat history.
+    expect(order[order.length - 1]).toBe("workspace-plan-decision-card");
+  });
+
+  it("renders the LATEST plan's decision card at the bottom in a multi-plan conversation", async () => {
+    // An older plan cycle (mid-history) must not hijack the position: the
+    // only rendered surface is the newest plan, pinned at the bottom.
+    const messages = [
+      msg(
+        MessageType.MESSAGE,
+        { planStateView: planState({ planId: "plan-old", status: "completed" }) }
+      ),
+      msg(MessageType.TOOL_CALL, { toolCallId: "tc-old", toolName: "web_search" }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-old",
+        toolName: "web_search",
+        toolResultSummary: "old plan work",
+      }),
+      msg(MessageType.MESSAGE, {}, "assistant", "Starting the second task."),
+      msg(
+        MessageType.MESSAGE,
+        {
+          planStateView: planState({
+            planId: "plan-new",
+            title: "Second plan",
+            status: "awaiting_approval",
+          }),
+        },
+        "assistant"
+      ),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const order = transcriptChildOrder(wrapper);
+    expect(order[order.length - 1]).toBe("workspace-plan-decision-card");
+    // The card shows the LATEST plan, not the first plan row's plan.
+    const decisions = wrapper.findAllComponents({
+      name: "AiChatPlanDecisionCard",
+    });
+    expect(decisions).toHaveLength(1);
+    expect((decisions[0].props("plan") as { title: string }).title).toBe(
+      "Second plan"
+    );
+  });
+
+  it("anchors the resolved receipt at the latest plan transition, not the first plan row", async () => {
+    // PRD §12.4: completed decision cards return to normal message history —
+    // at the position of the transition that produced them (after the
+    // research executions, before the approved-plan continuation work).
+    const messages = [
+      msg(MessageType.MESSAGE, { planStateView: planState({ status: "draft" }) }),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-research",
+        toolName: "web_search",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-research",
+        toolName: "web_search",
+        toolResultSummary: "research done",
+      }),
+      msg(
+        MessageType.MESSAGE,
+        {
+          planStateView: planState({ status: "approved" }),
+          planEventType: "plan_approved",
+        }
+      ),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-exec",
+        toolName: "run_command",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-exec",
+        toolName: "run_command",
+        toolResultSummary: "plan executed",
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // Receipt is present exactly once, anchored in history between the
+    // research executions (before the decision) and the approved-plan
+    // continuation executions (after the decision).
+    const order = transcriptChildOrder(wrapper);
+    const receiptIdx = order.findIndex((id) =>
+      id.startsWith("workspace-plan-receipt-")
+    );
+    expect(receiptIdx).toBeGreaterThan(-1);
+    const groupIdxs = order.reduce<number[]>(
+      (acc, id, idx) =>
+        id.startsWith("workspace-execution-group-") ? [...acc, idx] : acc,
+      []
+    );
+    expect(groupIdxs).toHaveLength(2);
+    expect(receiptIdx).toBeGreaterThan(groupIdxs[0]);
+    expect(receiptIdx).toBeLessThan(groupIdxs[1]);
+  });
+});
 
 describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
   it("FR-042/043: renders one execution row per toolCallId, not separate generic cards", async () => {
@@ -181,6 +355,44 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
       name: "AiChatPlanDecisionCard",
     });
     expect(decisions.length).toBe(1);
+  });
+
+  it("plan-mode UI tool calls render no stuck Running row (plan card is the surface)", async () => {
+    // EnterPlanMode never emits a tool_result on success — the plan_state
+    // message drives the decision card. Projecting the call row as an
+    // execution left "Running EnterPlanMode" spinning forever.
+    const planState = {
+      planId: "plan-1",
+      conversationId: "v2-test",
+      status: "awaiting_approval",
+      title: "Ship it",
+      objective: "Deliver",
+      currentVersion: 1,
+    };
+    const messages = [
+      msg(MessageType.MESSAGE, {}, "assistant", "This warrants planning."),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-enter-plan",
+        toolName: "EnterPlanMode",
+        toolArguments: { rationale: "multi-step task" },
+      }),
+      msg(MessageType.MESSAGE, { planStateView: planState }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // No stuck "Running EnterPlanMode" execution row / spinner.
+    expect(wrapper.text()).not.toContain("Running EnterPlanMode");
+    expect(
+      wrapper.findAllComponents({ name: "AiChatExecutionRow" }).length
+    ).toBe(0);
+    // The plan decision card IS the transition surface.
+    expect(
+      wrapper.findAllComponents({ name: "AiChatPlanDecisionCard" }).length
+    ).toBe(1);
   });
 
   it("FR-042: tool progress from live events evolves the row in place", async () => {
@@ -396,6 +608,132 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(plain?.props("group").defaultExpanded).toBe(false);
   });
 
+  it("T4/D1: a failed-resume RESTORED prompt still renders the interactive decision card", async () => {
+    // The store's restore path (restorePermissionPromptAfterFailure) yields
+    // exactly this shape: prompt flag back on, executing flag off, safe
+    // error as content. The card must mount — not vanish into a receipt.
+    const restored = msg(MessageType.TOOL_RESULT, {
+      toolCallId: "tc-perm-restored",
+      toolName: "run_command",
+      toolResult: {
+        needsPermissionPrompt: true,
+        success: false,
+        error: "engine gone",
+      },
+    });
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [restored],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const cards = wrapper.findAll('[data-testid="ai-chat-permission-card"]');
+    expect(cards).toHaveLength(1);
+    expect(
+      wrapper.find('[data-testid="ai-chat-permission-allow-once"]').exists()
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="ai-chat-permission-deny"]').exists()
+    ).toBe(true);
+  });
+
+  /**
+   * T3/D2 (audit): a REAL generated-image batch tool_result renders its
+   * interactive card in the DOM — progress counts, Retry-failed with only
+   * the failed references — and the events reach the transcript boundary.
+   * Stop lives on the tool_call card while executing.
+   */
+  it("T3/D2: a batch tool_result card renders progress + Retry in the DOM and emits the retry contract", async () => {
+    const messages = [
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-batch",
+        toolName: "process_artifact_batch",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-batch",
+        toolName: "process_artifact_batch",
+        toolResult: {
+          status: "partial",
+          requestedCount: 3,
+          completedCount: 2,
+          concurrency: 2,
+          instruction: "sharpen all the logos",
+          items: [
+            { status: "completed" },
+            {
+              status: "failed",
+              errorCode: "generated_image_edit_failed",
+              input: {
+                kind: "generated_image",
+                reference: { messageId: "m-img", imageIndex: 1 },
+              },
+            },
+            { status: "completed" },
+          ],
+        },
+        toolResultStatus: "success",
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // The batch card renders OUTSIDE the collapsed group (its own item kind).
+    const batchCards = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(batchCards.length).toBeGreaterThanOrEqual(1);
+    // Progress is visible in the DOM.
+    const text = wrapper.text();
+    expect(text).toContain("2 of 3");
+    // Retry-failed button exists in the DOM (not just an event contract).
+    const retryButtons = wrapper.findAll("button.v2-message__batch-retry");
+    expect(retryButtons.length).toBe(1);
+
+    // Clicking retry emits ONLY the failed reference with the instruction.
+    await retryButtons[0].trigger("click");
+    const retryEvents = wrapper.emitted("retry-generated-image-batch");
+    expect(retryEvents).toHaveLength(1);
+    expect(retryEvents?.[0]?.[0]).toEqual({
+      references: [{ messageId: "m-img", imageIndex: 1 }],
+      instruction: "sharpen all the logos",
+    });
+  });
+
+  it("T3/D2: an executing batch tool_call exposes Stop in the DOM", async () => {
+    const messages = [
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-batch-live",
+        toolName: "process_artifact_batch",
+        toolProgress: {
+          phase: "running",
+          progress: 0.4,
+          updatedAt: 123,
+          partialCount: 2,
+          expectedCount: 5,
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "streaming",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const stopButtons = wrapper.findAll("button.v2-message__batch-stop");
+    expect(stopButtons.length).toBe(1);
+    await stopButtons[0].trigger("click");
+    expect(wrapper.emitted("stop-batch")).toHaveLength(1);
+  });
+
   it("§18: outbound batch result paired in a group surfaces the interactive review card", async () => {
     const messages = [
       msg(MessageType.MESSAGE, {}, "assistant", "Drafting the batch."),
@@ -429,6 +767,79 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     const review = wrapper.findAll('[data-testid="outbound-batch-review"]');
     expect(review.length).toBe(1);
     expect(review[0].attributes("data-batch-id")).toBe("42");
+  });
+
+  /**
+   * FR-SKL-001 (capability parity): installation tool results must render
+   * the shared interactive SkillInstallCard OUTSIDE collapsed generic
+   * execution receipts — for both live and historical (persisted) rows.
+   */
+  it("FR-SKL-001: skill-install result paired in a group surfaces the interactive install card", async () => {
+    const messages = [
+      msg(MessageType.MESSAGE, {}, "assistant", "Installing the skill."),
+      msg(MessageType.TOOL_CALL, {
+        toolCallId: "tc-skill",
+        toolName: "skill_install_prepare",
+      }),
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-skill",
+        toolName: "skill_install_prepare",
+        toolResult: {
+          sessionId: "sess-install-1",
+          state: "awaiting_approval",
+          nextAction: "resume",
+          recoverable: true,
+          success: true,
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // The execution group still renders for the paired call/result…
+    const groups = wrapper.findAllComponents({ name: "AiChatExecutionGroup" });
+    expect(groups.length).toBeGreaterThanOrEqual(1);
+    // …and the install session ALSO renders its interactive card, carried on
+    // the source message identity so approvals/credentials stay reachable.
+    const installCards = wrapper.findAllComponents({
+      name: "SkillInstallCard",
+    });
+    expect(installCards.length).toBe(1);
+    expect(installCards[0].props("snapshot").sessionId).toBe(
+      "sess-install-1"
+    );
+  });
+
+  it("FR-SKL-001: unpaired historical skill-install result renders the install card, not a receipt", async () => {
+    const messages = [
+      msg(MessageType.TOOL_RESULT, {
+        toolCallId: "tc-skill-solo",
+        toolName: "skill_install_status",
+        toolResult: {
+          sessionId: "sess-install-2",
+          state: "ready",
+          nextAction: "resume",
+          recoverable: true,
+          success: true,
+        },
+      }),
+    ];
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const installCards = wrapper.findAllComponents({
+      name: "SkillInstallCard",
+    });
+    expect(installCards.length).toBe(1);
+    expect(installCards[0].props("snapshot").sessionId).toBe(
+      "sess-install-2"
+    );
   });
 
   it("§18: unpaired outbound batch result renders the review card, not a receipt", async () => {
@@ -502,7 +913,7 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     );
   });
 
-  it("§18: a terminal outbound batch (delivery_unknown) renders the card without the review action", async () => {
+  it("§18: an inconclusive outbound batch (delivery_unknown) renders the summary card with exactly one dialog reopen entry", async () => {
     const messages = [
       msg(MessageType.TOOL_RESULT, {
         toolCallId: "tc-outbound-done",
@@ -521,11 +932,13 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     });
     await flushPromises();
 
-    // Terminal batches hide the Review action (card shows the outcome
-    // summary instead) — the interactive card surface itself still renders.
+    // Settled terminal batches hide the Review action; the card surface still
+    // renders. Delivery-unknown is inconclusive (§18): its summary carries the
+    // dialog reopen entry (FR-OUT-007/009; the "email dialog reopen" journey),
+    // so exactly ONE reopen entry remains.
     expect(
       wrapper.findAll('[data-testid="outbound-batch-review"]').length
-    ).toBe(0);
+    ).toBe(1);
     expect(
       wrapper.findAllComponents({ name: "OutboundEmailBatchCard" }).length
     ).toBe(1);
@@ -683,4 +1096,220 @@ describe("AiChatWorkspaceTranscript generated-image reference forwarding", () =>
       imageIndex: 0,
     });
   });
+});
+
+describe("AiChatWorkspaceTranscript scroll-to-bottom button", () => {
+  /**
+   * happy-dom lays out elements with zero dimensions, so scroll state must be
+   * stubbed on the scroller element (same approach as the AiChatV2Messages
+   * scroll tests): getters/setters over scrollHeight/clientHeight/scrollTop.
+   */
+  function stubScrollGeometry(el: HTMLElement, height: number): void {
+    let top = 0;
+    Object.defineProperty(el, "scrollHeight", {
+      get: () => height,
+      configurable: true,
+    });
+    Object.defineProperty(el, "clientHeight", {
+      get: () => 100,
+      configurable: true,
+    });
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (v: number) => {
+        top = v;
+      },
+      configurable: true,
+    });
+  }
+
+  function mountTranscript(messages: ChatV2MessageView[]) {
+    return mount(AiChatWorkspaceTranscript, {
+      props: { messages, activeAssistantMessageId: null, streamStatus: "idle" },
+      global: {
+        plugins: [i18n],
+        // Render v-btn as a real <button> so the @click listener lands on a
+        // clickable element (same pattern as the AiChatV2 mount tests).
+        stubs: {
+          VBtn: { template: "<button><slot /></button>" },
+          VIcon: true,
+        },
+      },
+    });
+  }
+
+  it("is hidden while the transcript viewport sits at the bottom", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "hello"),
+    ]);
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
+
+  it("appears when the user scrolls away from the bottom", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "hello"),
+    ]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+
+    const button = wrapper.find('[data-testid="scroll-to-bottom"]');
+    expect(button.exists()).toBe(true);
+  });
+
+  it("click jumps to the bottom and hides the button again", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "hello"),
+    ]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+
+    await wrapper.find('[data-testid="scroll-to-bottom"]').trigger("click");
+    await flushPromises();
+
+    // scrollTop was written to scrollHeight (the bottom) and the affordance
+    // re-pinned: the button is gone.
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
+
+  it("appears when streamed content grows below the viewport without a scroll event", async () => {
+    const first = msg(MessageType.MESSAGE, {}, "assistant", "short");
+    const wrapper = mountTranscript([first]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 100);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+
+    // Content growth (scrollHeight 100 → 1000) fires no scroll event; the
+    // messages watcher must re-evaluate the affordance after the DOM settles.
+    Object.defineProperty(scroller, "scrollHeight", {
+      get: () => 1000,
+      configurable: true,
+    });
+    await wrapper.setProps({
+      messages: [
+        first,
+        msg(
+          MessageType.MESSAGE,
+          {},
+          "assistant",
+          "streamed token ".repeat(80)
+        ),
+      ],
+    });
+    await flushPromises();
+
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+  });
+
+  it("auto-scrolls to the bottom when an approval card appears so the user sees it", async () => {
+    const assistant = msg(MessageType.MESSAGE, {}, "assistant", "Reading the file.");
+    const wrapper = mountTranscript([assistant]);
+    await flushPromises();
+
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    // The user scrolled away from the bottom while the output streamed.
+    scroller.scrollTop = 300;
+    scroller.dispatchEvent(new Event("scroll"));
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(true);
+
+    // A gated tool result parks on the approval card (design §15.5).
+    await wrapper.setProps({
+      messages: [
+        assistant,
+        msg(MessageType.TOOL_RESULT, {
+          toolResult: {
+            needsPermissionPrompt: true,
+            permissionCategory: "filesystem",
+            success: true,
+          },
+        }),
+      ],
+    });
+    await flushPromises();
+
+    // The card is blocking and actionable at the very bottom of the
+    // transcript, so the chat jumps to it even though the user had scrolled
+    // away — and the affordance hides because we are back at the bottom.
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+    expect(
+      wrapper.findAll('[data-testid="ai-chat-permission-card"]').length
+    ).toBe(1);
+  });
+
+  it("jumps to the bottom on mount when loaded history already has a parked approval card", async () => {
+    const wrapper = mountTranscript([
+      msg(MessageType.MESSAGE, {}, "assistant", "Working…"),
+      msg(MessageType.TOOL_RESULT, {
+        toolResult: {
+          needsPermissionPrompt: true,
+          permissionCategory: "filesystem",
+          success: true,
+        },
+      }),
+    ]);
+    // The stub lands after mount but BEFORE the component's nextTick settles,
+    // mirroring a real viewport that exists by the time the scroll is applied.
+    const scroller = transcriptRootEl(wrapper);
+    stubScrollGeometry(scroller, 1000);
+    await flushPromises();
+
+    expect(scroller.scrollTop).toBe(1000);
+    expect(
+      wrapper.find('[data-testid="scroll-to-bottom"]').exists()
+    ).toBe(false);
+  });
+});
+
+it.each([true, false])('shows the email reply review card outside tool groups (paired=%s)', async (paired) => {
+  const metadata = { toolCallId: 'reply-card', toolName: 'create_email_reply_draft' };
+  const messages = [
+    ...(paired ? [msg(MessageType.TOOL_CALL, metadata)] : []),
+    msg(MessageType.TOOL_RESULT, { ...metadata, toolResult: { success: true, draftId: 42 } }),
+  ];
+  const wrapper = mount(AiChatWorkspaceTranscript, {
+    props: { messages, activeAssistantMessageId: null, streamStatus: 'idle' },
+    global: { plugins: [i18n], stubs: { AiChatEmailReplyReviewCard: { props: ['draftId'], template: '<article data-testid="reply-review">{{ draftId }}</article>' } } },
+  });
+  await flushPromises();
+  expect(wrapper.findAll('[data-testid="reply-review"]')).toHaveLength(1);
+  expect(wrapper.get('[data-testid="reply-review"]').text()).toBe('42');
+});
+
+it('recognizes sent reply results and rejects failed or invalid draft results', () => {
+  expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'send_email_reply', toolResult: { success: true, draft_id: 42 } }))).toBe(42);
+  for (const toolResult of [{ success: false, draftId: 42 }, { draftId: -1 }, { draftId: '42' }, {}]) {
+    expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'create_email_reply_draft', toolResult }))).toBeNull();
+  }
 });

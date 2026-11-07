@@ -11,7 +11,7 @@
       rounded="lg"
     >
       <v-list-item
-        prepend-icon="mdi-pending"
+        prepend-icon="mdi-progress-clock"
         :title="loadingtitle"
       >
         <template v-slot:prepend>

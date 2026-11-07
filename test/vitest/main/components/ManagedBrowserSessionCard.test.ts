@@ -72,10 +72,17 @@ const i18n = createI18n({
       managedBrowser: {
         platform_fallback: "Social",
         proxy_active: "Proxy",
+        scope_global: "Shared browser",
+        scope_global_hint:
+          "This browser session belongs to the account and stays visible when you switch chats.",
         states: {
           ready: "Ready",
           handoff: "You have control",
           user_login_in_progress: "Waiting for your login",
+          running: "Running",
+          stopping: "Stopping",
+          stopped: "Stopped",
+          failed: "Failed",
         },
         controls: {
           take_over: "Take over",
@@ -119,7 +126,10 @@ function stubs(): Record<string, Component> {
     ManagedBrowserHandoffDialog: defineComponent({
       props: ["modelValue", "status", "busy"],
       emits: ["update:modelValue", "verify", "extend", "cancel"],
-      template: "<div data-testid='mb-handoff-dialog-stub' />",
+      template:
+        "<div data-testid='mb-handoff-dialog-stub' :data-open='String(modelValue)'>" +
+        "<button data-testid='mb-handoff-close-stub' @click=\"$emit('update:modelValue', false)\" />" +
+        "</div>",
     }),
   };
 }
@@ -170,6 +180,37 @@ describe("ManagedBrowserSessionCard", () => {
     );
   });
 
+  it("B16: labels the account/global scope so selection changes cannot confuse it", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-scope']").exists()).toBe(
+        true
+      )
+    );
+    // Localized scope label (B16): the test bundle carries the key, the
+    // six app bundles carry it in every locale (verified by key parity).
+    expect(wrapper.find("[data-testid='mb-session-scope']").text()).toContain(
+      "Shared browser"
+    );
+    // The scope chip survives live status updates (the session is
+    // account/global state, not per-chat state).
+    const push = capturedStatusCallback();
+    push(status({ state: "handoff", handoffReason: "user_requested" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-scope']").exists()).toBe(
+      true
+    );
+    // Actions still target the session/account identity, not the selection.
+    await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
+    await vi.waitFor(() =>
+      expect(apiMocks.stopManagedBrowser).toHaveBeenCalledWith(
+        "mb_test000000001",
+        "user_stop"
+      )
+    );
+  });
+
   it("updates live from the status-changed event and hides on terminal", async () => {
     apiMocks.listActiveSessions.mockImplementation(async () => []);
     const wrapper = mountCard();
@@ -187,6 +228,108 @@ describe("ManagedBrowserSessionCard", () => {
     expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
       false
     );
+  });
+
+  it("FR-P0-013: the handoff dialog auto-opens in handoff states", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    expect(dialog().exists()).toBe(false);
+
+    capturedStatusCallback()(status({ state: "handoff" }));
+    await nextTick();
+    expect(dialog().exists()).toBe(true);
+    expect(dialog().attributes("data-open")).toBe("true");
+  });
+
+  it("FR-HANDOFF-CLOSE: dismissing the dialog stays dismissed across status refreshes", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    const close = () =>
+      wrapper.find("[data-testid='mb-handoff-close-stub']");
+
+    push(status({ state: "handoff" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("true");
+
+    await close().trigger("click");
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // A handoff status refresh (e.g. countdown update) must NOT reopen it.
+    push(status({ state: "handoff" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+    // The card keeps all handoff controls while the dialog is dismissed.
+    expect(
+      wrapper.find("[data-testid='mb-btn-verify-login']").exists()
+    ).toBe(true);
+    expect(
+      wrapper.find("[data-testid='mb-btn-extend']").exists()
+    ).toBe(true);
+  });
+
+  it("FR-HANDOFF-CLOSE: leaving the handoff states re-arms auto-open", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    const close = () =>
+      wrapper.find("[data-testid='mb-handoff-close-stub']");
+
+    push(status({ state: "handoff" }));
+    await nextTick();
+    await close().trigger("click");
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // Back to running (AI resumed) — the dismiss resets silently.
+    push(status({ state: "running" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // A NEW handoff pops the dialog again (e.g. a later CAPTCHA wall).
+    push(status({ state: "handoff", handoffReason: "captcha_sensitive_flow" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("true");
+  });
+
+  it("FR-HANDOFF-CLOSE: a stopped session clears the dismiss for the next session", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    const dialog = () =>
+      wrapper.find("[data-testid='mb-handoff-dialog-stub']");
+    const close = () =>
+      wrapper.find("[data-testid='mb-handoff-close-stub']");
+
+    push(status({ state: "handoff", sessionId: "mb_older00000001" }));
+    await nextTick();
+    await close().trigger("click");
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    push(status({ state: "user_login_in_progress", sessionId: "mb_older00000001" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("false");
+
+    // The session now ends; a later NEW session must re-open the dialog.
+    push(status({ state: "stopped", sessionId: "mb_older00000001" }));
+    await nextTick();
+    expect(dialog().exists()).toBe(false);
+
+    push(status({ state: "handoff", sessionId: "mb_test000000002" }));
+    await nextTick();
+    expect(dialog().attributes("data-open")).toBe("true");
   });
 
   it("shows takeover + stop in ready state, handoff controls in handoff", async () => {
@@ -276,6 +419,67 @@ describe("ManagedBrowserSessionCard", () => {
       expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
         false
       )
+    );
+  });
+
+  it("R8 P2-6: a late non-terminal status never resurrects a locally stopped session", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-stop']").exists()).toBe(true)
+    );
+    await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+        false
+      )
+    );
+
+    // A queued status event for the stopped session arrives late.
+    capturedStatusCallback()(status({ state: "running" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      false
+    );
+  });
+
+  it("R8 P2-6: a takeover reply confirming a session stopped mid-flight is dropped", async () => {
+    apiMocks.listActiveSessions.mockImplementation(async () => [status()]);
+    interface HandoffResolve {
+      (s: SafeManagedBrowserStatus | null): void;
+    }
+    let resolveHandoff: HandoffResolve | undefined;
+    apiMocks.requestHandoff.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveHandoff = resolve as HandoffResolve;
+        })
+    );
+    const wrapper = mountCard();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-btn-takeover']").exists()).toBe(
+        true
+      )
+    );
+
+    // Take over, but the reply is pending when the session goes terminal.
+    await wrapper.find("[data-testid='mb-btn-takeover']").trigger("click");
+    await nextTick();
+    capturedStatusCallback()(status({ state: "stopped" }));
+    await nextTick();
+    await vi.waitFor(() =>
+      expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+        false
+      )
+    );
+
+    // The awaited takeover reply lands after the stop: it must not revive
+    // the dead session.
+    resolveHandoff?.(status({ state: "handoff", handoffReason: "user_requested" }));
+    await nextTick();
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      false
     );
   });
 
@@ -522,4 +726,17 @@ describe("TODO-MSB-003 screenshot surface", () => {
       wrapper.find("[data-testid='mb-session-screenshot']").exists()
     ).toBe(false);
   });
+});
+
+
+it("renders and stops an account-free public browser session", async () => {
+  const publicStatus = status({ accountId: 0, platformId: 0, accountLabel: "Chrome", platformLabel: "Chrome", authenticated: null, currentOrigin: "https://sina.com" });
+  apiMocks.listActiveSessions.mockImplementation(async () => [publicStatus]);
+  const wrapper = mountCard();
+  await vi.waitFor(() => expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true));
+  expect(wrapper.find("[data-testid='mb-session-origin']").text()).toBe("https://sina.com");
+  expect(wrapper.find("[data-testid='mb-btn-verify-login']").exists()).toBe(false);
+  await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
+  expect(apiMocks.stopManagedBrowser).toHaveBeenCalled();
+  wrapper.unmount();
 });

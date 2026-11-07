@@ -78,7 +78,11 @@ const SlideStub = defineComponent({
 });
 
 function mountComposer(
-  props: { conversationId?: string | null } = {}
+  props: {
+    conversationId?: string | null;
+    isStreaming?: boolean;
+    isProcessing?: boolean;
+  } = {}
 ) {
   return mount(AiChatV2Composer, {
     props: {
@@ -214,6 +218,58 @@ describe("AiChatV2Composer pasted text", () => {
     expect(wrapper.emitted("send")).toBeUndefined();
     expect(wrapper.text()).toContain(
       "Pasted text is no longer available. Please paste it again."
+    );
+  });
+
+  it("allows pasting a follow-up while a turn is streaming (FR-SUB-008 P2)", async () => {
+    // Design invariant 11 / FR-SUB-008: the busy conversation's follow-up
+    // may carry pasted content — the pending queue sends it with the
+    // queued turn. Blocking paste for the whole busy period rejected the
+    // input the PRD requires the composer to accept.
+    const wrapper = mountComposer({ isStreaming: true });
+    const textarea = wrapper.find<HTMLTextAreaElement>(
+      '[data-testid="ai-chat-composer"]'
+    );
+    textarea.element.setSelectionRange(0, 0);
+
+    const raw = "XY".repeat(100); // 200 chars, small enough to insert raw
+    await textarea.trigger("paste", {
+      preventDefault: vi.fn(),
+      clipboardData: {
+        getData: () => raw,
+      },
+    });
+
+    // The paste inserted (not swallowed); the placeholder path still runs.
+    expect(textarea.element.value).not.toBe("");
+  });
+
+  it("still blocks paste while attachment processing truly cannot accept input", async () => {
+    const wrapper = mountComposer({ isProcessing: true });
+    const textarea = wrapper.find<HTMLTextAreaElement>(
+      '[data-testid="ai-chat-composer"]'
+    );
+
+    await textarea.trigger("paste", {
+      preventDefault: vi.fn(),
+      clipboardData: {
+        getData: () => "mid-processing paste",
+      },
+    });
+
+    expect(textarea.element.value).toBe("");
+    expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+  });
+
+  it("shows the attach action while a turn streams and hides it only for processing", async () => {
+    const streaming = mountComposer({ isStreaming: true });
+    expect(streaming.find('[data-testid="ai-chat-attach"]').exists()).toBe(
+      true
+    );
+
+    const processing = mountComposer({ isProcessing: true });
+    expect(processing.find('[data-testid="ai-chat-attach"]').exists()).toBe(
+      false
     );
   });
 });

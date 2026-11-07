@@ -1,6 +1,8 @@
 import { MessageType } from "@/entityTypes/commonType";
-import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
+import type { ChatV2GeneratedImage, ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import type { ChatRunDetailEvent } from "@/entityTypes/aiChatWorkspaceTypes";
+import { isEnterPlanModeToolName } from "@/service/EnterPlanModeTool";
+import { isPlanToolName } from "@/service/PlanModeToolPolicy";
 
 /**
  * Pure tool-execution projection for the redesigned workspace
@@ -31,6 +33,50 @@ export type ToolOutputKind =
   | "error"
   | "structured";
 
+// ---------------------------------------------------------------------------
+// Specialized-surface predicates (R8 P3, PRD §13.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * FR-SKL-001: an installer tool result carrying an install session — the
+ * shared AiChatV2Message branch mounts SkillInstallCard for exactly this
+ * predicate (toolName prefix + sessionId), so reuse it rather than
+ * fabricating a snapshot from arbitrary structured text.
+ */
+export function isSkillInstallResult(message: ChatV2MessageView): boolean {
+  return (
+    message.messageType === ("tool_result" as MessageType) &&
+    String(message.metadata?.toolName || "").startsWith("skill_install_") &&
+    typeof (
+      message.metadata?.toolResult as { sessionId?: unknown } | undefined
+    )?.sessionId === "string"
+  );
+}
+
+/** T3/D2: a generated-image batch card (live progress, Stop, Retry). */
+export function isBatchToolCard(message: ChatV2MessageView): boolean {
+  return (
+    (message.messageType === ("tool_call" as MessageType) ||
+      message.messageType === ("tool_result" as MessageType)) &&
+    String(message.metadata?.toolName || "") === "process_artifact_batch"
+  );
+}
+
+/**
+ * R8 P3 (PRD §13.3): the result renders a SPECIALIZED transcript surface
+ * (skill install, outbound batch, generated-image batch) beside the
+ * execution group. The group row keeps its identity but must suppress the
+ * generic body, or the same result renders twice.
+ */
+export function hasSpecializedSurface(message: ChatV2MessageView): boolean {
+  if (isSkillInstallResult(message) || isBatchToolCard(message)) return true;
+  return (
+    message.messageType === MessageType.TOOL_RESULT &&
+    String(message.metadata?.toolName || "") === "draft_outbound_email_batch" &&
+    typeof message.metadata?.toolResult?.batchId === "number"
+  );
+}
+
 export interface ToolExecutionView {
   readonly key: string;
   readonly assistantMessageId: string | null;
@@ -43,6 +89,10 @@ export interface ToolExecutionView {
   readonly expectedCount?: number;
   readonly summary?: string;
   readonly outputKind: ToolOutputKind;
+  /** D8: image tiles for the images kind (thumbnails + actions). */
+  readonly images?: readonly ChatV2GeneratedImage[];
+  /** D8: the tool_result message the tiles belong to (reference target). */
+  readonly sourceMessageId?: string | null;
   readonly startedAt?: string;
   readonly finishedAt?: string;
   readonly durationMs?: number;
@@ -64,6 +114,13 @@ export interface ToolExecutionView {
    * "result not saved" failure and never shows running or success.
    */
   readonly persistFailure?: "tool_call_persist_failed" | "tool_result_persist_failed";
+  /**
+   * R8 P3 (PRD §13.3): the result renders its own specialized transcript
+   * surface (skill install / outbound batch / image batch) beside the
+   * group — the generic SemanticToolResult body must be suppressed while
+   * the execution identity and Activity detail stay.
+   */
+  readonly hasSpecializedCard?: boolean;
 }
 
 export interface ToolExecutionGroupView {
@@ -95,6 +152,19 @@ function assistantOwnerFor(
 }
 
 const FAILURE_REASON_MAX_CHARS = 500;
+
+/**
+ * Plan-mode UI tools (`EnterPlanMode`, `AskUserQuestion`,
+ * `SubmitPlanForApproval`) never emit a matching `tool_result` event on
+ * success — they drive the plan lifecycle surfaces through `plan_state` /
+ * `ask_user_question` / `plan_submitted` events (FR-052). Projecting their
+ * call rows as executable work would leave them "running" forever; the same
+ * exclusion already guards the v2 pending-check in
+ * `aiChatV2/toolExecutionStateUtil.ts`.
+ */
+export const isPlanModeUiToolName = (toolName: unknown): boolean =>
+  typeof toolName === "string" &&
+  (isEnterPlanModeToolName(toolName) || isPlanToolName(toolName));
 
 function boundedFailureText(value: string): string | undefined {
   const trimmed = value.replace(/\s+/g, " ").trim();
@@ -153,6 +223,7 @@ function classifyOutput(message: ChatV2MessageView): {
   kind: ToolOutputKind;
   summary?: string;
   artifactId?: string;
+  images?: ChatV2GeneratedImage[];
 } {
   const metadata = message.metadata;
   // FR-047: files (write_file/edit_file/list_files results with file changes)
@@ -190,7 +261,12 @@ function classifyOutput(message: ChatV2MessageView): {
     };
   }
   if (metadata?.generatedImages && metadata.generatedImages.length > 0) {
-    return { kind: "images" };
+    // D8 (audit §13.2): the images row carries the tile metadata so the
+    // semantic surface can render thumbnails + actions, not a count label.
+    return {
+      kind: "images" as const,
+      images: metadata.generatedImages,
+    };
   }
   const summary =
     metadata?.toolResultSummary ?? metadata?.summary ?? message.content;
@@ -233,11 +309,28 @@ export function buildToolExecutionGroups(
   const legacy: Pending[] = [];
   let order = 0;
 
+  // Plan-mode UI tool calls project only when a paired result row exists
+  // (failure receipts). Unpaired ones never emit a result — the plan
+  // lifecycle surfaces own their state, and an unpaired call row would be
+  // stuck "running" forever (FR-052).
+  const pairedResultCallIds = new Set<string>();
+  for (const message of messages) {
+    if (message.messageType !== MessageType.TOOL_RESULT) continue;
+    const resultCallId = message.metadata?.toolCallId?.trim();
+    if (resultCallId) pairedResultCallIds.add(resultCallId);
+  }
+
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
     const metadata = message.metadata;
     if (message.messageType === MessageType.TOOL_CALL) {
       const toolCallId = metadata?.toolCallId?.trim() || null;
+      if (
+        isPlanModeUiToolName(metadata?.toolName) &&
+        (!toolCallId || !pairedResultCallIds.has(toolCallId))
+      ) {
+        continue;
+      }
       const owner = assistantOwnerFor(messages, i);
       const persistFailure = metadata?.toolPersistFailure;
       const view: ToolExecutionView = {
@@ -273,6 +366,7 @@ export function buildToolExecutionGroups(
     } else if (message.messageType === MessageType.TOOL_RESULT) {
       const toolCallId = metadata?.toolCallId?.trim() || null;
       const classification = classifyOutput(message);
+      const specialized = hasSpecializedSurface(message);
       const finishedAt = message.timestamp;
       const pending = toolCallId ? byCallId.get(toolCallId) : undefined;
       if (toolCallId && pending) {
@@ -288,12 +382,15 @@ export function buildToolExecutionGroups(
             outputKind: classification.kind,
             isError: classification.kind === "error",
             artifactId: classification.artifactId,
+            images: classification.images,
+            sourceMessageId: message.id,
             finishedAt,
             durationMs:
               Number.isNaN(startedMs) || Number.isNaN(finishedMs)
                 ? undefined
                 : Math.max(0, finishedMs - startedMs),
             permissionResumed: metadata?.permissionResumed === true,
+            hasSpecializedCard: specialized,
           },
         });
       } else {
@@ -309,9 +406,12 @@ export function buildToolExecutionGroups(
             summary: classification.summary,
             outputKind: classification.kind,
             isError: classification.kind === "error",
+            images: classification.images,
+            sourceMessageId: message.id,
             finishedAt,
             isLegacyUnpaired: true,
             permissionResumed: metadata?.permissionResumed === true,
+            hasSpecializedCard: specialized,
           },
         });
       }

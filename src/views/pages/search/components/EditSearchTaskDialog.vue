@@ -14,7 +14,7 @@
                 v-model="formData.engine"
                 :items="searchEngines"
                 :label="$t('search.search_enginer_name')"
-                :rules="[v => !!v || $t('validation.required')]"
+                :rules="[(v: string) => !!v || $t('validation.required')]"
                 required
               />
             </v-col>
@@ -27,7 +27,7 @@
                 type="number"
                 min="1"
                 max="100"
-                :rules="[v => v >= 1 && v <= 100 || $t('validation.pages_range')]"
+                :rules="[(v: number) => v >= 1 && v <= 100 || $t('validation.pages_range')]"
                 required
               />
             </v-col>
@@ -40,7 +40,7 @@
                 type="number"
                 min="1"
                 max="10"
-                :rules="[v => v >= 1 && v <= 10 || $t('validation.concurrency_range')]"
+                :rules="[(v: number) => v >= 1 && v <= 10 || $t('validation.concurrency_range')]"
                 required
               />
             </v-col>
@@ -70,7 +70,7 @@
                 v-model="keywordsText"
                 :label="$t('search.keyword')"
                 :placeholder="$t('search.keywords_placeholder')"
-                :rules="[v => !!v || $t('validation.required')]"
+                :rules="[(v: string) => !!v || $t('validation.required')]"
                 rows="3"
                 required
                 @input="updateKeywords"

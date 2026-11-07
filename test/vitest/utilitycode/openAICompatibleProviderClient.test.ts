@@ -42,17 +42,22 @@ function signalAwareHangingFetch(): typeof fetch {
  * Simulates a provider that sends headers then stalls mid-body. The returned
  * `Response.json()` reads the signal via the captured `init`; real fetch
  * rejects the body read on abort, so the fake mirrors that contract.
+ * `headersDelayMs` delays header arrival, modelling a budget that is already
+ * spent by the time the body phase begins (the loaded-CI-runner race).
  */
-function signalAwareHangingBodyFetch(): typeof fetch {
+function signalAwareHangingBodyFetch(headersDelayMs = 0): typeof fetch {
   return ((url: string | URL | Request, init?: RequestInit) => {
     const sig = init?.signal as AbortSignal | undefined;
     const body: Promise<Response> = new Promise((resolve) => {
-      // Headers arrive immediately.
-      resolve(
-        new Response("{}", {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
+      setTimeout(
+        () =>
+          resolve(
+            new Response("{}", {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            })
+          ),
+        headersDelayMs
       );
     });
     // Patch `.json()` so the body read honors the abort signal — mirroring
@@ -232,6 +237,44 @@ describe("OpenAICompatibleProviderClient timeouts", () => {
       expect(err).toBeInstanceOf(AIProviderError);
       expect((err as AIProviderError).code).toBe("network");
     }
+  });
+
+  it("B13: an already-spent call budget at body entry still classifies as the stalled-body network timeout", async () => {
+    // Regression for the CI flake: on loaded runners the event loop can
+    // stall past callBudgetMs while the headers phase is in flight, so the
+    // body phase begins with the budget already spent. The client aborted
+    // with no body timer armed and the raw `AbortError`
+    // ("The operation was aborted.") escaped instead of the mapped
+    // stalled-body network error. Force that exact transition
+    // deterministically: headers resolve after 150ms while the budget is
+    // 50ms — wall-clock sleeps preserve the declared order on any runner.
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      signalAwareHangingBodyFetch(150),
+      undefined,
+      /* responseTimeoutMs */ 5000,
+      /* bodyTimeoutMs */ 5000
+    );
+    const start = Date.now();
+    let caught: unknown;
+    try {
+      await client.complete({
+        messages: [{ role: "user", content: "hi" }],
+        callBudgetMs: 50,
+      });
+      throw new Error("should have thrown");
+    } catch (err) {
+      caught = err;
+    }
+    // Categorized for the generation service as a transport failure —
+    // never an uncategorized raw abort.
+    expect(caught).toBeInstanceOf(AIProviderError);
+    const providerErr = caught as AIProviderError;
+    expect(providerErr.code).toBe("network");
+    expect(providerErr.message).toMatch(/stalled before finishing the body/i);
+    expect(providerErr.message).not.toMatch(/The operation was aborted/i);
+    expect(Date.now() - start).toBeLessThan(3000);
   });
 
   it("B13: without callBudgetMs a stalled body still aborts via bodyTimeoutMs", async () => {
@@ -488,5 +531,62 @@ describe("OpenAICompatibleProviderClient configured context size (G01)", () => {
     );
     const { models } = await client.listModelsWithFallbackStatus();
     expect(models.data[0].context_size).toBeUndefined();
+  });
+});
+
+describe("OpenAICompatibleProviderClient literal model resolution (chat titles)", () => {
+  function completionResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "cheap",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "ok" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
+  function wireBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    return JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+  }
+
+  it("literalModel sends the id verbatim even when it is literally named small", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse());
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      fetchMock as unknown as typeof fetch
+    );
+    await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      model: "small",
+      literalModel: true,
+    });
+    expect(wireBody(fetchMock).model).toBe("small");
+    expect(wireBody(fetchMock)).not.toHaveProperty("literalModel");
+  });
+
+  it("literalModel without a model still uses the configured default", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse());
+    const client = new OpenAICompatibleProviderClient(
+      CONFIG,
+      "",
+      fetchMock as unknown as typeof fetch
+    );
+    await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      literalModel: true,
+    });
+    expect(wireBody(fetchMock).model).toBe("llama3.1");
   });
 });

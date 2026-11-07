@@ -394,6 +394,7 @@ function buildSkillMarkdownWrapperCode(
   return `setResult({
   success: true,
   mode: "documentation_skill",
+  summary: "Skill guidance loaded from SKILL.md (documentation_skill mode).",
   skillName: ${escapedName},
   skillFile: ${escapedPath},
   guidance: ${escapedContent},
@@ -1440,6 +1441,12 @@ function buildImportedSkillExecuteHandler(
               ...delegated.result,
               mode: "documentation_skill",
               legacyAdapter: true,
+              // Visible short ack for the transcript receipt: Chat V2
+              // surfaced the delegation marker through its raw-JSON
+              // fallback, but the workspace renders semantic summaries
+              // from `summary` — without it the row degrades to the
+              // generic "structured result" label (FR-25 parity).
+              summary: `Skill '${capturedName}' delegated to the prompt-skill runtime (documentation_skill mode, legacy adapter).`,
               ...(availableScripts.length > 0
                 ? {
                     available_scripts: availableScripts,
@@ -1469,6 +1476,10 @@ function buildImportedSkillExecuteHandler(
           result: {
             mode: "documentation_skill",
             skillName: capturedName,
+            // Same visible-ack channel as the delegated branch so the
+            // transcript receipt marks the doc path on BOTH legs.
+            summary:
+              "Skill guidance loaded from SKILL.md (documentation_skill mode).",
             skillGuidance,
             ...(availableScripts.length > 0
               ? {

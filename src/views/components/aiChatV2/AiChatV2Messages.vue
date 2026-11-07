@@ -13,18 +13,6 @@
           {{ t("aiChatV2.empty_description") || "Ask anything." }}
         </div>
       </div>
-      <!-- Pending (queued) messages: user bubbles in creation order, visually
-           distinct; only delivered rows feed context/tool/token features. -->
-      <AiChatV2PendingMessage
-        v-for="pending in pendingMessages"
-        :key="`pending-${pending.pendingMessageId}`"
-        :view="pending"
-        :runtime-status="runtimeStatus"
-        :steering-enabled="steeringEnabled"
-        @steer="(id: string) => emit('steer-pending', id)"
-        @cancel="(id: string) => emit('cancel-pending', id)"
-        @resume="(conversationId: string) => emit('resume-pending', conversationId)"
-      />
       <AiChatV2Message
         v-for="m in messages"
         :key="m.id"
@@ -118,13 +106,10 @@ import {
 } from "vue";
 import { useI18n } from "vue-i18n";
 import type {
-  AIChatPendingMessageView,
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
-  ChatV2RuntimeStatus,
 } from "@/entityTypes/aiChatV2Types";
 import AiChatV2Message from "./AiChatV2Message.vue";
-import AiChatV2PendingMessage from "./AiChatV2PendingMessage.vue";
 import AiChatV2RecoveryStatus from "./AiChatV2RecoveryStatus.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
 
@@ -154,18 +139,12 @@ const props = withDefaults(
     } | null;
     workspaceRoot?: string;
     showReasoning?: boolean;
-    /** Non-terminal queued messages for this conversation (PRD §7.2). */
-    pendingMessages?: AIChatPendingMessageView[];
-    /** Main-process runtime status, drives Steer visibility (PRD §7.3). */
-    runtimeStatus?: ChatV2RuntimeStatus;
-    /** Steering kill switch (presentation only; default on). */
-    steeringEnabled?: boolean;
     /** Message ids already reported this session (parent-owned after lift). */
     reportedMessageIds?: Set<string>;
     /** Tool-call message ids still waiting for a result during a live turn. */
     awaitingToolMessageIds?: ReadonlySet<string>;
   }>(),
-  { steeringEnabled: true, reportedMessageIds: () => new Set<string>() }
+  { reportedMessageIds: () => new Set<string>() }
 );
 const emit = defineEmits<{
   (e: "grant-permission", message: ChatV2MessageView, persistent: boolean): void;
@@ -195,9 +174,6 @@ const emit = defineEmits<{
     }
   ): void;
   (e: "stop-batch"): void;
-  (e: "steer-pending", pendingMessageId: string): void;
-  (e: "cancel-pending", pendingMessageId: string): void;
-  (e: "resume-pending", conversationId: string): void;
   (e: "report", descriptor: ReportableOutputDescriptor): void;
 }>();
 const { t } = useI18n();

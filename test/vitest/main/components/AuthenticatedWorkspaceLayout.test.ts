@@ -8,6 +8,7 @@ import { createI18n } from "vue-i18n";
 const bootstrapWorkspaceMock = vi.fn();
 const subscribeSummaryEventsMock = vi.fn();
 const setWorkspaceRedesignEnabledMock = vi.fn();
+const fetchWorkspaceRedesignPreferenceMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 const selectConversationMock = vi.fn();
 const subscribeDetailEventsMock = vi.fn();
@@ -18,8 +19,11 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: (...args: unknown[]) => bootstrapWorkspaceMock(...args),
   subscribeSummaryEvents: (...args: unknown[]) =>
     subscribeSummaryEventsMock(...args),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   setWorkspaceRedesignEnabled: (...args: unknown[]) =>
     setWorkspaceRedesignEnabledMock(...args),
+  fetchWorkspaceRedesignPreference: (...args: unknown[]) =>
+    fetchWorkspaceRedesignPreferenceMock(...args),
   createWorkspaceConversationId: (...args: unknown[]) =>
     createWorkspaceConversationIdMock(...args),
   renameConversation: vi.fn(),
@@ -107,9 +111,18 @@ async function mountLayout(shellWidth = 1400) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Audit R7-03: the selection pointer is persisted in localStorage — never
+  // leak it across tests (a stray pointer turns the NEXT mount's restore on).
+  localStorage.clear();
   bootstrapWorkspaceMock.mockResolvedValue({ workspaces: [], unassigned: [] });
   subscribeSummaryEventsMock.mockReturnValue(() => undefined);
+  vi.fn().mockReturnValue(() => undefined),
   setWorkspaceRedesignEnabledMock.mockResolvedValue(undefined);
+  // A02 default: the preference is UNSET (mount persists the default).
+  fetchWorkspaceRedesignPreferenceMock.mockResolvedValue({
+    enabled: true,
+    explicit: false,
+  });
   createWorkspaceConversationIdMock.mockReturnValue("fresh-1");
   selectConversationMock.mockResolvedValue({
     acceptedGeneration: 1,
@@ -142,12 +155,25 @@ describe("AuthenticatedWorkspaceLayout (chat-first shell design §7.2, TODO gap 
     );
   });
 
-  it("forces the redesign preference and shell flag on at mount (no toggle-off path)", async () => {
+  it("lands the redesign DEFAULT on mount when the preference is unset (no toggle-off path)", async () => {
     useInnerPageShellFlag().setShellEnabled(false);
     await mountLayout();
     await flushPromises();
 
     expect(setWorkspaceRedesignEnabledMock).toHaveBeenCalledWith(true);
+    expect(useInnerPageShellFlag().shellEnabled.value).toBe(true);
+  });
+
+  it("A02: never overwrites an explicit operator rollback on mount", async () => {
+    fetchWorkspaceRedesignPreferenceMock.mockResolvedValue({
+      enabled: false,
+      explicit: true,
+    });
+    await mountLayout();
+    await flushPromises();
+
+    expect(setWorkspaceRedesignEnabledMock).not.toHaveBeenCalled();
+    // The renderer-local shell boundary flag is still enforced.
     expect(useInnerPageShellFlag().shellEnabled.value).toBe(true);
   });
 
@@ -232,9 +258,23 @@ describe("AuthenticatedWorkspaceLayout (chat-first shell design §7.2, TODO gap 
 
     // No history loads, no run starts, and no detail subscription are
     // triggered by the layout itself (design §7.2 ownership boundaries).
+    // With NO stored selection pointer there is nothing to restore.
     expect(loadHistoryPageMock).not.toHaveBeenCalled();
     expect(startChatRunMock).not.toHaveBeenCalled();
     expect(subscribeDetailEventsMock).not.toHaveBeenCalled();
+  });
+
+  it("audit R7-03: mount restores the persisted selection through the handshake — never a run", async () => {
+    localStorage.setItem("aiChatWorkspace.selectedConversation", "restored-1");
+    const { router } = await mountLayout();
+    await router.push("/aiworkspace");
+    await router.isReady();
+    await flushPromises();
+
+    // The selection handshake re-selects the persisted pointer (snapshot
+    // hydration + detail subscription), but never starts a run.
+    expect(selectConversationMock).toHaveBeenCalledWith("restored-1", 1);
+    expect(startChatRunMock).not.toHaveBeenCalled();
   });
 
   describe("narrow drawer focus management (design §13)", () => {

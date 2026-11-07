@@ -248,7 +248,9 @@ body {
         Helvetica Neue, Helvetica, Arial, sans-serif, Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
     margin: 0;
     padding: 0;
-    font-size: 14px;
+    // 0.875rem keeps the historical 14px body at the default 16px root,
+    // and follows User Preferences when --app-font-scale changes.
+    font-size: 0.875rem;
     // &::-webkit-scrollbar {
     //     // 定义了滚动条整体的样式；
     //     background: #F7FAFC;

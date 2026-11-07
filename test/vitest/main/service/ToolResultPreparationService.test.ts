@@ -209,7 +209,7 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
         success: true,
         executionTimeMs: 900,
         summary: "Search returned 4000 businesses.",
-        control: { total: 4000 },
+        control: { total: 4000, draftId: 3, draft_id: 3 },
         output: bigOutput(),
         previewKind: "records",
       },
@@ -232,6 +232,8 @@ describe("ToolResultPreparationService — large results (AC-02)", () => {
     expect(ref.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(receipt.success).toBe(true);
     expect(receipt.control.total).toBe(4000);
+    expect(receipt.control.draftId).toBe(3);
+    expect(receipt.control.draft_id).toBe(3);
     // The outcome and totals survive; the bulk does not.
     expect(prepared.canonicalMessageContent).toContain("Search returned 4000 businesses.");
     expect(prepared.canonicalMessageContent).not.toContain("Business 599");

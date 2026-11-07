@@ -660,7 +660,6 @@ const getTaskTypeLabel = (taskType: TaskType): string => {
     case TaskType.SEARCH: return 'Market Insight'
     case TaskType.EMAIL_EXTRACT: return 'Contact Profile Insights'
     case TaskType.BUCK_EMAIL: return 'Buck Email'
-    case TaskType.YELLOW_PAGES: return 'Directory Assistant'
     case TaskType.GOOGLE_MAPS: return 'Google Maps'
     case TaskType.YANDEX_MAPS: return 'Yandex Maps'
     case TaskType.AI_MESSAGE: return t('schedule.ai_message_task') || 'AI Message Task'

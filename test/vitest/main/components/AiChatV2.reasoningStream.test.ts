@@ -183,8 +183,6 @@ const i18n = createI18n({
         conversation_history: "Conversation history",
         manage_mcp_tools: "Manage MCP Tools",
         new_conversation: "New conversation",
-        show_reasoning: "Show reasoning",
-        hide_reasoning: "Hide reasoning",
         voice: {
           enable_spoken_responses: "Enable spoken responses",
           disable_spoken_responses: "Disable spoken responses",
@@ -383,7 +381,7 @@ describe("AiChatV2 live reasoning panel", () => {
     );
   });
 
-  it("hides the live reasoning panel when the header toggle is turned off", async () => {
+  it("hides the live reasoning panel when the shared preference is off", async () => {
     vi.mocked(streamChatV2Message).mockImplementation(
       async (request: { conversationId?: string }, onChunk, onComplete) => {
         const conversationId = request.conversationId ?? "v2-test";
@@ -413,13 +411,16 @@ describe("AiChatV2 live reasoning panel", () => {
       }
     );
 
+    // The in-chat "Hide reasoning" button was removed; visibility now
+    // follows the persisted shared preference (AI provider settings).
+    window.localStorage.setItem(AI_CHAT_REASONING_VISIBLE_STORAGE_KEY, "false");
+
     const wrapper = mountChat();
     await flushPromises();
+    expect(wrapper.find('[data-testid="toggle-reasoning"]').exists()).toBe(
+      false
+    );
     await wrapper.find('[data-testid="send-first"]').trigger("click");
-    await flushPromises();
-    expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(true);
-
-    await wrapper.find('[data-testid="toggle-reasoning"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(false);
   });

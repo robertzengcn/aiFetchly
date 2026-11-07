@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 
-import { EmailReplyDetectionService } from "@/service/emailReceive/EmailReplyDetectionService";
+import {
+  EmailReplyDetectionService,
+  PROBE_DEADLINE_MS,
+} from "@/service/emailReceive/EmailReplyDetectionService";
 import type {
   ReplyDetectionMessagePort,
   ReplyDetectionDraftPort,
@@ -696,7 +699,7 @@ describe("EmailReplyDetection adversarial matrix (T04 step 9, §12) — full cha
       // Advance past the 15s deadline — the racer aborts the controller, the
       // listener fires `client.close()` on the hung connection, and the racer
       // resolves with probe_timeout.
-      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.advanceTimersByTimeAsync(PROBE_DEADLINE_MS + 1_000);
 
       const r = await probeP;
       expect(r.state).toBe("unknown");
@@ -1026,7 +1029,7 @@ describe("EmailReplyDetection adversarial matrix (T04 step 9, §12) — full cha
       // setTimeout + the abort listener is attached to the hung connect().
       await vi.advanceTimersByTimeAsync(0);
       // Advance past the 15s deadline — the racer aborts the controller.
-      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.advanceTimersByTimeAsync(PROBE_DEADLINE_MS + 1_000);
 
       const r = await probeP;
       expect(r.state).toBe("unknown");

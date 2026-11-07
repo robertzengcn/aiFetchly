@@ -1,0 +1,624 @@
+import { createHash, randomUUID } from "crypto";
+
+/**
+ * PluginRecoveryLedger — host-owned, conversation- and plugin-scoped retry
+ * budgets that survive MCP process exits (HOST-16, PRD §12.5, design §12.2).
+ *
+ * The model may propose a recovery strategy, but it can never mint authority:
+ * `previousErrorId` values are host-generated references, attempt counts and
+ * cooldowns are enforced here before any work is spawned, and each retry is
+ * reserved atomically so concurrent identical requests cannot both consume
+ * the same authorization.
+ *
+ * In-memory by design: application restart invalidates every reference
+ * (the user may explicitly start a new search; automatic resume is not
+ * supported in v1). Nothing Yellow Pages-specific may appear here.
+ */
+
+export type RecoveryStrategy =
+  | "fallback_adapter"
+  | "reduced_scope"
+  | "switch_platform"
+  | "retry_after_delay";
+
+export type RecoveryRejectionReason =
+  | "unknown_error_ref"
+  | "budget_exhausted"
+  | "cooldown"
+  | "strategy_not_allowed"
+  | "fingerprint_repeat"
+  | "missing_recovery_field"
+  | "reservation_in_flight";
+
+export interface RecoveryRecordInput {
+  readonly conversationId: string;
+  readonly pluginName: string;
+  readonly searchIdentity: string;
+  readonly code: string;
+  readonly category: string;
+  readonly allowedStrategies: readonly RecoveryStrategy[];
+  readonly retryAfterMs?: number;
+  /**
+   * B08: the ENVELOPE's own recoverability claim when present. An explicit
+   * false (fatal / user-intervention) strips every strategy independently
+   * of the plugin-supplied `allowedStrategies` list (AC-09).
+   */
+  readonly recoverable?: unknown;
+  /** B08:_host turn identity to bind to the recorded failure (generation). */
+  readonly userTurnId?: string;
+}
+
+export interface RecoveryValidateInput {
+  readonly conversationId: string;
+  readonly pluginName: string;
+  readonly searchIdentity: string;
+  readonly previousErrorId?: unknown;
+  readonly strategy?: unknown;
+  /**
+   * B08: HOST-verified request identity of the turn issuing this call
+   * (e.g. sourceUserMessageId). Present ⇒ the ledger binds the scope to
+   * that generation: recovery fields can no longer mint attempt 1 on a
+   * fresh/changed/post-restart scope (fail closed), and an explicit NEW
+   * user message (same scope, no recovery fields, different turn) resets
+   * the budget without giving the model a bypass. Absent ⇒ legacy
+   * semantics (existing tests / callers that have no identity yet).
+   */
+  readonly userTurnId?: string;
+}
+
+export type RecoveryValidation =
+  | {
+      readonly ok: true;
+      readonly context: {
+        readonly attempt: number;
+        readonly strategy: RecoveryStrategy | null;
+        readonly errorRef: string | null;
+        /**
+         * Delay the host OWES for `retry_after_delay` on this attempt — the
+         * plugin's advertised `retryAfterMs` at reserve time (H1/H3). Null
+         * means no delay is owed; the plugin still waits at least the model's
+         * positive proposal, never less.
+         */
+        readonly retryAfterMs: number | null;
+      };
+    }
+  | { readonly ok: false; readonly reason: RecoveryRejectionReason };
+
+interface LedgerEntry {
+  /** Host-generated opaque error reference bound to the last failure. */
+  errorRef: string;
+  code: string;
+  category: string;
+  allowedStrategies: readonly RecoveryStrategy[];
+  retryAfterMs?: number;
+  /** Total attempts started against this logical search (incl. the original). */
+  attempts: number;
+  /** Strategy+identity fingerprints already consumed. */
+  consumedFingerprints: Set<string>;
+  /** Timestamp after which another attempt may start (rate-limit cooldown). */
+  notBefore: number;
+  /** Set while a validated reservation is executing. */
+  inFlight: boolean;
+  terminal: boolean;
+  /**
+   * B08: host-verified turn (user message id) that owns this scope's
+   * current generation. Null when no identity was ever bound (legacy).
+   */
+  boundUserTurn: string | null;
+}
+
+export const RECOVERY_DEFAULT_MAX_RETRIES = 2;
+export const RECOVERY_HARD_MAX_ATTEMPTS = 3;
+
+/**
+ * B08: host-side category policy for recovery (AC-09, PRD §3.2). A failure
+ * recorded with one of these categories never advertises strategies — the
+ * plugin's supplied list is untrusted for these families, and an explicit
+ * `recoverable: false` on the envelope forces the same outcome elsewhere.
+ */
+const STRATEGY_FORBIDDEN_CATEGORIES = new Set([
+  "fatal",
+  "plugin_bug",
+  "user_intervention",
+  "auth",
+  "permission",
+]);
+
+export interface PluginRecoveryLedgerLimits {
+  readonly maxRetries: number;
+  readonly hardMaxAttempts: number;
+}
+
+/**
+ * Generic public-input contract (design §10.1, PRD §24.4, HOST-10): the
+ * host validates and normalizes these SHAPES at admission for any plugin
+ * search-style tool — no plugin-specific branch leaks into host code.
+ *
+ * - Text fields (`query`, `location`): after NFKC + case-fold + trim +
+ *   collapse, each must be 1-256 characters.
+ * - List fields (`fields`): strings only; the identity treats them as a
+ *   DEDUPLICATED, order-insensitive set.
+ * - Everything else passes through for the plugin's own schema to own.
+ */
+export const PUBLIC_SEARCH_TEXT_FIELDS = ["query", "location"] as const;
+export const PUBLIC_SEARCH_LIST_FIELDS = ["fields"] as const;
+export const PUBLIC_SEARCH_TEXT_MAX = 256;
+
+export interface PluginPublicInputIssue {
+  readonly code: "input-invalid";
+  readonly field: string;
+  readonly message: string;
+}
+
+/** NFKC, case-fold, trim, collapse whitespace runs. */
+export function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripWhitespaceOnly(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Normalized view of the arguments for identity/fingerprint computation:
+ * public text fields are normalized, list fields are deduplicated and
+ * sorted, everything else (values and shape) is untouched.
+ */
+export function normalizeArgsForSearchIdentity(
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = { ...args };
+  for (const field of PUBLIC_SEARCH_TEXT_FIELDS) {
+    const raw = normalized[field];
+    if (typeof raw === "string") {
+      normalized[field] = normalizeSearchText(raw);
+    }
+  }
+  for (const field of PUBLIC_SEARCH_LIST_FIELDS) {
+    const raw = normalized[field];
+    if (Array.isArray(raw) && raw.length > 0) {
+      normalized[field] = [
+        ...new Set(
+          raw
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => normalizeSearchText(item))
+        ),
+      ].sort();
+    }
+  }
+  return normalized;
+}
+
+/**
+ * Host-side schema precheck for the public input contract (an empty array
+ * of issues means valid). Only the shapes above are policed; unknown
+ * fields stay with the plugin's own domain schema.
+ */
+export function validatePublicSearchInput(
+  args: Record<string, unknown>
+): readonly PluginPublicInputIssue[] {
+  const issues: PluginPublicInputIssue[] = [];
+
+  for (const field of PUBLIC_SEARCH_TEXT_FIELDS) {
+    const raw = args[field];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string") {
+      issues.push({
+        code: "input-invalid",
+        field,
+        message: `"${field}" must be a string.`,
+      });
+      continue;
+    }
+    const cleaned = stripWhitespaceOnly(raw);
+    if (cleaned.length === 0) {
+      issues.push({
+        code: "input-invalid",
+        field,
+        message: `"${field}" must not be empty.`,
+      });
+      continue;
+    }
+    if (cleaned.length > PUBLIC_SEARCH_TEXT_MAX) {
+      issues.push({
+        code: "input-invalid",
+        field,
+        message: `"${field}" must be at most ${PUBLIC_SEARCH_TEXT_MAX} characters.`,
+      });
+    }
+  }
+
+  for (const field of PUBLIC_SEARCH_LIST_FIELDS) {
+    const raw = args[field];
+    if (raw === undefined) continue;
+    if (!Array.isArray(raw)) {
+      issues.push({
+        code: "input-invalid",
+        field,
+        message: `"${field}" must be an array of field names.`,
+      });
+      continue;
+    }
+    for (const item of raw) {
+      if (typeof item !== "string" || stripWhitespaceOnly(item).length === 0) {
+        issues.push({
+          code: "input-invalid",
+          field,
+          message: `"${field}" items must be non-empty strings.`,
+        });
+        break;
+      }
+    }
+  }
+  return issues;
+}
+
+/** Canonical JSON used for identities and fingerprints (sorted keys). */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value ?? null);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record)
+    .filter((k) => record[k] !== undefined)
+    .sort();
+  return `{${keys
+    .map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k])}`)
+    .join(",")}}`;
+}
+
+/**
+ * Generic logical-search identity contract (design §12.2, HOST-10): the
+ * argument fields a recovery STRATEGY may adjust without changing the
+ * logical search. Declared ONCE here — host code must not branch on plugin
+ * vocabulary.
+ */
+export const LOGICAL_SEARCH_STRATEGY_ADJUSTABLE_FIELDS = [
+  "recovery",
+  "maxResults",
+  "platform",
+  "includeDetailPages",
+] as const;
+
+/**
+ * Logical-search identity: the public-input-normalized canonical arguments
+ * minus the strategy-adjustable fields above. A `switch_platform` retry or
+ * a detail-pages toggle adjusts the SAME logical search and must never mint
+ * a fresh budget (design §12.2). The excluded fields still participate in
+ * the duplicate-job fingerprint, so two different live requests are never
+ * collapsed.
+ */
+export function searchIdentityFromArgs(
+  args: Record<string, unknown>
+): string {
+  const rest: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (
+      (LOGICAL_SEARCH_STRATEGY_ADJUSTABLE_FIELDS as readonly string[]).includes(
+        key
+      )
+    ) {
+      continue;
+    }
+    rest[key] = value;
+  }
+  return canonicalJson(normalizeArgsForSearchIdentity(rest));
+}
+
+/** Duplicate-suppression fingerprint: identical ⇒ same live job. */
+export function jobFingerprintFromArgs(
+  conversationId: string,
+  toolName: string,
+  args: Record<string, unknown>
+): string {
+  const { recovery: _recovery, ...rest } = args;
+  void _recovery;
+  const hash = createHash("sha256");
+  hash.update(conversationId);
+  hash.update(" ");
+  hash.update(toolName);
+  hash.update(" ");
+  hash.update(canonicalJson(normalizeArgsForSearchIdentity(rest)));
+  return hash.digest("hex");
+}
+
+function isRecoveryStrategy(value: unknown): value is RecoveryStrategy {
+  return (
+    value === "fallback_adapter" ||
+    value === "reduced_scope" ||
+    value === "switch_platform" ||
+    value === "retry_after_delay"
+  );
+}
+
+export class PluginRecoveryLedger {
+  private entries = new Map<string, LedgerEntry>();
+  private readonly limits: PluginRecoveryLedgerLimits;
+  private readonly now: () => number;
+
+  constructor(
+    limits?: Partial<PluginRecoveryLedgerLimits>,
+    now?: () => number
+  ) {
+    this.limits = {
+      maxRetries: limits?.maxRetries ?? RECOVERY_DEFAULT_MAX_RETRIES,
+      hardMaxAttempts:
+        limits?.hardMaxAttempts ?? RECOVERY_HARD_MAX_ATTEMPTS,
+    };
+    this.now = now ?? Date.now;
+  }
+
+  private key(conversationId: string, pluginName: string, identity: string) {
+    return `${conversationId} ${pluginName} ${identity}`;
+  }
+
+  /**
+   * Record a recoverable plugin failure and mint the public error reference
+   * the model will use for a retry. Multiple failures for the same logical
+   * search replace the entry (latest error governs) without resetting the
+   * attempt count.
+   */
+  public recordFailure(input: RecoveryRecordInput): string {
+    const key = this.key(
+      input.conversationId,
+      input.pluginName,
+      input.searchIdentity
+    );
+    const existing = this.entries.get(key);
+    const errorRef = `err_${randomUUID().slice(0, 8)}`;
+    const notBefore =
+      input.category === "rate_limited" && input.retryAfterMs
+        ? this.now() + input.retryAfterMs
+        : existing?.notBefore ?? 0;
+    // B08: strategies are validated independently — unknown values drop,
+    // and fatal / user-intervention families (or an envelope that denies
+    // recoverability itself) never advertise strategies.
+    const allowed =
+      (input.recoverable === false ||
+        STRATEGY_FORBIDDEN_CATEGORIES.has(input.category))
+        ? []
+        : input.allowedStrategies.filter(isRecoveryStrategy);
+    this.entries.set(key, {
+      errorRef,
+      code: input.code,
+      category: input.category,
+      allowedStrategies: allowed,
+      retryAfterMs: input.retryAfterMs,
+      attempts: existing?.attempts ?? 1,
+      consumedFingerprints: existing?.consumedFingerprints ?? new Set(),
+      notBefore,
+      inFlight: false,
+      terminal: false,
+      // B08: generation binding stays with the FIRST reserve of this
+      // scope; re-recorded failures keep the origin so a different-turn
+      // user restart remains the only reset path.
+      boundUserTurn: existing?.boundUserTurn ?? input.userTurnId ?? null,
+    });
+    return errorRef;
+  }
+
+  /**
+   * Validate a (possibly first-time) call and atomically reserve the attempt.
+   * First call for an identity with no recorded failure: allowed, no strategy.
+   * Retry after a failure: requires the host error reference and an allowed
+   * strategy, an open budget, an expired cooldown, and a not-yet-consumed
+   * fingerprint.
+   */
+  public validateAndReserve(
+    input: RecoveryValidateInput
+  ): RecoveryValidation {
+    const key = this.key(
+      input.conversationId,
+      input.pluginName,
+      input.searchIdentity
+    );
+    const entry = this.entries.get(key);
+
+    // B08: recovery fields NEVER mint a first attempt — a forged, foreign,
+    // changed-scope or post-restart reference must fail closed even when
+    // this scope has no (or no longer any) ledger entry.
+    const hasRecoveryFields =
+      (input.previousErrorId !== undefined &&
+        input.previousErrorId !== null) ||
+      input.strategy !== undefined;
+    if (!entry || entry.terminal) {
+      if (hasRecoveryFields) {
+        return { ok: false, reason: "unknown_error_ref" };
+      }
+      // H3: the FIRST attempt is reserved just like a retry (HOST-16). The
+      // original job therefore spends the budget even when it dies before
+      // producing a result envelope (crash, exit, invalid JSON): the entry
+      // now exists, so a later same-scope call cannot claim a free try. When
+      // a retry later "succeeds" (attempt 2 completes), the entry is DELETED
+      // (completeAttempt "succeeded") so the next user search starts clean.
+      this.entries.set(key, {
+        errorRef: "",
+        code: "",
+        category: "",
+        allowedStrategies: [],
+        attempts: 1,
+        consumedFingerprints: new Set(),
+        notBefore: 0,
+        inFlight: true,
+        terminal: false,
+        boundUserTurn: input.userTurnId ?? null,
+      });
+      return {
+        ok: true,
+        context: {
+          attempt: 1,
+          strategy: null,
+          errorRef: null,
+          retryAfterMs: null,
+        },
+      };
+    }
+
+    // A repeat of a recently failed scope without recovery context is tied
+    // to the ledger — the model must acknowledge the prior failure. B08
+    // exception: an EXPLICIT new user message (host-verified turn identity
+    // CHANGES and no recovery fields were supplied) is a fresh search, not
+    // a model retry — the budget resets so the user is never blocked until
+    // restart. The model has no bypass: it cannot mint allowed attempt 1
+    // while presenting recovery fields, and same-turn resets are refused.
+    if (
+      input.previousErrorId === undefined ||
+      input.previousErrorId === null
+    ) {
+      const isExplicitUserRestart =
+        entry.boundUserTurn !== null &&
+        typeof input.userTurnId === "string" &&
+        input.userTurnId !== "" &&
+        input.userTurnId !== entry.boundUserTurn &&
+        input.strategy === undefined;
+      if (isExplicitUserRestart) {
+        this.entries.set(key, {
+          errorRef: "",
+          code: "",
+          category: "",
+          allowedStrategies: [],
+          attempts: 1,
+          consumedFingerprints: new Set(),
+          notBefore: 0,
+          inFlight: true,
+          terminal: false,
+          boundUserTurn: input.userTurnId ?? null,
+        });
+        return {
+          ok: true,
+          context: {
+            attempt: 1,
+            strategy: null,
+            errorRef: null,
+            retryAfterMs: null,
+          },
+        };
+      }
+      return { ok: false, reason: "missing_recovery_field" };
+    }
+    if (input.previousErrorId !== entry.errorRef) {
+      // Forged, stale, foreign-conversation, or pre-restart reference.
+      return { ok: false, reason: "unknown_error_ref" };
+    }
+    if (entry.inFlight) {
+      return { ok: false, reason: "reservation_in_flight" };
+    }
+    if (entry.attempts >= this.limits.hardMaxAttempts) {
+      return { ok: false, reason: "budget_exhausted" };
+    }
+    if (entry.attempts > this.limits.maxRetries) {
+      return { ok: false, reason: "budget_exhausted" };
+    }
+    if (this.now() < entry.notBefore) {
+      return { ok: false, reason: "cooldown" };
+    }
+    if (!isRecoveryStrategy(input.strategy)) {
+      return { ok: false, reason: "missing_recovery_field" };
+    }
+    if (!entry.allowedStrategies.includes(input.strategy)) {
+      return { ok: false, reason: "strategy_not_allowed" };
+    }
+    const fingerprint = `${input.strategy} ${entry.code}`;
+    if (entry.consumedFingerprints.has(fingerprint)) {
+      return { ok: false, reason: "fingerprint_repeat" };
+    }
+
+    // Atomically consume the reservation.
+    entry.inFlight = true;
+    entry.attempts += 1;
+    entry.consumedFingerprints.add(fingerprint);
+    return {
+      ok: true,
+      context: {
+        attempt: entry.attempts,
+        strategy: input.strategy,
+        errorRef: entry.errorRef,
+        retryAfterMs: entry.retryAfterMs ?? null,
+      },
+    };
+  }
+
+  /**
+   * Settle a reserved attempt. `succeeded` DELETES the identity (H3: a
+   * successful attempt must not leave a terminal entry with stale attempts
+   * and consumed fingerprints behind — the next user search starts clean).
+   * `failed` clears the in-flight reservation so the next validation may
+   * proceed against the (possibly updated) entry.
+   */
+  public completeAttempt(
+    conversationId: string,
+    pluginName: string,
+    searchIdentity: string,
+    outcome: "failed" | "succeeded"
+  ): void {
+    const key = this.key(conversationId, pluginName, searchIdentity);
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    if (outcome === "succeeded") {
+      this.entries.delete(key);
+      return;
+    }
+    entry.inFlight = false;
+  }
+
+  /**
+   * Host-observed TRANSPORT failure — the tool result never reached the
+   * caller as a well-formed plugin envelope, so `recordFailure` cannot run:
+   * process crash/exit, spawn failure, unparseable output, or a rejected
+   * result payload (H3). The budget is consumed for the attempt that actually
+   * started (the entry created by `validateAndReserve`); no strategy is
+   * allowed afterward because there is no live plugin to negotiate a recovery
+   * contract with — the model must present the failure to the user.
+   */
+  public recordTransportFailure(input: {
+    readonly conversationId: string;
+    readonly pluginName: string;
+    readonly searchIdentity: string;
+    readonly userTurnId?: string;
+  }): string {
+    return this.recordFailure({
+      conversationId: input.conversationId,
+      pluginName: input.pluginName,
+      searchIdentity: input.searchIdentity,
+      code: "HOST_TRANSPORT_FAILURE",
+      category: "plugin_bug",
+      allowedStrategies: [],
+      userTurnId: input.userTurnId,
+    });
+  }
+
+  /** Bind a plugin-declared diagnostic id to the host reference (design §12.2). */
+  public bindPluginErrorId(errorRef: string, pluginId: unknown): {
+    readonly id: string;
+    readonly pluginErrorId?: string;
+  } {
+    return typeof pluginId === "string" && pluginId.length > 0
+      ? { id: errorRef, pluginErrorId: pluginId.slice(0, 64) }
+      : { id: errorRef };
+  }
+
+  /** Test support. */
+  public clearForTest(): void {
+    this.entries.clear();
+  }
+}
+
+let defaultLedger: PluginRecoveryLedger | undefined;
+
+export function getPluginRecoveryLedger(): PluginRecoveryLedger {
+  if (!defaultLedger) defaultLedger = new PluginRecoveryLedger();
+  return defaultLedger;
+}
+
+export function setPluginRecoveryLedgerForTest(
+  ledger: PluginRecoveryLedger | undefined
+): void {
+  defaultLedger = ledger;
+}

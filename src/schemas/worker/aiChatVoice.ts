@@ -34,8 +34,10 @@ const audioBase64Field = z
 const aiChatVoiceInitSchema = z.object({
   type: z.literal("initialize"),
   requestId: requestIdField,
-  sttModelPath: z.string().min(1).max(AI_CHAT_VOICE_MAX_ID_LENGTH).optional(),
-  ttsModelPath: z.string().min(1).max(AI_CHAT_VOICE_MAX_ID_LENGTH).optional(),
+  // Absolute LOCAL model paths — a deep temp-root install can exceed 128
+  // chars (caught by the voice parity E2E); align with the runtimeRoot cap.
+  sttModelPath: z.string().min(1).max(1024).optional(),
+  ttsModelPath: z.string().min(1).max(1024).optional(),
   sttLanguage: languageField,
   ttsLanguage: languageField,
   // Phase 7: optional downloaded voice-sherpa runtime root (absolute path).

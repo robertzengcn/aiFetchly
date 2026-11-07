@@ -10,10 +10,17 @@ vi.mock("@/entityTypes/agentTypes", () => ({}));
 
 // Mock the Token service so executeAsyncTool's defense-in-depth AI-enabled
 // gate passes (same pattern as AIChatQueryLoopAsyncPoll.test.ts).
+// R9 T04: key-aware Token mock — a blanket "true" also fed USERSDBPATH,
+// making every worker open the same cwd-relative `./true/` scraper.db;
+// concurrent full-suite workers then hit `database is locked` during
+// between-round DB bookkeeping and the turn fails. Empty dbpath takes the
+// per-worker isolated TMPDIR fallback (test/vitest/_setup/isolatedTmpDir.ts).
 vi.mock("@/modules/token", () => ({
   Token: vi.fn(function TokenMock() {
       return {
-    getValue: vi.fn().mockReturnValue("true"),
+    getValue: vi.fn(
+        (key: string) => (key === "user_dbpath" ? "" : "true")
+      ),
       };
     }),
 }));

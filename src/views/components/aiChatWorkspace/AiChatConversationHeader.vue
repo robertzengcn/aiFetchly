@@ -6,6 +6,22 @@
       {{ displayTitle }}
     </h1>
 
+    <!-- Run-strip removal (2026-10-26 design): goal/loop state keep their
+         home here as display-only chips beside the title, reusing the
+         strip's i18n keys so the six-language translations stay stable. -->
+    <span
+      v-if="goalObjective"
+      class="header-chip"
+      data-testid="workspace-header-goal"
+      >{{ t("workspaceChat.runStrip.goal", { objective: goalObjective }) || `Goal: ${goalObjective}` }}</span
+    >
+    <span
+      v-if="loopLabel"
+      class="header-chip"
+      data-testid="workspace-header-loop"
+      >{{ loopLabel }}</span
+    >
+
     <!-- FR-009: at most ONE summarized status, clickable into Activity. -->
     <button
       v-if="statusLabel"
@@ -19,26 +35,6 @@
     </button>
 
     <div class="header-actions">
-      <v-tooltip :text="inspectorTooltip" location="bottom">
-        <template #activator="{ props: tooltipProps }">
-          <button
-            v-bind="tooltipProps"
-            type="button"
-            class="icon-button"
-            :aria-label="inspectorTooltip"
-            :aria-pressed="inspectorOpen"
-            data-testid="workspace-inspector-toggle"
-            @click="emit('toggle-inspector')"
-          >
-            <v-icon
-              :icon="inspectorOpen ? 'mdi-panel-right' : 'mdi-panel-right-close'"
-              size="20"
-              aria-hidden="true"
-            />
-          </button>
-        </template>
-      </v-tooltip>
-
       <!-- FR-010/FR-011: infrequent conversation actions only; destructive
            actions live in a separated section (PRD §11.5). -->
       <v-menu location="bottom end">
@@ -82,6 +78,25 @@
             data-testid="workspace-overflow-compact"
             @click="emit('compact')"
           />
+          <v-list-item
+            role="menuitem"
+            :title="
+              t('workspaceChat.header.backgroundAgents') || 'Background Agents'
+            "
+            prepend-icon="mdi-account-group"
+            data-testid="workspace-overflow-agent-tasks"
+            @click="emit('open-agent-tasks')"
+          />
+          <v-list-item
+            role="menuitem"
+            :title="t('aiConversationReport.action') || 'Report conversation'"
+            :subtitle="reportDisabledReason || undefined"
+            prepend-icon="mdi-flag-outline"
+            data-testid="workspace-overflow-report"
+            :disabled="!reportEnabled || reportLoading"
+            :aria-disabled="!reportEnabled || reportLoading"
+            @click="emit('report')"
+          />
           <v-divider role="separator" />
           <v-list-item
             role="menuitem"
@@ -89,6 +104,7 @@
             :title="t('workspaceChat.header.clear') || 'Clear messages'"
             prepend-icon="mdi-eraser-variant"
             data-testid="workspace-overflow-clear"
+            :disabled="isWriteDisabled"
             @click="emit('clear')"
           />
           <v-list-item
@@ -97,10 +113,35 @@
             :title="t('workspaceChat.header.delete') || 'Delete chat'"
             prepend-icon="mdi-delete-outline"
             data-testid="workspace-overflow-delete"
+            :disabled="isWriteDisabled"
             @click="emit('delete')"
           />
         </v-list>
       </v-menu>
+
+      <!-- Sidebar (inspector) toggle — moved RIGHT of the "..." menu
+           (run-strip removal, 2026-10-26 design): one always-rendered
+           affordance that opens/hides the right-hand side panel. Glyph note:
+           `mdi-dock-right` because `mdi-panel-right[-close]` have no
+           `::before` rule in the installed @mdi/font 7.4.47 and rendered
+           blank (pinned by mdIconGlyphs.test.ts); open state shows via the
+           pressed tint. -->
+      <v-tooltip :text="inspectorTooltip" location="bottom">
+        <template #activator="{ props: tooltipProps }">
+          <button
+            v-bind="tooltipProps"
+            type="button"
+            class="icon-button"
+            :class="{ 'icon-button--active': inspectorOpen }"
+            :aria-label="inspectorTooltip"
+            :aria-pressed="inspectorOpen"
+            data-testid="workspace-inspector-toggle"
+            @click="emit('toggle-inspector')"
+          >
+            <v-icon icon="mdi-dock-right" size="20" aria-hidden="true" />
+          </button>
+        </template>
+      </v-tooltip>
     </div>
   </header>
 </template>
@@ -116,14 +157,33 @@ import {
   type ConversationStatusVisual,
 } from "./workspaceStatusUtil";
 
-const props = defineProps<{
-  title: string | null;
-  runtimeStatus: ConversationRuntimeStatus;
-  recovering: boolean;
-  activeToolCount: number;
-  inspectorOpen: boolean;
-  hasConversation: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    title: string | null;
+    runtimeStatus: ConversationRuntimeStatus;
+    recovering: boolean;
+    activeToolCount: number;
+    inspectorOpen: boolean;
+    hasConversation: boolean;
+    /** Active goal objective, when shared orchestration exposes one. */
+    goalObjective?: string | null;
+    /** Active/paused scheduled-loop status, when one exists. */
+    loopStatus?: string | null;
+    /** False when conversation reporting is off/fail-closed (PRD §11.4). */
+    reportEnabled?: boolean;
+    /** Content-report capability fetch in flight. */
+    reportLoading?: boolean;
+    /** Disabled reason shown as the item subtitle; empty when enabled. */
+    reportDisabledReason?: string;
+  }>(),
+  {
+    reportEnabled: false,
+    reportLoading: false,
+    reportDisabledReason: "",
+    goalObjective: null,
+    loopStatus: null,
+  }
+);
 
 const emit = defineEmits<{
   (e: "toggle-inspector"): void;
@@ -132,14 +192,27 @@ const emit = defineEmits<{
   (e: "compact"): void;
   (e: "export"): void;
   (e: "duplicate"): void;
+  (e: "open-agent-tasks"): void;
   (e: "clear"): void;
   (e: "delete"): void;
+  (e: "report"): void;
 }>();
 
 const { t } = useI18n();
 
 const displayTitle = computed(
   () => props.title?.trim() || (t("workspaceChat.newChat") || "New chat")
+);
+
+// B03 + P1-1 (FR-LIF-005): disable Delete AND Clear while the conversation
+// can still receive writes (running, queued, parked on permission/question).
+// The main-process IPC guard (getConversationBusyReason) is authoritative;
+// this only prevents the unsafe click. Matches the center surface's
+// onDelete/onClear busy+parked checks (selectedStore.isBusy / isParked).
+const isWriteDisabled = computed(() =>
+  ["running", "queued", "awaiting_permission", "awaiting_user"].includes(
+    props.runtimeStatus
+  )
 );
 
 const headerStatus = computed(() =>
@@ -179,6 +252,23 @@ const statusVisual = computed<ConversationStatusVisual>(() => {
 const inspectorTooltip = computed(() =>
   t("workspaceChat.inspector.toggle") || "Toggle inspector"
 );
+
+/** Scheduled-loop state wording (moved out of the deleted run strip). */
+const loopLabel = computed(() => {
+  if (!props.loopStatus) return "";
+  const map: Record<string, { key: string; fallback: string }> = {
+    running: {
+      key: "workspaceChat.runStrip.loopRunning",
+      fallback: "Scheduled loop running",
+    },
+    paused: {
+      key: "workspaceChat.runStrip.loopPaused",
+      fallback: "Scheduled loop paused",
+    },
+  };
+  const entry = map[props.loopStatus];
+  return entry ? t(entry.key) || entry.fallback : props.loopStatus;
+});
 </script>
 
 <style scoped>
@@ -219,6 +309,29 @@ const inspectorTooltip = computed(() =>
   background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
+/* Display-only chip (goal / scheduled-loop state moved out of the run
+   strip): the status-pill visual language minus any interaction affordance
+   — no hover, no pointer cursor, text carries the meaning (non-color).
+   Shrinkable with a working ellipsis (min-width: 0 beats the flex auto
+   minimum; no flex-shrink: 0) and width-capped, so a long objective can
+   never push the header actions out of reach. */
+.header-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(var(--v-border-color, 0, 0, 0), 0.15);
+  border-radius: 999px;
+  background: rgba(var(--v-theme-surface), 1);
+  color: rgba(var(--v-theme-on-surface), 0.75);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 24rem;
+}
+
 .header-status:focus-visible,
 .icon-button:focus-visible {
   outline: 2px solid rgb(var(--v-theme-primary));
@@ -247,6 +360,15 @@ const inspectorTooltip = computed(() =>
 
 .icon-button:hover {
   background: rgba(var(--v-theme-on-surface), 0.07);
+}
+
+/* Pressed state for toggles whose glyph cannot switch shape (the dock
+   icon exists in one form): a primary tint makes the OPEN sidebar state
+   visible without color-only signaling (the tint rides with the pressed
+   attribute + tooltip). */
+.icon-button--active {
+  color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.1);
 }
 
 .destructive {

@@ -28,6 +28,7 @@ import { drainCountersForTest } from "@/service/emailReply/EmailReplyMetrics";
 import { log } from "@/modules/Logger";
 import {
   EmailReplyDetectionService,
+  PROBE_DEADLINE_MS,
   REPLY_DETECTOR_VERSION,
   clampCacheObservationMs,
   type ReplyDetectionMessagePort,
@@ -681,7 +682,7 @@ describe("EmailReplyDetection cache (T05 step 10, §7.3)", () => {
       // B is queued behind A. Advance past the 15s deadline. B's deadline
       // expires during the queue wait; when A releases, B must return
       // probe_timeout WITHOUT opening a connection (no discover call for B).
-      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.advanceTimersByTimeAsync(PROBE_DEADLINE_MS + 1_000);
 
       // Release A so the chain hands off to B. B sees the deadline expired
       // after the queue wait and returns probe_timeout without probing.
@@ -745,7 +746,7 @@ describe("EmailReplyDetection cache (T05 step 10, §7.3)", () => {
       await vi.advanceTimersByTimeAsync(0);
       // Advance past the 15s deadline — the racer fires and resolves with
       // probe_timeout (winning the race against the blocked probe).
-      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.advanceTimersByTimeAsync(PROBE_DEADLINE_MS + 1_000);
 
       const r = await probeP;
       expect(r.state).toBe("unknown");

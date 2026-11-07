@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from "vue";
 import type { WorkspaceSummary } from "@/entityTypes/workspaceTypes";
-import { getWorkspace } from "@/views/api/workspace";
+import { getWorkspace, revokeWorkspace } from "@/views/api/workspace";
 import {
   acquireWorkspaceWatch,
   previewWorkspaceAgents,
@@ -48,6 +48,13 @@ export interface ConversationWorkspaceState {
   readonly pathUnavailable: Readonly<Ref<boolean>>;
   refresh(): Promise<void>;
   refreshMemoryCount(): Promise<void>;
+  /**
+   * FR-WSP-002 remove leg: revoke the active workspace binding through the
+   * canonical revoke channel, then refresh so the badge returns to its unset
+   * state. No-op when no workspace is resolved. Callers enforce the FR-WS-007
+   * busy gate.
+   */
+  removeWorkspace(): Promise<void>;
   requestSetup(): void;
   closeSetup(): void;
   /**
@@ -91,8 +98,40 @@ export function useConversationWorkspace(
 
   /** Monotonic refresh generation — stale responses are dropped. */
   let refreshGeneration = 0;
+  /** Monotonic acquire generation — stale preview-probe retries are dropped. */
+  let acquireGeneration = 0;
   /** True once the owning surface disposed: late acquisitions self-release. */
   let disposed = false;
+
+  const PROBE_RETRY_DELAYS_MS = [1500, 3500] as const;
+
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * AGENTS.md probe with bounded retries. The first snapshot from the
+   * workspace-watch worker can lag the acquire ack by a few seconds, so a
+   * single immediate preview would show "no instructions" whenever the scan
+   * has not landed yet (trust card never mounting). Retry until content or
+   * the bounded budget elapses; every retry bails when a newer acquisition
+   * (conversation/workspace change) superseded it.
+   */
+  async function probeInstructions(workspaceId: string): Promise<boolean> {
+    const generation = acquireGeneration;
+    for (let attempt = 0; attempt <= PROBE_RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        const content = await previewWorkspaceAgents(workspaceId);
+        if (content.length > 0) return true;
+      } catch {
+        // Not watched yet / transient IPC failure — fall through to retry.
+      }
+      if (generation !== acquireGeneration) return false;
+      if (attempt < PROBE_RETRY_DELAYS_MS.length) {
+        await sleep(PROBE_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+    return false;
+  }
 
   async function refreshMemoryCount(): Promise<void> {
     const id = conversationId.value;
@@ -189,6 +228,21 @@ export function useConversationWorkspace(
     setupOpen.value = false;
   }
 
+  async function removeWorkspace(): Promise<void> {
+    const ws = workspace.value;
+    if (!ws) return;
+    try {
+      await revokeWorkspace(ws.id);
+    } catch (err) {
+      // Non-fatal: the refresh below still reflects the persisted state.
+      console.error(
+        "[useConversationWorkspace] revokeWorkspace failed (non-fatal):",
+        err
+      );
+    }
+    await refresh();
+  }
+
   function applyApprovedWorkspace(workspaceId: number, rootPath: string): void {
     workspace.value = {
       id: workspaceId,
@@ -204,6 +258,7 @@ export function useConversationWorkspace(
     // Release any previous watch first (covers workspace switch).
     await releaseWatch();
     if (disposed) return; // owner unmounted while acquisition was starting
+    acquireGeneration += 1;
     workspaceHasAgents.value = false;
     pathUnavailable.value = false;
     try {
@@ -221,13 +276,9 @@ export function useConversationWorkspace(
       watchId.value = result.workspaceId;
       watchedConversationId = id;
       // Probe for AGENTS.md content via the preview channel — the renderer
-      // NEVER touches the filesystem (TRS-07).
-      try {
-        const content = await previewWorkspaceAgents(result.workspaceId);
-        workspaceHasAgents.value = content.length > 0;
-      } catch {
-        workspaceHasAgents.value = false;
-      }
+      // NEVER touches the filesystem (TRS-07). Retried with bounded backoff
+      // to cover the async first-worker-scan window.
+      workspaceHasAgents.value = await probeInstructions(result.workspaceId);
       // Owner unmounted while the acquisition was in flight — release the
       // claim immediately instead of leaking the main-process watcher.
       if (disposed) {
@@ -288,6 +339,7 @@ export function useConversationWorkspace(
   /** FINAL disposal (owning surface unmounted): no further acquisition. */
   async function dispose(): Promise<void> {
     disposed = true;
+    acquireGeneration += 1;
     await releaseWatch();
     workspaceHasAgents.value = false;
     pathUnavailable.value = false;
@@ -329,6 +381,7 @@ export function useConversationWorkspace(
     pathUnavailable,
     refresh,
     refreshMemoryCount,
+    removeWorkspace,
     requestSetup,
     closeSetup,
     applyApprovedWorkspace,

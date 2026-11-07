@@ -21,6 +21,7 @@ import type {
 } from "@/entityTypes/aiMessageTaskTypes";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AIChatQueryEngineFactory } from "@/service/AIChatQueryEngineFactory";
+import { AIChatToolApprovalModule } from "@/modules/AIChatToolApprovalModule";
 import { OUTBOUND_EMAIL_SEND_TOOL } from "@/service/AIChatQueryLoop";
 import {
   ScheduledLoopEventSink,
@@ -33,6 +34,7 @@ import {
 } from "@/service/AIChatConversationTurnCoordinator";
 import { ScheduledLoopRunRegistry } from "@/service/ScheduledLoopRunRegistry";
 import { AIChatConversationUpdateBroadcaster } from "@/service/AIChatConversationUpdateBroadcaster";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import {
   SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS,
   SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES,
@@ -122,6 +124,36 @@ export class ScheduledAiMessageRunner {
   private readonly runRegistry = ScheduledLoopRunRegistry.getInstance();
   private readonly broadcaster =
     AIChatConversationUpdateBroadcaster.getInstance();
+
+  /**
+   * Bump the conversation projection after a scheduled turn's durable message
+   * write. Interactive turns do this through AIChatCoordinator; scheduled
+   * turns bypass it, so without an explicit bump the sidebar preview,
+   * lastMessageAt, and messageCount never advance — and a loop conversation
+   * created from a fresh composer (no projection row at all) stays an
+   * unreachable phantom conversation that never appears in the UI.
+   */
+  private async recordProjection(input: {
+    conversationId: string;
+    isResult: boolean;
+    previewText: string;
+  }): Promise<void> {
+    try {
+      await new AIChatConversationModule().recordMessagePersisted({
+        conversationId: input.conversationId,
+        isResult: input.isResult,
+        previewText: input.previewText,
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      // The projection is a display hint — never fail the scheduled run for
+      // it. The once-per-process backfill repairs missing rows on restart.
+      console.warn(
+        "[scheduled-runner] conversation projection bump failed:",
+        err
+      );
+    }
+  }
 
   constructor() {
     this.taskModule = new AiMessageTaskModule();
@@ -217,6 +249,13 @@ export class ScheduledAiMessageRunner {
         conversationId,
         scheduleId
       );
+      // BUGFIX 2026-11-02: mirror the loop path's post-turn result bump so
+      // the sidebar preview/result timestamps advance for standalone runs.
+      await this.recordProjection({
+        conversationId,
+        isResult: result.status === "completed",
+        previewText: result.assistantFinalMessage || task.message,
+      });
       return result;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
@@ -508,14 +547,10 @@ export class ScheduledAiMessageRunner {
         policy,
         conversationId
       );
-      // Trusted scheduled-loop pre-authorization for the outbound send gate
-      // (see executeRunLoop for the rationale): the user pre-allowlisted
-      // start_email_send_task via the typed confirmation at loop creation.
-      // That typed pre-allowlist IS the trusted authorization AD-003 requires
-      // for an unattended send — there is no human present to click Review.
+      // Typed allowlist or this conversation's Full access. See
+      // resolveOutboundSendPreAuthorized.
       const outboundSendPreAuthorized =
-        policy.autoApproveTools &&
-        policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL);
+        await this.resolveOutboundSendPreAuthorized(conversationId, policy);
       engineRegistry.register({
         conversationId,
         engine,
@@ -753,6 +788,15 @@ export class ScheduledAiMessageRunner {
       if (lease) lease.release();
     }
 
+    // The scheduled user turn is durably persisted by now (all paths past the
+    // busy-defer early return persist it). Advance the sidebar projection to
+    // match the interactive path's submit-time bump.
+    await this.recordProjection({
+      conversationId,
+      isResult: false,
+      previewText: task.message,
+    });
+
     // B07 (FR-12/14, NFR-10): terminal delivery happens ONLY after the
     // scheduled transaction commits. On success the committed result
     // decides the stream kind (completed → done, anything else → error);
@@ -795,6 +839,16 @@ export class ScheduledAiMessageRunner {
     }
     try {
       if (finalized.status === "completed") {
+        // Advance the sidebar projection with the durable assistant result
+        // (interactive turns project their terminal through the coordinator;
+        // scheduled turns must do the same here).
+        if (finalized.assistantFinalMessage.trim() !== "") {
+          await this.recordProjection({
+            conversationId,
+            isResult: true,
+            previewText: finalized.assistantFinalMessage,
+          });
+        }
         this.broadcaster.emitScheduledStream({
           conversationId,
           runId,
@@ -1343,18 +1397,11 @@ export class ScheduledAiMessageRunner {
     };
 
     // Trusted scheduled-loop pre-authorization for the outbound send gate.
-    // The user pre-allowlisted start_email_send_task via the typed
-    // confirmation at loop creation (policy.autoApproveTools AND the tool is
-    // in policy.allowedTools). That typed pre-allowlist IS the trusted
-    // authorization AD-003 requires for an unattended send — there is no human
-    // present to click Review. The gate (AIChatQueryLoop.evaluateOutboundEmailGate)
-    // consults this to honor skip_review=true even for blocking reasonCodes
-    // (e.g. a dedup negation the pure resolver misreads as do-not-send),
-    // unblocking the scheduled outreach deadlock. Never true for interactive
-    // chat — scheduledContext is absent there and the renderer cannot forge it.
+    // Either the typed allowlist or this conversation's Full access mode is
+    // enough: there is no human present to click Review. The gate consults
+    // this to honor skip_review=true even for blocking reason codes.
     const outboundSendPreAuthorized =
-      policy.autoApproveTools &&
-      policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL);
+      await this.resolveOutboundSendPreAuthorized(conversationId, policy);
 
     try {
       try {
@@ -1390,8 +1437,22 @@ export class ScheduledAiMessageRunner {
         scheduleId: scheduleKey,
         clearPermissionBackstop,
       });
+      // BUGFIX 2026-11-02: standalone scheduled runs never advanced the
+      // workspace sidebar projection — a brand-new task conversation had no
+      // ai_chat_conversations row at all, so Run Now's workspace folder
+      // could not render (manual or event-driven refresh had nothing to
+      // show) until an app restart ran the once-per-process backfill.
+      // Mirror the interactive submit-time bump: an idempotent
+      // recordMessagePersisted that creates the row stamped with the
+      // binding's workspace key BEFORE any event-driven sidebar refresh
+      // races it.
+      await this.recordProjection({
+        conversationId,
+        isResult: false,
+        previewText: task.message,
+      });
       const assistantMessageId = `scheduled-assistant-${scheduleKey}-${runId}`;
-      const sink = new ScheduledLoopEventSink((event) => {
+      const innerSink = new ScheduledLoopEventSink((event) => {
         // Gated tool paused for permission: suspend the runtime timeout,
         // notify, broadcast, publish pending metadata, and start the
         // 1h auto-deny backstop. This branch runs BEFORE token/complete/error
@@ -1460,7 +1521,7 @@ export class ScheduledAiMessageRunner {
         ) {
           clearResumeTimeout();
           resumeTimeoutHandle = setTimeout(() => {
-            sink.failOutstanding(
+            innerSink.failOutstanding(
               `Scheduled loop resume timed out after ${SCHEDULED_LOOP_RESUME_TIMEOUT_MS}ms without a terminal event.`
             );
             try {
@@ -1499,6 +1560,21 @@ export class ScheduledAiMessageRunner {
               event.type === "error" ? event.errorMessage : undefined,
           });
         }
+      });
+
+      // Workspace owner adapter (design §8.3, bugfix 2026-11-02): keep the
+      // shared run envelope durable and broadcast redacted summaries so
+      // background schedule runs (Run Now + cron, standalone ai_message
+      // tasks) surface in the left workspace sidebar — previously ONLY
+      // runChatScheduledLoop wrapped its sink, so Run Now waits never
+      // produced workspace-key events and the chosen workspace folder never
+      // appeared. The inner sink keeps its streaming contract; helpers used
+      // later must read the INNER sink directly.
+      const sink = await createOwnerAdapterSink(innerSink, {
+        conversationId,
+        owner: "scheduled",
+        sourceId: String(scheduleKey),
+        broadcaster: sharedSummaryBroadcaster,
       });
 
       // TODO-11 (FR-013/022): consume the typed segment outcome directly;
@@ -1570,9 +1646,9 @@ export class ScheduledAiMessageRunner {
       // classification is authoritative when the sink saw no terminal, and a
       // pause parks for the resumed terminal via the sink wait.
       outcome =
-        sink.getOutcome() ??
+        innerSink.getOutcome() ??
         mapSegment(segmentOutcome) ??
-        (await sink.waitForTerminalOutcome());
+        (await innerSink.waitForTerminalOutcome());
     } catch (error: unknown) {
       if (error instanceof Error && error.name === "AbortError") {
         const errorMessage = `Run exceeded maximum runtime of ${limits.maxRuntimeMs}ms.`;
@@ -1724,6 +1800,36 @@ export class ScheduledAiMessageRunner {
       this.broadcaster.emit(event);
     } catch {
       // Renderer delivery failure does not fail the run.
+    }
+  }
+
+  /**
+   * Whether this scheduled occurrence may treat `start_email_send_task` as
+   * pre-authorized for the outbound gate.
+   *
+   * The typed allowlist is one grant. Full access on the same conversation is
+   * the other: the user already chose that registered tools run without an
+   * approval card. Full access does not skip the gate itself; it only lets
+   * `skip_review` proceed when nobody is present to click Review.
+   */
+  private async resolveOutboundSendPreAuthorized(
+    conversationId: string,
+    policy: AiMessageTaskToolPolicy
+  ): Promise<boolean> {
+    if (
+      policy.autoApproveTools &&
+      policy.allowedTools.includes(OUTBOUND_EMAIL_SEND_TOOL)
+    ) {
+      return true;
+    }
+    try {
+      const approvalModule = new AIChatToolApprovalModule();
+      const mode = await approvalModule.getModeForScheduledRunner(
+        conversationId
+      );
+      return mode === "full_access";
+    } catch {
+      return false;
     }
   }
 

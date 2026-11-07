@@ -9,12 +9,15 @@ const startChatRunMock = vi.fn();
 
 vi.mock("@/views/utils/apirequest", () => ({
   windowInvoke: (...args: unknown[]) => windowInvokeMock(...args),
+  windowReceive: vi.fn().mockReturnValue(() => undefined),
+  windowRemoveListener: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   // chatWorkspace store contract
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   // selectedConversation store contract
   cancelChatRun: vi.fn(),
   createClientRequestId: vi.fn().mockReturnValue("req-1"),
@@ -135,7 +138,68 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     expect(store.activeRunId).toBe("run-2");
   });
 
-  it("a rejection surfaces the error and keeps the optimistic row for retry", async () => {
+  it("a queued acceptance stays busy before the first stream event (FR-SUB-009 P1-7)", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    // The host turn ends BEFORE the queued send's IPC response resolves
+    // (slow round-trip): the presenter flushes to idle, and when the
+    // accept finally answers `pending-…` / `queued` the durable turn
+    // already owns this conversation.
+    store.applyDetailEvent({
+      conversationId: "conv-1",
+      runId: "run-1",
+      sequence: 2,
+      emittedAt: new Date(2026, 8, 18, 10, 0, 2).toISOString(),
+      eventType: "complete",
+      payload: {
+        eventType: "complete",
+        conversationId: "conv-1",
+        messageId: "a-running",
+        fullContent: "done",
+      },
+    });
+    expect(store.isBusy).toBe(false);
+
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-9",
+      status: "queued",
+    });
+    await store.sendMessage("queued follow-up");
+    await flushPromises();
+
+    // No stream event arrived yet — the queued runtime status must SURVIVE
+    // the accept-path sync, or Clear / /goal treat this conversation as
+    // idle while a durable turn is pending (the R8 P1-7 hole).
+    expect(store.runtimeStatus).toBe("queued");
+    expect(store.isBusy).toBe(true);
+  });
+
+  /**
+   * R9: the queued acceptance must never DOWNGRADE a live running host
+   * turn — the pending bubble's Steer affordance requires
+   * runtimeStatus === "running", and the P1-7 hydration (unconditional in
+   * the first cut) hid it and broke the §21.6-2/§21.6-3 steering E2E.
+   */
+  it("a queued acceptance never downgrades a running host turn (R9 steering)", async () => {
+    await seedStore("running");
+    const store = useSelectedConversationStore();
+    // The host turn is STILL RUNNING when the queued accept resolves.
+    startChatRunMock.mockResolvedValue({
+      conversationId: "conv-1",
+      runId: "pending-p-10",
+      status: "queued",
+    });
+    await store.sendMessage("steer candidate");
+    await flushPromises();
+
+    // The host turn owns the conversation: the status stays running (the
+    // Steer button's gate) and the conversation stays busy either way.
+    expect(store.runtimeStatus).toBe("running");
+    expect(store.isBusy).toBe(true);
+  });
+
+  it("a rejection surfaces the error and REMOVES the optimistic row (T8/D5: no draft duplication)", async () => {
     await seedStore("running");
     startChatRunMock.mockRejectedValue(
       new Error("A run is already active for this conversation.")
@@ -146,7 +210,16 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
     await flushPromises();
 
     expect(store.errorMessage).toContain("already active");
-    expect(store.messages.some((m) => m.content === "rejected B")).toBe(true);
+    // The draft stays in the composer — the transcript must not show the
+    // text twice (audit D5). The denial bubble alone marks the failure.
+    expect(store.messages.some((m) => m.content === "rejected B")).toBe(false);
+    expect(
+      store.messages.some(
+        (m) =>
+          m.role === "assistant" &&
+          m.content.includes("already active")
+      )
+    ).toBe(true);
   });
 
   it("an AI-disabled (subscription-required) rejection appends a visible assistant notice", async () => {
@@ -161,12 +234,13 @@ describe("selectedConversation queue-delegated sends (message-queue §9.2)", () 
 
     expect(accepted).toBe(false);
     expect(store.errorMessage).toContain("subscription");
-    // Optimistic user row is kept for retry after purchasing.
+    // T8/D5: the optimistic user row is REMOVED — the draft stays in the
+    // composer for retry after purchasing (no transcript duplication).
     expect(
       store.messages.some(
         (m) => m.role === "user" && m.content === "hello with no subscription"
       )
-    ).toBe(true);
+    ).toBe(false);
     // Pre-V2 parity: the denial is also an assistant bubble so the transcript
     // shows the purchase notice instead of staying silent.
     const notice = store.messages.find(

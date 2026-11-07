@@ -18,7 +18,7 @@
  *      approving runs the tool. Because capture is on and the body exceeds
  *      inlineMaxBytes, the pipeline externalizes it and the receipt card
  *      renders (`tool-output-card`) while the deep NEEDLE never appears inline
- *      in `ai-chat-root` (it lives in the artifact, not the bounded receipt).
+ *      in `workspace-transcript` (it lives in the artifact, not the bounded receipt).
  *   4. Restart the Electron app (closeApp + re-launch the SAME root). The
  *      persisted receipt survives.
  *   5. Read + search the preserved output through the real IPC channels
@@ -48,6 +48,7 @@ import { launchAiFetchly, type LaunchedApp } from "../fixtures/electronApp";
 import { closeApp } from "../support/processCleanup";
 import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
 import { assertCleanTeardown } from "../support/assertions";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 
 /**
  * The three tool-result rollout flags (config/toolResultConfig.ts
@@ -80,7 +81,12 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // Retargeted from the removed chat-dock toggle: the workspace shell
+  // mounts the conversation surface directly.
+  await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
+  await expect(
+    app.mainWindow.getByTestId("chat-center-surface")
+  ).toBeVisible({ timeout: 20_000 });
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -238,7 +244,7 @@ async function driveFileReadToReceipt(
   await expect(card).toContainText("file_read", { timeout: 15_000 });
   await app.mainWindow.getByTestId("ai-chat-permission-allow-once").click();
   // The follow-up "Done." renders once the tool result is fed back.
-  await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+  await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
     "Done.",
     { timeout: 30_000 }
   );
@@ -324,9 +330,9 @@ test("tool-result lifecycle: capture → restart → read/search → export → 
 
     // The deep NEEDLE never appears inline in the rendered conversation
     // surface — the bounded receipt carries only identity + sizes, never the
-    // bulk body. The marker stays out of `ai-chat-root`.
+    // bulk body. The marker stays out of `workspace-transcript`.
     await expect(
-      app.mainWindow.getByTestId("ai-chat-root")
+      app.mainWindow.getByTestId("workspace-transcript")
     ).not.toContainText(NEEDLE, { timeout: 5_000 });
 
     await closeApp(app);

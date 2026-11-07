@@ -19,6 +19,15 @@ export interface EmailAutoReplyPolicyInput {
     readonly todayForService: number;
     readonly threadCount: number;
   };
+  /**
+   * True when a human explicitly asked for this reply in conversation
+   * (`reviewed` on the AI tool / `humanReviewed` on the UI IPC). Exempts ONLY
+   * the classification-family blocks that mean "unsure or sensitive"
+   * (`needs_human_review`, defensively `unknown`) — never the machine-safety
+   * blocks (bounce, auto_reply, unsubscribe), recipient automation checks,
+   * blocked patterns, or limits.
+   */
+  readonly humanConfirmed?: boolean;
 }
 
 /** The evaluator's decision. */
@@ -39,7 +48,12 @@ export interface EmailAutoReplyPolicyDecision {
  * inconclusive verdict as permission to auto-send. A human-confirmed send
  * strips it first via {@link classificationForConfirmedSend}: the user
  * already reviewed the draft, and `unknown` only means the deterministic
- * rules were inconclusive.
+ * rules were inconclusive. A stored `needs_human_review` follows the same
+ * human-reviewed path (stripped by the same helper for confirmed sends, and
+ * exempt in {@link evaluateAutoReplyPolicy} when `humanConfirmed` is set):
+ * the classification asks FOR human review, and the confirmed send is that
+ * review happening. Bounce, auto_reply, and unsubscribe stay in this set in
+ * every path — machine-safety blocks are never overridable by a gesture.
  */
 const BLOCKED_CLASSIFICATIONS: ReadonlySet<EmailMessageClassification> = new Set([
   "bounce",
@@ -54,13 +68,25 @@ const BLOCKED_CLASSIFICATIONS: ReadonlySet<EmailMessageClassification> = new Set
  * human-confirmed send (draft approval or pre-send).
  *
  * A stored `unknown` is not evidence of a bounce, list, or unsubscribe.
- * Returning null lets the confirmed send proceed. Bounce, auto-reply,
- * unsubscribe, and needs_human_review are returned unchanged and still block.
+ * A stored `needs_human_review` means the topic/sender needed human review —
+ * and a confirmed send (explicit human approval or request-scoped tool
+ * confirmation) IS that human review completing, the same intent the
+ * pre-send sensitive-keyword path already encodes ("may still be sent AFTER
+ * explicit human approval in this assisted release"). Returning null for
+ * both lets the confirmed send proceed, flagged via `requiresHumanReview`.
+ * Bounce, auto-reply, and unsubscribe are returned unchanged and still block:
+ * machine-safety rules are not overridable by a human gesture.
  */
 export function classificationForConfirmedSend(
   classification: string | null | undefined
 ): string | null {
-  if (classification == null || classification === "unknown") return null;
+  if (
+    classification == null ||
+    classification === "unknown" ||
+    classification === "needs_human_review"
+  ) {
+    return null;
+  }
   return classification;
 }
 
@@ -125,7 +151,7 @@ export function confirmedSendRuleRefusal(
 export function evaluateAutoReplyPolicy(
   input: EmailAutoReplyPolicyInput
 ): EmailAutoReplyPolicyDecision {
-  const { message, classification, confidence, rule, sendCounts } = input;
+  const { message, classification, confidence, rule, sendCounts, humanConfirmed } = input;
 
   // 1. Loop prevention: never reply to an automated mailbox. The address
   // that would receive the reply is Reply-To when present, otherwise From.
@@ -142,7 +168,19 @@ export function evaluateAutoReplyPolicy(
   }
 
   // 2. Classification hard block.
-  if (classification && BLOCKED_CLASSIFICATIONS.has(classification)) {
+  //
+  // `humanConfirmed` (reviewed flag): a human explicitly asked for this reply
+  // in conversation, which resolves the "unsure / needs review" family.
+  // Machine-safety classifications (bounce, auto_reply, unsubscribe) stay
+  // hard-blocked — they are not human-review-able topics.
+  const humanReviewClassExempt =
+    humanConfirmed === true &&
+    (classification === "needs_human_review" || classification === "unknown");
+  if (
+    classification &&
+    BLOCKED_CLASSIFICATIONS.has(classification) &&
+    !humanReviewClassExempt
+  ) {
     return blocked(`Classification '${classification}' must not be auto-replied`);
   }
 

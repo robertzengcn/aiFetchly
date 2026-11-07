@@ -9,6 +9,10 @@ export const chrome_path = "chrome_path";
 export const firefox_path = "firefox_path";
 export const user_preferences = "user_preferences";
 export const language_preference = "language_preference";
+/** Root font scale stored in system settings. Mirrored in index.html. */
+export const ui_font_scale = "ui_font_scale";
+/** Chat message and composer size, in whole pixels. */
+export const ui_chat_font_size = "ui_chat_font_size";
 export const ai_website_analysis_business_info =
   "ai_website_analysis_business_info";
 export const embedding_group = "embedding_group";
@@ -29,7 +33,42 @@ export const ai_workspace_manual_memory_enabled =
   "user_ai_workspace_manual_memory";
 /** Desktop completion float (bottom-right). Key matches USER_AI_DESKTOP_NOTIFY. */
 export const ai_desktop_notify_enabled = "user_ai_desktop_notify";
+/**
+ * Display order is the order groups are declared below: the first declared
+ * group appears first in the settings page's left menu. "User Preferences"
+ * is deliberately first so it is the default selection on page load.
+ */
 export const settinggroupInit: Array<SystemSettingGroupdf> = [
+  {
+    name: user_preferences,
+    description: "user-preferences-group-description",
+    items: [
+      {
+        key: language_preference,
+        value: "en",
+        description: "language-preference-description",
+        type: "select",
+      },
+      {
+        key: ui_font_scale,
+        value: "1",
+        description: "ui-font-scale-description",
+        type: "stepper",
+      },
+      {
+        key: ui_chat_font_size,
+        value: "14",
+        description: "ui-chat-font-size-description",
+        type: "number",
+      },
+      {
+        key: ai_website_analysis_business_info,
+        value: JSON.stringify({ business: "" }),
+        description: "ai-website-analysis-business-info-description",
+        type: "input",
+      },
+    ],
+  },
   {
     // Managed browser + resource cache preferences (PRD §8.9). Both default
     // ON; the separate application release flag
@@ -129,24 +168,6 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         value: "",
         description: "firefox-path-description",
         type: "file",
-      },
-    ],
-  },
-  {
-    name: user_preferences,
-    description: "user-preferences-group-description",
-    items: [
-      {
-        key: language_preference,
-        value: "en",
-        description: "language-preference-description",
-        type: "select",
-      },
-      {
-        key: ai_website_analysis_business_info,
-        value: JSON.stringify({ business: "" }),
-        description: "ai-website-analysis-business-info-description",
-        type: "input",
       },
     ],
   },

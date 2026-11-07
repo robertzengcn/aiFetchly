@@ -20,10 +20,8 @@ const REQUIRED_WORKERS = [
   "SkillWorker.js",
   "WorkspaceConfigWatchWorker.js",
   "YandexMapsWorker.js",
-  "YellowPagesScraperProcess.js",
   "googleProxyCheck.js",
   "websiteContentScraper.js",
-  "YellowPagesScraper.js",
 ];
 const RENDERER_HTML_RELATIVE = ".vite/renderer/main_window/index.html";
 
@@ -610,8 +608,28 @@ function verifyDeclaredDependenciesPresent(resourcesDir) {
     // verifyRuntimeRequires.
     return true;
   }
-  const nodeModulesRoot = path.join(layout.diskRoot, "node_modules");
+  // Real asar build (resources/app.asar next to app.asar.unpacked): the
+  // staged manifest and node_modules live INSIDE the archive, and the
+  // on-disk layout root (app.asar.unpacked) only holds the asar-unpacked
+  // worker bundles and native deps — asar.unpackDir is meaningful only
+  // when something is unpacked, so there is no manifest to walk there.
+  // Same rationale as the ASAR-only branch: verifyRuntimeRequires covers
+  // the closure through extract-all; only the plain resources/app layout
+  // (FORGE_DISABLE_ASAR=1 CI smoke) exposes a verifiable manifest on disk.
+  const plainAppRoot = path.join(resourcesDir, "app");
   const manifestPath = path.join(layout.diskRoot, "package.json");
+  if (
+    layout.asarPath &&
+    !fs.existsSync(plainAppRoot) &&
+    !fs.existsSync(manifestPath)
+  ) {
+    console.log(
+      "Runtime dependency closure is inside the asar archive " +
+        `(${layout.asarPath}); direct requires are covered by verifyRuntimeRequires.`
+    );
+    return true;
+  }
+  const nodeModulesRoot = path.join(layout.diskRoot, "node_modules");
   if (!fs.existsSync(manifestPath)) {
     console.error(
       `No packaged app manifest at ${manifestPath} — cannot verify the runtime dependency closure.`
@@ -691,10 +709,7 @@ function run() {
   }
 
   let failed = false;
-  const expectedWorkers = REQUIRED_WORKERS.filter(
-    (workerFile) => workerFile !== "YellowPagesScraperProcess.js"
-  );
-  for (const workerFile of expectedWorkers) {
+  for (const workerFile of REQUIRED_WORKERS) {
     const matches = resourcesDirs
       .map((resourcesDir) => hasWorker(resourcesDir, workerFile))
       .filter((result) => result.found);

@@ -108,7 +108,7 @@
                   :loading="testingServerId === server.id"
                   title="Test connection"
                 >
-                  <v-icon size="small">mdi-network-check</v-icon>
+                  <v-icon size="small">mdi-web-check</v-icon>
                 </v-btn>
                 <v-btn
                   icon

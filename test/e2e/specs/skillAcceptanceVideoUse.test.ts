@@ -22,6 +22,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import type { E2ETestRoot } from "../fixtures/types";
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
 import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
@@ -159,29 +160,43 @@ function acceptancePrompt(source: string): string {
 }
 
 async function renderedToolNames(app: LaunchedApp): Promise<string[]> {
-  return app.mainWindow.evaluate(() => {
-    const root = document.querySelector('[data-testid="ai-chat-root"]');
-    if (!root) return [] as string[];
-    const texts: string[] = [];
-    root
-      .querySelectorAll(".v2-message__tool-field")
-      .forEach((el) => texts.push(el.textContent ?? ""));
-    return texts.map((t) => t.replace(/^Tool:\s*/, "").trim());
-  });
+  // Retargeted: the workspace transcript renders executions as activity rows
+  // (`.row-tool-name` carries the raw tool name for unknown-tool actions
+  // like the installer) instead of legacy `.v2-message__tool-field`.
+  const root = app.mainWindow.getByTestId("workspace-transcript");
+  const names = root.locator(".row-tool-name");
+  await expect(names.first()).toBeVisible({ timeout: 30_000 });
+  const count = await names.count();
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    out.push((await names.nth(i).innerText()).trim());
+  }
+  return out;
 }
 
 async function pollSessionId(
-  app: LaunchedApp,
-  attempts = 20,
+  root: E2ETestRoot,
+  attempts = 24,
   intervalMs = 500
 ): Promise<string | null> {
+  // Retargeted: the workspace execution receipt bounds the tool result DOM
+  // output, so the session id is read from the persisted install session
+  // row (node:sqlite readonly peek against the runner-managed database).
+  const { DatabaseSync } = await import("node:sqlite");
+  const dbPath = path.join(root.databasePath, "scraper.db");
   for (let i = 0; i < attempts; i++) {
-    const sessionId = await app.mainWindow.evaluate(() => {
-      const text = document.body.textContent ?? "";
-      const match = text.match(/"sessionId"\s*:\s*"([0-9a-f-]{20,40})"/);
-      return match ? match[1] : null;
-    });
-    if (sessionId) return sessionId;
+    try {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      const rows = db
+        .prepare(
+          "SELECT sessionId FROM skill_installation_sessions ORDER BY createdAt DESC LIMIT 1"
+        )
+        .all() as { sessionId: string }[];
+      db.close();
+      if (rows[0]?.sessionId) return rows[0].sessionId;
+    } catch {
+      /* database may not be flushed yet — keep polling */
+    }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
   return null;
@@ -244,7 +259,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
         await app.mainWindow
           .getByTestId("ai-chat-permission-allow-once")
           .click();
-        await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+        await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
           "installed and ready",
           { timeout: 60_000 }
         );
@@ -260,7 +275,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
         }
 
         // Item 18: session-correlated status follows next_action.
-        const sessionId = await pollSessionId(app);
+        const sessionId = await pollSessionId(root);
         expect(sessionId).not.toBeNull();
         const status = await invoke<InstallSnapshot>(
           app,
@@ -376,7 +391,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
         );
         await fakeAi.setFollowupText("Still the same installation.");
         await sendMessage(app, `set up ${repo} for me again`);
-        await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+        await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
           "Still the same installation.",
           { timeout: 60_000 }
         );
@@ -431,7 +446,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
           );
           await fakeAi.setFollowupText("Editing your dropped footage now.");
           await sendMessage(app, "here is my footage folder — edit the clip");
-          await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+          await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
             "Editing your dropped footage now.",
             { timeout: 60_000 }
           );
@@ -469,7 +484,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
           );
           await fakeAi.setFollowupText("Read the cut helper.");
           await sendMessage(app, "read the cutting helper script");
-          await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+          await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
             "Read the cut helper.",
             { timeout: 60_000 }
           );
@@ -481,7 +496,7 @@ test.describe("§27 acceptance scenario — video-use (NL-6)", () => {
           );
           await fakeAi.setFollowupText("Re-invoked without duplication.");
           await sendMessage(app, "apply the skill again to the graded cut");
-          await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+          await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
             "Re-invoked without duplication.",
             { timeout: 60_000 }
           );
@@ -578,7 +593,7 @@ test("daily-use invocation: use_skill ack + one hidden block + progressive helpe
       );
       await fakeAi.setFollowupText("Editing your dropped footage now.");
       await sendMessage(app, "here is my footage folder — edit the clip");
-      await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
         "Editing your dropped footage now.",
         { timeout: 60_000 }
       );
@@ -602,7 +617,7 @@ test("daily-use invocation: use_skill ack + one hidden block + progressive helpe
       );
       await fakeAi.setFollowupText("Read the cut helper.");
       await sendMessage(app, "read the cutting helper script");
-      await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
         "Read the cut helper.",
         { timeout: 60_000 }
       );
@@ -614,7 +629,7 @@ test("daily-use invocation: use_skill ack + one hidden block + progressive helpe
       );
       await fakeAi.setFollowupText("Re-invoked without duplication.");
       await sendMessage(app, "apply the skill again to the graded cut");
-      await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
         "Re-invoked without duplication.",
         { timeout: 60_000 }
       );

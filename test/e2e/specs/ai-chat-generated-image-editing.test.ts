@@ -23,7 +23,7 @@
  */
 
 import { e2eTest as test, expect } from "../fixtures/base";
-import { assertCleanTeardown } from "../support/assertions";
+import { assertCleanTeardown, assertImagesDecoded } from "../support/assertions";
 import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
 import type { LaunchedApp } from "../fixtures/electronApp";
 import type { E2ETestRoot } from "../fixtures/types";
@@ -297,20 +297,82 @@ async function seedGeneratedImagesOnLastTurn(
   };
 }
 
-/** Select the conversation whose title contains `marker` in the persistent
- * shell sidebar, which reloads history through the real selection IPC. */
+/** Resolve the conversation whose persisted USER row contains `marker` via
+ * the real conversations/history IPC (the workspace sidebar titles are not
+ * the opener text, so the marker cannot be matched against row labels). */
+async function findConversationIdByUserMarker(
+  app: LaunchedApp,
+  marker: string,
+  attempts = 24,
+  intervalMs = 500
+): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    const conversationId = await app.mainWindow.evaluate(
+      async (titleMarker: string) => {
+        const api = (
+          window as unknown as {
+            api: {
+              invoke: (
+                channel: string,
+                data?: unknown
+              ) => Promise<{ status: boolean; data: unknown } | undefined>;
+            };
+          }
+        ).api;
+        const convResp = await api.invoke(
+          "ai-chat-v2:conversations",
+          JSON.stringify({})
+        );
+        const convs = (convResp?.data ?? []) as Array<{
+          conversationId: string;
+        }>;
+        for (const conv of convs) {
+          const histResp = await api.invoke(
+            "ai-chat-v2:history",
+            JSON.stringify({ conversationId: conv.conversationId })
+          );
+          const rows =
+            ((histResp?.data ?? {}) as { messages?: HistoryMessageView[] })
+              .messages ?? [];
+          if (
+            rows.some(
+              (m) =>
+                m.role === "user" &&
+                typeof m.content === "string" &&
+                m.content.includes(titleMarker)
+            )
+          ) {
+            return conv.conversationId;
+          }
+        }
+        return null;
+      },
+      marker
+    );
+    if (conversationId) return conversationId;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return null;
+}
+
+/** Select the conversation whose seeded user turn contains `marker` in the
+ * persistent shell sidebar, which reloads history through the real
+ * selection IPC. */
 async function switchToConversationByMarker(
   app: LaunchedApp,
   marker: string
 ): Promise<void> {
+  const conversationId = await findConversationIdByUserMarker(app, marker);
+  if (!conversationId) {
+    throw new Error(`No conversation found for marker ${marker}`);
+  }
   const tree = app.mainWindow.getByTestId("workspace-tree");
   const row = tree
-    .locator('[data-testid^="workspace-conversation-"]')
-    .filter({ hasText: marker })
+    .locator(`[data-testid="workspace-conversation-${conversationId}"]`)
     .first();
   // Workspace-less conversations live in the "Other chats" folder, which
   // defaults collapsed — expand it when the row is hidden.
-  if (!(await row.isVisible())) {
+  if (await row.isHidden()) {
     await tree.locator('[data-nav-row="unassigned"]').click();
   }
   await expect(row).toBeVisible({ timeout: 30_000 });
@@ -372,6 +434,7 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
     const root = aiApp.mainWindow.getByTestId("chat-center-surface");
     const imageBlocks = root.locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
+    await assertImagesDecoded(root, { minCount: 2 });
 
     // Numbered badges reflect the document position of each generated image.
     const tileBadges = root.locator(".v2-message__generated-image-index");
@@ -447,6 +510,10 @@ test.describe("Workspace-less generated-image editing (Electron integration)", (
       .getByTestId("chat-center-surface")
       .locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
+    await assertImagesDecoded(
+      aiApp.mainWindow.getByTestId("chat-center-surface"),
+      { minCount: 2 }
+    );
 
     await imageBlocks
       .nth(0)

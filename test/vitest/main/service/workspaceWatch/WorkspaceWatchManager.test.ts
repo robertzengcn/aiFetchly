@@ -576,7 +576,6 @@ describe("WorkspaceWatchManager — ref-counted lifecycle + crash restart", () =
   });
 });
 
-
 // --- Portable-memory snapshot forwarding (design §13.1) ----------------------
 
 describe("WorkspaceWatchManager — portable memory snapshot callback", () => {
@@ -666,5 +665,130 @@ describe("WorkspaceWatchManager — portable memory snapshot callback", () => {
     w.emit("message", { type: "snapshot", workspaceId: "w1", snapshot: snap });
     // The changed event still flowed out — the manager stayed responsive.
     expect(s.configChangedEmitter).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spawn-race buffering: Electron's utilityProcess.pid is undefined until the
+// 'spawn' event fires. The manager must NOT silently drop acquire-driven
+// watch commands in that window (regression: watch commands were lost when
+// acquire raced the spawn, leaving the worker idle with zero watches and
+// empty snapshots — rendered AGENTS.md previews returned null forever).
+describe("WorkspaceWatchManager — spawn-race command buffering", () => {
+  /** Fake worker whose pid (and thus readiness) arrives later, like a real
+   * Electron UtilityProcess. Does not auto-exit on kill. */
+  interface DeferredSpawnWorker extends EventEmitter {
+    pid?: number;
+    postMessage: (cmd: WorkspaceWatchCommand) => void;
+    kill: () => void;
+    sendCalls: WorkspaceWatchCommand[];
+    killCalls: string[];
+  }
+
+  function createDeferredSpawnWorker(): DeferredSpawnWorker {
+    const sendCalls: WorkspaceWatchCommand[] = [];
+    const killCalls: string[] = [];
+    const w = new EventEmitter() as DeferredSpawnWorker;
+    w.sendCalls = sendCalls;
+    w.killCalls = killCalls;
+    w.postMessage = (cmd: WorkspaceWatchCommand) => {
+      sendCalls.push(cmd);
+    };
+    w.kill = () => {
+      killCalls.push("kill");
+    };
+    return w;
+  }
+
+  function spawn(worker: DeferredSpawnWorker, pid = 4242): void {
+    worker.pid = pid;
+    worker.emit("spawn");
+  }
+
+  it("buffers watch-workspace until the worker spawns, then flushes it", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createDeferredSpawnWorker();
+    s.nextWorker(w as never);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+
+    // Worker forked but spawn event not fired yet → command must be buffered,
+    // not dropped and not posted.
+    expect(s.forkStub).toHaveBeenCalledTimes(1);
+    expect(w.sendCalls).toEqual([]);
+
+    spawn(w);
+    expect(w.sendCalls).toEqual([
+      {
+        type: "watch-workspace",
+        workspaceId: "w1",
+        workspaceRoot: "/tmp/w1",
+        includeRootAgentsFile: true,
+      },
+    ]);
+  });
+
+  it("flushes buffered commands in arrival order after a late spawn", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createDeferredSpawnWorker();
+    s.nextWorker(w as never);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+    s.manager.acquire({
+      workspaceId: "w2",
+      workspaceRoot: "/tmp/w2",
+      consumerId: "chat:2",
+    });
+    spawn(w);
+    expect(
+      w.sendCalls.map((c) => (c as { workspaceId?: string }).workspaceId)
+    ).toEqual(["w1", "w2"]);
+  });
+
+  it("sends immediately once the worker is ready (no re-spawn, no buffer)", () => {
+    const s = createManager({ trustApproved: true });
+    const w = createDeferredSpawnWorker();
+    s.nextWorker(w as never);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+    spawn(w);
+    expect(w.sendCalls).toHaveLength(1);
+
+    // Once ready, a new acquire posts directly — the pid-based fast path.
+    s.manager.acquire({
+      workspaceId: "w2",
+      workspaceRoot: "/tmp/w2",
+      consumerId: "chat:3",
+    });
+    expect(
+      w.sendCalls.map((c) => (c as { workspaceId?: string }).workspaceId)
+    ).toEqual(["w1", "w2"]);
+    expect(s.forkStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not post the shutdown command to a worker that never spawned", async () => {
+    const s = createManager({ trustApproved: true, shutdownTimeoutMs: 20 });
+    const w = createDeferredSpawnWorker();
+    s.nextWorker(w as never);
+    s.manager.acquire({
+      workspaceId: "w1",
+      workspaceRoot: "/tmp/w1",
+      consumerId: "chat:1",
+    });
+    expect(w.sendCalls).toEqual([]);
+
+    await s.manager.shutdown();
+    expect(w.sendCalls).toEqual([]);
+    expect(w.killCalls).toEqual(["kill"]);
+    expect(s.forkStub).toHaveBeenCalledTimes(1);
   });
 });

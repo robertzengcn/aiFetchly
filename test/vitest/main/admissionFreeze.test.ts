@@ -29,7 +29,7 @@ describe("ToolJobRegistry closed flag (T06)", () => {
     ).toThrow(/closed/);
   });
 
-  it("queued jobs admitted BEFORE shutdown are cancelled (not silently dropped)", () => {
+  it("queued jobs admitted BEFORE shutdown are cancelled (not silently dropped)", async () => {
     const registry = new ToolJobRegistry({ maxConcurrent: 1 });
     const first = registry.start(
       "tool",
@@ -44,13 +44,20 @@ describe("ToolJobRegistry closed flag (T06)", () => {
       neverSpawn
     );
     expect(queued.queued).toBe(true);
-    // Capture live statuses BEFORE shutdown() clears its map, then verify the
-    // registry is sealed and empty after (cancelled-then-cleared semantics).
+    // Capture live statuses BEFORE shutdown() relabels active jobs, then
+    // verify the seal + cancel-relabel + deferred-clear contract.
     const firstStatus = registry.getStatus(first.jobId).status;
     const queuedStatus = registry.getStatus(queued.jobId).status;
     registry.shutdown();
     expect(["queued", "running"]).toContain(firstStatus);
     expect(queuedStatus).toBe("queued");
+    // H5: plain shutdown() seals the registry and relabels every active job
+    // 'cancelled' synchronously — nothing is silently dropped — but it does
+    // NOT clear the map: state is cleared only by shutdownAndAwaitCleanup
+    // after the bounded cleanup wait (see ToolJobRegistry.shutdown).
+    expect(registry.getStatus(first.jobId).status).toBe("cancelled");
+    expect(registry.getStatus(queued.jobId).status).toBe("cancelled");
+    await registry.shutdownAndAwaitCleanup(50);
     expect(registry.getStatus(first.jobId).status).toBe("not_found");
     expect(() =>
       registry.start(

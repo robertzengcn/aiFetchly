@@ -46,6 +46,8 @@ export interface RedactedRequest {
   readonly model: string | undefined;
   readonly messageCount: number;
   readonly roles: readonly string[];
+  /** Last-3 message roles, in order (continuation-classification evidence). */
+  readonly tailRoles: readonly string[];
   readonly stream: boolean;
   readonly toolNames: readonly string[];
   /**
@@ -61,6 +63,16 @@ export interface RedactedRequest {
    */
   readonly responseFormat: string | undefined;
   readonly clientDisconnected: boolean;
+  /**
+   * Occurrences of the fixed prompt-skill context markers — REDACTED counts
+   * (constant markers, never user content), used to prove single vs
+   * duplicated instruction injection and post-compaction reattachment.
+   * Lost in a merge and restored (skillAcceptance/skillInstallRuntimeFlows
+   * depend on them).
+   */
+  readonly hiddenSkillBlocks: number;
+  readonly reattachedSkillBlocks: number;
+  readonly skillDiagnostics: readonly string[];
   readonly timestamp: number;
 }
 
@@ -82,8 +94,24 @@ export interface FakeOpenAiController {
   readonly providerBaseUrl: string;
   readonly port: number;
   setScenario(name: FakeAiScenarioName): Promise<void>;
+  /**
+   * Override the text served to a tool-result CONTINUATION request (the
+   * follow-up model round after the app executes an approved tool). Pass
+   * null to fall back to the tool-success-followup scenario. Lost in a
+   * merge and restored (skillInstallRuntimeFlows/skillAcceptanceVideoUse
+   * depend on it).
+   */
+  setFollowupText(text: string | null): Promise<void>;
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
+  /** Clear the configured tool call (POST tool-call with no name). */
+  clearToolCall(): Promise<void>;
+  /**
+   * Override NON-continuation replies when no tool call is configured.
+   * Lost in a merge and restored (compaction/post-invoke scenarios script
+   * plain-text rounds with it).
+   */
+  setResponseText(text: string | null): Promise<void>;
   /**
    * Configure MULTIPLE tool calls in one response (queue/steering E2E):
    * the app's loop executes them sequentially, so steering committed while
@@ -187,12 +215,24 @@ function redactChatRequest(
     model: parsed.model,
     messageCount: messages.length,
     roles,
+    // Last-3 message roles — what the server's continuation classification
+    // keys on. Deduped `roles` cannot reveal ordering, and handoff (role:user)
+    // placement after the tool batch decides continuation detection.
+    tailRoles: messages
+      .slice(-3)
+      .map((m) => (m as { role?: string }).role ?? "?"),
     stream: parsed.stream === true,
     toolNames,
     imagePartHashes,
     responseFormat: responseFormat !== "" ? responseFormat : undefined,
     clientDisconnected,
     timestamp: Date.now(),
+    hiddenSkillBlocks: (rawBody.match(/<invoked_prompt_skill /g) ?? []).length,
+    reattachedSkillBlocks: (
+      rawBody.match(/invoked-prompt-skill-reattached/g) ?? []
+    ).length,
+    skillDiagnostics:
+      rawBody.match(/invoked-prompt-skill-diagnostic code="([A-Z_]+)"/g) ?? [],
   };
 }
 
@@ -201,6 +241,8 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   /** Optional tool call to emit on the next (non-continuation) chat request. */
   let toolCallConfig: { name: string; arguments: string } | null = null;
+  let followupText: string | null = null;
+  let responseText: string | null = null;
   /** Optional multi-call variant (queue/steering E2E). */
   let toolCallsConfig: {
     calls: ReadonlyArray<{ name: string; arguments: string }>;
@@ -218,14 +260,46 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let nonStreamingQueue: string[] = [];
   const requestLog: RedactedRequest[] = [];
 
+  /** True when a role:user message is a MODEL-ONLY handoff the app appends
+   * after the tool batch (Chat Completions contract, ticket P2-8): prompt-skill
+   * instructions or image artifacts. These must NOT break continuation
+   * classification — the request is still the loop feeding tool results. */
+  function isHandoffMessage(message: unknown): boolean {
+    const m = message as { role?: string; content?: unknown };
+    if (m?.role !== "user") return false;
+    if (typeof m.content === "string") {
+      return m.content.includes("[application:invoked-prompt-skill]");
+    }
+    if (Array.isArray(m.content)) {
+      return m.content.some(
+        (p) =>
+          (p as { type?: string; text?: string })?.type === "text" &&
+          typeof (p as { text?: string }).text === "string" &&
+          (p as { text?: string }).text.includes("[AIFETCHLY_IMAGE_HANDOFF_V1]")
+      );
+    }
+    return false;
+  }
+
   /** True when a chat request carries a tool-result message (the continuation
    * after the app executed an approved tool). */
   function hasToolResultMessage(rawBody: string): boolean {
     try {
       const parsed = JSON.parse(rawBody) as { messages?: unknown[] };
-      return Array.isArray(parsed.messages)
-        ? parsed.messages.some((m) => (m as { role?: string }).role === "tool")
-        : false;
+      if (!Array.isArray(parsed.messages) || parsed.messages.length === 0) {
+        return false;
+      }
+      // A continuation is the loop feeding a JUST-EXECUTED tool result back.
+      // Trailing handoff messages (role:user, model-only context appended
+      // AFTER the tool batch — skill instructions / image artifacts) are
+      // skipped first: the request still ends its tool flow at role:"tool".
+      // Checking ANY message (the original bug) made every later turn in the
+      // same conversation a "continuation" forever, because tool rows persist
+      // in history — locking the server onto one followup text.
+      let idx = parsed.messages.length - 1;
+      while (idx >= 0 && isHandoffMessage(parsed.messages[idx])) idx -= 1;
+      if (idx < 0) return false;
+      return (parsed.messages[idx] as { role?: string }).role === "tool";
     } catch {
       return false;
     }
@@ -255,6 +329,31 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         res.end();
         return;
       }
+      if (req.method === "POST" && url === "/__e2e/followup-text") {
+        // readBody(req) above already consumed the stream — parse the
+        // shared body string (re-reading req yields nothing and every
+        // override silently 400'd, the root cause of F1).
+        try {
+          const parsed = JSON.parse(body) as { text?: unknown };
+          followupText = typeof parsed.text === "string" ? parsed.text : null;
+          res.writeHead(204);
+        } catch {
+          res.writeHead(400);
+        }
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/response-text") {
+        try {
+          const parsed = JSON.parse(body) as { text?: unknown };
+          responseText = typeof parsed.text === "string" ? parsed.text : null;
+          res.writeHead(204);
+        } catch {
+          res.writeHead(400);
+        }
+        res.end();
+        return;
+      }
       if (req.method === "POST" && url === "/__e2e/reset") {
         requestLog.length = 0;
         scenario = "stream-text";
@@ -262,6 +361,8 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         toolCallsConfig = null;
         toolCallQueue = [];
         scriptedCallCounter = 0;
+        followupText = null;
+        responseText = null;
         nonStreamingQueue = [];
         res.writeHead(204);
         res.end();
@@ -386,6 +487,21 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       // generic completion. Existing SSE scenarios are untouched (stream:true).
       const parsedBody = parseChatRequestBody(rawBody);
       if (!parsedBody.stream) {
+        // Summarize-only control scenarios (recoverable-history FR-HIS-005):
+        // the compaction coordinator's summarize calls are the non-streaming
+        // path, so a spec can settle a run FAILED or keep it cancellable
+        // without ever breaking streaming chat sends.
+        if (scenario === "summarize-http-500") {
+          await sleep(200);
+          requestLog.push(redactChatRequest(req, rawBody, false));
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "summarize down" } }));
+          return;
+        }
+        if (scenario === "summarize-delayed") {
+          // Hold the summarize behind a barrier the spec can cancel inside.
+          await sleep(6_000);
+        }
         requestLog.push(redactChatRequest(req, rawBody, false));
         // G03: a queued canned body wins (reply-draft generation needs valid
         // reply JSON); otherwise the pre-existing default selection applies.
@@ -504,7 +620,23 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           ],
         };
       } else if (isContinuation) {
-        plan = resolveScenario("tool-success-followup");
+        plan = followupText
+          ? {
+              kind: "sse" as const,
+              frames: [
+                { delayMs: 0, payload: textChunk(followupText) },
+                { delayMs: 0, payload: stopChunk() },
+              ],
+            }
+          : resolveScenario("tool-success-followup");
+      } else if (responseText) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            { delayMs: 0, payload: textChunk(responseText) },
+            { delayMs: 0, payload: stopChunk() },
+          ],
+        };
       } else if (toolCallsConfig) {
         plan = {
           kind: "sse" as const,
@@ -634,11 +766,32 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         body: JSON.stringify({ name }),
       });
     },
+    async setFollowupText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/followup-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    },
     async setToolCall(name: string, argsJson: string): Promise<void> {
       await controlFetch("/__e2e/tool-call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, arguments: argsJson }),
+      });
+    },
+    async clearToolCall(): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+    },
+    async setResponseText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/response-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
       });
     },
     async setToolCalls(

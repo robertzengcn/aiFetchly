@@ -689,33 +689,92 @@ describe("linked development mode targets the original source (FR-11, NFR-05)", 
   }, 180_000);
 
   it("linked mode with a REMOTE source never links staging", async () => {
-    const module = new SkillInstallationModule();
-    const prepared = await module.prepare({
-      conversationId: "conv-linked-remote",
-      source: "https://github.com/browser-use/video-use",
-      mode: "linked",
-    });
-    if (prepared.state === "failed") {
-      // Offline (this host): remote acquisition fails with the typed code —
-      // the wrong-link scenario is unreachable, which is the invariant.
-      expect(prepared.errorCode).toBe("SOURCE_ACQUISITION_FAILED");
-      return;
-    }
-    // Online: the plan holds; approving may pause at awaiting_secret for the
-    // fixture's declared credential — resume, then activation must fail with
-    // the typed LINK_CREATION_FAILED (linked requires a local folder).
-    expect(prepared.state).toBe("awaiting_approval");
-    let approved = await module.approve({
-      sessionId: prepared.sessionId,
-      planRevision: prepared.planRevision as string,
-      approve: true,
-      approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
-    });
-    if (approved.state === "awaiting_secret") {
+    // R9 T02: CONTROLLED remote fixture — the acquisition is stubbed to a
+    // deterministic github-kind tree (no network, no upstream drift), the
+    // plan declares one REQUIRED credential, and the test legitimately
+    // satisfies the credential gate through the credential module before
+    // asserting the typed linked-refusal. The secret gate is NOT weakened.
+    const { SkillSourceAcquisitionService } = await import(
+      "@/service/SkillSourceAcquisitionService"
+    );
+    const { SkillCredentialService } = await import(
+      "@/service/SkillCredentialService"
+    );
+    const { SkillCredentialModule } = await import(
+      "@/modules/SkillCredentialModule"
+    );
+    const credentialMap = new Map<string, string>();
+    const storeSpy = vi
+      .spyOn(SkillCredentialService.prototype, "store")
+      .mockImplementation(
+        (installationId: string, environmentVariable: string, value: string) => {
+          credentialMap.set(`${installationId}:${environmentVariable}`, value);
+          return { ok: true as const };
+        }
+      );
+    const retrieveSpy = vi
+      .spyOn(SkillCredentialService.prototype, "retrieve")
+      .mockImplementation(
+        (installationId: string, environmentVariable: string) =>
+          credentialMap.get(`${installationId}:${environmentVariable}`) ?? null
+      );
+    const acquireSpy = vi
+      .spyOn(SkillSourceAcquisitionService.prototype, "acquire")
+      .mockImplementation(async (sessionId: string) => {
+        const root = path.join(configHome, "staging", sessionId, "source");
+        fs.mkdirSync(root, { recursive: true });
+        fs.writeFileSync(
+          path.join(root, "SKILL.md"),
+          "---\nname: video-use\ndescription: Edit videos\n---\n\n# Usage\n\nDo things. Requires ELEVENLABS_API_KEY= configured in the secure store."
+        );
+        return {
+          ok: true as const,
+          source: {
+            sourceId: "src-r9t02",
+            canonicalUri: "https://github.com/e2e-fixture/video-use",
+            resolvedRevision:
+              "0000000000000000000000000000000000000000",
+            acquiredRoot: root,
+            contentHash: "hash-r9t02",
+            acquisitionMethod: "github-archive" as const,
+          },
+        };
+      });
+    try {
+      const module = new SkillInstallationModule();
+      const prepared = await module.prepare({
+        conversationId: "conv-linked-remote",
+        source: "https://github.com/browser-use/video-use",
+        mode: "linked",
+      });
+      // The controlled tree plans cleanly: the session holds at approval.
+      expect(prepared.state).toBe("awaiting_approval");
+      let approved = await module.approve({
+        sessionId: prepared.sessionId,
+        planRevision: prepared.planRevision as string,
+        approve: true,
+        approvalToken: (await module.getApprovalToken(prepared.sessionId)) ?? "",
+      });
+      // The plan's REQUIRED credential legitimately pauses activation.
+      expect(approved.state).toBe("awaiting_secret");
+      expect(approved.installationId).toBeTruthy();
+      const stored = await new SkillCredentialModule().store(
+        approved.installationId as string,
+        "ELEVENLABS_API_KEY",
+        "fixture-value"
+      );
+      expect(stored).toEqual({ ok: true });
+      // Credentials complete -> the unified continuation -> the linked gate
+      // refuses to link a remote (non-local-folder) source with the typed
+      // code: staging is app-owned and NEVER exposed as the user's original.
       approved = await module.resumeAfterSecret(prepared.sessionId);
+      expect(approved.state).toBe("failed");
+      expect(approved.errorCode).toBe("LINK_CREATION_FAILED");
+    } finally {
+      acquireSpy.mockRestore();
+      retrieveSpy.mockRestore();
+      storeSpy.mockRestore();
     }
-    expect(approved.state).toBe("failed");
-    expect(approved.errorCode).toBe("LINK_CREATION_FAILED");
   }, 120_000);
 });
 

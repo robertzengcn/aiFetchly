@@ -1,4 +1,5 @@
 import { AIChatEventRouter } from "@/service/AIChatEventRouter";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
@@ -21,6 +22,7 @@ import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { AIChatConversationModel } from "@/model/AIChatConversation.model";
 import type { StartChatRunRequestPayload } from "@/schemas/ipc/aiChatWorkspace";
+import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
 import { normalizeChatV2UploadedFiles } from "@/main-process/communication/ai-chat-v2-ipc";
 import type { ChatV2UploadedAttachment } from "@/entityTypes/aiChatV2Types";
 import type {
@@ -103,6 +105,22 @@ export interface AIChatCoordinatorDeps {
     conversationId: string,
     status: ChatRunStatus
   ) => void;
+  /**
+   * Chat-titles design §6: nonblocking notification after an interactive
+   * exchange has been durably completed (assistant result persisted + run
+   * terminal state written). Fire-and-forget; title failures never
+   * propagate into the run pipeline.
+   */
+  readonly onInteractiveTurnCompleted?: (input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+    /**
+     * F01 (titles design §6/§8.3): provider config version captured at TURN
+     * EXECUTION — the identity that produced the exchange, not the version
+     * at completion time.
+     */
+    sourceProviderVersion: number;
+  }) => void;
   /**
    * Busy-conversation send delegation (message-queue PRD §9.2): when the
    * conversation already has a live/running turn, a new send is routed into
@@ -264,7 +282,13 @@ export class AIChatCoordinator {
       terminalChunk: null,
       dispatchSettled: false,
       unclassifiedExitSummary: null,
-      adapter: new AIChatRunEventAdapter(run.runId, request.conversationId),
+      // D01 (audit 2026-10-21-r3): the accepted-send identity is the real
+      // run id itself — detail envelopes bind the accepted entry exactly.
+      adapter: new AIChatRunEventAdapter(
+        run.runId,
+        request.conversationId,
+        run.runId
+      ),
     });
     this.runIndex.set(run.runId, request.conversationId);
     this.startRequests.set(run.runId, {
@@ -366,7 +390,13 @@ export class AIChatCoordinator {
       terminalChunk: null,
       dispatchSettled: false,
       unclassifiedExitSummary: null,
-      adapter: new AIChatRunEventAdapter(run.runId, input.conversationId),
+      // D01 (audit 2026-10-21-r3): a queue-drained turn carries its pending
+      // source id so renderer ledger binds are never FIFO-based.
+      adapter: new AIChatRunEventAdapter(
+        run.runId,
+        input.conversationId,
+        `pending-${input.pendingMessageId}`
+      ),
       queueDispatch: input,
       completion,
     });
@@ -425,7 +455,7 @@ export class AIChatCoordinator {
           readonly questionId: string;
           readonly answers: AskUserQuestionAnswer[];
         };
-  }): Promise<{ ok: boolean; error?: string }> {
+  }): Promise<{ ok: boolean; claimed?: boolean; error?: string }> {
     const live = this.liveRuns.get(input.conversationId);
     if (!live) {
       return {
@@ -465,7 +495,10 @@ export class AIChatCoordinator {
             input.action.questionId
           );
     if (claim.status === "already_claimed") {
-      return { ok: true }; // idempotent duplicate approval
+      // Idempotent duplicate approval — NOT a fresh claim: the consuming
+      // gesture owns the outcome, and R9 B07 denial routing relies on the
+      // distinction (a duplicate deny must never cancel a newer turn).
+      return { ok: true, claimed: false };
     }
     if (claim.status === "not_found") {
       return {
@@ -473,7 +506,6 @@ export class AIChatCoordinator {
         error: "No pending action for this run (stale or already consumed).",
       };
     }
-
     live.status = "queued";
     live.resumeClaim = claim;
     live.cancelRequested = false;
@@ -494,7 +526,9 @@ export class AIChatCoordinator {
     });
     void this.broadcastRunSummary(input.conversationId, "run_queued");
     this.pump();
-    return { ok: true };
+    // A FRESH claim: this gesture consumed the pending action and queued
+    // its resume.
+    return { ok: true, claimed: true };
   }
 
   // -------------------------------------------------------------------------
@@ -510,6 +544,18 @@ export class AIChatCoordinator {
     conversationId: string;
     runId?: string;
   }): Promise<{ cancelled: boolean }> {
+    // R10 B01: a renderer-supplied run id is the captured cancellation
+    // claim. When it no longer resolves to a run of the claimed
+    // conversation (finalized run, or a claim for a different
+    // conversation), the request is stale — a no-op that must never cancel
+    // the conversation's newer run. The coordinator owns run identity, so
+    // this validation cannot be done renderer-side.
+    if (input.runId) {
+      const claimed = this.runIndex.get(input.runId);
+      if (!claimed || claimed !== input.conversationId) {
+        return { cancelled: false };
+      }
+    }
     const conversationId = input.runId
       ? this.runIndex.get(input.runId) ?? input.conversationId
       : input.conversationId;
@@ -677,6 +723,8 @@ export class AIChatCoordinator {
     }
 
     // Same-conversation turn coordination at dispatch time (design §10.3).
+    // Titles F01: bind this execution to the current provider identity.
+    const sourceProviderVersion = currentProviderConfigVersion();
     const lease = this.deps.turnCoordinator.tryAcquire({
       conversationId,
       owner: "interactive",
@@ -703,6 +751,19 @@ export class AIChatCoordinator {
       live.status = "running";
       void this.broadcastRunSummary(conversationId, "run_started");
 
+      // Codex P2 (round 3): stage the user-confirmed batch IMMEDIATELY
+      // before engine submission — a startRun-time entry leaks when the
+      // scheduler queues the run for capacity and the user cancels it before
+      // dispatch (finalizeAfterTerminal never enters the engine, so nothing
+      // clears the registry; a later process_artifact_batch call in this
+      // conversation would consume the cancelled selection).
+      const stagedBatch = this.startRequests.get(runId)?.confirmedGeneratedImageBatch;
+      if (stagedBatch) {
+        getConfirmedBatchReferenceRegistry().stage(
+          conversationId,
+          stagedBatch.references
+        );
+      }
       // Stage A §3.5 (FR-005): the adapter lives in run context so resumed
       // segments continue the same monotonic sequence.
       const adapter = live.adapter;
@@ -786,6 +847,11 @@ export class AIChatCoordinator {
         // FR-022 / AC-17: a segment that ends without a classified outcome
         // (engine threw) is recorded as failed with a diagnostic — never
         // completed. The renderer still learns via a synthesized error event.
+        // Pre-turn failure: nothing consumed the staged set — clear it so a
+        // later batch call cannot pick up this cancelled selection.
+        if (stagedBatch) {
+          getConfirmedBatchReferenceRegistry().clear(conversationId);
+        }
         const message = err instanceof Error ? err.message : String(err);
         outcome = {
           type: "failed",
@@ -898,6 +964,15 @@ export class AIChatCoordinator {
           isResult: finalStatus === "completed",
           previewText: terminal.fullContent,
           timestamp: new Date(),
+        });
+      }
+      // Chat-titles FR-02: trigger only from durable completion of an
+      // interactive exchange (never cancelled/failed/paused paths).
+      if (finalStatus === "completed" && terminal) {
+        this.deps.onInteractiveTurnCompleted?.({
+          conversationId,
+          assistantMessageId: terminal.messageId ?? null,
+          sourceProviderVersion,
         });
       }
       if (terminal) {
@@ -1123,6 +1198,16 @@ export class AIChatCoordinator {
       toolApprovalMode: request.toolApprovalMode,
       uploadedFiles: request.uploadedFiles,
       generatedImageReferences: request.generatedImageReferences,
+      // FR-SUB-004/FR-IMG-004/FR-HIS-002 (capability parity): submission
+      // context must reach the engine identically on the workspace surface
+      // and the Chat V2 stream edge — pasted bodies, the trusted confirmed
+      // image batch, opaque archive references, and the retry-stable id.
+      pastedContents: request.pastedContents,
+      // The confirmed batch travels via ConfirmedBatchReferenceRegistry only
+      // (staged at dispatch ownership); the engine request never carries it
+      // (trusted-channel strip contract, ai-chat-v2-ipc.ts:1043).
+      historySelectionIds: request.historySelectionIds,
+      submissionId: request.submissionId,
     };
   }
 
@@ -1201,11 +1286,16 @@ export class AIChatCoordinator {
     const runtimeStatus: ConversationRuntimeStatus = live
       ? live.status
       : "idle";
+    // R8 P2-7: the live entry is already deleted for terminal broadcasts —
+    // a `run_failed` summary must still mark the sidebar (queue-path parity,
+    // FR-REC-007): status metadata only, no transcript bodies.
     const attention =
       runtimeStatus === "awaiting_permission"
         ? ("permission" as const)
         : runtimeStatus === "awaiting_user"
         ? ("user_input" as const)
+        : reason === "run_failed"
+        ? ("failure" as const)
         : ("none" as const);
     // A conversation created via the renderer's New-chat button enters the
     // sidebar with an EMPTY title and only learns the projection's generated
@@ -1214,6 +1304,7 @@ export class AIChatCoordinator {
     // them too), so this stays within the status-metadata-only contract.
     // The lookup must never block the status broadcast itself.
     let title: string | undefined;
+    let titleRevision: number | undefined;
     try {
       const projection =
         await this.deps.conversationModule.getConversationProjection(
@@ -1221,6 +1312,7 @@ export class AIChatCoordinator {
         );
       if (projection?.title) {
         title = projection.title;
+        titleRevision = projection.titleRevision;
       }
     } catch (err) {
       console.warn("[ai-chat-workspace] summary title lookup failed:", err);
@@ -1233,7 +1325,13 @@ export class AIChatCoordinator {
       unread: this.liveUnread.get(conversationId) ?? false,
       lastActivityAt: new Date().toISOString(),
       runId: live?.runId,
+      // Audit R03: the coordinator runs INTERACTIVE sends only — sign the
+      // fact so the selected store treats these as bindable.
+      runOwner: "interactive",
       ...(title !== undefined ? { title } : {}),
+      ...(title !== undefined && titleRevision !== undefined
+        ? { titleRevision }
+        : {}),
       reason,
     });
   }

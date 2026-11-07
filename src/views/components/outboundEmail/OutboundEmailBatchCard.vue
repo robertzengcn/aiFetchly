@@ -50,6 +50,39 @@
         <v-icon size="small" start :color="summaryColor">{{ summaryIcon }}</v-icon>
         {{ summaryText }}
       </div>
+      <!-- P1-6: authoritative detail (sent count + sanitized reason code) —
+           the frozen draft must carry the terminal evidence, and the
+           delivery-unknown copy stays distinct from success (§18). -->
+      <div
+        v-if="summaryDetailVisible"
+        class="text-caption text-medium-emphasis mt-1"
+        data-testid="outbound-batch-summary-detail"
+      >
+        {{
+          t("outboundEmail.summary_detail", {
+            sent: sentCount,
+            total: recipientCount,
+            reason: reasonCode,
+          })
+        }}
+      </div>
+      <!-- Delivery-unknown is inconclusive, not settled (§18): the outcome
+           summary renders AND the dialog reopen entry stays, so the user can
+           re-check per-recipient delivery progress after closing the dialog
+           (FR-OUT-007/009; the design table's "email dialog reopen" journey). -->
+      <v-btn
+        v-if="summaryReopenVisible"
+        color="primary"
+        variant="tonal"
+        size="small"
+        class="mt-2"
+        data-testid="outbound-batch-review"
+        :data-batch-id="batchId"
+        @click="$emit('review-requested', batchId)"
+      >
+        <v-icon start size="small">mdi-eye-outline</v-icon>
+        {{ t("outboundEmail.review_action") || "Review" }}
+      </v-btn>
     </v-card-item>
   </v-card>
 </template>
@@ -61,10 +94,11 @@ import { useI18n } from "vue-i18n";
 /**
  * Compact batch summary shown inline in the AI chat result (§18). For a
  * review-able batch it surfaces a Review button that opens the review dialog;
- * for a terminal batch (sent / partially_sent / delivery_unknown / failed /
- * discarded) it shows the outcome summary instead. The direct-send
- * completion summary is shown here so the user does not need a separate page
- * (§18 last bullet).
+ * for a settled terminal batch (sent / partially_sent / failed / cancelled /
+ * discarded) it shows the outcome summary instead; for an inconclusive
+ * delivery-unknown batch it shows the outcome summary AND keeps the dialog
+ * reopen entry. The direct-send completion summary is shown here so the user
+ * does not need a separate page (§18 last bullet).
  */
 const props = defineProps<{
   batchId: number;
@@ -94,12 +128,38 @@ const modeLabel = computed<string>(() => {
   }
 });
 
-/** Terminal batches hide the review button and show a summary instead. */
+/** Settled terminal batches hide the review button and show a summary instead.
+ *  Delivery-unknown keeps Review hidden in the actions row, but its summary
+ *  branch carries the dialog reopen entry (see summaryReopenVisible) so
+ *  delivery progress stays reachable (FR-OUT-007/008/009). */
 const showReviewAction = computed<boolean>(() => {
-  return !["sent", "partially_sent", "delivery_unknown", "failed", "discarded"].includes(
-    props.batchStatus
-  );
+  return ![
+    "sent",
+    "partially_sent",
+    "delivery_unknown",
+    "failed",
+    "cancelled",
+    "discarded",
+  ].includes(props.batchStatus);
 });
+
+const summaryDetailVisible = computed<boolean>(() => {
+  return [
+    "sent",
+    "partially_sent",
+    "delivery_unknown",
+    "failed",
+    "cancelled",
+    "discarded",
+  ].includes(props.batchStatus);
+});
+
+/** Delivery-unknown is inconclusive (§18): keep the dialog reopen entry in
+ *  the summary so delivery progress stays reachable after the dialog closes
+ *  (FR-OUT-007/009; the design table's "email dialog reopen" journey). */
+const summaryReopenVisible = computed<boolean>(
+  () => props.batchStatus === "delivery_unknown"
+);
 
 const summaryText = computed<string>(() => {
   switch (props.batchStatus) {
@@ -113,6 +173,8 @@ const summaryText = computed<string>(() => {
       return t("outboundEmail.failed_summary") || "Batch failed.";
     case "discarded":
       return t("outboundEmail.discarded_summary") || "Batch discarded.";
+    case "cancelled":
+      return t("outboundEmail.cancelled_summary") || "Batch cancelled.";
     default:
       return "";
   }

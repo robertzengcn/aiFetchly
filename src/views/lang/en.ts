@@ -13,6 +13,11 @@ export default {
     settings: { localVision: "Local vision", visualPlanner: "Visual planner mode", stopHotkey: "Stop hotkey", debugCapture: "Debug capture", save: "Save" },
   },
   common: {
+    back: "Back",
+    continue: "Continue",
+    dismiss: "Dismiss",
+    retry: "Retry",
+    user: "You",
     more: "More",
     actions: "Actions",
     confirmation: "confirmation",
@@ -136,12 +141,6 @@ export default {
     email_extraction_edit: "Edit Contact Profile Insights Task",
     email_extraction_list: "Contact Profile Insights Task List",
     email_extraction_detail: "Contact Profile Insights Detail",
-    yellow_pages: "Directory Assistant",
-    yellow_pages_list: "Directory Assistant",
-    create_yellow_pages_task: "Create Directory Assistant Task",
-    edit_yellow_pages_task: "Edit Directory Assistant Task",
-    yellow_pages_task_detail: "Task Detail",
-    yellow_pages_results: "Task Results",
     yandex_maps_scraper: "Local Business Finder",
     email_marketing: "Outreach Campaign",
     bulk_email_task_list: "Email Task List",
@@ -431,7 +430,6 @@ export default {
     // Summary Cards
     search_results: "Search Results",
     emails_extracted: "Contact Profiles",
-    yellow_pages: "Directory Assistant",
     emails_sent: "Emails Sent",
     vs_previous_period: "vs previous period",
     success_rate: "Success Rate",
@@ -468,14 +466,6 @@ export default {
     search: "Market Insight",
     search_scraper: "Market Insight Explorer",
     search_description: "Organizing public market insight data",
-    yellowpage: "Directory Assistant",
-    yellowpage_scraper: "Directory Assistant",
-    yellowpage_description: "Aligning public directory data",
-    create_yellow_pages_task: "Create Directory Assistant Task",
-    edit_yellow_pages_task: "Edit Directory Assistant Task",
-    configure_yellow_pages_task:
-      "Configure and create a new Directory Assistant task",
-    modify_yellow_pages_task: "Modify existing Directory Assistant task",
     task_configuration: "Task Configuration",
     task_name: "Task Name",
     task_name_placeholder: "e.g., Restaurant Search - NYC",
@@ -539,11 +529,7 @@ export default {
     update_task: "Update Task",
     cancel: "Cancel",
     task_created_successfully: "Task Created Successfully",
-    task_created_message:
-      "Your Directory Assistant task has been created successfully!",
     task_updated_successfully: "Task Updated Successfully",
-    task_updated_message:
-      "Your Directory Assistant task has been updated successfully!",
     error_creating_task: "Error Creating Task",
     view_all_tasks: "View All Tasks",
     view_task_details: "View Task Details",
@@ -591,10 +577,6 @@ export default {
     account_manage: "Account Manage",
     account_manage_subtitle: "Account Manage",
     account_manage_description: "Manage account in system",
-    // Directory Assistant List Page
-    yellow_pages_task_management: "Directory Assistant Task Management",
-    yellow_pages_task_management_description:
-      "Manage data alignment tasks for directory sources",
     new_task: "New Task",
     import: "Import",
     export: "Export",
@@ -1191,6 +1173,13 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "Review email reply",
+    chatLoading: "Loading email…",
+    chatApproveSend: "Approve and send",
+    chatSending: "Sending…",
+    chatSent: "Email sent",
+    chatError: "Unable to complete this action. Reload the conversation to check the email status.",
+
     drafts_title: "Reply Drafts",
     generate_draft: "Generate Draft",
     regenerate: "Regenerate",
@@ -1316,6 +1305,8 @@ export default {
     unknown_summary: "Delivery status unknown.",
     failed_summary: "Batch failed.",
     discarded_summary: "Batch discarded.",
+    cancelled_summary: "Batch cancelled.",
+    summary_detail: "Sent: {sent}/{total} · Reason: {reason}",
     review_title: "Review Outbound Email",
     recipient: "Recipient",
     sender: "Sender",
@@ -1479,6 +1470,9 @@ export default {
     email_template_empty: "email template should not be empty",
     email_filter_empty: "email filter should not be empty",
     email_service_empty: "email service should bot be empty",
+    email_service_not_found:
+      "The selected email service does not exist. Choose a service from the email service list and try again.",
+    start_send_email_failed: "Failed to start the email send.",
     choose_at_least_one_souce: "you should choose at least one source",
     avoid_duplicate: "avoid user to receive duplicate email",
     check_email_souce: "please check email source correct",
@@ -1640,6 +1634,21 @@ export default {
       "Select the embedding model used for vector search and similarity matching.",
     language_preference: "Language",
     "language-preference-description": "UI language preference.",
+    ui_font_scale: "Layout font size",
+    "ui-font-scale-description":
+      "Increase or decrease the size of menus, pages, and other layout text.",
+    ui_font_scale_decrease: "Decrease layout font size",
+    ui_font_scale_increase: "Increase layout font size",
+    ui_font_scale_reset: "Reset",
+    ui_font_scale_smaller: "Smaller",
+    ui_font_scale_default: "Default",
+    ui_font_scale_larger: "Larger",
+    ui_font_scale_large: "Large",
+    ui_font_scale_largest: "Largest",
+    ui_chat_font_size: "Chat font size",
+    "ui-chat-font-size-description":
+      "Font size for chat messages and the message box, in pixels (10–32).",
+    ui_chat_font_size_invalid: "Enter a whole number from 10 to 32.",
     ai_website_analysis_business_info: "Business Info",
     "ai-website-analysis-business-info-description":
       "Business information used during website AI analysis.",
@@ -1753,6 +1762,30 @@ export default {
     user_ai_desktop_notify: "Desktop Completion Notice",
     "ai-desktop-notify-description":
       "Show a bottom-right desktop notice when the main AI agent finishes a reply or a plan is ready for approval (only when the app is in the background).",
+    "managed-browser-group": "Managed Browser",
+    "managed-browser-group-description":
+      "Settings for the built-in managed social browser and its shared browser cache.",
+    "managed-browser-enabled": "Enable Managed Browser",
+    "managed-browser-enabled-description":
+      "Turn the managed browser on or off for new sessions.",
+    "managed-browser-cache-enabled": "Enable Browser Cache",
+    "managed-browser-cache-enabled-description":
+      "Keep the shared browser cache between sessions to speed up logins and reduce CAPTCHA prompts.",
+    "managed-browser-cache-max-size-mb": "Browser Cache Max Size (MB)",
+    "managed-browser-cache-max-size-description":
+      "Maximum shared browser cache size in megabytes (allowed range 100 to 2048).",
+    "managed-browser-cache-clear-on-exit": "Clear Browser Cache on Exit",
+    "managed-browser-cache-clear-on-exit-description":
+      "Delete the shared browser cache when the application exits.",
+    "managed-browser-2captcha-disclosure": "2Captcha Usage Disclosure",
+    "managed-browser-2captcha-disclosure-description":
+      "Accept the disclosure that 2Captcha is used to solve supported challenges.",
+    "managed-browser-2captcha-domains": "2Captcha Authorized Domains",
+    "managed-browser-2captcha-domains-description":
+      "Comma-separated list of domains where 2Captcha may be used. Empty means none.",
+    "managed-browser-2captcha-non-login": "Allow 2Captcha for Non-Login Challenges",
+    "managed-browser-2captcha-non-login-description":
+      "Permit 2Captcha to solve challenges that are not part of a login flow. Login, security, and payment challenges always require manual handoff.",
   },
   aiMemory: {
     title: "AI Memories",
@@ -2189,93 +2222,6 @@ export default {
     reasoning: "Reasoning",
     client_business: "Client Business",
   },
-  yellowPages: {
-    ai_support: "AI Support",
-    ai_support_hint:
-      "Use AI to assist data alignment when selectors fail to read public data",
-    ai_query_keywords: "AI query keywords",
-    ai_query_keywords_default_seed: "business",
-    use_account: "Use account",
-    account_required_for_platform: "Account required for platform: {name}",
-    not_set: "Not set",
-    enabled: "Enabled",
-    disabled: "Disabled",
-    authentication: "Authentication",
-    requires_cookies: "Requires Cookies",
-    account_required_for_auth: "Account required for authentication",
-    requires_login: "Requires Login",
-    requires_api_key: "Requires API Key",
-    requires_oauth: "Requires OAuth",
-    location_required: "Location Required",
-    platform_requires_location: "This platform requires a location for search",
-    // List / manage page
-    list_manual_refresh: "Manual refresh",
-    list_auto_refresh_enabled: "Auto-refresh enabled (5s)",
-    list_auto_refresh_paused: "Auto-refresh paused (page not visible)",
-    list_auto_refresh_disabled: "Auto-refresh disabled",
-    list_auto_refresh_on: "Auto-refresh ON",
-    list_auto_refresh_paused_btn: "Auto-refresh PAUSED",
-    list_auto_refresh_off: "Auto-refresh OFF",
-    list_last_updated: "Last updated",
-    list_auto_refresh_interval: "Auto-refresh: {seconds}s",
-    list_search_placeholder: "Search by task name or platform...",
-    list_filter_search: "Search",
-    list_filter_status: "Status",
-    list_filter_platform: "Platform",
-    list_filter_priority: "Priority",
-    list_tasks_match_filters:
-      "{total} of {totalUnfiltered} tasks match filters",
-    list_no_tasks_match_filters: "No tasks match your filters",
-    list_adjust_search_or_clear:
-      "Try adjusting your search criteria or clearing some filters",
-    list_clear_all_filters: "Clear All Filters",
-    list_applying_filters: "Applying filters...",
-    list_task_not_running: 'Task "{name}" is not currently running',
-    list_confirm_stop_task:
-      'Are you sure you want to stop task "{name}" (PID: {pid})?\n\nThis will terminate the running process and update the task status.',
-    list_task_stopped_success:
-      'Successfully stopped task "{name}"!\n\nTask status has been updated to "Pending" and the table will refresh to show the changes.',
-    list_task_stop_failed: 'Failed to stop task "{name}": {message}',
-    list_error_stopping_task: 'Error stopping task "{name}": {message}',
-    list_task_pause_failed: 'Failed to pause task "{name}": {message}',
-    list_task_resumed_success: 'Task "{name}" resumed successfully',
-    list_task_resume_failed: 'Failed to resume task "{name}": {message}',
-    list_task_still_running_results:
-      "Task is still running. Results will be available when data alignment completes.",
-    list_task_no_results_yet: "This task has no results yet.",
-    list_view_results_anyway_confirm:
-      "Do you still want to view the results page?",
-    list_unknown_error: "Unknown error",
-    list_unknown_error_occurred: "Unknown error occurred",
-    // Task details view
-    detail_task_information: "Task Information",
-    detail_task_status: "Task Status",
-    detail_task_actions: "Task Actions",
-    detail_field_name: "Name",
-    detail_field_platform: "Platform",
-    detail_field_keywords: "Keywords",
-    detail_field_location: "Location",
-    detail_field_max_pages: "Max Pages",
-    detail_field_priority: "Priority",
-    detail_field_status: "Status",
-    detail_field_progress: "Progress",
-    detail_field_results_count: "Results Count",
-    detail_field_created: "Created",
-    detail_field_last_updated: "Last Updated",
-    detail_action_start: "Start Task",
-    detail_action_stop: "Stop Task",
-    detail_action_pause: "Pause Task",
-    detail_action_resume: "Resume Task",
-    detail_action_view_results: "View Results",
-    detail_action_edit: "Edit Task",
-    detail_action_delete: "Delete Task",
-    detail_action_close: "Close",
-    detail_status_pending: "Pending",
-    detail_status_running: "Running",
-    detail_status_completed: "Completed",
-    detail_status_failed: "Failed",
-    detail_status_paused: "Paused",
-  },
   googleMaps: {
     title: "Local Business Finder",
     description: "Search public local business sources by keyword and location",
@@ -2481,6 +2427,14 @@ export default {
     draft_label: "Draft — review required",
   },
   aiProvider: {
+    chatTitles: {
+      section: "Chat titles",
+      description: "Automatic naming uses a short excerpt of the conversation and may incur a small amount of provider usage.",
+      autoToggle: "Automatically name new chats",
+      hostedModelHint: "Hosted mode uses the service's lightweight model.",
+      customModelLabel: "Title model (optional)",
+      customModelHint: "Used to name new chats automatically. Uses your configured provider.",
+    },
     title: "AI Provider",
     description:
       "Custom providers can power AI Chat with your own model. Hosted aiFetchly AI features still require a subscription.",
@@ -2553,8 +2507,6 @@ export default {
       "View and manage inbound emails received through configured services.",
     email_reply_description:
       "Review and audit AI-generated automatic email replies.",
-    directory_description:
-      "Browse directory tasks and collected business records.",
     maps_description: "Find local businesses from map providers.",
     outreach_description:
       "Manage outreach tasks, templates, filters, and replies.",
@@ -2579,8 +2531,16 @@ export default {
       "Review AI-generated replies, approval status, and audit logs.",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "The conversation is too long for the model's context window. Please start a new conversation or clear some history.",
+  skillSlash: {
+      notFound:
+        "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
+    },
+    cancel: "Cancel",
     queue: {
       queued: "Queued",
+      region: "Queued messages",
       steering: "Steering…",
       applied: "Applied",
       dispatching: "Sending…",
@@ -2891,8 +2851,6 @@ export default {
       retry: "Retry",
     },
     title: "AI Assistant",
-    show_reasoning: "Show reasoning",
-    hide_reasoning: "Hide reasoning",
     reasoning_title: "Reasoning",
     reasoning_streaming: "Reasoning…",
     reasoning_unavailable: "Reasoning is not available for this model.",
@@ -2995,6 +2953,30 @@ export default {
       binary_unsupported: "This output cannot be displayed as text; export it instead",
       close: "Close",
     },
+    // Host-registered plugin result artifacts (design §13.4).
+    pluginArtifact: {
+      title: "Result files",
+      count_label: "{count} file(s)",
+      file_title: "Records ({format})",
+      saved_at: "Saved {time}",
+      records_count: "{count} records",
+      preview: "Preview",
+      preview_truncated: "… (showing only the first rows)",
+      hide_preview: "Hide preview",
+      save: "Save file",
+      delete: "Delete",
+      confirm_delete: "Confirm delete",
+      preview_failed: "Could not load the preview",
+      export_failed: "Could not save the file",
+      delete_failed: "Could not delete the file",
+      deleted_all: "Files deleted",
+      expires_at: "Expires {time}",
+      expired_at: "Expired {time}",
+      recovered_title: "Recovered executions",
+      recovered_entry: "{plugin} · {time}",
+      recovered_note:
+        "An earlier run was interrupted before its results were saved.",
+    },
     generated_image_alt: "AI generated image",
     open_generated_image: "Open generated image",
     permission_denied: "Permission denied. The tool will not be executed.",
@@ -3002,6 +2984,8 @@ export default {
       "Could not continue the tool after permission was granted.",
     permission_resume_no_tool_id:
       "Missing tool call information; cannot continue execution.",
+    permission_deny_failed:
+      "Could not deny the tool. It is still paused for permission.",
     permission_requested_scheduled:
       "A scheduled task is asking for permission to use a tool. Review and approve or deny it.",
     auth_expired: "Your session has expired. Please sign in again.",
@@ -3041,6 +3025,7 @@ export default {
       document_ready: "Document ready",
       document_failed: "Document processing failed",
       image_alt: "Attached image: {name}",
+      text_required: "Add a message to send with your attachments.",
     },
     generatedImageRefs: {
       useAsReference: "Use as reference",
@@ -3501,6 +3486,7 @@ export default {
     notSet: "No workspace set",
     selectFolder: "Select folder",
     changeFolder: "Change folder",
+    removeAction: "Remove workspace",
     approve: "Approve workspace",
     revoke: "Revoke workspace",
     rootPath: "Root path",
@@ -3774,6 +3760,64 @@ export default {
     plugins: "Plugins",
     backToApp: "Back to app",
     loadOlder: "Load older messages",
+    command: {
+      staleAborted: "Selection changed — the command was not run.",
+      noConversation: "No chat is selected — the command was not run.",
+      busy:
+        "Commands are unavailable while this chat is running. Wait for it to finish or stop it first.",
+      filesNotSupported:
+        "This command does not support file attachments. Remove the files or send your message without the /command prefix.",
+      loopAttachmentsNotSupported:
+        "Loop commands do not support file attachments or pasted blocks. Send the loop command on its own, then share the content in a follow-up message.",
+      loopControlFailed: {
+        pause:
+          "Could not pause the scheduled loop. Check /loop status and try again.",
+        resume:
+          "Could not resume the scheduled loop. Check /loop status and try again.",
+        stop:
+          "Could not stop the scheduled loop. Check /loop status and try again.",
+      },
+      clearFailed: "Could not clear this chat. Try again.",
+    },
+    errors: {
+      queueLimit:
+        "The message queue is full. Wait for the current reply or stop it before sending again.",
+      contentTooLong: "The message is too long. Shorten it and try again.",
+      emptyMessage: "The message is empty. Type something before sending.",
+      preparationFailed:
+        "The message could not be prepared. Check the attachments and try again.",
+      queueDisabled: "The message queue is disabled. Sending is unavailable.",
+      aiDisabled: "AI features are not enabled on this plan. Your draft was kept.",
+      invalidRequest: "The request was invalid. Check the message and try again.",
+      pendingNotFound: "The queued message was not found. It may have been removed.",
+      pendingNotClaimable:
+        "The queued message can no longer be sent. Please resend it.",
+      conversationMismatch:
+        "The queued message belongs to a different conversation.",
+      idempotencyConflict:
+        "This message was already sent. Check the conversation before resending.",
+      attachmentsNotSteerable:
+        "Messages with attachments cannot steer a running reply.",
+      steeringDisabled: "Follow-up steering is disabled.",
+      turnNotSteerable: "There is no running reply to steer right now.",
+      steeringCommitRace: "Another action claimed this message first.",
+      runEnvelopeFailed:
+        "The execution could not start. Please try again in a moment.",
+      dispatchPromoteFailed:
+        "The message could not be dispatched. Please try again.",
+      runTerminalPersistFailed:
+        "The reply finished but could not be saved. It will recover on reload.",
+      contextWindow: "The conversation is too long for the model's context window. Start a new conversation or clear some history.",
+    },
+    history: {
+      selectionLimit: "Up to 20 passages can be attached to one message.",
+      navigateUnavailable: "That message is no longer available in this conversation.",
+    },
+    recovery: {
+      retry: "Reconnecting… attempt {attempt} of {max} (waiting ~{seconds}s)",
+      recovering: "Recovering via {layer}: {reason}",
+      recoveringDetail: "Recovering via {layer}: {reason} (attempt {attempt} of {max})",
+    },
     empty: {
       title: "Ask anything, or pick a conversation on the left.",
     },
@@ -3785,6 +3829,10 @@ export default {
       loadError: "Failed to load workspaces",
       empty: "No conversations yet",
       unassigned: "Other chats",
+      projects: "Project",
+      refresh: "Refresh projects",
+      collapse: "Collapse projects",
+      expand: "Expand projects",
       workspace: "Workspace",
       needsAttentionCount: "{count} conversations need attention",
     },
@@ -3812,6 +3860,7 @@ export default {
     },
     header: {
       overflow: "Conversation menu",
+      backgroundAgents: "Background Agents",
       rename: "Rename chat",
       renamePrompt: "Rename chat",
       compact: "Compact conversation",
@@ -3822,6 +3871,21 @@ export default {
       duplicate: "Duplicate conversation",
       deleteConfirm:
         "Delete this conversation? All messages and generated artifacts will be removed. This cannot be undone.",
+    },
+    renameDialog: {
+      title: "Rename chat",
+      label: "Chat name",
+      save: "Save",
+      cancel: "Cancel",
+      limitHint: "Max 200 characters",
+      errorEmpty: "Enter a name for this chat",
+      errorTooLong: "Names must be 200 characters or fewer",
+      errorInvalid: "That name contains unsupported characters",
+      errorSaveFailed: "Couldn't rename this chat. Please try again.",
+      errorUnavailable: "This chat is no longer available",
+      saving: "Saving…",
+      renameAction: "Rename chat",
+      menuButtonLabel: "Conversation actions",
     },
     runStrip: {
       goal: "Goal: {objective}",
@@ -3845,6 +3909,8 @@ export default {
       activity: "Activity",
       context: "Context",
       resize: "Resize inspector",
+      artifactsDisabled:
+        "Artifact results are unavailable while the specialized-results rollout adapter is rolled back.",
     },
     artifacts: {
       selectConversation: "Select a conversation to see its generated outputs.",
@@ -3886,6 +3952,11 @@ export default {
       revoked: "Revoked",
     },
     execution: {
+      arguments: "Arguments",
+      details: "Details",
+      duration: "Duration",
+      finishedAt: "Finished",
+      resultSummary: "Result",
       groupTitle: "Execution",
       progress: "{completed} of {total} complete",
       runningTool: "Running {tool}",
@@ -3893,6 +3964,7 @@ export default {
       artifactCreated: "HTML report created — open it in Artifacts",
       openArtifact: "Open",
       imagesGenerated: "Images generated",
+      imagesGeneratedCount: "{count} images generated",
       filesChanged: "Files changed — see Activity",
       permissionNeeded: "Permission decision required",
       structuredResult: "Structured result — see details in Activity",
@@ -3903,6 +3975,9 @@ export default {
       },
     },
     plan: {
+      continuationAborted: "Selection changed — the plan decision was saved, but its follow-up message was not sent. Reopen the conversation to continue.",
+      continuationPending: "The plan decision was saved, but its follow-up message was not sent. Use Continue to retry.",
+      continue: "Continue",
       version: "Version",
       current: "current",
       changeReason: "Change reason",
@@ -4087,6 +4162,9 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Unknown account",
     proxy_active: "Proxy",
+    scope_global: "Shared browser",
+    scope_global_hint:
+      "This browser session belongs to the account and stays visible when you switch chats.",
     screenshot: {
       capture: "Refresh thumbnail",
       alt: "Latest browser screenshot",
@@ -4184,6 +4262,7 @@ export default {
       verify_login: "I've finished logging in",
       extend: "Extend time (10 min)",
       cancel_task: "Cancel task",
+      close: "Close",
       reasons: {
         login_required: "The site requires a login to continue.",
         login_expired: "The saved login session has expired.",
@@ -4390,8 +4469,11 @@ export default {
       resultFailed: "Failed: {message}",
       output: "Output",
     },
+    stateUnknown: "Status unknown",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "The installation action failed. Try again.",
+      statusUnavailable: "Could not refresh the installation status. Approvals stay locked until the status is confirmed — check the connection and retry.",
       secretFailed: "Storing the credential failed. It was NOT saved.",
     },
     state: {
@@ -4412,9 +4494,4 @@ export default {
       superseded: "Superseded",
       awaiting_commands: "Setup commands pending",
     },
-  },
-  skillSlash: {
-    notFound:
-      "No installed prompt skill matches '{name}'. Use /skills to list installed skills.",
-  },
-};
+  },};

@@ -22,6 +22,15 @@ import {
 export { HttpResponseError } from "@/modules/lib/httpResponseError";
 
 /**
+ * Titles B05 (design §5.1/§8.5): strict single-dispatch requests opt out of
+ * auth-refresh replay. A 401/403 surfaces as a typed error instead of a
+ * second POST — an already-attempted completion is never replayed.
+ */
+export interface NoReplayRequestInit extends RequestInit {
+  noAuthReplay?: boolean;
+}
+
+/**
  * Decide whether a refresh failure is auth-shaped versus a transient/network
  * failure. Both paths keep local auth state; auth-shaped failures only stop
  * the current remote request so local app features remain available.
@@ -240,6 +249,11 @@ export class HttpClient {
     // 401 the same as 403 here — otherwise a genuinely expired access token
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
+      // Titles B05: never replay a strict single-dispatch request after a
+      // token refresh — the retry would spend a second provider call.
+      if ((options as NoReplayRequestInit).noAuthReplay === true) {
+        throw await this._buildHttpResponseError(res);
+      }
       log.warn(`Received ${res.status} - Attempting token refresh`);
       const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
@@ -495,7 +509,7 @@ export class HttpClient {
   public async postJson<T = any>(
     endpoint: string,
     data: unknown,
-    options = {}
+    options: NoReplayRequestInit = {}
   ): Promise<T> {
     // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
     // default to the standard JSON accept/content-type. The hard-coded

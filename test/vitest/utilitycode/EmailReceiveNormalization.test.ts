@@ -6,6 +6,7 @@ import {
 import {
   classifyDeterministic,
   classifyMessage,
+  buildClassificationPrompt,
   MODEL_CLASSIFIER_VERSION,
   CLASSIFIER_VERSION,
 } from "@/service/emailReply/EmailMessageClassificationService";
@@ -267,5 +268,71 @@ describe("classifyMessage two-stage (FR-007 stage 2, P2.2)", () => {
     });
     expect(d.classification).toBe("needs_human_review");
     expect(d.source).toBe("review");
+  });
+
+  it("routes a model 'auto_reply' verdict to needs_human_review (model-sourced hard blocks are not trusted)", async () => {
+    // Regression (2026-10-21 incident, erx-req-1-bu11tp58): a human reply
+    // ("what is feature of aifetchly" from a gmail.com sender) quoted the
+    // recipient's own marketing email below the question. The stage-2 model
+    // saw the quoted list-like content and answered auto_reply with high
+    // confidence; classifyMessage accepted it, the draft path persisted it
+    // sticky, and the re-gate refused with
+    // "[automated_sender] Classification 'auto_reply' must not be
+    // auto-replied". A model verdict is NOT deterministic-grade evidence for a
+    // hard block (RFC 3834-style loop prevention): deterministic rules already
+    // had the chance to see header/sender signals and found NONE. A model
+    // auto_reply/bounce/unsubscribe routes to review instead of freezing the
+    // thread behind a hard block.
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "auto_reply", confidence: 0.95 })
+    );
+    expect(d.classification).toBe("needs_human_review");
+    expect(d.source).toBe("review");
+  });
+
+  it("routes a model 'bounce' verdict to needs_human_review (same hard-block rule)", async () => {
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "bounce", confidence: 0.99 })
+    );
+    expect(d.classification).toBe("needs_human_review");
+    expect(d.source).toBe("review");
+  });
+
+  it("routes a model 'unsubscribe' verdict through as body-intent evidence (adoptable, unlike sender-automation claims)", async () => {
+    // Unlike auto_reply/bounce (sender-automation claims needing header-grade
+    // evidence the model never sees), unsubscribe is BODY-INTENT evidence the
+    // deterministic regex may miss — it stays adoptable so real stop-contact
+    // intent still blocks drafting.
+    const d = await classifyMessage(inconclusive, async () =>
+      JSON.stringify({ classification: "unsubscribe", confidence: 0.9 })
+    );
+    expect(d.classification).toBe("unsubscribe");
+    expect(d.source).toBe("model");
+  });
+
+  it("still accepts model-sourced positive verdicts (interested, not_interested, support_request)", async () => {
+    for (const classification of [
+      "interested",
+      "not_interested",
+      "support_request",
+    ] as const) {
+      const d = await classifyMessage(inconclusive, async () =>
+        JSON.stringify({ classification, confidence: 0.9 })
+      );
+      expect(d.classification).toBe(classification);
+      expect(d.source).toBe("model");
+    }
+  });
+
+  it("buildClassificationPrompt defines what a HUMAN reply looks like and forbids auto_reply without sender evidence", () => {
+    const prompt = buildClassificationPrompt({
+      subject: "Re: Quick question",
+      bodyExcerpt: "what is feature of aifetchly\n\nHi Robert, ...marketing...",
+    });
+    // The human-reply definition must be present, and auto_reply must be
+    // conditioned on automated-sender evidence rather than on quoted content.
+    expect(prompt).toMatch(/human/i);
+    expect(prompt).toMatch(/quoted|below the reply|earlier/i);
+    expect(prompt).toMatch(/auto[-_ ]?reply/i);
   });
 });

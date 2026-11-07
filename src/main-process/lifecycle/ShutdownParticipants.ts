@@ -73,19 +73,48 @@ const CONTACT_WORKER_OBSERVE_MS = 2_000;
 export function createShutdownParticipants(
   deps: BackgroundShutdownDeps
 ): ShutdownParticipant[] {
+  const chatTitles: ShutdownParticipant = {
+    id: "chat-titles",
+    freeze: () => {
+      // F05 (titles design §6/§8.5): seal background naming at exit entry.
+      // Dynamic import — an unused service is never instantiated; a used
+      // one drops queued work, aborts in-flight dispatch, and any future
+      // singleton is created already-disposed.
+      void import("@/service/aiChatWorkspaceRuntime").then(
+        ({ sealSharedAIChatTitleServiceForShutdown }) => {
+          sealSharedAIChatTitleServiceForShutdown();
+        }
+      );
+    },
+    stop: async () => undefined,
+    finalize: async () => undefined,
+  };
+
   const toolJobs: ShutdownParticipant = {
     id: "tool-jobs",
     freeze: () => {
       // T06/AC-05: seal the registry SYNCHRONOUSLY at exit entry — jobs
       // admitted after this tick are refused (start() throws closed).
+      // H5: active jobs are aborted + relabelled cancelled here; their
+      // admission leases ride deferred settlement so stop() below can await
+      // actual cleanup quiescence before other participants tear down.
       void import("@/service/ToolJobRegistry").then(
         ({ getDefaultToolJobRegistry }) => {
           getDefaultToolJobRegistry().shutdown();
         }
       );
     },
-    stop: async () => {
-      // Nothing further at stop time — freeze already cancelled + sealed.
+    stop: async (context) => {
+      // H5 (lifecycle): await bounded cleanup for the jobs frozen above
+      // (plugin process teardown incl. browser group kill) before the rest
+      // of the shutdown proceeds. Bounded by the remaining budget; a hung
+      // tool cannot block exit beyond it.
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      await getDefaultToolJobRegistry().shutdownAndAwaitCleanup(
+        Math.max(0, Math.min(5_000, context.remainingMs()))
+      );
     },
     finalize: async () => undefined,
   };
@@ -322,19 +351,6 @@ export function createShutdownParticipants(
     finalize: async () => undefined,
   };
 
-  const yellowPages: ShutdownParticipant = {
-    id: "yellow-pages",
-    freeze: () => undefined,
-    stop: async () => {
-      const { YellowPagesProcessManager } = await import(
-        "@/modules/YellowPagesProcessManager"
-      );
-      await YellowPagesProcessManager.getInstance().terminateAllProcesses();
-      log.info("Yellow Pages processes terminated");
-    },
-    finalize: async () => undefined,
-  };
-
   const appResources: ShutdownParticipant = {
     id: "app-resources",
     freeze: () => undefined,
@@ -352,13 +368,13 @@ export function createShutdownParticipants(
   };
 
   return [
+    chatTitles,
     toolJobs,
     managedBrowsers,
     contactExtraction,
     schedulers,
     marketingWebSocket,
     workspaceWatch,
-    yellowPages,
     searchScraper,
     durableTasks,
     workerProtocol,

@@ -16,6 +16,7 @@ import {
   VIDEODOWNLOAD_MESSAGE,
   VIDEODOWNLOAD,
   VIDEODOWNLOAD_TASK_LIST,
+  SOCIALPLATFORM_LIST,
   SEARCHSCRAPERAPI,
   LISTSESARCHRESUT,
   SEARCHEVENT,
@@ -35,6 +36,7 @@ import {
   EMAILMARKETINGTEMPDETAIL,
   EMAILMARKETINGTEMPUPDATE,
   EMAILMARKETINGFILTERLIST,
+  EMAILMARKETINGTEMPPREVIEW,
   EMAILMARKETFILTERDETAIL,
   EMAILMARKETFILTERUPDATE,
   EMAILSERVICEUPDATE,
@@ -159,6 +161,7 @@ import {
   CRON_NEXT_RUN_TIME,
   GET_LOGIN_URL,
   USER_CHECK_LOGIN,
+  CHECK_LOGIN_SUCCEEDED,
   USER_SIGNOUT,
   GET_APP_INFO,
   APP_OPEN_WEBSITE,
@@ -172,25 +175,17 @@ import {
   CREATE_SEARCH_TASK_ONLY,
   EXPORT_SEARCH_RESULTS,
   KILL_SEARCH_PROCESS,
-  // Yellow Pages Management Channels
-  YELLOW_PAGES_PLATFORMS,
-  YELLOW_PAGES_LIST,
-  YELLOW_PAGES_DETAIL,
-  YELLOW_PAGES_CREATE,
-  YELLOW_PAGES_UPDATE,
-  YELLOW_PAGES_DELETE,
-  YELLOW_PAGES_START,
-  YELLOW_PAGES_STOP,
-  YELLOW_PAGES_PAUSE,
-  YELLOW_PAGES_RESUME,
-  YELLOW_PAGES_PROGRESS,
-  YELLOW_PAGES_RESULTS,
-  YELLOW_PAGES_EXPORT,
-  YELLOW_PAGES_BULK,
-  YELLOW_PAGES_HEALTH,
-  YELLOW_PAGES_STATISTICS,
-  YELLOW_PAGES_KILL_PROCESS,
-  YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
+  // Platform Management Channels (PRD §28.1: shared platform registry —
+  // R9-preceding allowlist fix d23b41884; the yellow-pages-only channels
+  // were removed with the yellow-pages feature per PRD §17.2)
+  PLATFORM_LIST,
+  PLATFORM_DETAIL,
+  PLATFORM_CREATE,
+  PLATFORM_UPDATE,
+  PLATFORM_DELETE,
+  PLATFORM_VALIDATE,
+  PLATFORM_STATISTICS,
+  PLATFORM_TOGGLE,
   // Language Preference Channels
   LANGUAGE_PREFERENCE_GET,
   LANGUAGE_PREFERENCE_UPDATE,
@@ -270,7 +265,11 @@ import {
   AI_CHAT_WORKSPACE_ACTIVITY,
   AI_CHAT_WORKSPACE_GET_FLAG,
   AI_CHAT_WORKSPACE_SET_FLAG,
+  AI_CHAT_RENDERER_METRICS_PUSH,
+  // R8 §2: renderer-originated workspace action counts (bounded labels).
+  AI_CHAT_WORKSPACE_ACTION_COUNT,
   AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+  AI_CHAT_WORKSPACE_TITLE_UPDATED,
   AI_CHAT_WORKSPACE_DETAIL_EVENT,
   AI_CHAT_V2_CLEAR_CONVERSATION,
   AI_CHAT_V2_CLEAR_ALL,
@@ -280,6 +279,7 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
   AI_CHAT_V2_AT_MENTION_SUGGEST,
   AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
   AI_CHAT_V2_GOAL_CREATE,
@@ -329,6 +329,7 @@ import {
   SKILL_INSTALL_REVEAL_SOURCE,
   // AiChatV2 Recoverable History Channels (technical-design §13)
   AI_CHAT_V2_HISTORY_SEARCH,
+  AI_CHAT_V2_READ_PASTE_CACHE,
   AI_CHAT_V2_HISTORY_READ,
   AI_CHAT_V2_HISTORY_BROWSE,
   AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
@@ -358,6 +359,11 @@ import {
   AI_CHAT_V2_VOICE_MODEL_CANCEL_DOWNLOAD,
   AI_ARTIFACT_GET,
   AI_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_LIST,
+  PLUGIN_ARTIFACT_PREVIEW,
+  PLUGIN_ARTIFACT_EXPORT,
+  PLUGIN_ARTIFACT_DELETE,
+  PLUGIN_ARTIFACT_LIST_JOURNAL,
   // Dashboard Channels
   DASHBOARD_SUMMARY,
   DASHBOARD_TRENDS,
@@ -434,6 +440,7 @@ import {
   AI_MESSAGE_TASK_RUN_DETAIL,
   AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
   AGENT_DEFINITION_LIST,
+  AGENT_TASK_CANCEL,
   AGENT_TASK_DETAIL,
   AGENT_TASK_TRANSCRIPT,
   AGENT_TASK_LIST,
@@ -536,6 +543,7 @@ import {
   SLASH_COMMAND_DISPATCH,
   AIFETCHLY_CONFIG_RELOAD,
   AIFETCHLY_CONFIG_STATUS,
+  AIFETCHLY_CONFIG_CHANGED,
   // Workspace Watcher Channels
   AIFETCHLY_WORKSPACE_WATCH_ACQUIRE,
   AIFETCHLY_WORKSPACE_WATCH_RELEASE,
@@ -655,6 +663,7 @@ contextBridge.exposeInMainWorld("api", {
       EXTRAMODULECHANNE_UNINSTALL,
       VIDEODOWNLOAD_MESSAGE,
       VIDEODOWNLOAD,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       CHECKALLPROXY,
       REMOVEFAILUREPROXY,
@@ -713,6 +722,7 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_MESSAGE,
       VIDEODOWNLOAD_MESSAGE,
       VIDEODOWNLOAD,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       SEARCHEVENT,
       CHECKALLPROXYMESSAGE,
@@ -740,6 +750,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
       AI_CHAT_V2_PENDING_EVENT,
       AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+      AI_CHAT_WORKSPACE_TITLE_UPDATED,
       AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
       ANALYZE_WEBSITE_PROGRESS,
@@ -788,6 +799,8 @@ contextBridge.exposeInMainWorld("api", {
       APPLICATION_LIFECYCLE_STATE_CHANGED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     const isSocialTaskLogChannel = /^socialtask:log:/.test(channel);
 
@@ -812,6 +825,7 @@ contextBridge.exposeInMainWorld("api", {
       SYSTEM_MESSAGE,
       VIDEODOWNLOAD_MESSAGE,
       VIDEODOWNLOAD,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       SEARCHEVENT,
       CHECKALLPROXYMESSAGE,
@@ -839,6 +853,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
       AI_CHAT_V2_PENDING_EVENT,
       AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+      AI_CHAT_WORKSPACE_TITLE_UPDATED,
       AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
       ANALYZE_WEBSITE_PROGRESS,
@@ -868,6 +883,8 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_AUTO_COMPACTED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
       // Local AI Runtime install/update progress (main -> renderer)
       LOCAL_AI_RUNTIME_PROGRESS,
       // Managed Browser events (main -> renderer, design §22)
@@ -901,6 +918,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_OPEN_FROM_NOTIFY,
       AI_CHAT_V2_PENDING_EVENT,
       AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+      AI_CHAT_WORKSPACE_TITLE_UPDATED,
       AI_CHAT_WORKSPACE_DETAIL_EVENT,
       AI_FILE_OPERATION,
       ANALYZE_WEBSITE_PROGRESS,
@@ -940,6 +958,8 @@ contextBridge.exposeInMainWorld("api", {
       APPLICATION_LIFECYCLE_STATE_CHANGED,
       // Incremental compaction run progress broadcast (§13.1)
       AI_CHAT_V2_COMPACTION_PROGRESS,
+      // AiFetchly config changed (slash suggestions live refresh, D-04)
+      AIFETCHLY_CONFIG_CHANGED,
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.removeAllListeners(channel);
@@ -950,6 +970,7 @@ contextBridge.exposeInMainWorld("api", {
     const validChannels = [
       "user:Login",
       USER_CHECK_LOGIN,
+      CHECK_LOGIN_SUCCEEDED,
       USER_SIGNOUT,
       "campaign:list",
       "socialtask:list",
@@ -980,6 +1001,7 @@ contextBridge.exposeInMainWorld("api", {
       VIDEODOWNLOAD,
       VIDEODOWNLOAD_TASK_LIST,
       LISTSESARCHRESUT,
+      SOCIALPLATFORM_LIST,
       SEARCHSCRAPERAPI,
       TASKSEARCHRESULTLIST,
       "task:create",
@@ -1000,6 +1022,7 @@ contextBridge.exposeInMainWorld("api", {
       EMAILMARKETINGTEMPDETAIL,
       EMAILMARKETINGTEMPUPDATE,
       EMAILMARKETINGFILTERLIST,
+      EMAILMARKETINGTEMPPREVIEW,
       EMAILMARKETFILTERDETAIL,
       EMAILMARKETFILTERUPDATE,
       EMAILSERVICEUPDATE,
@@ -1101,26 +1124,17 @@ contextBridge.exposeInMainWorld("api", {
       CREATE_SEARCH_TASK_ONLY,
       EXPORT_SEARCH_RESULTS,
       KILL_SEARCH_PROCESS,
-      // Yellow Pages Management Channels
-      YELLOW_PAGES_PLATFORMS,
-      YELLOW_PAGES_LIST,
-      YELLOW_PAGES_DETAIL,
-      YELLOW_PAGES_CREATE,
-      YELLOW_PAGES_UPDATE,
-      YELLOW_PAGES_DELETE,
-      YELLOW_PAGES_START,
-      YELLOW_PAGES_STOP,
-      YELLOW_PAGES_PAUSE,
-      YELLOW_PAGES_RESUME,
-      YELLOW_PAGES_PROGRESS,
-      YELLOW_PAGES_RESULTS,
-      YELLOW_PAGES_EXPORT,
-      YELLOW_PAGES_BULK,
-      YELLOW_PAGES_HEALTH,
-      YELLOW_PAGES_STATISTICS,
-      YELLOW_PAGES_KILL_PROCESS,
-      YELLOW_PAGES_CHECK_ORPHANED_PROCESSES,
-      "yellow_pages:get_process_status",
+      // Platform Management Channels (PRD §28.1: shared platform registry —
+      // R9-preceding allowlist fix d23b41884; the yellow-pages-only channels
+      // were removed with the yellow-pages feature per PRD §17.2)
+      PLATFORM_LIST,
+      PLATFORM_DETAIL,
+      PLATFORM_CREATE,
+      PLATFORM_UPDATE,
+      PLATFORM_DELETE,
+      PLATFORM_VALIDATE,
+      PLATFORM_STATISTICS,
+      PLATFORM_TOGGLE,
       // Language Preference Channels
       LANGUAGE_PREFERENCE_GET,
       LANGUAGE_PREFERENCE_UPDATE,
@@ -1182,6 +1196,9 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_WORKSPACE_ACTIVITY,
       AI_CHAT_WORKSPACE_GET_FLAG,
       AI_CHAT_WORKSPACE_SET_FLAG,
+      AI_CHAT_RENDERER_METRICS_PUSH,
+      // R8 §2: renderer-originated workspace action counts (bounded labels).
+      AI_CHAT_WORKSPACE_ACTION_COUNT,
       AI_CHAT_RESUME_TOOL_AFTER_PERMISSION,
       AI_CHAT_V2_RESUME_TOOL_AFTER_PERMISSION,
       AI_CHAT_V2_DENY_TOOL_PERMISSION,
@@ -1191,6 +1208,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_REJECT_PLAN,
       AI_CHAT_V2_REQUEST_PLAN_CHANGES,
       AI_CHAT_V2_PLAN_VERSIONS,
+      AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
       AI_CHAT_V2_AT_MENTION_SUGGEST,
       AI_CHAT_V2_EXPORT_GENERATED_IMAGE,
       AI_CHAT_V2_GOAL_CREATE,
@@ -1234,6 +1252,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
       // AiChatV2 Recoverable History Channels (technical-design §13)
       AI_CHAT_V2_HISTORY_SEARCH,
+      AI_CHAT_V2_READ_PASTE_CACHE,
       AI_CHAT_V2_HISTORY_READ,
       AI_CHAT_V2_HISTORY_BROWSE,
       AI_CHAT_V2_HISTORY_RESOLVE_SELECTIONS,
@@ -1254,6 +1273,12 @@ contextBridge.exposeInMainWorld("api", {
       // AI Artifact Channels
       AI_ARTIFACT_GET,
       AI_ARTIFACT_LIST,
+      // Plugin file artifacts
+      PLUGIN_ARTIFACT_LIST,
+      PLUGIN_ARTIFACT_PREVIEW,
+      PLUGIN_ARTIFACT_EXPORT,
+      PLUGIN_ARTIFACT_DELETE,
+      PLUGIN_ARTIFACT_LIST_JOURNAL,
       AI_KEYWORDS_GENERATE,
       // AI Provider (Local/Custom) Settings Channels
       AI_PROVIDER_SETTINGS_GET,
@@ -1328,6 +1353,7 @@ contextBridge.exposeInMainWorld("api", {
       AI_MESSAGE_TASK_LIST_AVAILABLE_TOOLS,
       // Agent Runtime Channels
       AGENT_DEFINITION_LIST,
+      AGENT_TASK_CANCEL,
       AGENT_TASK_DETAIL,
       AGENT_TASK_TRANSCRIPT,
       AGENT_TASK_LIST,

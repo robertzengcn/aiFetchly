@@ -145,6 +145,18 @@ describe("AiChatV2PendingMessage", () => {
     );
   });
 
+  it("hides Steer for a row the view marks not-steerable (generated-image refs, FR-QUE-005 P1-3)", () => {
+    // toView drains canSteer for rows carrying generatedImageReferences;
+    // the bubble must honor the authoritative flag instead of recomputing
+    // its own attachment-only predicate.
+    const wrapper = mountPending(makeView({ canSteer: false }), {
+      runtimeStatus: "running",
+    });
+    expect(wrapper.find('[data-testid="ai-chat-pending-steer"]').exists()).toBe(
+      false
+    );
+  });
+
   it("offers Remove for queued and paused, plus Send next when paused", () => {
     const paused = mountPending(makeView({ status: "paused" }));
     expect(paused.find('[data-testid="ai-chat-pending-remove"]').exists()).toBe(

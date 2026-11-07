@@ -31,6 +31,7 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
       "fetch_unread_emails",
       "list_email_services",
       "start_email_send_task",
+      "check_email_replied",
       "create_email_reply_draft",
       "send_email_reply",
       "list_schedules",
@@ -136,4 +137,12 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     expect(s).toContain("email_content");
     expect(s.toLowerCase()).toContain("never html");
   });
+});
+
+
+it("opens any website before asking the user to sign in, regardless of saved accounts", () => {
+  const section = buildBuiltInToolCapabilitiesSection();
+  expect(section).toContain("ANY website, including social networks and login-required sites");
+  expect(section).toContain("Never refuse browser use because no saved account exists");
+  expect(section).toContain("Open the site first, then hand off sign-in");
 });

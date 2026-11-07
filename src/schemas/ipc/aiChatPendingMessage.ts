@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { lazySchema } from "@/utils/lazySchema";
 import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { aiChatHistorySelectionIdsSchema } from "@/schemas/aiChatHistorySelections";
 
 /**
  * Strict request schemas for the pending-message queue IPC surface
@@ -82,6 +83,12 @@ const streamRequestSchema = z.strictObject({
         .max(50),
     })
     .optional(),
+  // §13.3 stable submission identity (same bounds as the WORKSPACE_START_RUN
+  // contract): the legacy AiChatV2 composer attaches it to EVERY ordinary
+  // send, and the accepted run dedupe/bookkeeping reuses it across
+  // transport retries. Opaque history selections ride the same envelope.
+  submissionId: z.string().min(8).max(64).optional(),
+  historySelectionIds: aiChatHistorySelectionIdsSchema.optional(),
 });
 
 /** AI_CHAT_V2_PENDING_CREATE */

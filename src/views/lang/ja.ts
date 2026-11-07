@@ -14,6 +14,11 @@ export default {
     settings: { localVision: "ローカルビジョン", visualPlanner: "ビジュアルプランナーモード", stopHotkey: "停止ホットキー", debugCapture: "デバッグキャプチャ", save: "保存" },
   },
   common: {
+    back: "戻る",
+    continue: "続行",
+    dismiss: "閉じる",
+    retry: "再試行",
+    user: "あなた",
     more: "もっと",
     actions: "操作",
     confirmation: "確認",
@@ -137,12 +142,6 @@ export default {
     email_extraction_edit: "連絡先インサイトタスクを編集",
     email_extraction_list: "連絡先インサイトタスク一覧",
     email_extraction_detail: "連絡先インサイト詳細",
-    yellow_pages: "ディレクトリアシスタント",
-    yellow_pages_list: "ディレクトリアシスタント",
-    create_yellow_pages_task: "ディレクトリアシスタントタスクを作成",
-    edit_yellow_pages_task: "ディレクトリアシスタントタスクを編集",
-    yellow_pages_task_detail: "タスク詳細",
-    yellow_pages_results: "タスク結果",
     yandex_maps_scraper: "ローカルビジネス検索",
     email_marketing: "アウトリーチキャンペーン",
     bulk_email_task_list: "メールタスク一覧",
@@ -437,7 +436,6 @@ export default {
     analytics_charts: "分析とトレンドチャート",
     search_results: "検索結果",
     emails_extracted: "Contact Profiles",
-    yellow_pages: "ディレクトリアシスタント",
     emails_sent: "送信済みメール",
     vs_previous_period: "前期間との比較",
     success_rate: "成功率",
@@ -472,14 +470,6 @@ export default {
     search: "市場インサイト",
     search_scraper: "市場インサイトエクスプローラー",
     search_description: "公開市場インサイトデータを整理",
-    yellowpage: "イエローページ",
-    yellowpage_scraper: "ディレクトリアシスタント",
-    yellowpage_description: "公開ディレクトリデータを統合",
-    create_yellow_pages_task: "ディレクトリアシスタントタスクを作成",
-    edit_yellow_pages_task: "ディレクトリアシスタントタスクを編集",
-    configure_yellow_pages_task:
-      "新しいディレクトリアシスタントタスクを設定して作成",
-    modify_yellow_pages_task: "既存のディレクトリアシスタントタスクを変更",
     task_configuration: "タスク設定",
     task_name: "タスク名",
     task_name_placeholder: "例: レストラン検索 - 東京",
@@ -543,11 +533,7 @@ export default {
     update_task: "タスクを更新",
     cancel: "キャンセル",
     task_created_successfully: "タスクの作成に成功しました",
-    task_created_message:
-      "ディレクトリアシスタントタスクが正常に作成されました！",
     task_updated_successfully: "タスクの更新に成功しました",
-    task_updated_message:
-      "ディレクトリアシスタントタスクが正常に更新されました！",
     error_creating_task: "タスク作成エラー",
     view_all_tasks: "すべてのタスクを表示",
     view_task_details: "タスク詳細を表示",
@@ -592,9 +578,6 @@ export default {
     account_manage: "アカウント管理",
     account_manage_subtitle: "アカウント管理",
     account_manage_description: "システム内のアカウントを管理",
-    yellow_pages_task_management: "ディレクトリアシスタントタスク管理",
-    yellow_pages_task_management_description:
-      "Manage data alignment tasks for directory sources",
     new_task: "新規タスク",
     import: "インポート",
     export: "エクスポート",
@@ -1170,6 +1153,13 @@ export default {
     },
   },
   emailReply: {
+    chatReviewTitle: "メール返信を確認",
+    chatLoading: "メールを読み込み中…",
+    chatApproveSend: "承認して送信",
+    chatSending: "送信中…",
+    chatSent: "メールを送信しました",
+    chatError: "操作を完了できませんでした。会話を再読み込みしてメールの状態を確認してください。",
+
     drafts_title: "返信下書き",
     generate_draft: "下書き生成",
     regenerate: "再生成",
@@ -1285,6 +1275,8 @@ export default {
     unknown_summary: "配信ステータス不明。",
     failed_summary: "バッチが失敗しました。",
     discarded_summary: "バッチは破棄されました。",
+    cancelled_summary: "バッチはキャンセルされました。",
+    summary_detail: "送信済み：{sent}/{total} ・理由：{reason}",
     review_title: "送信メールをレビュー",
     recipient: "受信者",
     sender: "送信者",
@@ -1436,6 +1428,9 @@ export default {
     email_template_empty: "メールテンプレートは空にできません",
     email_filter_empty: "メールフィルターは空にできません",
     email_service_empty: "メールサービスは空にできません",
+    email_service_not_found:
+      "選択したメールサービスは存在しません。一覧からサービスを選び直して、もう一度お試しください。",
+    start_send_email_failed: "メール送信を開始できませんでした。",
     choose_at_least_one_souce: "少なくとも1つのソースを選択してください",
     avoid_duplicate: "重複メールの受信を防止",
     check_email_souce: "メールソースを確認してください",
@@ -1594,6 +1589,21 @@ export default {
       "ベクトル検索と類似性マッチングに使用する埋め込みモデルを選択します。",
     language_preference: "言語",
     "language-preference-description": "UIの言語設定。",
+    ui_font_scale: "画面の文字サイズ",
+    "ui-font-scale-description":
+      "メニュー、ページ、その他の画面の文字サイズを大きく、または小さくします。",
+    ui_font_scale_decrease: "画面の文字を小さくする",
+    ui_font_scale_increase: "画面の文字を大きくする",
+    ui_font_scale_reset: "リセット",
+    ui_font_scale_smaller: "小さめ",
+    ui_font_scale_default: "標準",
+    ui_font_scale_larger: "大きめ",
+    ui_font_scale_large: "大",
+    ui_font_scale_largest: "最大",
+    ui_chat_font_size: "チャットの文字サイズ",
+    "ui-chat-font-size-description":
+      "チャットのメッセージと入力欄の文字サイズ（ピクセル、10～32）。",
+    ui_chat_font_size_invalid: "10から32の整数を入力してください。",
     ai_website_analysis_business_info: "ビジネス情報",
     "ai-website-analysis-business-info-description":
       "ウェブサイトのAI分析で使用されるビジネス情報。",
@@ -1708,6 +1718,30 @@ export default {
     user_ai_desktop_notify: "デスクトップ完了通知",
     "ai-desktop-notify-description":
       "メイン AI エージェントの返信完了、または計画の承認待ち時に右下へデスクトップ通知を表示します（アプリがバックグラウンドのときのみ）。",
+    "managed-browser-group": "管理ブラウザー",
+    "managed-browser-group-description":
+      "内蔵の管理ソーシャルブラウザーと共有ブラウザーキャッシュの設定。",
+    "managed-browser-enabled": "管理ブラウザーを有効化",
+    "managed-browser-enabled-description":
+      "新規セッションでの管理ブラウザーの有効/無効を切り替えます。",
+    "managed-browser-cache-enabled": "ブラウザーキャッシュを有効化",
+    "managed-browser-cache-enabled-description":
+      "セッション間で共有ブラウザーキャッシュを保持し、ログインを高速化して CAPTCHA を削減します。",
+    "managed-browser-cache-max-size-mb": "キャッシュの最大サイズ（MB）",
+    "managed-browser-cache-max-size-description":
+      "共有ブラウザーキャッシュの最大サイズ（メガバイト単位、許容範囲 100〜2048）。",
+    "managed-browser-cache-clear-on-exit": "終了時にキャッシュを削除",
+    "managed-browser-cache-clear-on-exit-description":
+      "アプリの終了時に共有ブラウザーキャッシュを削除します。",
+    "managed-browser-2captcha-disclosure": "2Captcha 利用の同意",
+    "managed-browser-2captcha-disclosure-description":
+      "対応するチャレンジの解決に 2Captcha を使用することへの同意を確認します。",
+    "managed-browser-2captcha-domains": "2Captcha 許可ドメイン",
+    "managed-browser-2captcha-domains-description":
+      "2Captcha の使用を許可するドメインのカンマ区切りリスト。空欄は許可なし。",
+    "managed-browser-2captcha-non-login": "非ログインチャレンジへの 2Captcha 許可",
+    "managed-browser-2captcha-non-login-description":
+      "ログイン以外のチャレンジに対して 2Captcha の使用を許可します。ログイン・セキュリティ・決済のチャレンジは常に手動の引き継ぎが必要です。",
   },
   aiMemory: {
     title: "AIメモリ",
@@ -2129,92 +2163,6 @@ export default {
     reasoning: "推論",
     client_business: "クライアントビジネス",
   },
-  yellowPages: {
-    ai_support: "AIサポート",
-    ai_support_hint:
-      "Use AI to assist data alignment when selectors fail to read public data",
-    ai_query_keywords: "AIでキーワードを生成",
-    ai_query_keywords_default_seed: "ビジネス",
-    use_account: "アカウントを使用",
-    account_required_for_platform:
-      "このプラットフォームにはアカウントが必要です：{name}",
-    not_set: "未設定",
-    enabled: "有効",
-    disabled: "無効",
-    authentication: "認証",
-    requires_cookies: "Cookie が必要",
-    account_required_for_auth: "認証にはアカウントが必要です",
-    requires_login: "ログインが必要",
-    requires_api_key: "API キーが必要",
-    requires_oauth: "OAuth が必要",
-    location_required: "位置情報が必要",
-    platform_requires_location:
-      "このプラットフォームの検索には位置情報が必要です",
-    list_manual_refresh: "手動更新",
-    list_auto_refresh_enabled: "自動更新有効（5秒）",
-    list_auto_refresh_paused: "自動更新一時停止（ページ非表示）",
-    list_auto_refresh_disabled: "自動更新無効",
-    list_auto_refresh_on: "自動更新 ON",
-    list_auto_refresh_paused_btn: "自動更新 一時停止",
-    list_auto_refresh_off: "自動更新 OFF",
-    list_last_updated: "最終更新",
-    list_auto_refresh_interval: "自動更新：{seconds}秒",
-    list_search_placeholder: "タスク名またはプラットフォームで検索...",
-    list_filter_search: "Search",
-    list_filter_status: "状態",
-    list_filter_platform: "プラットフォーム",
-    list_filter_priority: "優先度",
-    list_tasks_match_filters: "{totalUnfiltered} 件中 {total} 件が条件に一致",
-    list_no_tasks_match_filters: "条件に一致するタスクがありません",
-    list_adjust_search_or_clear:
-      "検索条件を変更するか、フィルターを解除してください",
-    list_clear_all_filters: "すべてのフィルターを解除",
-    list_applying_filters: "フィルターを適用中...",
-    list_task_not_running: "タスク「{name}」は現在実行されていません",
-    list_confirm_stop_task:
-      "タスク「{name}」（PID: {pid}）を停止しますか？\n\n実行中のプロセスを終了し、タスク状態を更新します。",
-    list_task_stopped_success:
-      "タスク「{name}」を正常に停止しました。\n\nタスク状態は「保留」に更新され、テーブルが更新されます。",
-    list_task_stop_failed: "タスク「{name}」の停止に失敗しました：{message}",
-    list_error_stopping_task: "タスク「{name}」の停止中にエラー：{message}",
-    list_task_pause_failed: "タスク「{name}」の一時停止に失敗：{message}",
-    list_task_resumed_success: "タスク「{name}」を再開しました",
-    list_task_resume_failed: "タスク「{name}」の再開に失敗：{message}",
-    list_task_still_running_results:
-      "Task is still running. Results will be available when data alignment completes.",
-    list_task_no_results_yet: "このタスクにはまだ結果がありません。",
-    list_view_results_anyway_confirm: "それでも結果ページを表示しますか？",
-    list_unknown_error: "不明なエラー",
-    list_unknown_error_occurred: "不明なエラーが発生しました",
-    // Task details view
-    detail_task_information: "タスク情報",
-    detail_task_status: "タスク状態",
-    detail_task_actions: "タスクアクション",
-    detail_field_name: "名前",
-    detail_field_platform: "プラットフォーム",
-    detail_field_keywords: "キーワード",
-    detail_field_location: "場所",
-    detail_field_max_pages: "最大ページ数",
-    detail_field_priority: "優先度",
-    detail_field_status: "状態",
-    detail_field_progress: "進捗",
-    detail_field_results_count: "結果数",
-    detail_field_created: "作成日時",
-    detail_field_last_updated: "最終更新",
-    detail_action_start: "タスクを開始",
-    detail_action_stop: "タスクを停止",
-    detail_action_pause: "タスクを一時停止",
-    detail_action_resume: "タスクを再開",
-    detail_action_view_results: "結果を表示",
-    detail_action_edit: "タスクを編集",
-    detail_action_delete: "タスクを削除",
-    detail_action_close: "閉じる",
-    detail_status_pending: "保留中",
-    detail_status_running: "実行中",
-    detail_status_completed: "完了",
-    detail_status_failed: "失敗",
-    detail_status_paused: "一時停止中",
-  },
   googleMaps: {
     title: "ローカルビジネス検索",
     description: "キーワードと場所で Channel Alpha のローカルビジネスを検索",
@@ -2422,6 +2370,14 @@ export default {
     draft_label: "下書き — レビュー必須",
   },
   aiProvider: {
+    chatTitles: {
+      section: "チャットのタイトル",
+      description: "自動命名には会話の短い抜粋を使用し、少量のプロバイダー利用が発生する場合があります。",
+      autoToggle: "新しいチャットを自動的に命名",
+      hostedModelHint: "ホストモードではサービスの軽量モデルを使用します。",
+      customModelLabel: "タイトルモデル（任意）",
+      customModelHint: "新しいチャットの自動命名に使用します。設定したプロバイダーを使用します。",
+    },
     title: "AI プロバイダー",
     description:
       "カスタムプロバイダーは独自のモデルで AI チャットを利用できます。ホスト型 aiFetchly AI 機能には引き続きサブスクリプションが必要です。",
@@ -2495,8 +2451,6 @@ export default {
     email_receive_description:
       "設定済みのサービスで受信したインバウンドメールを表示・管理します。",
     email_reply_description: "AIが生成した自動メール返信を確認・監査します。",
-    directory_description:
-      "ディレクトリタスクと収集済みの企業レコードを確認します。",
     maps_description: "地図プロバイダーから地域ビジネスを見つけます。",
     outreach_description:
       "アウトリーチタスク、テンプレート、フィルター、返信を管理します。",
@@ -2520,8 +2474,16 @@ export default {
     audit_description: "AI生成の返信、承認ステータス、監査ログを確認します。",
   },
   aiChatV2: {
+  // R9 B06: sentinel the banner maps CONTEXT_WINDOW_EXCEEDED onto.
+  context_window_exceeded: "会話が長すぎてモデルのコンテキストウィンドウに収まりません。新しい会話を開始するか、履歴の一部を削除してください。",
+  skillSlash: {
+      notFound:
+        "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
+    },
+    cancel: "キャンセル",
     queue: {
       queued: "待機中",
+      region: "待機中のメッセージ",
       steering: "方向転換中…",
       applied: "適用済み",
       dispatching: "送信中…",
@@ -2817,8 +2779,6 @@ export default {
       retry: "再試行",
     },
     title: "AI アシスタント",
-    show_reasoning: "推論を表示",
-    hide_reasoning: "推論を非表示",
     reasoning_title: "推論",
     reasoning_streaming: "推論中…",
     reasoning_unavailable: "このモデルでは推論を利用できません。",
@@ -2919,12 +2879,37 @@ export default {
       binary_unsupported: "この出力はテキストとして表示できません。エクスポートしてください",
       close: "閉じる",
     },
+    // ホストが登録したプラグイン結果ファイル（design §13.4）。
+    pluginArtifact: {
+      title: "結果ファイル",
+      count_label: "{count} 件のファイル",
+      file_title: "レコード（{format}）",
+      saved_at: "保存日時 {time}",
+      records_count: "{count} 件のレコード",
+      preview: "プレビュー",
+      preview_truncated: "… (先頭の行のみ表示)",
+      hide_preview: "プレビューを隠す",
+      save: "ファイルを保存",
+      delete: "削除",
+      confirm_delete: "削除を確定",
+      preview_failed: "プレビューを読み込めませんでした",
+      export_failed: "ファイルを保存できませんでした",
+      delete_failed: "ファイルを削除できませんでした",
+      deleted_all: "ファイルを削除しました",
+      expires_at: "{time} に失効",
+      expired_at: "{time} に失効済み",
+      recovered_title: "復元された実行",
+      recovered_entry: "{plugin} · {time}",
+      recovered_note: "以前の実行は結果が保存される前に中断されました。",
+    },
     generated_image_alt: "AI生成画像",
     open_generated_image: "生成画像を開く",
     permission_denied: "権限が拒否されました。ツールは実行されません。",
     permission_resume_failed: "許可後にツールを再開できませんでした。",
     permission_resume_no_tool_id:
       "ツール呼び出し情報が不足しているため、続行できません。",
+    permission_deny_failed:
+      "ツールを拒否できませんでした。ツールは引き続き権限待ちで停止しています。",
     permission_requested_scheduled:
       "スケジュールされたタスクがツールの使用許可を要求しています。確認して承認または拒否してください。",
     auth_expired:
@@ -2965,6 +2950,7 @@ export default {
       document_ready: "ドキュメント準備完了",
       document_failed: "ドキュメント処理に失敗しました",
       image_alt: "添付画像：{name}",
+      text_required: "添付ファイルと一緒に送るメッセージを入力してください。",
     },
     generatedImageRefs: {
       useAsReference: "参照として使用",
@@ -3418,11 +3404,13 @@ export default {
       "部分的な結果を表示中（{collected} / {expected}）。ツールはタイムアウトしましたが、取得済みのデータを返しました。",
   },
   workspace: {
+    chooseHint: "AIのファイルツールが読み書きできるフォルダを選択してください。",
     title: "ワークスペース",
     badgeLabel: "ワークスペース",
     notSet: "ワークスペース未設定",
     selectFolder: "フォルダを選択",
     changeFolder: "フォルダを変更",
+    removeAction: "ワークスペースを解除",
     approve: "ワークスペースを承認",
     revoke: "ワークスペースを取り消し",
     rootPath: "ルートパス",
@@ -3703,6 +3691,55 @@ export default {
     plugins: "プラグイン",
     backToApp: "アプリに戻る",
     loadOlder: "過去のメッセージを読み込む",
+    command: {
+      staleAborted: "選択が変更されたため、コマンドは実行されませんでした。",
+      noConversation: "チャットが選択されていないため、コマンドは実行されませんでした。",
+      busy: "このチャットの実行中はコマンドを使用できません。完了を待つか、先に停止してください。",
+      filesNotSupported: "このコマンドはファイルの添付に対応していません。ファイルを外すか、/コマンド接頭辞なしでメッセージを送信してください。",
+      loopAttachmentsNotSupported:
+        "ループコマンドはファイル添付や貼り付けブロックに対応していません。ループコマンドだけを送信し、内容は後続のメッセージで共有してください。",
+      loopControlFailed: {
+        pause: "スケジュール済みループを一時停止できませんでした。/loop の状態を確認して再試行してください。",
+        resume: "スケジュール済みループを再開できませんでした。/loop の状態を確認して再試行してください。",
+        stop: "スケジュール済みループを停止できませんでした。/loop の状態を確認して再試行してください。",
+      },
+      clearFailed: "このチャットを消去できませんでした。再試行してください。",
+    },
+    errors: {
+      queueLimit:
+        "メッセージキューがいっぱいです。現在の返信を待つか停止してから送信してください。",
+      contentTooLong: "メッセージが長すぎます。短くしてから再試行してください。",
+      emptyMessage: "メッセージが空です。送信前に何か入力してください。",
+      preparationFailed:
+        "メッセージを準備できませんでした。添付ファイルを確認して再試行してください。",
+      queueDisabled: "メッセージキューは無効です。送信できません。",
+      aiDisabled: "このプランでは AI 機能が有効になっていません。下書きは保持されました。",
+      invalidRequest: "リクエストが無効です。メッセージを確認して再試行してください。",
+      pendingNotFound: "キュー内のメッセージが見つかりませんでした。削除された可能性があります。",
+      pendingNotClaimable: "キュー内のメッセージは送信できなくなりました。再送信してください。",
+      conversationMismatch: "キュー内のメッセージは別の会話のものです。",
+      idempotencyConflict:
+        "このメッセージは既に送信されています。再送信前に会話を確認してください。",
+      attachmentsNotSteerable:
+        "添付ファイル付きのメッセージは実行中の返信を誘導できません。",
+      steeringDisabled: "フォローアップの誘導は無効です。",
+      turnNotSteerable: "今誘導できる実行中の返信はありません。",
+      steeringCommitRace: "別の操作がこのメッセージを先に取得しました。",
+      runEnvelopeFailed: "実行を開始できませんでした。しばらくしてから再試行してください。",
+      dispatchPromoteFailed: "メッセージを送信できませんでした。再試行してください。",
+      runTerminalPersistFailed:
+        "返信は完了しましたが保存できませんでした。再読み込み時に回復します。",
+      contextWindow: "会話がモデルのコンテキストウィンドウに対して長すぎます。新しい会話を開始するか、履歴の一部を消去してください。",
+    },
+    history: {
+      selectionLimit: "1 つのメッセージに添付できる引用は最大 20 件です。",
+      navigateUnavailable: "そのメッセージはこの会話では利用できなくなりました。",
+    },
+    recovery: {
+      retry: "再接続中… 試行 {attempt}/{max}（約 {seconds} 秒待機）",
+      recovering: "{layer} で復旧中：{reason}",
+      recoveringDetail: "{layer} で復旧中：{reason}（試行 {attempt}/{max}）",
+    },
     empty: {
       title: "何でも質問するか、左の会話を選択してください。",
     },
@@ -3714,6 +3751,10 @@ export default {
       loadError: "ワークスペースの読み込みに失敗しました",
       empty: "まだ会話はありません",
       unassigned: "その他のチャット",
+      projects: "プロジェクト",
+      refresh: "プロジェクトを更新",
+      collapse: "プロジェクトを折りたたむ",
+      expand: "プロジェクトを展開",
       workspace: "ワークスペース",
       needsAttentionCount: "{count} 件の会話に注意が必要です",
     },
@@ -3741,6 +3782,7 @@ export default {
     },
     header: {
       overflow: "会話メニュー",
+      backgroundAgents: "バックグラウンドエージェント",
       rename: "チャット名を変更",
       renamePrompt: "チャット名を変更",
       compact: "会話を圧縮",
@@ -3751,6 +3793,21 @@ export default {
       duplicate: "会話を複製",
       deleteConfirm:
         "この会話を削除しますか？すべてのメッセージと生成済みアーティファクトが削除され、元に戻せません。",
+    },
+    renameDialog: {
+      title: "チャットの名前を変更",
+      label: "チャット名",
+      save: "保存",
+      cancel: "キャンセル",
+      limitHint: "最大200文字",
+      errorEmpty: "チャット名を入力してください",
+      errorTooLong: "名前は200文字以内にしてください",
+      errorInvalid: "名前に使用できない文字が含まれています",
+      errorSaveFailed: "名前を変更できませんでした。もう一度お試しください。",
+      errorUnavailable: "このチャットは利用できなくなりました",
+      saving: "保存中…",
+      renameAction: "チャットの名前を変更",
+      menuButtonLabel: "会話の操作",
     },
     runStrip: {
       goal: "ゴール：{objective}",
@@ -3774,6 +3831,8 @@ export default {
       activity: "アクティビティ",
       context: "コンテキスト",
       resize: "インスペクターの幅を変更",
+      artifactsDisabled:
+        "専用結果ロールバックアダプターが適用されている間、アーティファクトの結果は利用できません。",
     },
     artifacts: {
       selectConversation: "会話を選択すると生成物が表示されます。",
@@ -3815,6 +3874,11 @@ export default {
       revoked: "失効",
     },
     execution: {
+      arguments: "引数",
+      details: "詳細",
+      duration: "所要時間",
+      finishedAt: "完了",
+      resultSummary: "結果",
       groupTitle: "実行",
       progress: "{total} 件中 {completed} 件完了",
       runningTool: "{tool} を実行中",
@@ -3822,6 +3886,7 @@ export default {
       artifactCreated: "HTML レポートを作成しました — アーティファクトで開く",
       openArtifact: "開く",
       imagesGenerated: "画像を生成しました",
+      imagesGeneratedCount: "{count} 枚の画像を生成しました",
       filesChanged: "ファイルが変更されました — アクティビティを参照",
       permissionNeeded: "権限の判断が必要です",
       structuredResult: "構造化された結果 — 詳細はアクティビティ",
@@ -3832,6 +3897,9 @@ export default {
       },
     },
     plan: {
+      continuationAborted: "選択が変更されたため、プランの決定は保存されましたが、後続メッセージは送信されませんでした。会話を開き直して続行してください。",
+      continuationPending: "プランの決定は保存されましたが、後続メッセージは送信されませんでした。「続行」で再試行してください。",
+      continue: "続行",
       version: "バージョン",
       current: "現在",
       changeReason: "変更理由",
@@ -4017,6 +4085,9 @@ export default {
     platform_fallback: "ソーシャル",
     unknown_account: "不明なアカウント",
     proxy_active: "プロキシ",
+    scope_global: "共有ブラウザ",
+    scope_global_hint:
+      "このブラウザセッションはアカウントに属し、チャットを切り替えても表示されたままになります。",
     screenshot: {
       capture: "サムネイルを更新",
       alt: "最新のブラウザのスクリーンショット",
@@ -4114,6 +4185,7 @@ export default {
       verify_login: "ログインしました",
       extend: "時間を延長（10分）",
       cancel_task: "タスクをキャンセル",
+      close: "閉じる",
       reasons: {
         login_required: "続行にはログインが必要です。",
         login_expired: "保存されたログインセッションの有効期限が切れました。",
@@ -4313,8 +4385,11 @@ export default {
       resultFailed: "失敗：{message}",
       output: "出力",
     },
+    stateUnknown: "状態不明",
+    // R9 B01: the authoritative status read failed — controls lock until re-read.
     errors: {
       actionFailed: "インストール操作に失敗しました。再試行してください。",
+      statusUnavailable: "インストール状態を更新できませんでした。状態が確認されるまで承認はロックされたままです。接続を確認して再試行してください。",
       secretFailed: "認証情報の保存に失敗しました。保存されていません。",
     },
     state: {
@@ -4335,9 +4410,4 @@ export default {
       superseded: "置き換え済み",
       awaiting_commands: "セットアップコマンド待ち",
     },
-  },
-  skillSlash: {
-    notFound:
-      "'{name}' に一致するインストール済みスキルがありません。/skills で一覧を確認してください。",
-  },
-};
+  },};

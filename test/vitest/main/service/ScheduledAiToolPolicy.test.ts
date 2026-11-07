@@ -414,6 +414,20 @@ describe("ScheduledAiToolPolicy full_access approval mode", () => {
   // and mark_email_processed stay unreachable. Unregistered/hallucinated tool
   // names still fail closed. approve_for_me is NOT a fast path here.
 
+  it("full_access auto-approves start_email_send_task without an allowlist entry", () => {
+    const decision = canAutoApproveScheduledTool({
+      skill: skill("start_email_send_task", {
+        requiresConfirmation: true,
+        confirmationPolicy: "request_scoped_action",
+      }),
+      taskPolicy: policy({ allowedTools: [] }),
+      toolName: "start_email_send_task",
+      approvalMode: "full_access",
+    });
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresInteractivePermission).toBeFalsy();
+  });
+
   it("full_access auto-approves a high-impact tool absent from the allowlist", () => {
     // file_write is high-impact and NOT in allowedTools — under normal gating
     // this would pause for interactive permission. full_access auto-runs it.

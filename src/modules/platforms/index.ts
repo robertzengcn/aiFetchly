@@ -3,9 +3,7 @@ export { ExampleHybridAdapter } from "./ExampleHybridAdapter";
 export { ComAdapter192 } from "./192ComAdapter";
 export { JapaneseYellowPagesAdapter } from "./JapaneseYellowPagesAdapter";
 // export { YellComAdapter } from './YellComAdapter';
-export { YellowPagesComAdapter } from "./YellowPagesComAdapter";
 export { YelpComAdapter } from "./YelpComAdapter";
-export { YellowPagesCaAdapter } from "./YellowPagesCaAdapter";
 export { ExampleClassBasedAdapter } from "./ExampleClassBasedAdapter";
 export { Adapter11880 } from "./11880Adapter";
 export { AdapterGelbeseiten } from "./GelbeseitenAdapter";
@@ -14,7 +12,6 @@ export { PagineGialleItAdapter } from "./PagineGialleItAdapter";
 export { ITownPageAdapter } from "./ITownPageAdapter";
 export { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
 export { KoreaLocalPagesAdapter } from "./KoreaLocalPagesAdapter";
-export { YellowPagesComSgAdapter } from "./YellowPagesComSgAdapter";
 
 // Export the factory
 export { PlatformAdapterFactory } from "./PlatformAdapterFactory";

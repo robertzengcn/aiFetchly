@@ -219,6 +219,7 @@ This initiative does not include:
 3. `AiChatV2Composer.vue` remains the shared message-entry component unless a later technical design replaces it for both surfaces together.
 4. The workspace retains its semantic transcript. Tool messages must not revert to duplicate generic call/result cards.
 5. Shared behavior must be extracted from `AiChatV2.vue` into typed composables, stores, or renderer-safe controllers. It must not be copied wholesale into `AiChatCenterSurface.vue`.
+   - **Owner exception (2026-10-18, reconciled 2026-10-20):** the extraction rule governs new capability work only. The delivered workspace surface is authoritative as-built: it consumes the already-extracted shared seams (`AiChatV2Composer.vue`, the durable pending-message queue, the command composables, the voice orchestration, and the rollout adapters), while the pre-existing `AiChatV2.vue` submission / image-preflight / plan-continuation logic stays where it is — frozen as rollback behavior under the independently controlled rollout flags (PRD §21–22, design §23). Full extraction of the remaining duplicated orchestration into the shared composables is deferred until after the V03 soak gate and a separate cleanup decision; it is not a gap against this exception (see §11.2).
 6. The workspace coordinator remains the main-process owner of workspace run envelopes and cross-conversation resource scheduling.
 7. The durable pending-message service remains the authority for same-conversation FIFO order, steering, pause, resume, cancellation, and restart recovery.
 8. A technical design must define one mapping between pending-message identity and workspace run identity. The same user message must never exist as two independently dispatchable jobs.
@@ -267,6 +268,13 @@ Names may change in technical design, but ownership must be equivalent to:
 | Reporting orchestration              | Capabilities, eligible-item selection, single-output reports, conversation reports, submission state, and report references       |
 | Voice orchestration                  | Settings, runtime and model readiness, installation, recording, transcription, playback, cancellation, and spoken-response policy |
 | Conversation-workspace orchestration | Binding, approval, trust card, watcher lifecycle, workspace memory, and refresh of scoped commands and mentions                   |
+
+**Authority clarification (owner decision 2026-10-18; reconciled 2026-10-20):** the table above defines *capability ownership equivalence*, not a requirement to extract every orchestration path into shared modules. As delivered:
+
+- the **workspace surface is authoritative** for capability behavior — where a seam (voice, pending queue, composer, command routing, rollout adapters) is extracted and shared, both surfaces consume it, and the workspace consumes its already-shared implementations for submission acceptance, commands, and plan continuation;
+- **Chat V2 is frozen rollback behavior**: it keeps its own pre-existing submission, image-preflight, and plan-continuation paths unchanged; those duplicated failure paths are characterized by the pinned suites (`test/vitest/main/components/AiChatV2.acceptedSendContract.test.ts` for the accepted-send durable contract, the `AiChatCenterSurface.test.ts` ownership suites B04/B06/B07/B08 for the workspace side, and `test/e2e/specs/workspaceRolloutDrill.test.ts` for the renderer rollback sequence), and no further duplication may be introduced on the workspace side;
+- behavior is controlled by the **independently switchable rollout adapter flags** (design §23): rollback routes users to Chat V2, whose persisted states and command interception semantics match the workspace (audit B07 regression sentence);
+- the **removal gate** (§26 item 8 + §28 DoD / design §26 item 10) is unchanged, and completing V03 plus the separate cleanup decision remains the precondition for any post-exception extraction wave.
 
 ### 11.3 Queue responsibility model
 
@@ -345,7 +353,7 @@ The implementation must compose these concerns. It must not:
 - **FR-PER-003**: Users can grant once, grant persistently when allowed, or deny.
 - **FR-PER-004**: Grant and deny actions use the existing trusted permission IPC and never expose raw permission tokens to the DOM or logs.
 - **FR-PER-005**: A successful grant resumes the exact paused tool continuation once.
-- **FR-PER-006**: Denial produces the existing safe tool result and lets the AI explain or recover.
+- **FR-PER-006**: In scheduled-loop journeys, denial produces the existing safe tool result and lets the AI explain or recover. In interactive (workspace-coordinator-owned) turns, denial is the validated stop of the paused run (deny-equals-stop): the decision row renders the denied receipt and the turn does not continue with an unobserved engine resume.
 - **FR-PER-007**: Failure leaves the decision available and announces the error.
 - **FR-PER-008**: Inactive conversations show only bounded permission attention in the sidebar. Selecting the conversation reveals the full decision.
 
@@ -593,7 +601,8 @@ The semantic projection must support at least:
 2. The run strip and sidebar show bounded attention.
 3. The selected transcript shows tool, permission category, preview, and workspace context.
 4. The user grants once, grants persistently when offered, or denies.
-5. The exact continuation resumes once, or the denial result returns to the model.
+5. A grant resumes the exact paused continuation once. In scheduled-loop journeys the denial result returns to the model (FR-PER-006); in interactive (workspace-coordinator-owned) turns denial is the validated stop of the paused run (deny-equals-stop). Acceptance tests distinguish the two cases.
+6. If the grant or deny action fails, the decision card stays actionable, the error is announced, and the failed decision never cancels an unrelated conversation's run (FR-PER-007).
 
 ### 17.5 Review and send outbound email
 

@@ -14,6 +14,7 @@ import {
   AUTH_EXPIRED_SENTINEL,
   IMAGE_EDIT_UNAVAILABLE_SENTINEL,
   IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  CONTEXT_WINDOW_EXCEEDED_SENTINEL,
   type ImageEditErrorCode,
 } from "./AIChatErrorSentinels";
 export {
@@ -21,6 +22,7 @@ export {
   AUTH_EXPIRED_SENTINEL,
   IMAGE_EDIT_UNAVAILABLE_SENTINEL,
   IMAGE_EDIT_PROVIDER_FAILED_SENTINEL,
+  CONTEXT_WINDOW_EXCEEDED_SENTINEL,
 } from "./AIChatErrorSentinels";
 export type { ImageEditErrorCode } from "./AIChatErrorSentinels";
 import { UnresolvedPastedTextError } from "./pastedText/UnresolvedPastedTextError";
@@ -285,9 +287,65 @@ export function imageEditErrorCode(err: unknown): ImageEditErrorCode | null {
  * Map unknown errors to user-safe messages.
  * Raw server bodies, stack traces, and sensitive request details
  * are logged but never surfaced to the renderer.
+ *
+ * B15: durable-queue errors (validation, limits, preparation, queue/steering
+ * gates) keep a stable `[CODE]` prefix so the renderer can map them to
+ * six-language UI copy centrally. Codes are bounded and carry no prompts,
+ * file content/paths, tokens, or payloads.
  */
+export const PENDING_ERROR_CODES: ReadonlySet<string> = new Set([
+  "QUEUE_LIMIT_REACHED",
+  "CONTENT_TOO_LONG",
+  "EMPTY_MESSAGE",
+  "PENDING_NOT_FOUND",
+  "PENDING_NOT_CLAIMABLE",
+  "CONVERSATION_MISMATCH",
+  "IDEMPOTENCY_CONFLICT",
+  "ATTACHMENTS_NOT_STEERABLE",
+  "PREPARATION_FAILED",
+  "AI_FEATURE_DISABLED",
+  "QUEUE_DISABLED",
+  "INVALID_REQUEST",
+  "STEERING_DISABLED",
+  "TURN_NOT_STEERABLE",
+  "STEERING_COMMIT_RACE",
+  "RUN_ENVELOPE_FAILED",
+  "DISPATCH_PROMOTE_FAILED",
+  "RUN_TERMINAL_PERSIST_FAILED",
+]);
+
+/**
+ * Stable bounded code for queue/preparation/terminal errors, or null.
+ * Reads the typed `code` property (module/queue errors) so user guidance
+ * survives userSafeError instead of collapsing to generic unexpected-error
+ * text. Never reflects message bodies — codes only.
+ */
+export function pendingErrorCode(err: unknown): string | null {
+  if (err instanceof Error) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && PENDING_ERROR_CODES.has(code)) {
+      return code;
+    }
+  }
+  if (typeof err === "object" && err !== null) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === "string" && PENDING_ERROR_CODES.has(code)) {
+      return code;
+    }
+  }
+  return null;
+}
+
 export function userSafeError(err: unknown): string {
   if (err instanceof Error) {
+    // B15: typed queue/preparation/terminal errors keep their stable code
+    // prefix (bounded, localizable downstream). Module messages are already
+    // user-safe guidance (limits, recovery actions) — surface them verbatim
+    // instead of the generic unexpected-error fallback below.
+    const pendingCode = pendingErrorCode(err);
+    if (pendingCode) {
+      return `[${pendingCode}] ${err.message || pendingCode}`;
+    }
     if (err.name === "AbortError") {
       return "Generation stopped.";
     }
@@ -345,14 +403,15 @@ export function userSafeError(err: unknown): string {
     // Context window exceeded: the conversation history (including tool
     // call/result pairs) grew beyond the model's context length. This is
     // NOT a transient error — retrying with the same input will always
-    // fail. Surface a clear, actionable message so the user knows to start
-    // a new conversation or clear history instead of retrying blindly.
+    // fail. Emit the stable sentinel (R8 P2-8 / FR-REC-004) so renderers
+    // map it to the localized actionable copy (start a new conversation or
+    // clear history) instead of carrying a prose string across locales.
     if (
       /context_window_exceeded|context window|context length|contextwindowexceeded|longer than the model/i.test(
         msg
       )
     ) {
-      return "The conversation is too long for the model's context window. Please start a new conversation or clear some history.";
+      return CONTEXT_WINDOW_EXCEEDED_SENTINEL;
     }
     if (/Failed to fetch|NetworkError|ECONNREFUSED|fetch failed/i.test(msg)) {
       return "Could not connect to the AI server.";

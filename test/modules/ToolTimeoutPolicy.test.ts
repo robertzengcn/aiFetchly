@@ -43,9 +43,6 @@ describe("ToolTimeoutPolicy", () => {
     });
     it("classifies network tools as network", () => {
       expect(inferTimeoutClassByName("analyze_website")).to.equal("network");
-      expect(inferTimeoutClassByName("search_yellow_pages")).to.equal(
-        "network"
-      );
     });
     it("defaults unknown tools to network (safe ceiling for unannotated I/O tools)", () => {
       expect(inferTimeoutClassByName("something_new")).to.equal("network");

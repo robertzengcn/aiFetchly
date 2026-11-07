@@ -137,6 +137,20 @@ export interface ChatV2HistorySelectionMetadata {
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
   source: "chat-v2" | "slash-command" | "scheduled-loop";
+  /**
+   * Chat-titles design §7.2 (B01): the RAW visible typed text exactly as the
+   * user entered it, before attachment enrichment, mention expansion, or
+   * injected context. Bounded to 2,000 characters. Titles and navigation
+   * excerpts read ONLY this — persisted `content` may mix in non-typed
+   * context that must never reach a title request or the sidebar.
+   */
+  safeTypedText?: string;
+  /**
+   * r3 G01: the provider config version that EXECUTED this exchange. Title
+   * selection uses it to refuse sending one provider's excerpt under a
+   * different provider's job. Absent on legacy rows (treated as compatible).
+   */
+  sourceProviderVersion?: number;
   openaiResponseId?: string;
   finishReason?: string | null;
   cancelled?: boolean;
@@ -240,6 +254,14 @@ export interface ChatV2MessageMetadata {
   // AI artifact pointer (metadata only — never the full HTML content).
   // Present on tool_result messages produced by create_html_artifact.
   artifact?: AIArtifactToolMetadata;
+  /**
+   * Host-registered plugin result artifacts (design §13.4). Opaque `pa_…`
+   * store ids only — never filesystem paths. Attached to the bounded tool
+   * payload by the host after promotion; the renderer previews, exports, and
+   * deletes them through the plugin-artifact IPC, which re-verifies
+   * conversation ownership in the main process.
+   */
+  pluginArtifacts?: ChatV2PluginArtifactMetadata[];
   // Slash-command result rows. Present only on assistant messages rendered
   // from a slash-command dispatch's show_result variant.
   slashCommandResult?: boolean;
@@ -268,6 +290,19 @@ export interface ChatV2MessageMetadata {
   /** Present on the final assistant row when steering changed direction
    * mid-turn; offsets split the visible content for marker rendering. */
   directionTransitions?: readonly ChatV2DirectionTransition[];
+}
+
+/**
+ * One host-registered plugin result artifact (design §13.4): an opaque,
+ * epoch-scoped store id plus presentation-only descriptors. Never a path.
+ */
+export interface ChatV2PluginArtifactMetadata {
+  id: string;
+  format: "json" | "csv";
+  recordCount: number;
+  sizeBytes?: number;
+  createdAt?: string;
+  expiresAt?: string;
 }
 
 /** Renderer request to start a streaming chat turn. */

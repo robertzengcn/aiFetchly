@@ -22,6 +22,7 @@ vi.mock("@/views/components/aiChatV2/voice/BrowserVoiceRecorder", () => ({
     return {
       start: startMock,
       stop: stopMock,
+      dispose: vi.fn(),
     };
   }),
 }));

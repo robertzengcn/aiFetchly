@@ -9,7 +9,6 @@ import { Page } from 'puppeteer';
  * 
  * @example
  * ```typescript
- * const adapter = new YellowPagesComAdapter();
  * const results = await adapter.searchBusinesses(page, ['restaurant'], 'New York');
  * const data = await adapter.extractBusinessData(page);
  * ```

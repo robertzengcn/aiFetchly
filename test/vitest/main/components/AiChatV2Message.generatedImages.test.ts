@@ -313,6 +313,78 @@ function makeBatchResultMessage(
   } as unknown as ChatV2MessageView;
 }
 
+/**
+ * Build the durable `tool_result` payload exactly as the chat loop serializes
+ * it when the batch record is externalized (SlimmedOutput): the top-level
+ * fields collapse to the operation envelope and the batch record rides only
+ * inside `toolOutputRefs[].toolOutputPreview` as a JSON string.
+ */
+function makeExternalizedBatchPreview(): string {
+  return JSON.stringify({
+    status: "completed",
+    processor: "image_edit",
+    requestedCount: 2,
+    completedCount: 2,
+    failedCount: 0,
+    cancelledCount: 0,
+    concurrency: 2,
+    items: [
+      {
+        input: {
+          kind: "generated_image",
+          reference: { messageId: "msg-gen-1", imageIndex: 0 },
+        },
+        status: "completed",
+        agentTaskId: "agt-1",
+        durationMs: 25,
+        outputImages: [
+          {
+            url: "aifetchly-generated-image://local/user/conv/agent/image-1.png",
+            file_name: "image-1.png",
+            mime_type: "image/png",
+            delivery: "local_file",
+          },
+        ],
+      },
+      {
+        input: {
+          kind: "generated_image",
+          reference: { messageId: "msg-gen-1", imageIndex: 1 },
+        },
+        status: "completed",
+        agentTaskId: "agt-2",
+        durationMs: 26,
+        outputImages: [
+          {
+            url: "aifetchly-generated-image://local/user/conv/agent/image-2.png",
+            file_name: "image-2.png",
+            mime_type: "image/png",
+            delivery: "local_file",
+          },
+        ],
+      },
+    ],
+  });
+}
+
+function makeExternalizedBatchToolResult(): Record<string, unknown> {
+  const preview = makeExternalizedBatchPreview();
+  return {
+    nonzeroExit: false,
+    operationStatus: "success",
+    toolOutputRefs: [
+      {
+        outputId: "out-1",
+        capturedBytes: 3252,
+        preservation: "complete",
+        sourceCompleteness: "complete",
+        toolOutputPreview: preview,
+      },
+    ],
+    toolOutputPreservation: "complete",
+  };
+}
+
 describe("AiChatV2Message artifact batch progress", () => {
   it("renders the aggregate summary line with counts, concurrency and overall status", async () => {
     const wrapper = mountWith(
@@ -325,6 +397,72 @@ describe("AiChatV2Message artifact batch progress", () => {
     expect(summary.text()).toContain("1 of 3 completed");
     expect(summary.text()).toContain("concurrency 3");
     expect(wrapper.find(".v2-message__batch-status").text()).toBe("partial");
+  });
+
+  it("unwraps the externalized batch record from toolOutputPreview when the durable result hides the batch fields", async () => {
+    const wrapper = mountWith(
+      makeBatchResultMessage(makeExternalizedBatchToolResult())
+    );
+    await flushPromises();
+
+    const summary = wrapper.find(".v2-message__batch-summary");
+    expect(summary.exists()).toBe(true);
+    expect(summary.text()).toContain("2 of 2 completed");
+    expect(summary.text()).toContain("concurrency 2");
+    expect(wrapper.find(".v2-message__batch-status").text()).toBe("completed");
+  });
+
+  it("unwraps the batch record from the preparation service's snake_case uiMetadata envelope", async () => {
+    const preview = makeExternalizedBatchPreview();
+    const wrapper = mountWith(
+      makeBatchResultMessage({
+        operationStatus: "success",
+        outputRefs: [
+          {
+            outputId: "out-ext-snake",
+            capturedBytes: 3252,
+            preservation: "complete",
+            sourceCompleteness: "complete",
+          },
+        ],
+        preview,
+        previewComplete: true,
+        preservation: "complete",
+      })
+    );
+    await flushPromises();
+
+    const summary = wrapper.find(".v2-message__batch-summary");
+    expect(summary.exists()).toBe(true);
+    expect(summary.text()).toContain("2 of 2 completed");
+    expect(summary.text()).toContain("concurrency 2");
+    expect(wrapper.find(".v2-message__batch-status").text()).toBe("completed");
+  });
+
+  it("does not render a progress view when previews do not parse into a batch-shaped record", async () => {
+    const wrapper = mountWith(
+      makeBatchResultMessage({
+        operationStatus: "success",
+        toolOutputRefs: [
+          {
+            outputId: "out-bad",
+            capturedBytes: 42,
+            preservation: "complete",
+            toolOutputPreview: JSON.stringify({ foo: "unrelated" }),
+          },
+          {
+            outputId: "out-broken",
+            capturedBytes: 7,
+            preservation: "complete",
+            toolOutputPreview: "not json at all {{{",
+          },
+        ],
+        toolOutputPreservation: "complete",
+      })
+    );
+    await flushPromises();
+
+    expect(wrapper.find(".v2-message__batch-summary").exists()).toBe(false);
   });
 
   it("lists failed and cancelled items with safe labels and translated errors in an expandable section", async () => {

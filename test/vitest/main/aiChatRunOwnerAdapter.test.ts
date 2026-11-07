@@ -6,6 +6,7 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { createOwnerAdapterSink } from "@/service/AIChatRunOwnerAdapter";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatRunModel } from "@/model/AIChatRun.model";
+import { WorkspaceModule } from "@/modules/WorkspaceModule";
 import type {
   AIChatQueryEvent,
   AIChatQueryEventSink,
@@ -203,6 +204,77 @@ describe("AIChatRunOwnerAdapter (design §8.3 owner adapters)", () => {
     expect(
       summaries.find((s) => s.reason === "user_input_required")?.attention
     ).toBe("user_input");
+  });
+
+  it("carries the conversation's bound workspaceKey in every summary broadcast", async () => {
+    await SqliteDb.ensureInitialized();
+    // BUGFIX 2026-11-02: scheduled runs bypass the coordinator, and the
+    // adapter hardcoded workspaceKey: null — so a conversation bound to a
+    // workspace by its schedule could never surface its folder in the
+    // left menu; every broadcast advertised "Unassigned".
+    const boundDir = fs.mkdtempSync(path.join(tmpDir, "wb-"));
+    const bound = await new WorkspaceModule().setWorkspace({
+      conversationId: "v2-owner-key-1",
+      rootPath: boundDir,
+    });
+    expect(bound.workspaceKey).toBeTruthy();
+
+    const summaries: ConversationSummaryEvent[] = [];
+    const inner = captureSink();
+    const sink = await createOwnerAdapterSink(inner.sink, {
+      conversationId: "v2-owner-key-1",
+      owner: "scheduled",
+      sourceId: "31",
+      runModule: new AIChatRunModule(),
+      broadcaster: {
+        broadcastSummary: (event) => summaries.push(event),
+      },
+    });
+
+    sink.emit({
+      type: "start",
+      conversationId: "v2-owner-key-1",
+      messageId: "a1",
+    });
+    sink.emit({
+      type: "complete",
+      conversationId: "v2-owner-key-1",
+      messageId: "a1",
+      fullContent: "hi",
+      finishReason: "stop",
+    });
+
+    await waitFor(() => summaries.some((s) => s.reason === "run_completed"));
+    expect(summaries.length).toBeGreaterThan(0);
+    for (const summary of summaries) {
+      expect(summary.workspaceKey).toBe(bound.workspaceKey);
+    }
+  });
+
+  it("keeps workspaceKey null when the conversation has no binding", async () => {
+    await SqliteDb.ensureInitialized();
+    const summaries: ConversationSummaryEvent[] = [];
+    const inner = captureSink();
+    const sink = await createOwnerAdapterSink(inner.sink, {
+      conversationId: "v2-owner-key-2",
+      owner: "scheduled",
+      sourceId: "32",
+      runModule: new AIChatRunModule(),
+      broadcaster: {
+        broadcastSummary: (event) => summaries.push(event),
+      },
+    });
+
+    sink.emit({
+      type: "start",
+      conversationId: "v2-owner-key-2",
+      messageId: "a1",
+    });
+
+    await waitFor(() => summaries.some((s) => s.reason === "run_started"));
+    for (const summary of summaries) {
+      expect(summary.workspaceKey).toBeNull();
+    }
   });
 });
 

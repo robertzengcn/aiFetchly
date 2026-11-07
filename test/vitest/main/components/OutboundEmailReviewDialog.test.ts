@@ -178,6 +178,34 @@ describe("OutboundEmailReviewDialog", () => {
     expect(sendBtn.attributes("disabled")).toBeDefined();
   });
 
+  // R9 review fix (FR-OUT-006 UX gate): a batch whose delivery already went
+  // out or settled inconclusively must not offer Approve/Send/Discard — the
+  // reopened receipt dialog is a PROGRESS surface only. The service-side
+  // approval gate is the authority; this keeps the failure path UX-invisible.
+  it("disables approve/send and hides discard for an already-attempted batch", async () => {
+    vi.mocked(getOutboundEmailBatch).mockResolvedValue(
+      makeBatchResult({
+        batch: {
+          id: 1,
+          status: "delivery_unknown",
+          batchHash: "a".repeat(64),
+          conversationId: "conv-1",
+          recipientCount: 1,
+        },
+      })
+    );
+    const wrapper = mountDialog();
+    await flushPromises();
+
+    const approveBtn = wrapper.find('[data-testid="outbound-review-approve"]');
+    expect(approveBtn.attributes("disabled")).toBeDefined();
+    const sendBtn = wrapper.find('[data-testid="outbound-review-send"]');
+    expect(sendBtn.attributes("disabled")).toBeDefined();
+    expect(
+      wrapper.find('[data-testid="outbound-review-discard"]').exists()
+    ).toBe(false);
+  });
+
   it("sends the batch after approval and emits sent", async () => {
     const wrapper = mountDialog();
     await flushPromises();

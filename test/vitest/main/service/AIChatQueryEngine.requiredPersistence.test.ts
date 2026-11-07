@@ -33,6 +33,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     getConversationMessages: mockGetConversationMessages,
     getRecentMessages: vi.fn().mockResolvedValue([]),
     saveUserMessage: mockSaveUserMessage,
+stampUserMessageTurnIdentity: vi.fn().mockResolvedValue(undefined),
     saveAssistantMessage: mockSaveAssistantMessage,
     saveToolCallMessage: mockSaveToolCallMessage,
     saveToolResultMessage: mockSaveToolResultMessage,

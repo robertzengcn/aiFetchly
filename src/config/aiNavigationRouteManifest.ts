@@ -289,15 +289,6 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       aiDescription: "Extract email addresses from websites and search results",
     },
     {
-      routeName: "YellowPagesList",
-      path: "/yellowpages/list",
-      titleKey: "route.yellow_pages_list",
-      visible: true,
-      aiNavigable: true,
-      aiAliases: ["yellow pages", "yellow pages list", "business directory"],
-      aiDescription: "Scrape business listings from yellow pages directories",
-    },
-    {
       routeName: "MapScraper",
       path: "/map-scraper",
       titleKey: "route.map_scraper",

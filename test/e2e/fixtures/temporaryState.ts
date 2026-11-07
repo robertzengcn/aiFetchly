@@ -40,6 +40,8 @@ export interface E2EStateManifestInput {
    * to "true"/"false" by the bootstrap's manifest validation (E2EEnvironment).
    */
   readonly tokenOverrides?: Readonly<Record<string, string>>;
+  /** Chat-titles E2E opt-in: seed an explicit title model (see E2EEnvironment). */
+  readonly chatTitles?: boolean;
 }
 
 /** Write the validated state.json the E2EStateSeeder consumes. */
@@ -60,6 +62,9 @@ export function writeStateManifest(
   }
   if (manifest.tokenOverrides) {
     payload.tokenOverrides = manifest.tokenOverrides;
+  }
+  if (manifest.chatTitles) {
+    payload.chatTitles = manifest.chatTitles;
   }
   fs.writeFileSync(root.stateFilePath, JSON.stringify(payload), "utf8");
 }

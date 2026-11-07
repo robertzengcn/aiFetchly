@@ -45,6 +45,7 @@ const onAifetchlyConfigChangedMock = vi.fn((cb) => {
 
 vi.mock("@/views/api/workspace", () => ({
   getWorkspace: (...a: unknown[]) => getWorkspaceMock(...a),
+  revokeWorkspace: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/views/api/workspaceWatch", () => ({

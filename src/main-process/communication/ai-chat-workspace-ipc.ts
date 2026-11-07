@@ -1,5 +1,8 @@
 import { ipcMain } from "electron";
 import {
+  consumePlanDecisionTiming,
+} from "@/main-process/communication/aiChatPlanDecisionTiming";
+import {
   AI_CHAT_WORKSPACE_BOOTSTRAP,
   AI_CHAT_WORKSPACE_GET_FLAG,
   AI_CHAT_WORKSPACE_SET_FLAG,
@@ -19,6 +22,7 @@ import {
   workspaceBootstrapRequestSchema,
   workspaceFlagGetRequestSchema,
   workspaceFlagSetRequestSchema,
+  type WorkspaceRolloutFeature,
   selectConversationRequestSchema,
   unsubscribeDetailRequestSchema,
   startChatRunRequestSchema,
@@ -33,29 +37,39 @@ import {
 } from "@/schemas/ipc/aiChatWorkspace";
 import { AIChatCoordinator } from "@/service/AIChatCoordinator";
 import {
+  scheduledAwareLiveRuntime,
   setQueueTurnDispatcher,
   setRunOwnerResumeRouter,
   sharedWorkspaceEventRouter,
+  getSharedAIChatTitleService,
 } from "@/service/aiChatWorkspaceRuntime";
 import type { AIChatEventRouter } from "@/service/AIChatEventRouter";
-import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
+import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
 import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
 import { AIChatRunModule } from "@/modules/AIChatRunModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
-import { AIChatMessageModel } from "@/model/AIChatMessage.model";
 import {
   getQueryEngine,
   getQueueService,
   canUseChat,
   parseMetadata,
   serializeHistoryTimestamp,
+  validateAndStageGeneratedImageFields,
 } from "@/main-process/communication/ai-chat-v2-ipc";
-import { userSafeError } from "@/service/AIChatErrorMapper";
+import { userSafeError, pendingErrorCode } from "@/service/AIChatErrorMapper";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { Token } from "@/modules/token";
 import {
-  USERSDBPATH,
+  AI_CHAT_WORKSPACE_SHARED_ORCHESTRATION,
+  AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS,
+  AI_CHAT_WORKSPACE_VOICE_MEMORY,
   USER_AI_CHAT_WORKSPACE_REDESIGN,
 } from "@/config/usersetting";
+import {
+  isWorkspaceSharedOrchestrationEnabled,
+  isWorkspaceSpecializedResultsEnabled,
+  isWorkspaceVoiceMemoryEnabled,
+} from "@/service/AIChatWorkspaceRollout";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   ChatHistoryPageResponse,
@@ -77,7 +91,14 @@ function ok<T>(data: T): CommonMessage<T> {
 // ---------------------------------------------------------------------------
 
 const eventRouter = sharedWorkspaceEventRouter;
-const scheduler = new AIChatExecutionScheduler();
+
+/** G01: plausible submit-click journey window (@see design §18.2). */
+const MAX_SUBMIT_CLICK_JOURNEY_MS = 600_000;
+
+// B02: the coordinator and the durable queue admit through the SAME global
+// scheduler instance (see aiChatSharedScheduler) — ordinary interactive work
+// cannot bypass resource limits/fairness relative to other owners.
+const scheduler = getSharedExecutionScheduler();
 
 let coordinatorInstance: AIChatCoordinator | null = null;
 
@@ -94,6 +115,9 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
       // Cross-path terminal notification (shell / message-queue unification):
       // a coordinator-run terminal re-drains or holds durable rows queued
       // behind it. Failures must never break the coordinator path itself.
+      onInteractiveTurnCompleted: (input) => {
+        getSharedAIChatTitleService().notifyInteractiveTurnCompleted(input);
+      },
       onRunTerminal: (conversationId, status) => {
         if (
           status !== "completed" &&
@@ -110,63 +134,6 @@ export function getAiChatWorkspaceCoordinator(): AIChatCoordinator {
               err
             );
           });
-      },
-      // Busy-conversation send delegation (message-queue §9.2): the send
-      // becomes a durable pending row; the coordinator rejection is kept
-      // only when the queue declines. forceQueue: the coordinator owns the
-      // live turn — its terminal notification drains or holds the row, so
-      // the queue must never auto-dispatch it mid-turn (e.g. while the
-      // engine reports idle between transport retries).
-      busySubmit: async (request) => {
-        try {
-          const receipt = await getQueueService().submit({
-            forceQueue: true,
-            clientRequestId: request.clientRequestId,
-            request: {
-              conversationId: request.conversationId,
-              message: request.message,
-              model: request.model,
-              mode: request.mode,
-              toolApprovalMode: request.toolApprovalMode,
-              showReasoning: request.showReasoning,
-              // Parity with the coordinator path: a delegated send must not
-              // silently drop execution settings the schema accepts.
-              temperature: request.temperature,
-              maxTokens: request.maxTokens,
-              systemPrompt: request.systemPrompt,
-              ...(request.reasoning ? { reasoning: request.reasoning } : {}),
-              uploadedFiles: request.uploadedFiles
-                ? [...request.uploadedFiles]
-                : undefined,
-              generatedImageReferences: request.generatedImageReferences
-                ? [...request.generatedImageReferences]
-                : undefined,
-            },
-          });
-          if (!receipt.pendingMessage) return null;
-          // The live turn can terminate WHILE the row was being persisted
-          // (submit awaits several DB ops): its terminal notification found
-          // zero rows and returned, and forceQueue suppresses the drain —
-          // the row would sit queued forever. Re-check and reconcile.
-          if (
-            getQueryEngine().getConversationRuntimeStatus(
-              request.conversationId
-            ) === "idle"
-          ) {
-            void getQueueService()
-              .notifyExternalTurnTerminal(request.conversationId, "completed")
-              .catch(() => undefined);
-          }
-          return {
-            pendingRunId: `pending-${receipt.pendingMessage.pendingMessageId}`,
-          };
-        } catch (err) {
-          console.warn(
-            "[ai-chat-workspace] busy-send queue delegation failed:",
-            err
-          );
-          return null;
-        }
       },
     });
     // Stage A §3.4 (FR-004/005): register this coordinator as the execution
@@ -194,8 +161,92 @@ export function getAiChatWorkspaceEventRouter(): AIChatEventRouter {
   return eventRouter;
 }
 
+/**
+ * B03: authoritative busy reason for delete protection. Returns a short
+ * reason string when ANY execution owner can still write to the
+ * conversation (coordinator live run, engine runtime, non-terminal pending
+ * rows covering running/parked/pending dispatch, or a non-terminal durable
+ * run envelope), or null when deletion is safe. Renderer state alone is
+ * never trusted — this runs in main before any delete proceeds.
+ *
+ * P1-1 (audit 2026-10-22): the v2 clear channel consults this SAME
+ * predicate — a parked/queued run must not survive as a writer while the
+ * transcript is wiped underneath it.
+ */
+export async function getConversationBusyReason(
+  conversationId: string
+): Promise<string | null> {
+  if (getAiChatWorkspaceCoordinator().getLiveRuntime(conversationId)) {
+    return "live run";
+  }
+  // Scheduled-occurrence probe (bugfix 2026-11-02): a live scheduled turn
+  // bypasses the coordinator and runs in a dedicated engine — without this
+  // a mid-run scheduled conversation reports "not busy" and clear/delete
+  // could wipe the transcript underneath a turn that is still writing
+  // (the SAME projection the select snapshot and the sidebar use).
+  if (scheduledAwareLiveRuntime(() => null)(conversationId)) {
+    return "scheduled turn";
+  }
+  try {
+    if (
+      getQueryEngine().getConversationRuntimeStatus(conversationId) !== "idle"
+    ) {
+      return "engine turn active";
+    }
+  } catch {
+    // Engine status unavailable — fall through to durable checks below.
+  }
+  try {
+    const pending = await getQueueService().list(conversationId);
+    if (
+      pending.some((row) =>
+        ["queued", "steering", "dispatching", "paused"].includes(row.status)
+      )
+    ) {
+      return "queued execution";
+    }
+  } catch {
+    // Queue list unavailable — fall through to run-envelope check.
+  }
+  try {
+    const runs = await new AIChatRunModule().listByConversation(
+      conversationId,
+      10
+    );
+    if (
+      runs.some((run) =>
+        ["queued", "running", "awaiting_permission", "awaiting_user"].includes(
+          run.status
+        )
+      )
+    ) {
+      return "durable run active";
+    }
+  } catch {
+    // Run lookup unavailable — treat as not busy (fail open would be worse,
+    // but without storage we cannot confirm; the layers above already gate).
+  }
+  return null;
+}
+
 /** One-time-per-process projection backfill guard. */
 let backfillStarted = false;
+/**
+ * r3 G05: single-flight readiness — concurrent first bootstraps share ONE
+ * in-flight pass instead of racing duplicate reconciliation/backfill work.
+ */
+let backfillInFlight: Promise<void> | null = null;
+
+/**
+ * F17: authenticated DB-scope reset — a new scope must re-run schema
+ * readiness/title reconciliation; a FAILED first pass stays retryable
+ * because backfillStarted is only set after success. An in-flight pass from
+ * the previous scope is orphaned (its success cannot mark the new scope).
+ */
+export function resetWorkspaceBackfillForScopeChange(): void {
+  backfillStarted = false;
+  backfillInFlight = null;
+}
 
 function toMessageView(row: {
   messageId: string;
@@ -226,8 +277,9 @@ async function loadHistoryPage(input: {
   limit: number;
   before?: { timestamp: string; messageId: string };
 }): Promise<ChatHistoryPageResponse> {
-  const model = new AIChatMessageModel(getDbPathOrThrow());
-  const { rows, hasOlder } = await model.getConversationPageDescending(
+  // G04 layering: history paging is owned by AIChatConversationModule —
+  // IPC handlers never instantiate Models directly.
+  const { rows, hasOlder } = await new AIChatConversationModule().getConversationPage(
     input.conversationId,
     input.limit,
     input.before
@@ -250,13 +302,6 @@ async function loadHistoryPage(input: {
         : null,
     hasOlder,
   };
-}
-
-function getDbPathOrThrow(): string {
-  // The Token service owns USERSDBPATH; models need the raw path.
-  const dbpath = new Token().getValue(USERSDBPATH);
-  if (!dbpath) throw new Error("User database path is not initialized");
-  return dbpath;
 }
 
 type InvokeEvent = {
@@ -303,7 +348,40 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       // Idempotent backfill once per process: inserts missing projection
       // rows and workspace keys for legacy conversations.
       if (!backfillStarted) {
-        backfillStarted = true;
+        if (backfillInFlight) {
+          // G05: another bootstrap is running this pass — join it and do
+          // not duplicate reconciliation work.
+          await backfillInFlight.catch(() => undefined);
+        } else {
+        // G05: publish the in-flight pass so joiners wait instead of racing.
+        let releaseInFlight!: () => void;
+        backfillInFlight = new Promise<void>((resolve) => {
+          releaseInFlight = resolve;
+        });
+        void releaseInFlight; // released at the end of this block
+        // F17: mark as started only AFTER the readiness work succeeds so a
+        // failed pass remains retryable for this scope.
+        let readinessOk = true;
+        // Chat-titles design §6/§11: interrupted title claims fall back
+        // permanently for their lifecycle; legacy user rows are repaired.
+        // Never enqueues naming work and never scans history for jobs.
+        try {
+          const titleReconcile =
+            await conversationModule.reconcileTitleStateOnStartup();
+          void titleReconcile;
+        } catch (err) {
+          readinessOk = false;
+          console.warn(
+            "[ai-chat-workspace] title startup reconciliation failed:",
+            err
+          );
+        }
+        if (readinessOk) {
+          backfillStarted = true;
+        }
+        releaseInFlight();
+        backfillInFlight = null;
+        }
         // Reconcile abandoned non-terminal runs to `interrupted` BEFORE
         // bootstrap reports runtime state (design §19.4 / FR-036).
         try {
@@ -332,7 +410,12 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       }
       const sidebar: WorkspaceSidebarResponse =
         await conversationModule.getWorkspaceSidebar(
-          (conversationId) => coordinator.getLiveRuntime(conversationId),
+          // Scheduled-occurrence-aware (bugfix 2026-11-02): same blind spot
+          // as the select snapshot — a mid-run scheduled conversation must
+          // project running in the sidebar instead of idle.
+          scheduledAwareLiveRuntime(
+            (conversationId) => coordinator.getLiveRuntime(conversationId)
+          ),
           null
         );
       return ok(sidebar);
@@ -377,14 +460,58 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       }
 
       const conversationId = parsed.data.conversationId;
+      // Audit R2 G01: the default-route selection journey timing — request
+      // → reconstructed transcript snapshot. (The ai-history channel keeps
+      // its own complementary observation.)
+      const selectionRequestedAt = performance.now();
       const page = await loadHistoryPage({
         conversationId,
         limit: 50,
       });
-      const live = coordinator.getLiveRuntime(conversationId);
+      // Scheduled-occurrence-aware live lookup (bugfix 2026-11-02): a live
+      // scheduled turn bypasses the coordinator and runs in a dedicated
+      // engine, so a coordinator-only lookup reports the conversation idle
+      // and the selected view hydrated without its running flag.
+      const live = scheduledAwareLiveRuntime(
+        (id) => coordinator.getLiveRuntime(id)
+      )(conversationId);
       const engineStatus =
         getQueryEngine().getConversationRuntimeStatus(conversationId);
-      const runtimeStatus = live?.runtimeStatus ?? engineStatus;
+      // B06: ordinary queue-backed turns never populate the coordinator's
+      // liveRuns map — without a durable fallback, selection cannot
+      // reconstruct the active run id and background terminals miss the
+      // sidebar. Fall back to the latest non-terminal durable run envelope
+      // (same precedence as the sidebar projection helper).
+      let durableActive: { runId: string; status: string } | null = null;
+      if (!live) {
+        try {
+          const runs = await new AIChatRunModule().listByConversation(
+            conversationId,
+            10
+          );
+          const active = runs.find((run) =>
+            ["queued", "running", "awaiting_permission", "awaiting_user"].includes(
+              run.status
+            )
+          );
+          if (active) {
+            durableActive = { runId: active.runId, status: active.status };
+          }
+        } catch {
+          // Durable lookup unavailable — keep coordinator/engine truth.
+        }
+      }
+      const snapshot = AIChatConversationModule.effectiveRuntime(
+        conversationId,
+        (id) => coordinator.getLiveRuntime(id),
+        durableActive
+      );
+      const runtimeStatus =
+        snapshot.activeRunId !== null
+          ? snapshot.runtimeStatus
+          : engineStatus !== "idle"
+            ? engineStatus
+            : snapshot.runtimeStatus;
       const response: SelectConversationResponse = {
         acceptedGeneration,
         conversationId,
@@ -392,9 +519,15 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         nextBefore: page.nextBefore,
         hasOlder: page.hasOlder,
         runtimeStatus,
-        activeRunId: live?.activeRunId ?? null,
+        activeRunId: snapshot.activeRunId,
         title: null,
       };
+      // Audit R2 G01: a page failure threw before this point, so success
+      // here means the reconstructed transcript is in hand.
+      aiChatQueueCounters.observeTiming(
+        "selection_request_to_transcript_ms",
+        performance.now() - selectionRequestedAt
+      );
       return ok(response);
     } catch (err) {
       return denied(userSafeError(err));
@@ -416,20 +549,154 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
   ipcMain.handle(AI_CHAT_WORKSPACE_START_RUN, async (_e, data: unknown) => {
     const chatAccess = canUseChat();
     if (!chatAccess.ok) {
+      // G03 §18.1: entitlement rejections are labeled (deliberate
+      // validation/entitlement rejects are excluded from soak acceptance).
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_workspace_submission_rejected_total",
+        "ai_disabled"
+      );
       return denied(chatAccess.message);
     }
     try {
       const parsed = startChatRunRequestSchema.safeParse(parsePayload(data));
       if (!parsed.success) {
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_rejected_total",
+          "invalid_request"
+        );
         return denied("Invalid start-run request");
       }
-      const result = await getAiChatWorkspaceCoordinator().startRun(
-        parsed.data
+      // Shared trusted-channel edge (parity with the V2 stream/pending
+      // handlers): validate + normalize generated-image references, STAGE the
+      // user-confirmed batch set into ConfirmedBatchReferenceRegistry (the
+      // registry is what process_artifact_batch consumes — the raw request
+      // field is never read downstream), and strip the field so nothing
+      // stores or forwards it.
+      const validated = validateAndStageGeneratedImageFields(
+        parsed.data.uploadedFiles ?? [],
+        parsed.data,
+        // Codex P1: DO NOT stage at receive time — the coordinator stages
+        // when it owns the dispatch, and the durable queue stages when the
+        // queued turn dispatches. A receive-time entry under a busy
+        // conversation would be consumed by the running turn or cleared by
+        // its terminal before the queued turn executes.
+        { stage: false }
       );
-      if (!result.ok) {
-        return denied(result.message);
+      if (!validated.ok) {
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_rejected_total",
+          "image_reference_invalid"
+        );
+        return denied(validated.errorMessage);
       }
-      return ok(result.response);
+      // T1 (AD-001/AD-004, audit): EVERY accepted ordinary send becomes a
+      // durable pending row first — idle AND busy. The queue is the single
+      // dispatch authority (claim → bridge envelope → engine); the
+      // coordinator no longer dispatches ordinary prompts, so a message can
+      // never be dispatched twice. forceQueue keeps a busy conversation's
+      // row held until the live turn's terminal re-drains.
+      const request = {
+        ...parsed.data,
+        ...validated.request,
+        historySelectionIds: validated.request.historySelectionIds
+          ? [...validated.request.historySelectionIds]
+          : undefined,
+      };
+      // Audit R2 G01: the plan-continuation timing meta is a trusted-channel
+      // association only — it must never reach the engine request payload.
+      // G01 (audit 2026-10-21): same rule for the renderer-origin submit
+      // click stamp feeding the full click→acceptance journey measure.
+      const { planContinuation, journeyStart, ...engineRequest } = request;
+      try {
+        const engineBusy =
+          getQueryEngine().getConversationRuntimeStatus(
+            request.conversationId
+          ) !== "idle";
+        // G01 (design §18.2): submit → durable acceptance timing around the
+        // queue submit that produces the acceptance receipt. The name is
+        // deliberately narrow (renamed per audit R2 G01): it starts here,
+        // excluding attachment encoding, prior validation and IPC latency —
+        // it does NOT measure the full submit-click journey.
+        const submitStartedMs = performance.now();
+        const receipt = await getQueueService().submit({
+          forceQueue: engineBusy,
+          clientRequestId: request.clientRequestId,
+          request: engineRequest,
+        });
+        if (!receipt.pendingMessage) {
+          aiChatQueueCounters.incrementLabeled(
+            "ai_chat_workspace_submission_rejected_total",
+            "conversation_busy"
+          );
+          return denied(
+            "A run is already active for this conversation. Wait for it to finish or stop it first."
+          );
+        }
+        aiChatQueueCounters.observeTiming(
+          "queue_submit_to_acceptance_ms",
+          performance.now() - submitStartedMs
+        );
+        // G01 (design §18.2): the FULL submit-click → durable acceptance
+        // journey. The renderer stamps the click boundary at the composer
+        // click (audit r3 D02: BEFORE command routing and attachment
+        // encoding), so everything between those stages and here at the
+        // acceptance receipt is included by construction — no stage hides
+        // inside the truncated tail anymore. Implausible stamps (too far
+        // in the future/past — bad clocks, replays) silently produce no
+        // sample; the queue-only metric above stays untouched.
+        if (journeyStart) {
+          const elapsed = Date.now() - journeyStart.clickAtEpochMs;
+          if (elapsed >= -15_000 && elapsed <= MAX_SUBMIT_CLICK_JOURNEY_MS) {
+            aiChatQueueCounters.observeTiming(
+              "submit_click_to_acceptance_ms",
+              Math.min(Math.max(elapsed, 0), MAX_SUBMIT_CLICK_JOURNEY_MS)
+            );
+          }
+        }
+        // Audit R2 G01: the REAL plan decision → continuation acceptance
+        // boundary. A renderer-declared continuation identity whose decision
+        // was anchored by the v2 plan handler measures between the persisted
+        // decision and THIS queue acceptance; no ledger match (failed,
+        // repeated or foreign continuation) produces no sample at all.
+        if (planContinuation && request.clientRequestId.startsWith("plan-cont-")) {
+          const decidedAtMs = consumePlanDecisionTiming(
+            planContinuation.planId,
+            planContinuation.version,
+            planContinuation.action
+          );
+          if (decidedAtMs !== null) {
+            aiChatQueueCounters.observeTiming(
+              "plan_decision_to_continuation_ms",
+              performance.now() - decidedAtMs
+            );
+          }
+          aiChatQueueCounters.recordWorkspaceAction(
+            "plan",
+            "continuation",
+            "accepted"
+          );
+        }
+        // G03 §18.1: durable acceptances by disposition (bounded labels).
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_accepted_total",
+          receipt.disposition
+        );
+        return ok({
+          conversationId: request.conversationId,
+          runId: `pending-${receipt.pendingMessage.pendingMessageId}`,
+          status: "queued",
+          acceptedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        // G03 §18.1: typed queue denials keep their bounded code as the
+        // label (codes only — never prompts or payloads); untyped errors
+        // fall back to a single unknown label.
+        aiChatQueueCounters.incrementLabeled(
+          "ai_chat_workspace_submission_rejected_total",
+          pendingErrorCode(err) ?? "unknown"
+        );
+        return denied(userSafeError(err));
+      }
     } catch (err) {
       return denied(userSafeError(err));
     }
@@ -503,12 +770,40 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid rename request");
       }
+      // Titles B09: a manual rename invalidates any live naming work for
+      // this conversation synchronously with the ownership write.
+      getSharedAIChatTitleService().cancelConversation(
+        parsed.data.conversationId
+      );
       const conversationModule = new AIChatConversationModule();
-      const renamed = await conversationModule.rename(
+      // Chat-titles FR-06/§10.1: authoritative versioned metadata after an
+      // atomic manual write. A missing row is a stable failure — the
+      // renderer reports the chat as unavailable, never as a silent no-op.
+      const result = await conversationModule.applyManualRename(
         parsed.data.conversationId,
         parsed.data.title
       );
-      return ok({ renamed });
+      if (result.outcome === "missing") {
+        return denied("conversation_not_found");
+      }
+      if (result.outcome === "invalid") {
+        return denied("invalid_title");
+      }
+      // Persist before publishing (invariant 4): the title event carries the
+      // committed revision so every renderer converges to it.
+      eventRouter.broadcastTitleUpdate({
+        conversationId: parsed.data.conversationId,
+        title: result.title,
+        titleRevision: result.titleRevision,
+        titleSource: "user",
+      });
+      return ok({
+        renamed: true,
+        conversationId: parsed.data.conversationId,
+        title: result.title,
+        titleRevision: result.titleRevision,
+        titleSource: "user",
+      });
     } catch (err) {
       return denied(userSafeError(err));
     }
@@ -525,20 +820,44 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
       if (!parsed.success) {
         return denied("Invalid delete request");
       }
-      // Never delete under a live run: the engine would keep executing and
-      // re-persist its result, silently resurrecting the conversation.
-      if (
-        getAiChatWorkspaceCoordinator().getLiveRuntime(
-          parsed.data.conversationId
-        )
-      ) {
+      // Chat-titles FR-09: deletion cancels outstanding naming work; a
+      // late result can never recreate the conversation (conditional writes
+      // remain the final protection).
+      getSharedAIChatTitleService().cancelConversation(
+        parsed.data.conversationId
+      );
+      // B03: never delete under authoritative execution ownership. The old
+      // guard checked only the coordinator's liveRuns map, but ordinary
+      // sends now dispatch through the durable queue and never populate it —
+      // a running ordinary turn could be deleted and then re-persist content.
+      // Deny while ANY owner can still write: coordinator live run, engine
+      // runtime, non-terminal pending rows (running/parked/pending dispatch),
+      // or a non-terminal durable run envelope.
+      const busyReason = await getConversationBusyReason(
+        parsed.data.conversationId
+      );
+      if (busyReason) {
+        // G03 §18.1: unsafe-delete denials by guard outcome.
+        aiChatQueueCounters.incrementWorkspace(
+          "ai_chat_workspace_action_total",
+          {
+            capability: "workspace",
+            action: "conversation_delete",
+            outcome: "denied_busy",
+          }
+        );
         return denied(
-          "This conversation is running a task. Stop it before deleting."
+          `This conversation is busy (${busyReason}). Stop it before deleting.`
         );
       }
       await new AIChatConversationModule().deleteConversation(
         parsed.data.conversationId
       );
+      aiChatQueueCounters.incrementWorkspace("ai_chat_workspace_action_total", {
+        capability: "workspace",
+        action: "conversation_delete",
+        outcome: "deleted",
+      });
       return ok({ deleted: true });
     } catch (err) {
       return denied(userSafeError(err));
@@ -630,11 +949,29 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         return denied("Invalid flag request");
       }
       const raw = new Token().getValue(USER_AI_CHAT_WORKSPACE_REDESIGN);
-      // Default-on for dev preview: treat missing value (null/undefined) as
-      // enabled so the merged redesign is visible without manual setup.
-      // Explicit "false" still disables (rollback per design §30.2).
+      // Redesign default is OFF with a validated rollback (PRD §33): an
+      // unset/empty value reports enabled=false so the legacy dock stays
+      // authoritative until the operator (or the A02 mount-time DEFAULT
+      // enforcement) records "true". Explicit "false" still rolls back.
+      // NOTE: Token.getValue returns "" for missing keys — it never yields
+      // null/undefined, so the "" branch is the unset case in practice.
+      // A02: `explicit` distinguishes the unset default from an operator's
+      // recorded choice — mount-time enforcement may only land the DEFAULT,
+      // never overwrite an explicit rollback/disable.
       const enabled = raw === null || raw === undefined ? true : raw === "true";
-      return ok({ enabled });
+      const explicit = raw === "true" || raw === "false";
+      // A02 (design §23.1): independent adapter controls ride the same
+      // channel so the drill toggles each capability through the real shell.
+      // Defaults come from the rollout accessors (default-on adapters).
+      return ok({
+        enabled,
+        explicit,
+        adapters: {
+          sharedOrchestration: isWorkspaceSharedOrchestrationEnabled(),
+          specializedResults: isWorkspaceSpecializedResultsEnabled(),
+          voiceMemory: isWorkspaceVoiceMemoryEnabled(),
+        },
+      });
     } catch (err) {
       return denied(userSafeError(err));
     }
@@ -649,11 +986,37 @@ export function registerAiChatWorkspaceIpcHandlers(): void {
         return denied("Invalid flag request");
       }
       const token = new Token();
+      const feature: WorkspaceRolloutFeature = parsed.data.feature ?? "redesign";
+      if (feature !== "redesign") {
+        // Adapter flags: one presentation/dispatch adapter at a time. The
+        // durable queue, run identities and permission gates never change.
+        const key =
+          feature === "shared_orchestration"
+            ? AI_CHAT_WORKSPACE_SHARED_ORCHESTRATION
+            : feature === "specialized_results"
+              ? AI_CHAT_WORKSPACE_SPECIALIZED_RESULTS
+              : AI_CHAT_WORKSPACE_VOICE_MEMORY;
+        token.setValue(key, parsed.data.enabled ? "true" : "false");
+        // R8 §2 (§23.2): adapter toggle counts — labels only.
+        aiChatQueueCounters.recordWorkspaceAction(
+          "workspace",
+          "adapter_flag",
+          parsed.data.enabled ? "enabled" : "disabled"
+        );
+        return ok({ enabled: parsed.data.enabled, feature });
+      }
       token.setValue(
         USER_AI_CHAT_WORKSPACE_REDESIGN,
         parsed.data.enabled ? "true" : "false"
       );
-      return ok({ enabled: parsed.data.enabled });
+      // R8 §2 (PRD §33 / §23.2): the operator rollback (enabled=false) is
+      // the workspace→Chat-V2 drill — it must show in the action counter.
+      aiChatQueueCounters.recordWorkspaceAction(
+        "workspace",
+        "redesign_flag",
+        parsed.data.enabled ? "enabled" : "rollback"
+      );
+      return ok({ enabled: parsed.data.enabled, feature });
     } catch (err) {
       return denied(userSafeError(err));
     }

@@ -4,10 +4,17 @@
     to an ALLOWLISTED component through a static record — never a component
     path from route data, IPC, or user input. The inspector is optional and
     scoped to the active page/selection (IPR-007/008).
+
+    Docked-column change (2026-10-26): no body teleport — the host is a
+    direct flex child of `.app-workspace-shell`, so the active inspector
+    mounts INLINE as the shell row's third column (wide: real layout
+    column; narrow/medium: the surface's own overlay variant).
   -->
-  <Teleport to="body">
-    <component :is="inspectorComponent" v-if="inspectorComponent && inspector.target" :key="inspectorKey" />
-  </Teleport>
+  <component
+    :is="inspectorComponent"
+    v-if="inspectorComponent && inspector.target"
+    :key="inspectorKey"
+  />
 </template>
 
 <script setup lang="ts">
@@ -35,9 +42,15 @@ const inspectorComponent = computed<Component | null>(() => {
   return kind ? INSPECTOR_REGISTRY[kind] ?? null : null;
 });
 
-const inspectorKey = computed(
-  () => `${inspector.kind ?? "none"}-${inspector.requestGeneration}`
-);
+// Key by kind only — NEVER requestGeneration. Mount-time loads call
+// `inspector.beginRequest()` (ScheduleInspector.load), which mutates
+// `requestGeneration`; reading it here would change this child's key on
+// every mount, remounting the child — whose mount reloads and re-remounts…
+// an infinite synchronous cycle reported as
+// "Maximum recursive updates exceeded in component <AppInspectorHost>".
+// Open/close lifecycle is owned by the host's v-if; target changes within
+// a kind are owned by each inspector's own target watcher.
+const inspectorKey = computed(() => inspector.kind ?? "none");
 
 // Expose shell state to registered inspectors via provide in the parent is
 // unnecessary: inspectors import the stores directly.

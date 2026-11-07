@@ -28,6 +28,15 @@ export class AIChatRunModule extends BaseModule {
     return this.getModel().getByRunId(runId);
   }
 
+  /** T1 (AD-003): interactive run envelope lookup by pending source id. */
+  async findBySourceId(
+    owner: string,
+    sourceId: string
+  ): Promise<AIChatRunEntity | null> {
+    await this.ensureConnection();
+    return this.getModel().findBySourceId(owner, sourceId);
+  }
+
   async listByConversation(
     conversationId: string,
     limit?: number

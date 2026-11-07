@@ -1058,4 +1058,59 @@ describe("AiChatV2 generated-image editing wiring", () => {
     ).toBe(false);
     expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("4");
   });
+
+  it("discards a stale batch confirm when the active conversation switched (FR-IMG-015 P1-2)", async () => {
+    await mockHistoryWithImages(4);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.setProps({
+      openConversationRequest: { id: 1, conversationId: "conv-A" },
+    });
+    await flushPromises();
+
+    await selectReferences(wrapper, 4);
+    await wrapper.find('[data-testid="composer-send-plural"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="ai-chat-generated-batch-confirm"]').exists()
+    ).toBe(true);
+
+    // Switch to conv-B; the overlay host closes the dialog, but a deferred
+    // confirm (same race the chooser's stale pick covers) must never submit
+    // conv-A's confirmed batch into conv-B.
+    await wrapper.setProps({
+      openConversationRequest: { id: 2, conversationId: "conv-B" },
+    });
+    await flushPromises();
+
+    // Re-stage conv-A's confirmed payload exactly as a stale dialog emit
+    // would race it in, then fire the confirm handler.
+    const chatVm = wrapper.vm as unknown as {
+      pendingGeneratedImageSend?: {
+        conversationId: string;
+        text: string;
+        files: File[];
+        confirmedReferences: Array<{ messageId: string; imageIndex: number }>;
+      };
+      confirmGeneratedImageBatch?: () => void;
+    };
+    chatVm.pendingGeneratedImageSend = {
+      conversationId: "conv-A",
+      text: "all of them",
+      files: [],
+      confirmedReferences: [
+        { messageId: "m1", imageIndex: 0 },
+        { messageId: "m1", imageIndex: 1 },
+        { messageId: "m1", imageIndex: 2 },
+        { messageId: "m1", imageIndex: 3 },
+      ],
+    };
+    expect(typeof chatVm.confirmGeneratedImageBatch).toBe("function");
+    chatVm.confirmGeneratedImageBatch?.();
+    await flushPromises();
+
+    expect(streamChatV2Message).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="tray-count"]').text()).toBe("0");
+  });
 });

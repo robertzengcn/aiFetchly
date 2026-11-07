@@ -88,6 +88,10 @@ export interface FakePluginHubController {
   readonly port: number;
   /** Replace the catalog served to subsequent requests. */
   setCatalog(entries: readonly FakePluginHubEntrySpec[]): void;
+  /** Script the plugin-zip download result of subsequent requests. */
+  setZipBehavior(behavior: FakePluginHubZipBehavior): void;
+  /** Number of scripted zip-download failures since the last reset. */
+  primaryZipFailureCount(): number;
   /** Number of catalog requests since the last reset. */
   catalogRequestCount(): number;
   /** Number of plugin-zip downloads since the last reset. */
@@ -96,6 +100,9 @@ export interface FakePluginHubController {
   reset(): void;
   stop(): Promise<void>;
 }
+
+/** Deterministic zip-download behavior for recoverable-failure E2E legs. */
+export type FakePluginHubZipBehavior = "ok" | "http-error" | "garbage";
 
 /** The installable entry used by the unified-plugin critical flow. */
 export const FIXTURE_INSTALLABLE_SLUG = "e2e-fixture-plugin";
@@ -135,10 +142,15 @@ interface HubResponseBody {
 
 export async function startFakePluginHubServer(): Promise<FakePluginHubController> {
   const zipBytes = buildFixturePluginZip();
+  // Truncated/truncated-nonsense bytes: LocalZipPluginFetcher must reject an
+  // archive that is not a valid zip deterministically over loopback HTTP.
+  const garbageZipBytes = Buffer.from("not-a-real-zip-archive", "utf8");
 
   let entries: readonly FakePluginHubEntrySpec[] = [];
   let catalogRequests = 0;
   let zipRequests = 0;
+  let zipBehavior: FakePluginHubZipBehavior = "ok";
+  let primaryZipFailures = 0;
   // Assigned right after listen(0) resolves; the handler reads it per request.
   let port = 0;
 
@@ -177,6 +189,20 @@ export async function startFakePluginHubServer(): Promise<FakePluginHubControlle
       }
       if (req.method === "GET" && url.startsWith("/zips/plugin.zip")) {
         zipRequests += 1;
+        if (zipBehavior !== "ok") {
+          primaryZipFailures += 1;
+          if (zipBehavior === "http-error") {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "hub unavailable (scripted)" }));
+            return;
+          }
+          res.writeHead(200, {
+            "Content-Type": "application/zip",
+            "Content-Length": garbageZipBytes.length,
+          });
+          res.end(garbageZipBytes);
+          return;
+        }
         res.writeHead(200, {
           "Content-Type": "application/zip",
           "Content-Length": zipBytes.length,
@@ -205,6 +231,12 @@ export async function startFakePluginHubServer(): Promise<FakePluginHubControlle
     setCatalog(next: readonly FakePluginHubEntrySpec[]): void {
       entries = next;
     },
+    setZipBehavior(behavior: FakePluginHubZipBehavior): void {
+      zipBehavior = behavior;
+    },
+    primaryZipFailureCount(): number {
+      return primaryZipFailures;
+    },
     catalogRequestCount(): number {
       return catalogRequests;
     },
@@ -214,6 +246,8 @@ export async function startFakePluginHubServer(): Promise<FakePluginHubControlle
     reset(): void {
       catalogRequests = 0;
       zipRequests = 0;
+      primaryZipFailures = 0;
+      zipBehavior = "ok";
     },
     stop(): Promise<void> {
       return new Promise<void>((resolve) => server.close(() => resolve()));

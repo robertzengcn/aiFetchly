@@ -74,12 +74,6 @@ export const SocialPlatformList: SocialPlatformEntity[] = [
     category: "Search Engine",
   },
   {
-    id: 6,
-    name: "YellowPages.com",
-    url: "https://www.yellowpages.com",
-    category: "Business Directory",
-  },
-  {
     id: 7,
     name: "Yelp.com",
     url: "https://www.yelp.com",

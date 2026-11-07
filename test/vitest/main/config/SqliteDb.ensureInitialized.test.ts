@@ -345,6 +345,11 @@ describe("EmailSearchTaskModule.resetOrphanedProcessingTasks", () => {
     vi.restoreAllMocks();
   });
 
+  // R9 T04 stabilization: the test body dynamically imports the heavy
+  // EmailSearchTaskModule/EmailsearchTask.model graph on first use. Paying
+  // that import cost inside the 5s default made this test flake under
+  // full-suite parallel load (passes serially at --maxWorkers=2, flakes at
+  // full concurrency). B22 convention: 30s budget for import-heavy tests.
   test("calls ensureConnection before querying tasks", async () => {
     // Mock the entire SqliteDb layer
     const ensureInitSpy = vi
@@ -389,5 +394,5 @@ describe("EmailSearchTaskModule.resetOrphanedProcessingTasks", () => {
 
     // listSearchtask must have been called to actually look for orphaned tasks
     expect(listMock).toHaveBeenCalled();
-  });
+  }, 30_000);
 });

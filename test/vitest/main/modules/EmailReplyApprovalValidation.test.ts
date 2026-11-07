@@ -123,32 +123,35 @@ describe("P0.4 — approval blocked by validation findings", () => {
     };
   }
 
-  it("refuses approval when the body leaks AI self-disclosure (block)", async () => {
+  // 2026-10-20: the leakage_ai_self_disclosure block was removed (over-broad
+  // regex deadlocked sends on product-name false positives like "our AI
+  // Email Writer"; see EmailReplyOutputValidator). These drafts must now
+  // approve cleanly — the send_email_reply deadlock is resolved. The
+  // prompt-time BANNED_AI_PHRASES list and the model's requiresHumanReview
+  // flag remain as softer gates.
+  it("approves a body that previously triggered AI self-disclosure (user path)", async () => {
     const { draftId } = await seedDraftWithBody(
       "As an AI language model, here is the answer."
     );
-    await expect(
-      approvalService.approveDraft({
-        draftId,
-        approvedByType: "user",
-      })
-    ).rejects.toThrow(/validation findings/);
-    // The draft must remain unapproved.
+    await approvalService.approveDraft({
+      draftId,
+      approvedByType: "user",
+    });
     const draft = await draftModule.readAggregate(draftId);
-    expect(draft?.status).toBe("draft");
+    expect(draft?.status).toBe("approved");
   });
 
-  it("refuses a block finding even via the AI tool's tool_confirmation path", async () => {
+  it("approves a body that previously triggered AI self-disclosure (AI tool_confirmation path)", async () => {
     const { draftId } = await seedDraftWithBody(
       "As an AI language model, here is the answer."
     );
-    await expect(
-      approvalService.approveDraft({
-        draftId,
-        approvedByType: "tool_confirmation",
-        approvedById: "ai_tool",
-      })
-    ).rejects.toThrow(/validation findings/);
+    await approvalService.approveDraft({
+      draftId,
+      approvedByType: "tool_confirmation",
+      approvedById: "ai_tool",
+    });
+    const draft = await draftModule.readAggregate(draftId);
+    expect(draft?.status).toBe("approved");
   });
 
   it("approves a refund body and persists the finding as an audit warning", async () => {

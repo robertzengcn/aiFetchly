@@ -81,10 +81,49 @@ export class PortableWorkspaceMemoryModule extends BaseModule {
       scope.scopeId,
       f.id
     );
-    const previousHash =
-      (
-        await this.portableStateModel.getByScopeAndMemoryId(scope.scopeId, f.id)
-      )?.lastValidHash ?? null;
+    const previousState =
+      await this.portableStateModel.getByScopeAndMemoryId(scope.scopeId, f.id);
+    const previousHash = previousState?.lastValidHash ?? null;
+
+    // CONFLICT HOLD (design §14.6 / FR-038): while a record is conflicted,
+    // only an explicit user resolution (actor "user") or a queued,
+    // hash-checked app write (actor "aifetchly") may clear it. External
+    // watcher imports must never clobber the conflict marker — they may
+    // only advance the observed hash so the resolver sees the newest bytes.
+    const conflictHold =
+      existing !== null &&
+      previousState?.syncState === "conflicted" &&
+      input.actor !== "user" &&
+      input.actor !== "aifetchly";
+    if (conflictHold) {
+      await this.portableStateModel.updateByScopeAndMemoryId(
+        scope.scopeId,
+        f.id,
+        {
+          relativePath: document.relativePath,
+          observedHash: document.contentHash,
+          syncState: "conflicted",
+          diagnosticCode: previousState.diagnosticCode ?? "memory-conflict",
+          diagnosticMessage:
+            previousState.diagnosticMessage ??
+            "conflict held across external import; projection untouched until resolved",
+        }
+      );
+      await this.auditModel.append({
+        scopeId: scope.scopeId,
+        memoryId: f.id,
+        relativePath: document.relativePath,
+        action: "import",
+        actor: input.actor,
+        outcome: "conflict-held",
+        previousHash: previousState.lastValidHash ?? null,
+        nextHash: document.contentHash,
+        diagnosticCode: "memory-conflict-hold",
+        message:
+          "external import did not clobber the conflicted record; use the conflict resolver to choose a version",
+      });
+      return;
+    }
 
     if (existing) {
       await this.memoryModel.updateByScopeAndMemoryId(scope.scopeId, f.id, {

@@ -25,6 +25,14 @@
         {{ t(`managedBrowser.states.${status.state}`) || status.state }}
       </span>
       <span
+        class="mb-session-card__scope"
+        data-testid="mb-session-scope"
+        :title="t('managedBrowser.scope_global_hint') || ''"
+      >
+        <v-icon size="x-small" aria-hidden="true">mdi-earth</v-icon>
+        {{ t("managedBrowser.scope_global") || "Shared browser" }}
+      </span>
+      <span
         v-if="elapsedLabel"
         class="mb-session-card__elapsed"
         data-testid="mb-session-header-elapsed"
@@ -205,7 +213,7 @@
       :model-value="handoffDialogOpen"
       :status="status"
       :busy="busy"
-      @update:model-value="handoffDialogOpen = $event"
+      @update:model-value="onHandoffDialogVisibility"
       @verify="onVerifyLogin"
       @extend="onExtend"
       @cancel="onCancelTask"
@@ -257,6 +265,21 @@ const { t } = useI18n();
 const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
+/**
+ * Sticky dismiss (FR-HANDOFF-CLOSE): when the user closes the handoff dialog
+ * while the session stays in a handoff/login state, the periodic handoff
+ * status refreshes must not reopen it — the session card keeps all of the
+ * receipt controls (verify / resume / extend / stop). The flag resets as
+ * soon as the session leaves the handoff states or ends.
+ */
+const handoffDismissed = ref(false);
+/**
+ * R8 P2-6: sessions this card has seen go away — terminal status events and
+ * local stop clicks both land here. A late non-terminal status for one of
+ * them must never resurrect the card ("stopped stays empty until
+ * listActiveSessions or a new start says otherwise").
+ */
+const stoppedSessionIds = new Set<string>();
 const recentNotices = ref<
   Array<{
     readonly eventId: string;
@@ -365,20 +388,36 @@ const stateIcon = computed(() => {
 
 function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!next || TERMINAL_STATES.has(next.state)) {
+    if (next?.sessionId) {
+      stoppedSessionIds.add(next.sessionId);
+    }
     status.value = null;
     handoffDialogOpen.value = false;
+    handoffDismissed.value = false;
     approvalRequest.value = null;
     progressLine.value = null;
     firstSeenAt.value = null;
     clearScreenshot();
     return;
   }
+  // R8 P2-6: ignore events that are not about the card's current session
+  // (this includes any session that was already stopped), and drop results
+  // for a session other than the one displayed when one is up.
+  if (stoppedSessionIds.has(next.sessionId)) {
+    return;
+  }
+  if (status.value && status.value.sessionId !== next.sessionId) {
+    return;
+  }
   status.value = next;
-  // The handoff dialog auto-opens in handoff/login states (FR-P0-013).
-  handoffDialogOpen.value = stateIsHandoffLike.value || handoffDialogOpen.value;
+  // The handoff dialog auto-opens in handoff/login states (FR-P0-013) unless
+  // the user already dismissed it for this handoff (sticky dismiss, reset
+  // once the session leaves the handoff states).
   if (!stateIsHandoffLike.value) {
+    handoffDismissed.value = false;
     handoffDialogOpen.value = false;
   } else {
+    handoffDialogOpen.value = !handoffDismissed.value;
     // Nothing identifiable stays visible while the user handles a login
     // or challenge — the thumbnail is cleared entering sensitive states.
     clearScreenshot();
@@ -432,6 +471,18 @@ function onTakeOver(): void {
   });
 }
 
+/**
+ * Handoff dialog visibility (FR-HANDOFF-CLOSE): a close while the session
+ * remains in a handoff/login state is sticky — the periodic handoff status
+ * events must not reopen the dialog the user just closed.
+ */
+function onHandoffDialogVisibility(value: boolean): void {
+  handoffDialogOpen.value = value;
+  if (!value && stateIsHandoffLike.value) {
+    handoffDismissed.value = true;
+  }
+}
+
 function onVerifyLogin(): void {
   const current = status.value;
   if (!current) {
@@ -473,6 +524,7 @@ function onStop(): void {
   }
   void run(async () => {
     await stopManagedBrowser(current.sessionId, "user_stop");
+    stoppedSessionIds.add(current.sessionId);
     applyStatus(null);
   });
 }
@@ -485,6 +537,7 @@ function onCancelTask(): void {
   handoffDialogOpen.value = false;
   void run(async () => {
     await stopManagedBrowser(current.sessionId, "cancelled");
+    stoppedSessionIds.add(current.sessionId);
     applyStatus(null);
   });
 }
@@ -634,6 +687,18 @@ onBeforeUnmount(() => {
   font-size: 0.75rem;
   color: #546e7a;
   border: 1px solid rgba(84, 110, 122, 0.4);
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.mb-session-card__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
   border-radius: 999px;
   padding: 1px 6px;
   white-space: nowrap;

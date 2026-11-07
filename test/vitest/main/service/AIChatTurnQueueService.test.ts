@@ -29,8 +29,9 @@ import {
   AIChatTurnQueueError,
   createSteeringPromoter,
   type AIChatTurnQueueEngine,
-  type AIChatQueueTurnDispatch,
+  type AIChatQueueLease,
 } from "@/service/AIChatTurnQueueService";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { AIChatPendingMessageModule } from "@/modules/AIChatPendingMessageModule";
 import {
   AIChatPendingMessagePreparationService,
@@ -40,6 +41,11 @@ import type { AIChatPendingMessageEvent } from "@/entityTypes/aiChatV2Types";
 import type { AIChatTurnTerminalEvent } from "@/service/AIChatQueryEvents";
 import { SqliteDb } from "@/config/SqliteDb";
 import { resolveTestDbPath } from "@/config/testDbPath";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatConversationModel } from "@/model/AIChatConversation.model";
+import { AIChatMessageModel } from "@/model/AIChatMessage.model";
+import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
+import { MessageType } from "@/entityTypes/commonType";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -53,6 +59,7 @@ function fakePrep(): AIChatPendingMessagePreparationService {
           attachmentMetadata: undefined,
           messageMetadata: { source: "chat-v2" },
           imageAttachments: [],
+          stagedRefs: [],
         } as AIChatPendingPreparedContent)
     ),
   } as unknown as AIChatPendingMessagePreparationService;
@@ -77,9 +84,42 @@ function makeEngineStub() {
   let nextSubmit: Deferred<AIChatTurnTerminalEvent> | null = null;
   let reserveResult: unknown = null;
   let commitResult = true;
+  // R7-04 probe: full-behavior responder for one submit — restores the
+  // bookkeeping invariants (submitted counter) while letting a test drive
+  // the durable assistant persistence like the real engine does.
+  let submitResponder:
+    | null
+    | ((
+        input: Parameters<
+          AIChatTurnQueueEngine["submitPersistedUserMessage"]
+        >[0]
+      ) => Promise<AIChatTurnTerminalEvent>) = null;
   const engine: AIChatTurnQueueEngine = {
     getConversationRuntimeStatus: (id: string) =>
       (statuses.get(id) as never) ?? "idle",
+    submitPersistedUserMessage: vi.fn(
+      async (
+        input: Parameters<
+          AIChatTurnQueueEngine["submitPersistedUserMessage"]
+        >[0]
+      ) => {
+        submitted.push({
+          conversationId: input.savedUser.conversationId,
+          modelContent: input.modelContent,
+        });
+        if (submitResponder) {
+          return await submitResponder(input);
+        }
+        if (nextSubmit) {
+          return await nextSubmit.promise;
+        }
+        return {
+          type: "completed",
+          conversationId: input.savedUser.conversationId,
+          assistantMessageId: "a1",
+        } as AIChatTurnTerminalEvent;
+      }
+    ),
     reserveSteering: vi.fn(() => reserveResult as never),
     cancelSteeringReservation: vi.fn(),
     commitSteering: vi.fn(() => commitResult),
@@ -98,49 +138,62 @@ function makeEngineStub() {
     setCommit(value: boolean) {
       commitResult = value;
     },
+    setSubmitResponder(
+      responder:
+        | null
+        | ((
+            input: Parameters<
+              AIChatTurnQueueEngine["submitPersistedUserMessage"]
+            >[0]
+          ) => Promise<AIChatTurnTerminalEvent>)
+    ) {
+      submitResponder = responder;
+    },
   };
 }
 
 function makeService(
-  engineOverrides?: Partial<ReturnType<typeof makeEngineStub>>
+  engineOverrides?: Partial<ReturnType<typeof makeEngineStub>>,
+  preparedOverrides?: Partial<AIChatPendingPreparedContent>
 ) {
   const stub = makeEngineStub();
   Object.assign(stub, engineOverrides ?? {});
-  const module = new AIChatPendingMessageModule(fakePrep());
+  const prep = fakePrep();
+  if (preparedOverrides) {
+    const original = prep.prepare as unknown as (
+      input: { request: { message: string } }
+    ) => Promise<AIChatPendingPreparedContent>;
+    (prep.prepare as unknown) = vi.fn(
+      async (input: { request: { message: string } }) =>
+        ({
+          ...(await original(input)),
+          ...preparedOverrides,
+        } as AIChatPendingPreparedContent)
+    );
+  }
+  const module = new AIChatPendingMessageModule(prep);
   const events: AIChatPendingMessageEvent[] = [];
-  // Stage A §3.4: drained rows dispatch through the execution owner seam.
-  // The dispatcher shares the engine stub's submitted/nextSubmit handles so
-  // existing drain tests keep driving turn outcomes through setNextSubmit.
-  let nextSubmit: Deferred<AIChatTurnTerminalEvent> | null = null;
-  const dispatchQueuedTurn = async (
-    input: AIChatQueueTurnDispatch
-  ): Promise<AIChatTurnTerminalEvent> => {
-    stub.submitted.push({
-      conversationId: input.savedUser.conversationId,
-      modelContent: input.modelContent,
-    });
-    if (nextSubmit) {
-      return await nextSubmit.promise;
-    }
-    return {
-      type: "completed",
-      conversationId: input.savedUser.conversationId,
-      assistantMessageId: input.assistantMessageId,
-    } as AIChatTurnTerminalEvent;
-  };
-  stub.setNextSubmit = (d: Deferred<AIChatTurnTerminalEvent> | null) => {
-    nextSubmit = d;
-  };
+  let leaseEnabled = true;
   const service = new AIChatTurnQueueService({
     engine: stub.engine,
     pendingModule: module,
     eventSink: { emit: (e) => events.push(e) },
-    dispatchQueuedTurn,
+    streamSinkFactory: () => ({ emit: () => undefined }),
+    tryAcquireLease: ((): AIChatQueueLease | null =>
+      leaseEnabled ? { release: () => undefined } : null) as never,
     isAiEnabled: () => true,
     isQueueEnabled: () => true,
     isSteeringEnabled: () => true,
   });
-  return { service, module, events, stub };
+  return {
+    service,
+    module,
+    events,
+    stub,
+    setLeaseEnabled(value: boolean) {
+      leaseEnabled = value;
+    },
+  };
 }
 
 beforeEach(async () => {
@@ -157,12 +210,6 @@ beforeEach(async () => {
       }
     }
   }
-  // NOTE: do NOT re-seed/re-init here. Vitest runs multiple files per fork
-  // worker; destroy+re-init churn leaks a destroyed instance window into
-  // sibling DB files in the same worker (cross-file "No metadata" /
-  // "database is locked" flakes in the main gate). The destroy-only hook is
-  // the dev-proven behavior; the serial-service flake it occasionally shows
-  // is shared-DB contention, not a suite defect.
 });
 
 describe("AIChatTurnQueueService submit + drain", () => {
@@ -187,6 +234,9 @@ describe("AIChatTurnQueueService submit + drain", () => {
     );
     const views = await service.list("v2-a");
     expect(views[0].status).toBe("sent");
+    // R8 §2 (PRD §20): the PRD-named `scheduled` alias must move with every
+    // dispatch, so the soak dashboard can read either series.
+    expect(aiChatQueueCounters.get("ai_chat_pending_scheduled_total")).toBe(1);
   });
 
   it("busy submit stays queued with no dispatch", async () => {
@@ -391,73 +441,29 @@ describe("AIChatTurnQueueService submit + drain", () => {
     expect(stub.submitted[0].modelContent).toBe("B");
   });
 
-  it("execution-owner busy (race) releases the claim back to queued without dispatching", async () => {
-    const { service, module, stub } = makeService();
-    const statuses = stub.statuses;
-    void statuses;
-    void module;
-    // Simulate the admission race: the owner reports conversation_busy for
-    // the drained row (another turn claimed the conversation first).
-    const originalSubmit = service.submit.bind(service);
-    void originalSubmit;
-    const { AIChatTurnQueueService: Svc } = await import(
-      "@/service/AIChatTurnQueueService"
-    );
-    const busyService = new Svc({
-      engine: stub.engine,
-      pendingModule: new AIChatPendingMessageModule(fakePrep()),
-      eventSink: { emit: () => undefined },
-      dispatchQueuedTurn: () =>
-        Promise.resolve({
-          type: "conversation_busy",
-          conversationId: "v2-lease",
-        } as AIChatTurnTerminalEvent),
-      isAiEnabled: () => true,
-      isQueueEnabled: () => true,
-      isSteeringEnabled: () => true,
-    });
-    await busyService.submit({
+  it("lease busy releases the claim back to queued without dispatching", async () => {
+    const { service, stub, setLeaseEnabled } = makeService();
+    setLeaseEnabled(false);
+    await service.submit({
       clientRequestId: "cr-lease",
       request: { message: "A", conversationId: "v2-lease" },
     });
     await vi.waitFor(async () => {
-      const views = await busyService.list("v2-lease");
+      const views = await service.list("v2-lease");
       return views[0]?.status === "queued";
     });
     expect(stub.submitted.length).toBe(0);
-    // Quiesce the busy→release→re-drain chain this test triggers: the row
-    // is released back to queued, the drain re-fires, re-gets busy, and so
-    // on. Wait until a full drain attempt settles with the row STILL queued
-    // (no DB writes in flight) so the next test inherits no chain.
-    await new Promise((r) => setTimeout(r, 50));
-    await vi.waitFor(async () => {
-      const before = await busyService.list("v2-lease");
-      await new Promise((r2) => setTimeout(r2, 30));
-      const after = await busyService.list("v2-lease");
-      return (
-        before[0]?.status === "queued" &&
-        after[0]?.status === "queued" &&
-        before[0]?.updatedAt === after[0]?.updatedAt
-      );
-    });
   });
 
   it("AI-disabled drain holds the queue durably", async () => {
     const { service } = makeService();
-    // forceQueue: no drain fires at submission (the scenario under test is
-    // the DISABLED drain path, so triggering a healthy one only invites
-    // interference from prior tests' leaked chains).
-    const submitted = service.submit({
+    await service.submit({
       clientRequestId: "cr-hold",
       request: { message: "A", conversationId: "v2-hold" },
-      forceQueue: true,
     });
-    // Force lazy DataSource init with a read (destroy-only beforeEach
-    // leaves initialization to the first model call; a write racing that
-    // lazy init is what produced "No metadata" / "database is locked" in
-    // the main-config fork). Then pause — the durable hold under test.
-    await service.list("v2-hold");
-    await submitted;
+    // Force a paused-ish state by disabling AI then submitting again:
+    // simpler — directly pause via model like resume test, then verify
+    // resume with AI disabled keeps rows paused.
     await service["deps"]["pendingModule"]
       .getModel()
       .pauseConversationQueued("v2-hold", "user_stopped");
@@ -598,6 +604,9 @@ describe("AIChatTurnQueueService steer", () => {
         }),
       },
     ]);
+    // R8 §2 (PRD §20): the PRD-named `steered` alias moves with every
+    // applied steering promote, alongside the live applied/requested series.
+    expect(aiChatQueueCounters.get("ai_chat_pending_steered_total")).toBe(1);
     const views = await service.list("v2-pro");
     expect(views.find((v) => v.content === "focus on Europe")?.status).toBe(
       "applied"
@@ -650,6 +659,60 @@ describe("AIChatTurnQueueService steer", () => {
     ).rejects.toMatchObject({ code: "TURN_NOT_STEERABLE" });
     const views = await service.list("v2-st2");
     expect(views[0].status).toBe("sent");
+  });
+
+  it("rejects steering for a queued row carrying generated-image references (FR-QUE-005 P1-3)", async () => {
+    const first = createDeferred<AIChatTurnTerminalEvent>();
+    const { service, stub } = makeService(undefined, {
+      messageMetadata: {
+        source: "chat-v2",
+        generatedImageReferences: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m1", imageIndex: 1 },
+        ],
+      },
+    });
+    stub.setNextSubmit(first);
+    await service.submit({
+      clientRequestId: "cr-imgsteer-a",
+      request: { message: "A", conversationId: "v2-imgsteer" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    stub.statuses.set("v2-imgsteer", "running");
+
+    const receiptB = await service.submit({
+      clientRequestId: "cr-imgsteer-b",
+      request: { message: "now batch-edit all of them", conversationId: "v2-imgsteer" },
+    });
+    expect(receiptB.disposition).toBe("queued");
+
+    // Force the steering path past the reservation so the test targets the
+    // metadata check, not a null-reservation refusal.
+    stub.setReserve({
+      reservationId: "r-img",
+      targetAssistantMessageId: "assistant-img",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+    stub.setCommit(true);
+
+    // A stale renderer must not be able to bypass the UI gate: the durable
+    // row carries a reference channel that steering would drop, so the
+    // service rejects with the not-steerable error and keeps the row queued.
+    await expect(
+      service.steer({
+        conversationId: "v2-imgsteer",
+        pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+      })
+    ).rejects.toMatchObject({ code: "TURN_NOT_STEERABLE" });
+    const views = await service.list("v2-imgsteer");
+    const row = views.find((v) => v.content.includes("batch-edit"));
+    expect(row?.status).toBe("queued");
+
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-imgsteer",
+      assistantMessageId: "a",
+    });
   });
 
   it("commit-false race restores the row to queued", async () => {
@@ -738,12 +801,8 @@ describe("AIChatTurnQueueService gating", () => {
       engine: makeEngineStub().engine,
       pendingModule: module,
       eventSink: { emit: () => undefined },
-      dispatchQueuedTurn: () =>
-        Promise.resolve({
-          type: "completed",
-          conversationId: "v2-off",
-          assistantMessageId: "a1",
-        } as AIChatTurnTerminalEvent),
+      streamSinkFactory: () => ({ emit: () => undefined }),
+      tryAcquireLease: () => null,
       isAiEnabled: () => true,
       isQueueEnabled: () => false,
       isSteeringEnabled: () => true,
@@ -754,5 +813,226 @@ describe("AIChatTurnQueueService gating", () => {
         request: { message: "nope", conversationId: "v2-off" },
       })
     ).rejects.toBeInstanceOf(AIChatTurnQueueError);
+  });
+});
+
+/**
+ * Audit R7-04 (conversation-projection parity): a queue-drained turn persists
+ * durable message rows but never materializes `ai_chat_conversations`, so the
+ * boot-time sidebar loses the conversation until the next backfill. The seams
+ * must couple projection upserts at the durable moments — user promotion and
+ * turn terminal — like the coordinator's direct-send path (recordMessagePersisted
+ * at accept + completed/cancelled terminal).
+ */
+describe("AIChatTurnQueueService conversation projection parity (audit R7-04)", () => {
+  /**
+   * Same shape as makeService, but with a released-lease counter — the drain
+   * resolves its lease in the drain's `finally`, so release count is a
+   * deterministic end-of-drain signal even for cancelled/failed terminals
+   * that emit no event.
+   */
+  function makeR7Service() {
+    const stub = makeEngineStub();
+    const module = new AIChatPendingMessageModule(fakePrep());
+    const events: AIChatPendingMessageEvent[] = [];
+    const released = { count: 0 };
+    const service = new AIChatTurnQueueService({
+      engine: stub.engine,
+      pendingModule: module,
+      eventSink: { emit: (e) => events.push(e) },
+      streamSinkFactory: () => ({ emit: () => undefined }),
+      tryAcquireLease: (() => ({
+        release: (): void => {
+          released.count += 1;
+        },
+      })) as never,
+      isAiEnabled: () => true,
+      isQueueEnabled: () => true,
+      isSteeringEnabled: () => true,
+      // Audit R7-04: the drained-turn projection couplings under test.
+      conversationModule: new AIChatConversationModule(),
+    });
+    return { service, module, events, stub, released };
+  }
+
+  /** Persist the durable assistant row exactly as the real engine does. */
+  function makeAssistantPersister() {
+    const messageModel = new AIChatMessageModel(resolveTestDbPath());
+    return async (
+      input: Parameters<
+        AIChatTurnQueueEngine["submitPersistedUserMessage"]
+      >[0],
+      terminal: AIChatTurnTerminalEvent
+    ): Promise<AIChatTurnTerminalEvent> => {
+      if (input.assistantMessageId && terminal.type !== "failed") {
+        const entity = new AIChatMessageEntity();
+        entity.messageId = input.assistantMessageId;
+        entity.conversationId = input.savedUser.conversationId;
+        entity.role = "assistant";
+        entity.content =
+          terminal.type === "completed"
+            ? "assistant answer"
+            : "partial output persisted before cancellation";
+        entity.timestamp = new Date();
+        entity.messageType = MessageType.MESSAGE;
+        entity.metadata = JSON.stringify({ source: "chat-v2" });
+        await messageModel.saveMessage(entity);
+      }
+      return terminal;
+    };
+  }
+
+  async function readProjection(conversationId: string) {
+    const conversationModule = new AIChatConversationModule();
+    return conversationModule.getConversationProjection(conversationId);
+  }
+
+  it("a completed drain materializes the projection: preview, generated title, counters, unread", async () => {
+    const { service, stub, released } = makeR7Service();
+    const persistTurn = makeAssistantPersister();
+    stub.setSubmitResponder((input) =>
+      persistTurn(input, {
+        type: "completed",
+        conversationId: input.savedUser.conversationId,
+        assistantMessageId: input.assistantMessageId ?? "",
+      })
+    );
+
+    await service.submit({
+      clientRequestId: "cr-r7-04-done",
+      request: {
+        message: "run preservation probe",
+        conversationId: "v2-r7-done",
+      },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    await vi.waitFor(() => expect(released.count).toBe(1), { timeout: 5_000 });
+
+    const projection = await readProjection("v2-r7-done");
+    expect(projection).not.toBeNull();
+    // The last durable message is the assistant answer → the sidebar preview.
+    expect(projection?.preview).toBe("assistant answer");
+    // The generated title derives once from the first user content.
+    expect(projection?.title).toBe("run preservation probe");
+    // user registration creates the row (count 0), the completed result bumps it
+    expect(projection?.messageCount).toBe(1);
+    expect(projection?.lastResultAt).not.toBeNull();
+    expect(AIChatConversationModel.isUnread(projection as never)).toBe(true);
+
+    const sidebar = await new AIChatConversationModule().getWorkspaceSidebar(
+      () => null,
+      "v2-r7-done"
+    );
+    expect(
+      sidebar.unassigned.some((s) => s.conversationId === "v2-r7-done")
+    ).toBe(true);
+  });
+
+  it("a cancelled drain updates the preview but never marks unread", async () => {
+    const { service, stub, released } = makeR7Service();
+    const persistTurn = makeAssistantPersister();
+    stub.setSubmitResponder((input) =>
+      persistTurn(input, {
+        type: "cancelled",
+        conversationId: input.savedUser.conversationId,
+        assistantMessageId: input.assistantMessageId ?? "",
+      })
+    );
+
+    await service.submit({
+      clientRequestId: "cr-r7-04-cancel",
+      request: { message: "cancel probe", conversationId: "v2-r7-cancel" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    await vi.waitFor(() => expect(released.count).toBe(1), { timeout: 5_000 });
+
+    const projection = await readProjection("v2-r7-cancel");
+    expect(projection).not.toBeNull();
+    // The partial assistant content survived cancellation and is projected,
+    // but a cancelled turn is NOT a result — no unread.
+    expect(projection?.preview).toBe(
+      "partial output persisted before cancellation"
+    );
+    expect(projection?.messageCount).toBe(1);
+    expect(projection?.lastResultAt).toBeNull();
+    expect(AIChatConversationModel.isUnread(projection as never)).toBe(false);
+  });
+
+  it("a failed drain with no assistant row still registers the user message", async () => {
+    const { service, stub, released } = makeR7Service();
+    stub.setSubmitResponder((input) =>
+      Promise.resolve({
+        type: "failed" as const,
+        conversationId: input.savedUser.conversationId,
+        assistantMessageId: input.assistantMessageId ?? "",
+      })
+    );
+
+    await service.submit({
+      clientRequestId: "cr-r7-04-fail",
+      request: { message: "failure probe", conversationId: "v2-r7-fail" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    await vi.waitFor(() => expect(released.count).toBe(1), { timeout: 5_000 });
+
+    const projection = await readProjection("v2-r7-fail");
+    expect(projection).not.toBeNull();
+    expect(projection?.preview).toBe("failure probe");
+    expect(projection?.messageCount).toBe(0);
+    expect(projection?.lastResultAt).toBeNull();
+  });
+
+  it("steering promotion advances the projection preview", async () => {
+    const { service, stub, module } = makeR7Service();
+    const first = createDeferred<AIChatTurnTerminalEvent>();
+    stub.setNextSubmit(first);
+    await service.submit({
+      clientRequestId: "cr-r7-04-steer-a",
+      request: { message: "A", conversationId: "v2-r7-steer" },
+    });
+    await vi.waitFor(() => expect(stub.submitted.length).toBe(1));
+    stub.statuses.set("v2-r7-steer", "running");
+
+    const receiptB = await service.submit({
+      clientRequestId: "cr-r7-04-steer-b",
+      request: { message: "focus on Europe", conversationId: "v2-r7-steer" },
+    });
+    stub.setReserve({
+      reservationId: "r1",
+      targetAssistantMessageId: "assistant-9",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+    stub.setCommit(true);
+    await service.steer({
+      conversationId: "v2-r7-steer",
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+    });
+
+    // The engine's steering mailbox (createSteeringPromoter) promotes through
+    // the SAME module seam after commitSteering; drive it here.
+    const claimed = await module
+      .getModel()
+      .getByPendingMessageId(receiptB.pendingMessage.pendingMessageId);
+    await module.promoteSteeringToUserMessage({
+      pendingMessageId: receiptB.pendingMessage.pendingMessageId,
+      claimToken: claimed?.claimToken ?? "",
+      boundary: "after_tool",
+      targetAssistantMessageId: "assistant-9",
+    });
+    // The promoted coupling writes the projection synchronously; the held
+    // drain (first deferred) still owns the conversation.
+
+    const projection = await readProjection("v2-r7-steer");
+    expect(projection).not.toBeNull();
+    // The steering row became the latest durable user message.
+    expect(projection?.preview).toBe("focus on Europe");
+    // The generated title stays on the FIRST turn's content.
+    expect(projection?.title).toBe("A");
+
+    first.resolve({
+      type: "completed",
+      conversationId: "v2-r7-steer",
+      assistantMessageId: "a",
+    });
   });
 });

@@ -1,9 +1,11 @@
 import { BaseModule } from "@/modules/baseModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { AiMessageTaskModel } from "@/model/AiMessageTask.model";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { ScheduledLoopRunRegistry } from "@/service/ScheduledLoopRunRegistry";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 import {
   SCHEDULED_LOOP_MAX_ALLOWED_TOOLS,
   validateScheduledLoopAllowedTools,
@@ -206,6 +208,21 @@ export class AIChatScheduledLoopModule extends BaseModule {
         slashCommandName: "loop",
       },
     });
+    // Ensure the conversation projection row exists (design §8.6). The
+    // renderer may pass a locally-fabricated v2 id (fresh composer, no active
+    // conversation) that has no ai_chat_conversations row. Without it the
+    // loop's conversation is a phantom: scheduled turns persist messages but
+    // the sidebar never lists the conversation and the transcript becomes
+    // unreachable after navigating away. Mirrors the interactive path, where
+    // AIChatCoordinator bumps the projection on every message persist.
+    const conversationModule = new AIChatConversationModule();
+    await conversationModule.recordMessagePersisted({
+      conversationId,
+      isResult: false,
+      previewText: request.rawCommand,
+      generatedTitle: request.rawCommand,
+      timestamp: now,
+    });
 
     // Create task then schedule; compensate on partial failure so we never
     // leave an active schedule pointing at a missing task (or vice versa).
@@ -261,6 +278,13 @@ export class AIChatScheduledLoopModule extends BaseModule {
           slashCommandResult: true,
           slashCommandName: "scheduled-loop-create",
         },
+      });
+      // Confirmation row → advance the projection preview/counters too.
+      await conversationModule.recordMessagePersisted({
+        conversationId,
+        isResult: true,
+        previewText: summary,
+        timestamp: now,
       });
 
       const schedule = await this.scheduleModel.getScheduleById(scheduleId);
@@ -339,6 +363,24 @@ export class AIChatScheduledLoopModule extends BaseModule {
   async stopCurrentRun(
     conversationId: string
   ): Promise<{ cancelled: boolean }> {
+    // Bugfix 2026-11-02: BOTH scheduled paths register their dedicated
+    // engine in the conversation-keyed registry while an occurrence
+    // executes — chat-bound `/loop` runs AND schedule-page AI message task
+    // runs. Abort the live occurrence through its run-registry controller
+    // BEFORE the chat-loop fallback so the workspace composer Stop
+    // affordance works for task-run conversations too (previously it
+    // silently no-opped for them). The entry also carries the parked-turn
+    // permission backstop — stopping a parked turn must clear that timer.
+    const engineEntry = ScheduledLoopEngineRegistry.getInstance().getByConversation(
+      conversationId
+    );
+    if (engineEntry) {
+      engineEntry.clearPermissionBackstop?.();
+      const aborted = ScheduledLoopRunRegistry.getInstance().abort(
+        engineEntry.runId
+      );
+      return { cancelled: aborted };
+    }
     const schedule = await this.scheduleModel.findLatestChatScheduledLoop(
       conversationId
     );

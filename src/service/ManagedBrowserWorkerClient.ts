@@ -1,4 +1,7 @@
-import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
 import * as path from "path";
 import { log } from "@/modules/Logger";
@@ -135,6 +138,22 @@ export class ManagedBrowserWorkerClient {
     const worker = fork(entryPath, [this.sessionId, this.sessionNonce]);
     this.worker = worker;
     worker.on("message", (raw) => this.handleMessage(raw));
+    // The utility process pipes stderr/stdout; without a reader the child
+    // can block once the pipe buffer fills and its crashes are invisible.
+    // Tap stderr (worker-only diagnostics) at warn level; keep the stream
+    // capped per chunk (launch failures, Chromium dependency errors).
+    const stdioTap = worker as unknown as {
+      stderr?: {
+        on(event: string, listener: (chunk: Buffer) => void): void;
+      } | null;
+    };
+    stdioTap.stderr?.on?.("data", (chunk: Buffer) => {
+      log.warn(
+        `[ManagedBrowserWorkerClient:${this.sessionId}] stderr: ${chunk
+          .toString()
+          .slice(0, 500)}`
+      );
+    });
     worker.on("exit", (code) => {
       void this.cleanup(`exit:${code ?? "unknown"}`);
     });

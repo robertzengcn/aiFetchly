@@ -98,6 +98,12 @@ vi.mock("@/modules/AiMessageTaskRunModule", () => ({
     failRun = mockFailRun;
   },
 }));
+const mockRecordMessagePersisted = vi.hoisted(() => vi.fn());
+vi.mock("@/modules/AIChatConversationModule", () => ({
+  AIChatConversationModule: class {
+    recordMessagePersisted = mockRecordMessagePersisted;
+  },
+}));
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: class {
     createConversationIfNeeded = mockCreateConversationIfNeeded;
@@ -305,6 +311,43 @@ describe("ScheduledAiMessageRunner.runChatScheduledLoop", () => {
     const r = await call();
     expect(r.status).toBe("completed");
     expect(mockRunTurn).toHaveBeenCalled();
+  });
+
+  it("bumps the conversation projection for the scheduled user turn and result", async () => {
+    // Scheduled turns bypass AIChatCoordinator, so without an explicit bump
+    // the sidebar projection (preview/lastMessageAt/messageCount) never
+    // advances and a loop conversation created from a fresh composer stays
+    // an unreachable phantom (no ai_chat_conversations row at all).
+    engineOutcome.value = { type: "complete", content: "deployment ok" };
+    await call();
+    expect(mockRecordMessagePersisted).toHaveBeenCalledTimes(2);
+    expect(mockRecordMessagePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "v2-conv", isResult: false })
+    );
+    expect(mockRecordMessagePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "v2-conv",
+        isResult: true,
+        previewText: "deployment ok",
+      })
+    );
+  });
+
+  it("does not bump the projection when the conversation is busy (deferred)", async () => {
+    mockAcquire.mockRejectedValue(new Error("busy"));
+    engineOutcome.value = { type: "complete", content: "should not run" };
+    const r = await call();
+    expect(r.status).toBe("blocked_by_policy");
+    expect(mockRecordMessagePersisted).not.toHaveBeenCalled();
+  });
+
+  it("bumps only the user-turn projection when the turn fails", async () => {
+    engineOutcome.value = { type: "error", message: "boom" };
+    await call();
+    expect(mockRecordMessagePersisted).toHaveBeenCalledTimes(1);
+    expect(mockRecordMessagePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "v2-conv", isResult: false })
+    );
   });
 
   it("rejects a task that is not chat_scheduled_loop", async () => {

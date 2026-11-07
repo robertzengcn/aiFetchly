@@ -1,4 +1,7 @@
-import { MANAGED_BROWSER_ACTION_LIMITS } from "@/config/managedBrowser";
+import {
+  MANAGED_BROWSER_ACTION_LIMITS,
+  MANAGED_BROWSER_TIMEOUTS,
+} from "@/config/managedBrowser";
 import type { ManagedBrowserErrorCode } from "@/entityTypes/managedBrowserTypes";
 import type {
   BrowserAction,
@@ -56,7 +59,7 @@ export interface ExecutorPageLike {
   evaluate<T>(pageFunction: unknown, ...args: unknown[]): Promise<T>;
   goto(
     url: string,
-    options?: { timeoutMs?: number; waitUntil?: string }
+    options?: { timeout?: number; waitUntil?: string }
   ): Promise<unknown>;
   keyboard: { press(key: string): Promise<void> };
 }
@@ -178,11 +181,7 @@ export class BrowserActionExecutor {
         }
         run.depth++;
         try {
-          const compositeStop = await this.runComposite(
-            action,
-            options,
-            run
-          );
+          const compositeStop = await this.runComposite(action, options, run);
           if (compositeStop) {
             return compositeStop;
           }
@@ -236,10 +235,8 @@ export class BrowserActionExecutor {
   ): Promise<StopCode | null> {
     if (action.type === "if") {
       const met = await this.checkCondition(action, options);
-      const branch = met ? action.then : (action.else ?? []);
-      return branch.length > 0
-        ? this.runSequence(branch, options, run)
-        : null;
+      const branch = met ? action.then : action.else ?? [];
+      return branch.length > 0 ? this.runSequence(branch, options, run) : null;
     }
     // repeat: check the condition BEFORE each iteration; hard iteration
     // cap is schema-bound, total-step + wall-time caps are shared.
@@ -297,47 +294,35 @@ export class BrowserActionExecutor {
         case "navigate":
           return await this.doNavigate(action.url, options);
         case "click":
-          return await this.withElement(
-            action,
-            options,
-            async (entry) => {
-              await entry.element.scrollIntoView();
-              await entry.element.click({ timeout: 5_000 });
-              return { success: true };
-            }
-          );
+          return await this.withElement(action, options, async (entry) => {
+            await entry.element.scrollIntoView();
+            await entry.element.click({ timeout: 5_000 });
+            return { success: true };
+          });
         case "fill":
-          return await this.withElement(
-            action,
-            options,
-            async (entry) => {
-              const inputType = await this.probeInputType(entry.element);
-              if (inputType && isSensitiveInputType(inputType)) {
-                // Credential-like fields always force user handoff.
-                return {
-                  success: false,
-                  errorCode: "challenge_requires_handoff" as const,
-                  effectUnknown: false,
-                  stopCode: "handoff_required" as const,
-                };
-              }
-              await entry.element.scrollIntoView();
-              // Clear then type with trusted input events; never echo the value.
-              await entry.element.evaluate("((el) => { el.value = ''; })");
-              await entry.element.type(action.value, { delay: 10 });
-              return { success: true };
+          return await this.withElement(action, options, async (entry) => {
+            const inputType = await this.probeInputType(entry.element);
+            if (inputType && isSensitiveInputType(inputType)) {
+              // Credential-like fields always force user handoff.
+              return {
+                success: false,
+                errorCode: "challenge_requires_handoff" as const,
+                effectUnknown: false,
+                stopCode: "handoff_required" as const,
+              };
             }
-          );
+            await entry.element.scrollIntoView();
+            // Clear then type with trusted input events; never echo the value.
+            await entry.element.evaluate("((el) => { el.value = ''; })");
+            await entry.element.type(action.value, { delay: 10 });
+            return { success: true };
+          });
         case "select":
-          return await this.withElement(
-            action,
-            options,
-            async (entry) => {
-              await entry.element.scrollIntoView();
-              await entry.element.select(...action.values);
-              return { success: true };
-            }
-          );
+          return await this.withElement(action, options, async (entry) => {
+            await entry.element.scrollIntoView();
+            await entry.element.select(...action.values);
+            return { success: true };
+          });
         case "press_key":
           await options.page.keyboard.press(action.key);
           return { success: true };
@@ -439,7 +424,9 @@ export class BrowserActionExecutor {
       };
     }
     await options.page.goto(url, {
-      timeoutMs: options.navigateTimeoutMs ?? 45_000,
+      timeout:
+        options.navigateTimeoutMs ??
+        MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
       waitUntil: "domcontentloaded",
     });
     // Navigation invalidates every reference (FR-TOOL-003).
@@ -578,11 +565,7 @@ export class BrowserActionExecutor {
     const live = await lookup.entry.element
       .evaluate<LiveElementDescriptor | null>(READ_ELEMENT_DESCRIPTOR_SCRIPT)
       .catch(() => null);
-    if (
-      !live ||
-      live.role !== expected.role ||
-      live.name !== expected.name
-    ) {
+    if (!live || live.role !== expected.role || live.name !== expected.name) {
       return {
         success: false,
         errorCode: "stale_page_reference",

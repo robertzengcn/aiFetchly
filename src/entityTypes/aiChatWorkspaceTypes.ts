@@ -60,6 +60,8 @@ export interface WorkspaceConversationSummary {
   readonly conversationId: string;
   readonly workspaceKey: string | null;
   readonly title: string;
+  /** Monotonic title version; guards renderer reconciliation (titles §10.3). */
+  readonly titleRevision: number;
   readonly preview: string;
   readonly lastActivityAt: string;
   readonly unread: boolean;
@@ -97,7 +99,27 @@ export interface ConversationSummaryEvent {
   readonly unread: boolean;
   readonly lastActivityAt: string;
   readonly runId?: string;
+  /**
+   * Audit R03: the accepted append identity the fact belongs to — the
+   * `pending-<pendingMessageId>` the renderer registered (queue-dominated
+   * facts carry it). Allows an exact-source binding instead of the
+   * accept-ordered fallback. Absent on legacy senders (pre-parity facts).
+   */
+  readonly sourceRunId?: string | null;
+  /**
+   * Audit R03: originating run owner. Facts signed with a NON-interactive
+   * owner are background-only for the selected store: they update sidebar
+   * state but must never bind/resolve accepted-send ledger entries.
+   * Absent means an interactive-path fact (interactive producers stay
+   * unsigned; only explicit owners are stamped).
+   */
+  readonly runOwner?: ChatRunOwner;
   readonly title?: string;
+  /**
+   * Chat-titles design §10.3: version of `title`. Once a versioned title is
+   * known, unversioned title fields cannot replace it.
+   */
+  readonly titleRevision?: number;
   readonly reason:
     | "run_queued"
     | "run_started"
@@ -146,10 +168,29 @@ export type ChatRunDetailEventType =
 export interface ChatRunDetailEvent {
   readonly conversationId: string;
   readonly runId: string;
+  /** Audit R03: the accepted append identity this detail stream serves from. */
+  readonly sourceRunId?: string | null;
   readonly sequence: number;
   readonly emittedAt: string;
   readonly eventType: ChatRunDetailEventType;
   readonly payload: Record<string, unknown>;
+}
+
+/**
+ * Identity of one terminal detail event consumed by the selected-
+ * conversation store (audit R05): only these records count as genuine
+ * completions — view-state transitions (e.g. a run id appearing on an idle
+ * view after a selection switch) never do. `ordinal` is the run's
+ * per-conversation accepted-send order (1-based); the coordinator
+ * serializes each conversation's runs, so terminal ordinals arrive in
+ * accepted-send order and pair the k-th accepted send with the k-th
+ * consumed terminal.
+ */
+export interface ChatRunTerminalRecord {
+  readonly conversationId: string;
+  readonly runId: string;
+  readonly kind: "complete" | "error" | "cancelled";
+  readonly ordinal: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +214,21 @@ export interface StartChatRunRequest {
   };
   readonly toolApprovalMode?: string;
   readonly resourceClass?: "general";
+}
+
+/**
+ * Audit R2 G01 trusted-channel association: declares that a start-run
+ * request is the durable continuation of a plan decision so main can
+ * observe the real decision → durable-acceptance interval. Identity only —
+ * never plan content — and stripped before reaching the engine payload.
+ * `action` mirrors the renderer's canonical plan-continuation decision
+ * vocabulary (`planContinuationStore.ts`) — the same tokens seed the
+ * deterministic continuation requestId hash.
+ */
+export interface PlanContinuationIdentityMeta {
+  readonly planId: string;
+  readonly version: number;
+  readonly action: "approve-plan" | "reject-plan" | "request-plan-changes";
 }
 
 export interface StartChatRunResponse {

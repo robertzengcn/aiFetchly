@@ -21,6 +21,7 @@ import type {
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
+  AIChatPlanContinuationRecoveryView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
 import type { OpenAIModelsResponse } from "@/api/aiChatApi";
@@ -51,6 +52,7 @@ import {
   AI_CHAT_V2_REJECT_PLAN,
   AI_CHAT_V2_REQUEST_PLAN_CHANGES,
   AI_CHAT_V2_PLAN_VERSIONS,
+  AI_CHAT_V2_PLAN_CONTINUATION_RECOVER,
   AI_CHAT_V2_GET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_SET_TOOL_APPROVAL_MODE,
   AI_CHAT_V2_DENY_TOOL_PERMISSION,
@@ -959,6 +961,21 @@ export async function getChatV2PlanVersions(
   return (resp as AIChatPlanVersionView[] | null) ?? [];
 }
 
+/**
+ * R12 — ask main to reconcile persisted plan decision transitions against
+ * the deterministic pending continuation ids. Returns the one recoverable
+ * continuation intent (a decision committed in main but whose follow-up
+ * turn was never accepted), or null. Read-only; never executes anything.
+ */
+export async function recoverChatV2PlanContinuationIntent(
+  conversationId: string
+): Promise<AIChatPlanContinuationRecoveryView | null> {
+  const resp = await windowInvoke(AI_CHAT_V2_PLAN_CONTINUATION_RECOVER, {
+    conversationId,
+  });
+  return (resp as AIChatPlanContinuationRecoveryView | null) ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Tool Approval Mode
 // ---------------------------------------------------------------------------
@@ -1022,8 +1039,11 @@ export async function denyChatV2ToolPermission(
     toolId,
     conversationId,
   });
+  // R10 B02: a null/garbage response is NOT a confirmed denial — reporting
+  // it as a successful no-owner deny would replace the actionable card with
+  // a receipt the owner never confirmed. Report it as a failure instead.
   return (
-    (resp as DenyToolPermissionResult | null) ?? { ok: true, handled: false }
+    (resp as DenyToolPermissionResult | null) ?? { ok: false, handled: false }
   );
 }
 
@@ -1249,8 +1269,8 @@ export async function isHistoryUiEnabled(): Promise<boolean> {
 
 
 /**
- * REMOVED: the legacy ai-chat-v2:compact-conversation channel has no
- * main-process handler and no preload allowlist entry — every call silently
- * no-oped. Use startCompaction (bounded incremental coordinator, §13.1)
- * instead.
+ * REMOVED (G02/B05 repair): the legacy ai-chat-v2:compact-conversation
+ * channel had no main-process handler and no preload allowlist entry —
+ * every call silently no-oped. Use startCompaction (bounded incremental
+ * coordinator, §13.1) instead.
  */

@@ -18,6 +18,7 @@
  */
 
 import { e2eTest as test, expect } from "../fixtures/base";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 import { assertCleanTeardown } from "../support/assertions";
 
 /** The pure (no-permission) read-only file tool used for steering scenarios. */
@@ -38,42 +39,30 @@ function textarea(app: {
 async function openChat(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): Promise<void> {
-  // The AI chat workspace is the default landing route; the dock toggle only
-  // exists when the app landed elsewhere. Handle both.
-  const toggle = app.mainWindow.getByTestId("ai-chat-toggle");
-  try {
-    await toggle.waitFor({ state: "visible", timeout: 5_000 });
-    await toggle.click();
-  } catch {
-    /* already on the chat workspace */
-  }
+  // G02 certification path: the AI chat workspace is the DEFAULT landing
+  // route (`/` → `/aiworkspace`) and these scenarios must exercise the
+  // workspace transcript — no legacy-dock fallbacks. If the app lands
+  // elsewhere or the workspace surface is absent, fail loudly instead of
+  // passing by testing the wrong surface.
+  await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
   await expect(textarea(app)).toBeVisible({ timeout: 30_000 });
-  // Under the chat-first shell the composer renders on the empty state too,
-  // but sends need a selected conversation — start one (the legacy dock
-  // created a conversation implicitly on first send).
+  // Sends need a selected conversation — start one through the shell strip.
   const newChat = app.mainWindow.getByTestId("workspace-new-chat");
-  try {
-    await newChat.waitFor({ state: "visible", timeout: 5_000 });
-    await newChat.click();
-    await expect(textarea(app)).toBeVisible({ timeout: 30_000 });
-  } catch {
-    /* legacy dock: no shell strip button */
-  }
+  await newChat.waitFor({ state: "visible", timeout: 5_000 });
+  await newChat.click();
+  await expect(textarea(app)).toBeVisible({ timeout: 30_000 });
 }
 
 /**
- * The chat content root: the chat-first shell renders the transcript as
- * `workspace-transcript`; the legacy dock uses `ai-chat-root`. Scope text
- * containment to whichever is present.
+ * The chat content root for certification: the chat-first shell renders the
+ * transcript as `workspace-transcript`. The legacy dock (`ai-chat-root`) is
+ * deliberately NOT accepted here — a passing scenario must prove the
+ * default-route workspace transcript.
  */
 function chatRoot(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): import("@playwright/test").Locator {
-  return app.mainWindow
-    .locator(
-      '[data-testid="workspace-transcript"], [data-testid="ai-chat-root"]'
-    )
-    .first();
+  return app.mainWindow.locator('[data-testid="workspace-transcript"]').first();
 }
 
 /**
@@ -124,6 +113,20 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     if (aiApp) {
       assertCleanTeardown(aiApp);
     }
+  });
+
+  test("0. default landing route redirects into the chat workspace (§21.6-0)", async ({
+    aiApp,
+  }) => {
+    // G02 route-level certification: loading the bare root hash must land
+    // in the chat workspace (`AI_Chat_Workspace` child redirect), not any
+    // legacy dock or settings page.
+    await aiApp.mainWindow.goto(`${RENDERER_ORIGIN}/#/`);
+    await aiApp.mainWindow.waitForURL(/#\/aiworkspace/, { timeout: 30_000 });
+    // The fresh profile has no selected conversation, so the shell renders
+    // its empty state (no transcript element yet) — certify the chat
+    // workspace surface via the composer.
+    await expect(composer(aiApp)).toBeVisible({ timeout: 30_000 });
   });
 
   test("1. queues B behind delayed A and auto-dispatches B after A (§21.6-1)", async ({

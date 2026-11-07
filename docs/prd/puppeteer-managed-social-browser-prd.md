@@ -1,5 +1,28 @@
 # Puppeteer-Managed Social Browser and LLM Automation - Product Requirements Document
 
+## Public browsing clarification (2026-10-29)
+
+Opening any website in the built-in managed browser must not require a
+Tool Account, including social networks and sites requiring sign-in. Open the
+site first; if authentication is needed, hand control to the user in that
+browser. Missing or unsupported saved accounts must fall back to an ephemeral
+browser instead of refusing to open the site. `browser_start_session` accepts `purpose` and an optional
+`requested_start_url`; omit `account_id` for public browsing. Preserve the
+requested hostname (for example, `https://sina.com`) and use the browser tools,
+rather than substituting an HTTP content fetch.
+
+Public sessions use a disposable profile, direct networking, no saved-account
+cookie import/export, and no persistent account cache. They become ready without
+social-platform authentication verification. Public HTTPS navigation retains the
+scheme and private-network restrictions, action approvals, and challenge handoff.
+Login does not create or update a saved Tool Account. Internal status/lease ids
+use accountId/platformId `0` for this mode; API callers omit the id rather than
+passing `0`. Existing saved-account sessions retain their platform/domain scope.
+Navigation failures must be surfaced rather than reporting a successful open.
+
+The account-selection and cookie-reuse requirements below apply to sessions
+explicitly started with a saved account, not to public browsing.
+
 ## Document Information
 
 - **Version**: 1.0

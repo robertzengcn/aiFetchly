@@ -32,7 +32,6 @@ describe("compliance-facing product nouns", () => {
       search_scraper: "Market Insight Explorer",
       email_extraction: "Contact Profile Insights",
       email_extraction_form: "Contact Profile Insights",
-      yellow_pages: "Directory Assistant",
       google_maps_scraper: "Local Business Finder",
       yandex_maps_scraper: "Local Business Finder",
       map_scraper: "Local Business Finder",

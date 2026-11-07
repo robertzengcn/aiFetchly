@@ -33,6 +33,16 @@ beforeEach(() => {
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
   process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
   SqliteDb.getInstance(tmpDir);
+  // Install hygiene: all three tests import the SAME plugin name without
+  // the overwrite flag, and getPluginInstallRoot() resolves to
+  // <cwd>/.test-userData outside Electron. Without removing the previous
+  // test's generation the second/third import's staging→final rename fails
+  // with ENOTEMPTY ("non-overwrite install requires a fresh dir" — H6
+  // update-transaction contract). Wipe the plugin subtree every test.
+  fs.rmSync(path.join(process.cwd(), ".test-userData", "plugins"), {
+    recursive: true,
+    force: true,
+  });
 });
 
 vi.mock("@/modules/token", () => ({

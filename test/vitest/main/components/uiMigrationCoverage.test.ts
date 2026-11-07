@@ -32,10 +32,10 @@ describe("inner-page convergence registry (PRD §4.1, IPR-054/055/056)", () => {
   });
 
 
-  it("covers exactly the 53 in-scope customer-facing surfaces", () => {
+  it("covers exactly the 50 in-scope customer-facing surfaces", () => {
     expect(report.inScopeSurfaceCount).toBe(IN_SCOPE_SURFACE_COUNT);
 
-    expect(IN_SCOPE_SURFACE_COUNT).toBe(53);
+    expect(IN_SCOPE_SURFACE_COUNT).toBe(50);
   });
 
   it("never uses menu visibility as scope evidence (IPR-054)", () => {

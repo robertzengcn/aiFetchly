@@ -20,12 +20,25 @@
         :data-testid="'workspace-execution-persist-failure'"
       >{{ persistFailureLabel }}</span>
       <SemanticToolResult
-        v-else-if="terminal"
+        v-else-if="terminal && !execution.hasSpecializedCard"
         :output-kind="execution.outputKind"
         :summary="execution.summary"
         :is-error="execution.isError"
         :artifact-id="execution.artifactId"
+        :images="execution.images"
         @reopen-artifact="$emit('reopen-artifact', $event)"
+        @use-image="
+          (index: number) =>
+            $emit(
+              'use-generated-image',
+              execution.sourceMessageId
+                ? {
+                    messageId: execution.sourceMessageId,
+                    imageIndex: index,
+                  }
+                : null
+            )
+        "
       />
     </span>
     <span class="row-meta">
@@ -39,6 +52,14 @@
   </div>
 </template>
 
+<!--
+  R8 P3 (PRD §13.3): when the row's result renders its own specialized
+  transcript surface (skill install / outbound batch / image batch card),
+  the generic SemanticToolResult body above is suppressed — the status,
+  action label, meta, and Activity detail still identify the execution, so
+  the same result never renders twice.
+-->
+
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -51,6 +72,15 @@ import { conversationStatusVisual, type ConversationStatusVisual } from "./works
 
 const emit = defineEmits<{
   (e: 'reopen-artifact', artifactId: string): void;
+  /**
+   * D8: the images semantic row's Use-as-reference action, resolved to the
+   * owning message + tile index reference (null when the row has no source
+   * message identity — the parent ignores it).
+   */
+  (
+    e: 'use-generated-image',
+    reference: { messageId: string; imageIndex: number } | null
+  ): void;
 }>();
 void emit;
 

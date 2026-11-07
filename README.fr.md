@@ -30,6 +30,7 @@ aiFetchly transforme une intention métier en workflows exécutables :
 - **Demander du travail à un agent IA** : recherche, analyse de fichiers, extraction de données, rédaction de messages, résumés et usage d'outils depuis une interface de chat.
 - **Utiliser vos connaissances métier** : importer des documents dans une bibliothèque locale et produire des réponses ou brouillons fondés sur vos propres fichiers.
 - **Automatiser le navigateur et les données** : collecter des informations sur des sites web, extraire des données structurées, traiter des listes d'URL et exporter les résultats.
+- **Laisser l'agent piloter un vrai navigateur** : ouvrez une fenêtre Chrome visible que l'IA observe et contrôle ; suivez chaque étape, approuvez les actions importantes et reprenez la main lors d'une connexion ou d'une vérification. Voir [Automatisation avec navigateur géré](#automatisation-avec-navigateur-géré).
 - **Déléguer à des sous-agents spécialisés** : lancer des agents en arrière-plan avec leur propre prompt, permissions d'outils, limites de ressources et sortie structurée.
 - **Étendre l'espace de travail** : installer des compétences et plugins pour ajouter outils, workflows métier et intégrations.
 - **Garder le contrôle** : stocker les données dans SQLite en local, vérifier l'activité des outils, gérer les permissions et exécuter sur votre poste.
@@ -88,6 +89,7 @@ aiFetchly transforme une intention métier en workflows exécutables :
 
 | Capacité | Description |
 |----------|-------------|
+| **Navigateur géré piloté par l'IA** | Confiez une vraie fenêtre Chrome visible à l'agent : ouvrir un site, lire la page, cliquer, saisir, naviguer, extraire des données et mettre en pause pour une prise en main humaine. Fonctionne sur les sites publics sans compte enregistré et réutilise la connexion d'un Tool Account quand vous le souhaitez. |
 | **Recherche web automatisée** | Recherchez sur plusieurs moteurs, collectez des informations métier, traitez des URL et récupérez les erreurs de tâche. |
 | **Extraction de données structurées** | Extrayez emails, téléphones, adresses, profils sociaux, informations d'entreprise et enregistrements d'annuaires. |
 | **Planification de tâches** | Planifiez avec cron, enchaînez des jobs dépendants, créez des workflows récurrents et suivez l'historique. |
@@ -166,9 +168,71 @@ Les workers dans `src/childprocess/` exécutent les tâches longues comme le scr
 
 AI Chat peut utiliser l'IA hébergée d'aiFetchly ou un fournisseur compatible OpenAI configuré par l'utilisateur. Ouvrez **System Settings -> AI Provider** pour changer de mode et enregistrer un fournisseur local ou personnalisé.
 
+## Automatisation avec navigateur géré
+
+aiFetchly embarque un navigateur que l'agent IA peut réellement piloter. L'agent ouvre une fenêtre Chrome/Chromium avec interface, visible sur votre bureau, observe la page et exécute les étapes demandées, pendant que l'application affiche l'état de la session, les approbations, la progression et les résultats.
+
+Cette fonction sert aux sites et comptes que vous possédez ou êtes autorisé à utiliser. Elle ne contourne ni le MFA, ni les défis de connexion/sécurité, ni les contrôles de sécurité des plateformes, ni les restrictions d'accès.
+
+### Démarrer une session
+
+- **AI Chat** : décrivez une tâche qui nécessite un navigateur, l'agent charge les outils lui-même.
+- **Tool Account → Open managed browser** : réutilisez la session enregistrée d'un compte pour sa plateforme.
+- **Carte de session dans l'espace de travail** : voir, contrôler ou arrêter un navigateur déjà en cours.
+
+La navigation publique ne nécessite aucun compte. Tout site, y compris les réseaux sociaux et les pages exigeant une connexion, s'ouvre sans Tool Account enregistré ; si le site demande une connexion, aiFetchly vous remet cette même fenêtre au lieu de refuser l'ouverture ou de basculer sur une récupération HTTP. Avec un compte enregistré, la session de cookies chiffrée est réutilisée.
+
+### Outils de navigateur disponibles
+
+| Outil | Usage |
+|-------|-------|
+| `browser_start_session` | Démarrer une session pour une URL ou un Tool Account enregistré |
+| `browser_get_status` | Lire l'état de la session et l'URL assainie courante |
+| `browser_observe` | Obtenir un instantané sémantique borné de la page et de ses éléments |
+| `browser_navigate` | Naviguer vers une URL `http(s)` autorisée |
+| `browser_run_actions` | Exécuter un programme structuré borné (clic, saisie, défilement, attente, extraction, boucle) |
+| `browser_screenshot` | Capturer une vignette de la page pour la conversation |
+| `browser_request_handoff` | Mettre en pause et vous demander de reprendre la main |
+| `browser_resume_after_handoff` | Reprendre après votre confirmation |
+| `browser_evaluate_script` | Exécuter du JavaScript vérifié dans la page, avec approbation |
+| `browser_clear_cache` | Vider le cache du compte courant après confirmation |
+| `browser_stop_session` | Arrêter et fermer le navigateur |
+
+`browser_observe` renvoie des références du type `@e1 [button] "Search"` avec une révision de page ; les références obsolètes sont rejetées après une navigation ou un rechargement pour éviter de cliquer au mauvais endroit.
+
+### Approbations et sécurité
+
+| Risque | Exemples | Comportement |
+|--------|----------|--------------|
+| Observation | Lire du texte, inspecter, capture | Approbation au niveau de la session |
+| Interaction réversible | Rechercher, filtrer, paginer, rédiger | Approbation au niveau de la session |
+| Saisie sensible | Email, téléphone, message privé, upload | Aperçu et approbation explicite |
+| Conséquent | Envoyer, publier, commenter, suivre, uploader, supprimer, acheter, modifier les paramètres | Approbation ponctuelle avec compte, cible et effet |
+| Script privilégié | Tout JavaScript dans la page | Script, origine, but, timeout et sortie attendue affichés avant approbation |
+| Authentification | Mot de passe, MFA, passkey, CAPTCHA de sécurité | Toujours réalisée par vous |
+
+Le contenu d'une page est traité comme une donnée non fiable : un site ne peut donc pas convaincre l'agent de contourner une approbation, le modèle ne peut pas déclarer sa propre action sûre et un refus explicite reste définitif. Les cookies ne parviennent jamais au renderer, au modèle, aux résultats d'outils, aux logs ou à l'analytique : seul le processus principal les déchiffre et seul le worker du navigateur les applique. Après une connexion réussie, la session rafraîchie est chiffrée et enregistrée à nouveau.
+
+### Réglages et cache
+
+**System Settings → Managed Browser** propose :
+
+| Réglage | Valeur par défaut | Effet |
+|---------|-------------------|-------|
+| **Use built-in managed browser** | Activé | Autorise de nouvelles sessions pilotées par l'IA |
+| **Use managed browser cache** | Activé | Réutilise des ressources statiques isolées par compte |
+| **Maximum managed-browser cache** | 500 Mo | Limite l'usage disque (100–2048 Mo) |
+| **Clear cache when aiFetchly closes** | Désactivé | Vide le cache du navigateur à la fermeture |
+
+Le panneau affiche aussi la taille approximative du cache, la dernière suppression et les actions pour vider le cache d'un compte ou de tous les navigateurs gérés. Vider le cache ne supprime jamais les cookies chiffrés, les connexions enregistrées, les comptes ni les téléchargements.
+
+Les exigences complètes, le modèle de sécurité, la politique de fingerprint et le plan de déploiement sont dans [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md).
+
 ## Documentation
 
 La documentation complète est disponible sur [docs.aifetchly.com](https://docs.aifetchly.com).
+
+Navigateur géré piloté par l'IA (sessions Chrome visibles, outils de navigateur, approbations, reprise en main, fingerprint, cache) : [exigences produit](docs/prd/puppeteer-managed-social-browser-prd.md).
 
 Le site officiel de l'application est [aifetchly.com](https://www.aifetchly.com).
 

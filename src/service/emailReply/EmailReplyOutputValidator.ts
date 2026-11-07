@@ -7,8 +7,9 @@ import { REPLY_VALIDATOR_VERSION } from "@/service/emailReply/replyReliabilityVe
  * revision with a `block` finding from reaching `approved`.
  *
  * Finding severities (two tiers since 2026-10-18):
- *  - block:   AI disclosure / prompt / tool / retrieval leakage; configured
- *             forbidden phrases. Never sendable — approval refuses.
+ *  - block:   prompt / tool / retrieval leakage; configured forbidden phrases.
+ *             Never sendable — approval refuses. (AI-self-disclosure was
+ *             removed from this set on 2026-10-20 — see LEAKAGE_PATTERNS note.)
  *  - warning: unsupported commitments (refund/discount/guaranteed price or date,
  *             legal/credential/account), payment instructions, new
  *             recipients, attachment-inspection claims. Advisory only: persisted
@@ -20,7 +21,11 @@ import { REPLY_VALIDATOR_VERSION } from "@/service/emailReply/replyReliabilityVe
  *
  * Revisions materialized before 2026-10-18 may persist the retired `review`
  * severity in their stored findings JSON; that value was non-gating after the
- * demotion and is never re-read for decisions.
+ * demotion and is never re-read for decisions. Revisions materialized before
+ * 2026-10-20 may persist a retired `leakage_ai_self_disclosure(_zh|_ja)` block
+ * finding in their stored JSON; that code is no longer emitted and stored
+ * instances are non-gating (never re-read for decisions — the approval service
+ * recomputes validation from the trusted revision body).
  *
  * Patterns are intentionally broad and multilingual; they err toward flagging
  * (as warnings) rather than letting an unsafe claim pass unnoticed.
@@ -56,6 +61,17 @@ interface CompiledPattern {
 }
 
 // ---- Leakage (block) ----
+// NOTE: AI-self-disclosure patterns (leakage_ai_self_disclosure / _zh / _ja)
+// were removed on 2026-10-20. The English regex made the qualifier
+// `(?: language model| assistant)?` optional, so it matched the bare word
+// "AI" anywhere — a false positive that deadlocked sends whenever a draft
+// mentioned the product ("our AI Email Writer") or used "AI" as a noun.
+// Same deadlock class as the 2026-10-18 review-tier demotion. The softer
+// gates remain: the prompt-time BANNED_AI_PHRASES list steers the model
+// away from AI-author phrasing upstream, the model's requiresHumanReview
+// flag still gates approval, and the send tool's requiresConfirmation
+// gesture is the human gate. Genuine prompt/tool/retrieval leakage below
+// stays a hard block — only AI-self-disclosure was lifted.
 const LEAKAGE_PATTERNS: readonly CompiledPattern[] = [
   code(
     "leakage_system_prompt",
@@ -66,21 +82,6 @@ const LEAKAGE_PATTERNS: readonly CompiledPattern[] = [
     "leakage_system_policy",
     /\bSYSTEM POLICY\b|\bREQUIRED OUTPUT SCHEMA\b/i,
     "Generated text echoes the structured prompt section headers"
-  ),
-  code(
-    "leakage_ai_self_disclosure",
-    /\b(?:as an? )?ai(?: language model| assistant)?\b|i am an? (?:ai|language model|automated)/i,
-    "Generated text discloses that the reply is AI-generated"
-  ),
-  code(
-    "leakage_ai_self_disclosure_zh",
-    /(作为一个人工智能|我是一个人工智能|作为一个ai|我是一个ai)/i,
-    "Generated text discloses AI origin (Chinese)"
-  ),
-  code(
-    "leakage_ai_self_disclosure_ja",
-    /(私はai|人工知能)/i,
-    "Generated text discloses AI origin (Japanese)"
   ),
   code(
     "leakage_tool_definition",

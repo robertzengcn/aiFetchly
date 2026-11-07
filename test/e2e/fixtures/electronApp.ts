@@ -15,6 +15,7 @@ import {
 import { _electron as electronLauncher } from "playwright";
 import * as path from "path";
 import { E2E_ENV, RENDERER_ORIGIN, type E2ETestRoot } from "./types";
+import type { E2EStateManifestInput } from "./temporaryState";
 
 export interface LaunchOptions {
   readonly testRoot: E2ETestRoot;
@@ -39,12 +40,20 @@ export interface LaunchOptions {
    */
   readonly hubBaseUrl?: string;
   /**
-   * Explicit extra env for the Electron child, applied AFTER sanitization
-   * (never inherited from the host). Used by specs that opt into gated
-   * main-process features, e.g. AIFETCHLY_E2E_TRAY=1 for the lifecycle
-   * tray scenarios.
+   * Deterministic native-dialog responses (design §15.6). Patched into the
+   * state manifest AFTER the fixture's write (launch happens last), so a
+   * confirm-pick flow (e.g. workspace folder selection) can automate the
+   * otherwise-native dialog. Paths must be inside the E2E root — the
+   * manifest loader rejects out-of-root paths fail-closed.
    */
-  readonly extraEnv?: Record<string, string>;
+  readonly dialogResponses?: E2EStateManifestInput["dialogResponses"];
+  /**
+   * Voice-journey specs (audit TODO V01): swap the real microphone for
+   * Chromium's synthetic fake media device so getUserMedia + MediaRecorder
+   * run deterministically under headless/xvfb. No product flag — Chromium
+   * launch args only, mirroring Chrome's own test mode.
+   */
+  readonly voiceFakeMediaStream?: boolean;
 }
 
 export interface NetworkViolation {
@@ -226,10 +235,26 @@ export async function launchAiFetchly(
   options: LaunchOptions
 ): Promise<LaunchedApp> {
   const e2eMainPath = resolveE2eMainPath();
-  const env = buildSanitizedEnv(options.testRoot, options.fakeAiBaseUrl);
-  if (options.extraEnv) {
-    Object.assign(env, options.extraEnv);
+  // Deterministic native-dialog responses must be patched into the state
+  // manifest BEFORE spawn: the E2E dialog service reads it once at launch.
+  // The patch preserves every field the fixture already wrote.
+  if (options.dialogResponses) {
+    const fs = await import("fs");
+    const existing = JSON.parse(
+      fs.readFileSync(options.testRoot.stateFilePath, "utf8")
+    ) as Record<string, unknown>;
+    fs.writeFileSync(
+      options.testRoot.stateFilePath,
+      JSON.stringify({
+        ...existing,
+        dialogResponses: options.dialogResponses,
+      }),
+      "utf8"
+    );
   }
+  // Single sanitized-environment construction with all required arguments
+  // (B01): initialMaximized + hubBaseUrl must flow through, then explicit
+  // test extras apply once post-sanitization (host env never leaks in).
   const env = buildSanitizedEnv(
     options.testRoot,
     options.fakeAiBaseUrl,
@@ -255,6 +280,12 @@ export async function launchAiFetchly(
       // Specs assert translated UI text (e.g. "Delivery Unknown"), so the
       // manifest contract must hold deterministically from first paint.
       "--lang=en",
+      // Voice journeys (V01): fake-device mode makes the recorder produce a
+      // deterministic synthetic tone without any OS audio hardware; fake-ui
+      // auto-grants getUserMedia permission prompts (FR-VOICE capture).
+      ...(options.voiceFakeMediaStream
+        ? ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
+        : []),
     ],
     cwd: process.cwd(),
     env,
@@ -291,7 +322,15 @@ export async function launchAiFetchly(
   // but still polled once at startup); abort every external origin and record it
   // (design §10.2 — relaxed to loopback so the security goal "no external
   // traffic" is preserved without flagging known-local polls).
+  // Audit V04: generated images load through the app's OWN custom protocol
+  // handler (src/background.ts `protocol.handle`), which serves only
+  // existence- and path-validated files under the redirected userData root.
+  // That is explicitly trusted app-local traffic. A non-special scheme URL
+  // parses with an opaque ("null") origin, so the guard must recognize the
+  // intended scheme + authority by prefix — never a blanket `origin === null`
+  // allowance, which every unrelated opaque origin shares.
   const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+  const TRUSTED_LOCAL_PROTOCOL_PREFIX = "aifetchly-generated-image://local/";
   await mainWindow.route("**/*", (route) => {
     const request = route.request();
     const url = request.url();
@@ -304,7 +343,10 @@ export async function launchAiFetchly(
     } catch {
       origin = url;
     }
-    if (LOOPBACK_HOSTS.has(hostname)) {
+    if (
+      url.startsWith(TRUSTED_LOCAL_PROTOCOL_PREFIX) ||
+      LOOPBACK_HOSTS.has(hostname)
+    ) {
       void route.continue();
       return;
     }
@@ -330,6 +372,32 @@ export async function launchAiFetchly(
     );
     // Vue app landmark mounted.
     await mainWindow.waitForSelector("#app", { timeout: 60_000 });
+    // Router boot navigation settled (audit-fix R2 G02 follow-up): "#app"
+    // mounts BEFORE the router's initial navigation (+ its async permission
+    // guard) finalizes. A typed-hash navigation issued in that window (the
+    // app boots on "#/") is overwritten by the still-pending boot navigation
+    // to "#/aiworkspace", so every first-post-boot hash navigation bounced
+    // back to the chat center and the audit list / draft detail E2E tests
+    // timed out waiting for a page that would only render on the SECOND
+    // navigation. Waiting for router.isReady() here (resolve the router
+    // through the mounted Vue app instance) makes the returned fixture
+    // settle the boot navigation exactly once, deterministically.
+    await mainWindow.waitForFunction(
+      async () => {
+        const appEl = document.querySelector("#app");
+        const router = (
+          appEl as unknown as
+            | { __vue_app__?: { config: { globalProperties: Record<string, unknown> } } }
+            | null
+        )?.__vue_app__?.config.globalProperties.$router as
+          | { isReady(): Promise<boolean> }
+          | undefined;
+        if (!router) return false;
+        return await router.isReady();
+      },
+      undefined,
+      { timeout: 60_000 }
+    );
   } catch (err) {
     // Readiness failed after Electron already started — close it so CI retries
     // don't accumulate orphan processes. Best-effort; rethrow the real error.

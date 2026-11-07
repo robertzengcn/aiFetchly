@@ -32,8 +32,6 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { getMainWindow } from "@/main-process/mainWindowRegistry";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { SearchController } from "@/controller/SearchController";
-import { YellowPagesController } from "@/controller/YellowPagesController";
-import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { initializeWebSocketConnection } from "@/main-process/communication/websocket-ipc";
 import { resetAiChatV2RuntimeForDatabaseSwitch } from "@/main-process/communication/ai-chat-v2-ipc";
 import { TokenRefreshService } from "@/modules/tokenRefresh";
@@ -227,8 +225,6 @@ export async function completeDesktopLogin(
       log.info("ScheduleManager rebuilt for new path after login");
 
       SearchController.resetInstance();
-      YellowPagesController.resetInstance();
-      YellowPagesProcessManager.resetInstance();
       resetAiChatV2RuntimeForDatabaseSwitch();
       WebSocketClient.resetInstance();
       await VectorDatabasePool.clearAllInstances();

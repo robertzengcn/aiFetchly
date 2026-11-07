@@ -81,13 +81,18 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
    * Resolve the model id to send to the provider. The virtual "small"/"haiku"
    * aliases belong to the hosted aiFetchly server and are unknown to
    * third-party providers, so they are served with the configured default
-   * model instead of being sent literally (which would 404).
+   * model instead of being sent literally (which would 404). Exception:
+   * `literalModel: true` (chat-titles design §8.3) sends the requested id
+   * verbatim — an explicitly configured title model is never rewritten.
    */
-  private resolveModel(requestModel?: string): string {
-    if (isSmallModelAlias(requestModel)) {
+  private resolveModel(request: OpenAIChatCompletionRequest): string {
+    if (request.literalModel === true && request.model) {
+      return request.model;
+    }
+    if (isSmallModelAlias(request.model)) {
       return this.config.defaultModel;
     }
-    return requestModel ?? this.config.defaultModel;
+    return request.model ?? this.config.defaultModel;
   }
 
   private url(path: "/models" | "/chat/completions"): string {
@@ -257,7 +262,7 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   ): Promise<OpenAIChatCompletionResponse> {
     const payload = buildNonStreamingPayload({
       ...request,
-      model: this.resolveModel(request.model),
+      model: this.resolveModel(request),
     });
     // B13: ONE AbortController spans both the response-headers phase and the
     // response-body phase. Its signal is the one passed to `fetch` AND the one
@@ -345,12 +350,18 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
     const bodyTimeout = Number.isFinite(remaining)
       ? Math.min(remaining, this.bodyTimeoutMs)
       : this.bodyTimeoutMs;
-    let bodyTimer: ReturnType<typeof setTimeout> | undefined;
-    if (bodyTimeout <= 0) {
-      controller.abort();
-    } else {
-      bodyTimer = setTimeout(() => controller.abort(), bodyTimeout);
-    }
+    // An already-spent call budget still goes through the timer (0ms) rather
+    // than a bare synchronous abort: the armed-but-not-yet-fired timer keeps
+    // the catches below classifying the abort as the stalled-body network
+    // timeout. A bare abort() left `bodyTimer` unset, so the raw `AbortError`
+    // ("The operation was aborted.") escaped whenever the budget expired
+    // exactly at the headers→body transition — on loaded CI runners with
+    // event-loop stalls, and in production whenever callBudgetMs is tighter
+    // than the provider's headers timing.
+    const bodyTimer = setTimeout(
+      () => controller.abort(),
+      Math.max(0, bodyTimeout)
+    );
     try {
       if (!res.ok) {
         // toProviderError reads res.text(), which rejects on abort but is
@@ -409,7 +420,7 @@ export class OpenAICompatibleProviderClient implements ChatProviderClient {
   ): AsyncGenerator<ChatProviderStreamEvent, void, void> {
     const payload = buildStreamingPayload({
       ...request,
-      model: this.resolveModel(request.model),
+      model: this.resolveModel(request),
     });
     let res: Response;
     try {

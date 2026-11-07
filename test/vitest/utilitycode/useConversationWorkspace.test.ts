@@ -178,8 +178,12 @@ describe("useConversationWorkspace (chat-first shell design §9.1)", () => {
     await vi.waitFor(() => {
       expect(state.watchId.value).toBe("ws-11");
     });
-    // AGENTS.md content was found → trust card is eligible.
-    expect(state.trustCardVisible.value).toBe(true);
+    // AGENTS.md content was found → trust card is eligible. The preview probe
+    // resolves one microtask AFTER the watch ack, so poll like the dismissal
+    // test below instead of asserting synchronously.
+    await vi.waitFor(() => {
+      expect(state.trustCardVisible.value).toBe(true);
+    });
 
     // Switching conversations releases the previous watch.
     conversationId.value = "conv-2";

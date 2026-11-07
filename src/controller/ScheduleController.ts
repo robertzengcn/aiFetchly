@@ -203,7 +203,13 @@ export class ScheduleController {
      */
     public async runScheduleNow(id: number): Promise<void> {
         try {
-            await this.scheduleManager.executeSchedule(id);
+            // BUGFIX 2026-11-02: detach matches the documented Run Now contract
+            // ("the caller returns after the run is accepted and the task
+            // continues in the background") and the AI-tool path — the button
+            // previously awaited the ENTIRE scheduled AI run before the IPC
+            // resolved, making "Run now" feel frozen for the run's full
+            // duration.
+            await this.scheduleManager.executeSchedule(id, { detach: true });
         } catch (error) {
             log.error(`Failed to run schedule ${id}:`, error);
             throw error;

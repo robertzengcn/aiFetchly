@@ -3,6 +3,7 @@ import { AIChatPlanModel } from "@/model/AIChatPlan.model";
 import { AIChatPlanVersionModel } from "@/model/AIChatPlanVersion.model";
 import { AIChatPlanQuestionModel } from "@/model/AIChatPlanQuestion.model";
 import { AIChatPlanApprovalModel } from "@/model/AIChatPlanApproval.model";
+import { AIChatPendingMessageModel } from "@/model/AIChatPendingMessage.model";
 import type {
   AIChatPlanStateView,
   AIChatPlanVersionView,
@@ -13,10 +14,60 @@ import type {
   AskUserQuestionPayload,
   SubmitPlanForApprovalPayload,
   AIChatPlanVersionAuthor,
+  AIChatPlanApprovalDecision,
+  AIChatPlanContinuationAction,
+  AIChatPlanContinuationRecoveryView,
 } from "@/entityTypes/aiChatPlanTypes";
 import { DesktopNotifyService } from "@/service/DesktopNotifyService";
+import { createHash } from "node:crypto";
 
 const V2_PREFIX = "v2-";
+
+/**
+ * Plan statuses whose lifecycle ended in a way that makes a pending
+ * continuation meaningless: the execution already ran to a definitive end
+ * or never started from this decision. `rejected` and `draft` (decision
+ * transitions, R12) are NOT here — their continuation intents are exactly
+ * what recovery reconstructs.
+ */
+const PLAN_CONTINUATION_EXCLUDED_STATUSES: ReadonlySet<AIChatPlanStatus> =
+  new Set<AIChatPlanStatus>(["completed", "cancelled", "executing"]);
+
+/**
+ * Deterministic continuation id shared with the renderer
+ * (planContinuationIdentity.ts): the pending-message clientRequestId for a
+ * plan decision's follow-up turn, `plan-cont-<48 hex chars>` of
+ * sha256(planId + ":" + version + ":" + action). MUST stay byte-identical
+ * to the renderer implementation — cross-process identity parity is what
+ * lets a reconstructed replay dedupe in `ai_chat_pending_messages`.
+ */
+function planContinuationRequestId(
+  planId: string,
+  version: number,
+  action: AIChatPlanContinuationAction
+): string {
+  const digest = createHash("sha256")
+    .update(`${planId}:${version}:${action}`)
+    .digest("hex")
+    .slice(0, 48);
+  return `plan-cont-${digest}`;
+}
+
+/** Maps a persisted approval decision onto its continuation action. */
+function decisionToContinuationAction(
+  decision: AIChatPlanApprovalDecision
+): AIChatPlanContinuationAction | null {
+  switch (decision) {
+    case "approved":
+      return "approve-plan";
+    case "rejected":
+      return "reject-plan";
+    case "changes_requested":
+      return "request-plan-changes";
+    default:
+      return null;
+  }
+}
 
 function uuid(): string {
   if (
@@ -42,6 +93,7 @@ export class AIChatPlanModule extends BaseModule {
   private versionModel: AIChatPlanVersionModel;
   private questionModel: AIChatPlanQuestionModel;
   private approvalModel: AIChatPlanApprovalModel;
+  private pendingModel: AIChatPendingMessageModel;
 
   constructor() {
     super();
@@ -49,6 +101,7 @@ export class AIChatPlanModule extends BaseModule {
     this.versionModel = new AIChatPlanVersionModel(this.dbpath);
     this.questionModel = new AIChatPlanQuestionModel(this.dbpath);
     this.approvalModel = new AIChatPlanApprovalModel(this.dbpath);
+    this.pendingModel = new AIChatPendingMessageModel(this.dbpath);
   }
 
   // ---------- Views ----------
@@ -252,6 +305,12 @@ export class AIChatPlanModule extends BaseModule {
     return this.toQuestionView(entity);
   }
 
+  /** Fetch a question by id (includes the persisted answers, if any). */
+  async getQuestionById(questionId: string): Promise<AIChatPlanQuestionView | null> {
+    const entity = await this.questionModel.getByQuestionId(questionId);
+    return entity ? this.toQuestionView(entity) : null;
+  }
+
   async answerQuestion(input: {
     conversationId: string;
     questionId: string;
@@ -442,6 +501,78 @@ export class AIChatPlanModule extends BaseModule {
       status: "draft",
     });
     return (await this.buildStateView(plan.planId))!;
+  }
+
+  /**
+   * R12 — plan-continuation commit-to-response crash recovery.
+   *
+   * A plan decision commits durably in main (approval row + status write)
+   * BEFORE the renderer is told; the renderer then saves a continuation
+   * intent into localStorage and issues the follow-up turn through the
+   * durable pending queue. If the renderer crashes (or the reply is lost)
+   * between those points, nothing on disk records that a continuation is
+   * supposed to happen and the decision silently takes no effect.
+   *
+   * Reconciliation closes that gap WITHOUT a schema change: the decision row
+   * is the durable commit record, the continuation identity is a pure
+   * function of (planId, version, action), and the pending queue's unique
+   * `clientRequestId` index is the durable "already accepted" marker.
+   * Replaying with the same id is an idempotent dedupe, so a recovered
+   * intent can never duplicate a provider turn that already ran.
+   *
+   * Returns the one recoverable intent for the conversation's newest plan,
+   * or null. Deliberately READ-ONLY (no writes, no provider dispatch):
+   * recovery only reconstructs what the user already decided; executing an
+   * UNCOMMITTED decision is impossible because a missing approval row
+   * yields null.
+   */
+  async getRecoverablePlanContinuation(
+    conversationId: string
+  ): Promise<AIChatPlanContinuationRecoveryView | null> {
+    // Any-status lookup: a `rejected` plan is terminal but its decision's
+    // continuation feedback is exactly what recovery must not lose.
+    const plan =
+      await this.planModel.getNewestByConversation(conversationId);
+    if (!plan) return null;
+    if (PLAN_CONTINUATION_EXCLUDED_STATUSES.has(plan.status as AIChatPlanStatus))
+      return null;
+    if (plan.currentVersion <= 0) return null;
+
+    // Only the CURRENT version's decision may recover. When the plan has
+    // advanced to a newer version awaiting approval, any older pending
+    // send is obsolete (the stale-decision guard also rejects replaying it).
+    const decision = await this.approvalModel.getLatestByPlanVersion(
+      plan.planId,
+      plan.currentVersion
+    );
+    if (!decision) return null;
+    const action = decisionToContinuationAction(decision.decision);
+    if (!action) return null;
+
+    const clientRequestId = planContinuationRequestId(
+      plan.planId,
+      plan.currentVersion,
+      action
+    );
+    // A row with this id (any status, incl. terminal) proves the
+    // continuation turn was already accepted — resurfacing it would double
+    // the intent (the renderer's own accepted continuations also keep their
+    // row). The unique-index dedupe then makes this the single source of
+    // "already handled" shared by both processes.
+    const existing = await this.pendingModel.getByClientRequestId(
+      clientRequestId
+    );
+    if (existing) return null;
+
+    return {
+      conversationId,
+      planId: plan.planId,
+      version: plan.currentVersion,
+      action,
+      feedback: decision.feedback ?? "",
+      clientRequestId,
+      decidedAt: (decision.createdAt ?? new Date()).toISOString(),
+    };
   }
 
   async listVersions(planId: string): Promise<AIChatPlanVersionView[]> {

@@ -32,14 +32,16 @@ describe("socialtaskrun", () => {
         record_time TEXT NULL
       )`
     );
-    raw.close();
 
-    // Seed two runs for task 69 so the list has known content.
+    // Seed two runs for task 69 so the list has known content — BEFORE the
+    // handle closes (the old order prepared the insert on a closed handle
+    // and the whole beforeAll threw "The database connection is not open").
     const insert = raw.prepare(
       "INSERT INTO task_run (task_id, taskrun_num, log_path) VALUES (?, ?, ?)"
     );
     insert.run(69, "r-1", "logfilepath");
     insert.run(69, "r-2", "logfilepath");
+    raw.close();
   });
 
   afterAll(() => {

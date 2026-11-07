@@ -579,10 +579,16 @@ export class ScheduleManager {
 
     /**
      * Handle application shutdown
+     *
+     * Skips persistence: app exit is not a user "stop" toggle, so the
+     * persisted scheduler_status.is_running flag is left untouched. The next
+     * boot's initializeWithDatabaseStatus() reads it to auto-restore the
+     * master switch the user left running (persistStoppedStatus() would
+     * otherwise overwrite it to false on every quit).
      */
     async handleAppShutdown(): Promise<void> {
         log.info('Shutting down ScheduleManager...');
-        await this.stop();
+        await this.stop(true);
     }
 
     /**

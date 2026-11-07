@@ -1,4 +1,6 @@
 import { ipcMain } from "electron";
+// G01 (design §18): bounded image capability action counters.
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { AI_CHAT_V2_EXPORT_GENERATED_IMAGE } from "@/config/channellist";
 import { canUseChat } from "@/main-process/communication/ai-chat-v2-ipc";
 import { log } from "@/modules/Logger";
@@ -152,7 +154,26 @@ async function handleExportGeneratedImage(
     return denied(chatAccess.message);
   }
 
-  const parsed = parseExportImageRequest(data);
+  // Renderer convention: the Electron preload transport stringifies invoke
+  // payloads (see ipcTransport.serializeForElectron), so the raw first
+  // argument is a JSON string. Unwrap it here — the same unwrap the shared
+  // registerValidatedHandler applies — instead of rejecting every object
+  // payload as malformed (FR-IMG-015 defect found by the E2E save journey).
+  let parsedData: unknown = data;
+  if (typeof data === "string") {
+    if (data.trim().length === 0) {
+      parsedData = undefined;
+    } else {
+      try {
+        parsedData = JSON.parse(data);
+      } catch {
+        log.warn("[generated-image-export] received malformed JSON payload");
+        return denied("Malformed request payload");
+      }
+    }
+  }
+
+  const parsed = parseExportImageRequest(parsedData);
   if (!parsed) {
     return denied(
       "conversationId and a {messageId, imageIndex} reference are required"
@@ -235,7 +256,14 @@ async function handleExportGeneratedImage(
  * the renderer can surface its request-workspace flow without throwing.
  */
 export function registerGeneratedImageExportIpcHandlers(): void {
-  ipcMain.handle(AI_CHAT_V2_EXPORT_GENERATED_IMAGE, async (_e, data: unknown) =>
-    handleExportGeneratedImage(data)
-  );
+  ipcMain.handle(AI_CHAT_V2_EXPORT_GENERATED_IMAGE, async (_e, data: unknown) => {
+    // G01 (design §18): generated-image export action counter (PRD §20).
+    const result = await handleExportGeneratedImage(data);
+    aiChatQueueCounters.recordWorkspaceAction(
+      "image",
+      "export",
+      result.status ? "ok" : "error"
+    );
+    return result;
+  });
 }

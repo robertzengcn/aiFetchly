@@ -595,7 +595,7 @@ export async function startBulkEmailSendTask(
       recipient_count: recipients.recipients.length,
       template_ids: parsed.template_ids,
       filter_ids: parsed.filter_ids,
-      service_ids: parsed.service_ids,
+      service_ids: taskInput.EmailServicelist,
       not_duplicate: parsed.not_duplicate,
       ...(parsed.email_subject !== undefined &&
       parsed.email_html_content !== undefined

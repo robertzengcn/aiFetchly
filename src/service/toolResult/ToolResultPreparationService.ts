@@ -80,6 +80,12 @@ export interface ToolOutcome {
   readonly extraOutputs?: readonly unknown[];
   /** True when the result carries no text output at all. */
   readonly isEmpty?: boolean;
+  /**
+   * Optional per-outcome preview byte budget (`batchPreviewMaxBytes` for
+   * batch aggregate receipts). Clamped by the preview service, defaulted to
+   * `previewMaxBytes` when absent.
+   */
+  readonly previewMaxBytes?: number;
 }
 
 /**
@@ -95,6 +101,8 @@ const ALLOWED_CONTROL_KEYS = [
   "job_id",
   "shell_id",
   "exit_code",
+  "draftId",
+  "draft_id",
   "batchId",
   "batchStatus",
   "draftCount",
@@ -265,6 +273,9 @@ export class ToolResultPreparationService {
         outputRef !== null &&
         outputRef.preservation === "complete" &&
         (outcome.sourceCompleteness ?? "complete") === "complete",
+      ...(outcome.previewMaxBytes !== undefined
+        ? { maxBytes: outcome.previewMaxBytes }
+        : {}),
     });
 
     // The first page the model can request. Without this, the receipt names
@@ -478,7 +489,12 @@ export class ToolResultPreparationService {
     deps: PreparationDependencies;
   }): ToolResultReceipt {
     const config = TOOL_RESULT_CONFIG;
-    let preview = truncateUtf8Safe(input.previewText, config.previewMaxBytes);
+    // Batch aggregate receipts opt into the larger budget; the receipt schema
+    // stays the hard ceiling (the preview service already clamps to it).
+    let preview = truncateUtf8Safe(
+      input.previewText,
+      input.outcome.previewMaxBytes ?? config.previewMaxBytes
+    );
     const base = {
       schemaVersion: 1 as const,
       toolCallId: boundString(input.deps.context.toolCallId, 200),

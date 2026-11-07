@@ -6,7 +6,8 @@ import {
 } from "@/model/AIChatPendingMessage.model";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
-import { AIChatPendingMessagePreparationService } from "@/service/AIChatPendingMessagePreparationService";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatPendingMessagePreparationService, normalizeChatV2UploadedFiles } from "@/service/AIChatPendingMessagePreparationService";
 import type {
   AIChatPendingMessageView,
   AIChatPendingMessageStatus,
@@ -44,6 +45,24 @@ interface AIChatPendingRequestOptions {
   readonly showReasoning?: boolean;
   readonly reasoning?: ChatV2StreamRequest["reasoning"];
   readonly toolApprovalMode?: ChatV2StreamRequest["toolApprovalMode"];
+  /**
+   * FR-HIS-002 (capability parity, design §12.11): opaque archive
+   * references + the retry-stable submission identity must survive the
+   * deferred dispatch — a queued send carries the same selected context an
+   * idle send does. The engine re-resolves the ids at turn start.
+   */
+  readonly historySelectionIds?: readonly string[];
+  readonly submissionId?: string;
+  /**
+   * Codex P1: the user-confirmed generated-image batch rides with the row
+   * (normalized, validated at the IPC edge) and the queue STAGES it at
+   * dispatch — a receive-time registry entry would be consumed by the
+   * running turn or cleared by its terminal before the queued turn runs.
+   */
+  readonly confirmedBatchReferences?: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[];
 }
 
 /** Non-null pending row (the Model's lookups return `| null`). */
@@ -77,6 +96,82 @@ function newId(prefix: string): string {
     return `${prefix}-${crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Audit R05: SHA-256 over the full request identity — normalized message
+ * text, turn options, reference sets, and the validated attachment list
+ * ordered as submitted, hashed BY CONTENT BYTES. Deliberately excludes the
+ * preparation outputs (display/model content): staged documents carry
+ * nondeterministic refIds, so byte-identical retries of an ambiguous
+ * transport must produce the SAME digest even though their content strings
+ * differ. Two submissions share a digest iff they are the same logical
+ * submission; an attachment byte edit rotates the digest.
+ */
+export function computeRequestDigestSha256(
+  request: ChatV2StreamRequest
+): string {
+  const hash = crypto.createHash("sha256");
+  const feed = (part: string | Buffer): void => {
+    hash.update(part);
+    hash.update(Buffer.from([0]));
+  };
+
+  feed((request.message ?? "").trim().replace(/\r\n/g, "\n"));
+  feed(request.model ?? "");
+  feed(request.mode ?? "");
+  feed(request.toolApprovalMode ?? "");
+  feed(request.showReasoning === true ? "1" : "0");
+  feed(request.temperature == null ? "" : String(request.temperature));
+  feed(request.maxTokens == null ? "" : String(request.maxTokens));
+  feed(request.systemPrompt ?? "");
+
+  const files = normalizeChatV2UploadedFiles(request.uploadedFiles ?? []);
+  feed(String(files.length));
+  for (const file of files) {
+    feed(file.fileName);
+    feed(file.mimeType);
+    feed(String(file.sizeBytes));
+    feed(file.kind);
+    feed(
+      crypto
+        .createHash("sha256")
+        .update(Buffer.from(file.contentBase64, "base64"))
+        .digest()
+    );
+  }
+
+  const refSets: readonly {
+    messageId: string;
+    imageIndex: number;
+  }[][] = [
+    request.generatedImageReferences ?? [],
+    request.confirmedGeneratedImageBatch?.references ?? [],
+  ];
+  for (const refs of refSets) {
+    feed(String(refs.length));
+    for (const ref of refs) {
+      feed(ref.messageId);
+      feed(String(ref.imageIndex));
+    }
+  }
+
+  const historyIds = [...(request.historySelectionIds ?? [])].sort(
+    (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  );
+  feed(String(historyIds.length));
+  for (const id of historyIds) feed(id);
+
+  const pastes = Object.entries(request.pastedContents ?? {}).sort(
+    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)
+  );
+  feed(String(pastes.length));
+  for (const [key, value] of pastes) {
+    feed(key);
+    feed(value);
+  }
+
+  return hash.digest("hex");
 }
 
 /** Input for a durable pending create. */
@@ -183,9 +278,17 @@ export class AIChatPendingMessageModule extends BaseModule {
       });
     } catch (err) {
       if (err instanceof AIChatPendingMessageModuleError) throw err;
+      // Review fix (information disclosure): the typed error's message is
+      // surfaced verbatim by userSafeError ("[CODE] <message>") — raw
+      // preparation errors (filesystem paths, driver text) must stay in
+      // logs, with only static user guidance crossing to the renderer.
+      console.error(
+        "[ai-chat-pending] message preparation failed:",
+        err
+      );
       throw new AIChatPendingMessageModuleError(
         "PREPARATION_FAILED",
-        err instanceof Error ? err.message : "Failed to prepare the message."
+        "The message could not be prepared for sending. Check attachments and try again."
       );
     }
 
@@ -217,7 +320,22 @@ export class AIChatPendingMessageModule extends BaseModule {
           : undefined,
         messageMetadataJson: JSON.stringify(prepared.messageMetadata),
         recoveryReason: input.recoveryReason,
+        requestDigestSha256: computeRequestDigestSha256(input.request),
       });
+      if (row.pendingMessageId !== pendingMessageId) {
+        // The idempotency gate resolved to an ALREADY-ACCEPTED attempt
+        // (same clientRequestId + same request digest). Drop the bytes and
+        // staged files written for this attempt — the existing row owns
+        // the accepted ones (audit R05).
+        if (bytesWritten) {
+          await this.attachmentModule
+            .deleteByMessageId(userMessageId)
+            .catch(() => undefined);
+        }
+        await this.preparation
+          .cleanupStagedReferences(prepared.stagedRefs)
+          .catch(() => undefined);
+      }
       return {
         pendingMessageId: row.pendingMessageId,
         conversationId: row.conversationId,
@@ -229,6 +347,9 @@ export class AIChatPendingMessageModule extends BaseModule {
           .deleteByMessageId(userMessageId)
           .catch(() => undefined);
       }
+      await this.preparation
+        .cleanupStagedReferences(prepared.stagedRefs)
+        .catch(() => undefined);
       if (err instanceof AIChatPendingModelError) {
         throw new AIChatPendingMessageModuleError(
           err.code as AIChatPendingModuleErrorCode,
@@ -358,6 +479,16 @@ export class AIChatPendingMessageModule extends BaseModule {
         "Messages with attachments will send after the current response."
       );
     }
+    const meta = this.parseMessageMetadata(row);
+    if (
+      meta?.generatedImageReferences &&
+      meta.generatedImageReferences.length > 0
+    ) {
+      throw new AIChatPendingMessageModuleError(
+        "ATTACHMENTS_NOT_STEERABLE",
+        "Messages with attachments will send after the current response."
+      );
+    }
     return await this.pendingModel.claimForSteering(
       input.pendingMessageId,
       input.targetAssistantMessageId
@@ -373,10 +504,12 @@ export class AIChatPendingMessageModule extends BaseModule {
       input.pendingMessageId
     );
     const metadata = row ? this.parseMessageMetadata(row) : undefined;
-    return await this.pendingModel.promoteDispatchToUserMessage({
+    const saved = await this.pendingModel.promoteDispatchToUserMessage({
       ...input,
       metadata,
     });
+    await this.projectUserMessage(saved);
+    return saved;
   }
 
   async promoteSteeringToUserMessage(input: {
@@ -402,10 +535,54 @@ export class AIChatPendingMessageModule extends BaseModule {
           },
         }
       : undefined;
-    return await this.pendingModel.promoteSteeringToUserMessage({
+    const saved = await this.pendingModel.promoteSteeringToUserMessage({
       ...input,
       metadata,
     });
+    await this.projectUserMessage(saved);
+    return saved;
+  }
+
+  /**
+   * Conversation-projection coupling (audit R7-04): promote is the durable
+   * user moment on the queue/bridge path; mirror the coordinator's
+   * recordMessagePersisted-at-accept so the sidebar matches. Promotion is
+   * exactly-once (status CAS), so the projection cannot double-count on
+   * retries. Best effort — projection failure never fails the turn.
+   */
+  private async projectUserMessage(saved: AIChatMessageEntity): Promise<void> {
+    try {
+      // Titles B01: prefer the persisted raw typed-text projection so the
+      // sidebar excerpt never shows attachment/mention enrichment.
+      let safeTyped = saved.content;
+      if (saved.metadata) {
+        try {
+          const meta = JSON.parse(saved.metadata) as {
+            safeTypedText?: string;
+          };
+          if (typeof meta.safeTypedText === "string") {
+            safeTyped = meta.safeTypedText;
+          }
+        } catch {
+          // fall back to persisted content
+        }
+      }
+      await new AIChatConversationModule().recordMessagePersisted({
+        conversationId: saved.conversationId,
+        isResult: false,
+        previewText: safeTyped,
+        // Generated title derives from the first user content, like the
+        // coordinator path.
+        generatedTitle: safeTyped,
+        timestamp: saved.timestamp,
+      });
+    } catch (err) {
+      console.warn(
+        "[ai-chat-pending] conversation projection failed for",
+        saved.messageId,
+        err
+      );
+    }
   }
 
   /**
@@ -418,6 +595,16 @@ export class AIChatPendingMessageModule extends BaseModule {
     readonly contentParts:
       | Array<OpenAITextContentPart | OpenAIImageUrlContentPart>
       | undefined;
+    /**
+     * Codex P1: the user-confirmed generated-image batch for THIS row —
+     * returned SEPARATELY from the engine request (the strip contract keeps
+     * it off the request); the queue stages it into the trusted registry at
+     * dispatch time.
+     */
+    readonly confirmedBatchReferences?: readonly {
+      messageId: string;
+      imageIndex: number;
+    }[];
   }> {
     await this.ensureConnection();
     const options = this.parseRequestOptions(row);
@@ -444,7 +631,21 @@ export class AIChatPendingMessageModule extends BaseModule {
       ...(options.toolApprovalMode !== undefined
         ? { toolApprovalMode: options.toolApprovalMode }
         : {}),
+      ...(options.historySelectionIds !== undefined &&
+      options.historySelectionIds.length > 0
+        ? { historySelectionIds: [...options.historySelectionIds] }
+        : {}),
+      ...(options.submissionId !== undefined
+        ? { submissionId: options.submissionId }
+        : {}),
     };
+    // Codex P1: the confirmed batch is returned SEPARATELY (strip contract:
+    // the engine request never carries it); the queue stages it at dispatch.
+    const confirmedBatchReferences =
+      options.confirmedBatchReferences !== undefined &&
+      options.confirmedBatchReferences.length > 0
+        ? [...options.confirmedBatchReferences]
+        : undefined;
     const images = await this.attachmentModule.getByMessageId(
       row.userMessageId
     );
@@ -465,7 +666,9 @@ export class AIChatPendingMessageModule extends BaseModule {
         })),
       ];
     }
-    return { request, contentParts };
+    return confirmedBatchReferences
+      ? { request, contentParts, confirmedBatchReferences }
+      : { request, contentParts };
   }
 
   // -------------------------------------------------------------------------
@@ -479,6 +682,12 @@ export class AIChatPendingMessageModule extends BaseModule {
     runtimeStatus: ChatV2RuntimeStatus = "idle"
   ): AIChatPendingMessageView {
     const attachments = this.parseAttachmentMetadata(row);
+    // D01 (audit 2026-10-21-r3): trusted generated-image reference rows ship
+    // the reference channel only on a normal dispatch — steering would drop
+    // it, so they are exactly as unsteerable as attachment rows.
+    const hasGeneratedImageReferences =
+      (this.parseMessageMetadata(row)?.generatedImageReferences?.length ??
+        0) > 0;
     return {
       pendingMessageId: row.pendingMessageId,
       conversationId: row.conversationId,
@@ -492,6 +701,7 @@ export class AIChatPendingMessageModule extends BaseModule {
       canSteer:
         row.status === "queued" &&
         attachments.length === 0 &&
+        !hasGeneratedImageReferences &&
         runtimeStatus === "running",
       steeringBoundary: row.steeringBoundary,
       activeAssistantMessageId: row.targetAssistantMessageId,
@@ -583,6 +793,20 @@ export class AIChatPendingMessageModule extends BaseModule {
         : {}),
       ...(request.toolApprovalMode !== undefined
         ? { toolApprovalMode: request.toolApprovalMode }
+        : {}),
+      ...(request.historySelectionIds !== undefined &&
+      request.historySelectionIds.length > 0
+        ? { historySelectionIds: [...request.historySelectionIds] }
+        : {}),
+      ...(request.submissionId !== undefined
+        ? { submissionId: request.submissionId }
+        : {}),
+      ...(request.confirmedGeneratedImageBatch?.references
+        ? {
+            confirmedBatchReferences: [
+              ...request.confirmedGeneratedImageBatch.references,
+            ],
+          }
         : {}),
     };
   }

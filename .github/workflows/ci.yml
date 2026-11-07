@@ -271,7 +271,10 @@ jobs:
     name: Electron E2E (Playwright)
     needs: lint-and-test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 196 Electron specs run on one worker. A 30-minute job budget was
+    # cancelled around spec ~177 (setup + the suite itself). 90 leaves room
+    # for the full serial run and the one CI retry.
+    timeout-minutes: 90
     env:
       CI: "true"
       # Suppress the vite render-config native-loader __dirname warning.

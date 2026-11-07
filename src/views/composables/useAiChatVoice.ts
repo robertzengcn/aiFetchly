@@ -27,6 +27,7 @@ import {
 } from "@/views/api/localAiRuntime";
 import { isLocalAiRuntimeUsable } from "@/views/utils/localAiRuntimeUi";
 import { emitShellDiagnostic } from "@/views/utils/shellDiagnostics";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import type {
   AiChatVoiceRuntimeStatus,
   AiChatVoiceSettingsView,
@@ -82,8 +83,11 @@ export interface AiChatVoiceState {
   readonly settingsSaveFailed: Readonly<Ref<boolean>>;
   readonly modelInstalling: Readonly<Ref<boolean>>;
   readonly modelInstallError: Readonly<Ref<string | null>>;
-  /** True when TTS enablement is blocked on installing the speech model. */
-  readonly ttsInstallPrompt: Readonly<Ref<boolean>>;
+  /**
+   * Consumer-writable: the TTS install popup closes itself on cancel
+   * (design §11.4), not only via flows.
+   */
+  readonly ttsInstallPrompt: Ref<boolean>;
   readonly playbackError: Readonly<Ref<string | null>>;
   readonly missingInputModel: Readonly<ComputedRef<boolean>>;
   readonly runtimeUnavailable: Readonly<ComputedRef<boolean>>;
@@ -144,6 +148,11 @@ export function useAiChatVoice(options: {
   );
   speechController.start();
   const unsubscribeSpeaking = speechController.subscribe((value) => {
+    // R8 §2: count each playback start (labels only). The false transition
+    // is the natural stop and is not separately counted.
+    if (value) {
+      void recordWorkspaceActionCount("voice", "playback", "ok");
+    }
     speaking.value = value;
   });
 
@@ -302,6 +311,13 @@ export function useAiChatVoice(options: {
         runtimeReady: !runtimeUnavailable.value,
         outcome: "ok",
       });
+      // R8 §2: capability-state count in the workspace action counter
+      // (labels only — booleans rendered as stable tokens).
+      void recordWorkspaceActionCount(
+        "voice",
+        "capability_state",
+        !runtimeUnavailable.value && inputEnabled.value ? "ready" : "setup"
+      );
     } catch {
       // Settings load failure: voice actions show unavailable/setup state;
       // typed chat remains usable (design §11.4). settingsUnavailable keeps
@@ -316,6 +332,8 @@ export function useAiChatVoice(options: {
         runtimeReady: false,
         outcome: "error",
       });
+      // R8 §2: capability-state count — load failure stays countable.
+      void recordWorkspaceActionCount("voice", "capability_state", "error");
       autoSend.value = false;
       maxRecordingMs.value = DEFAULT_MAX_RECORDING_MS;
       settings.value = null;
@@ -355,6 +373,12 @@ export function useAiChatVoice(options: {
         ttsMode: enabling ? "all_assistant_messages" : "disabled",
       });
       applySettings(saved);
+      // R8 P2 (FR-VOI-009): the saved mode gates NEW speech only — when the
+      // user turns spoken responses off, queued/playing utterances must not
+      // outlive the preference change.
+      if (!enabling) {
+        speechController.stop();
+      }
     } catch {
       // FR-VOICE-004: a preference-save failure is a RECOVERABLE state —
       // bounded flag + localized retry in the chat center; the raw error
@@ -369,6 +393,8 @@ export function useAiChatVoice(options: {
     if (modelInstalling.value) return;
     modelInstalling.value = true;
     modelInstallError.value = null;
+    // R8 §2: install action count (labels only, fire-and-forget).
+    void recordWorkspaceActionCount("voice", "install_model", "ok");
     try {
       await downloadVoiceModel(
         status.value?.sttModelId ?? "sherpa-onnx:stt:auto"
@@ -390,17 +416,40 @@ export function useAiChatVoice(options: {
     if (modelInstalling.value) return;
     modelInstalling.value = true;
     modelInstallError.value = null;
-    ttsInstallPrompt.value = false;
     try {
       const ttsModelId = settings.value?.ttsModelId ?? "sherpa-onnx:tts:auto";
       await downloadVoiceModel(ttsModelId);
       notifyVoiceModelsChanged();
       await loadSettings();
+      // Popup confirm completes the user's original enable intent
+      // (toggle → popup). When the model is now usable, persist the
+      // enablement (mirrors confirmRuntimeInstall auto-enabling
+      // push-to-talk). A save failure surfaces via settingsSaveFailed.
+      if (status.value?.ttsState === "ready") {
+        try {
+          const current = settings.value ?? (await getVoiceSettings());
+          const saved = await setVoiceSettings({
+            ...current,
+            ttsMode: "all_assistant_messages",
+          });
+          applySettings(saved);
+        } catch {
+          settingsSaveFailed.value = true;
+        }
+        // The popup's job (install + enable) completed: it closes itself.
+        // On failure or a still-missing model it stays open so the user
+        // sees the error or can retry/cancel (spec goal: install in place).
+        ttsInstallPrompt.value = false;
+      }
     } catch {
+      await loadSettings();
+      // Surface the error AFTER the refresh: loadSettings clears
+      // modelInstallError when the runtime reports state ready, which
+      // would otherwise erase the install-failure message before the
+      // user ever sees it.
       modelInstallError.value =
         t("aiChatV2.voice.tts_model_install_failed") ||
         "Speech model installation failed.";
-      await loadSettings();
     } finally {
       modelInstalling.value = false;
     }
@@ -413,6 +462,8 @@ export function useAiChatVoice(options: {
     runtimeInstallProgress.value = null;
     runtimeModelProgress.value = null;
     runtimeInstallDialog.value = true;
+    // R8 §2: runtime install offer count (labels only).
+    void recordWorkspaceActionCount("voice", "install_runtime_offer", "ok");
     try {
       runtimeInstallOffer.value = await prepareLocalAiRuntimeInstall(
         VOICE_SHERPA_RUNTIME_ID
@@ -452,12 +503,15 @@ export function useAiChatVoice(options: {
       applySettings(saved);
       await loadSettings();
       runtimeInstallDialog.value = false;
+      // R8 §2: runtime install completion count (labels only).
+      void recordWorkspaceActionCount("voice", "install_runtime", "ok");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       runtimeInstallError.value = `${
         t("aiChatV2.voice.runtime_install_failed") ||
         "Voice runtime installation failed."
       } ${msg}`;
+      void recordWorkspaceActionCount("voice", "install_runtime", "error");
       await loadSettings();
     } finally {
       runtimeInstalling.value = false;

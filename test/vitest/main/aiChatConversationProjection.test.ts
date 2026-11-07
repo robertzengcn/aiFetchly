@@ -88,8 +88,14 @@ describe("AIChatConversationModel projection", () => {
     expect(updated.title).toBe("My custom name");
     expect(updated.titleIsUserSet).toBe(true);
 
-    // Generated title lands once when no title exists.
-    await model.createProjection({ conversationId: "v2-conv-4" });
+    // Generated title lands once when no title exists AND the row carries an
+    // interactive pending lifecycle (titles design §4: bare producers are
+    // legacy/suppressed and never auto-titled).
+    await model.createProjection({
+      conversationId: "v2-conv-4",
+      titleSource: "placeholder",
+      titleGenerationStatus: "pending",
+    });
     const gen = await model.recordMessagePersisted({
       conversationId: "v2-conv-4",
       isResult: false,
@@ -99,6 +105,7 @@ describe("AIChatConversationModel projection", () => {
     });
     expect(gen.title).toBe("first exchange title");
     expect(gen.titleIsUserSet).toBe(false);
+    expect(gen.titleSource).toBe("excerpt");
   });
 
   it("bounds preview and title lengths", async () => {

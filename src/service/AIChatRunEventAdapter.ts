@@ -12,9 +12,17 @@ import type {
 export class AIChatRunEventAdapter {
   private sequenceCounter = 0;
 
+  /**
+   * D01 (audit 2026-10-21-r3): the accepted append identity this run serves
+   * (`pending-<pendingMessageId>` for queue-drained turns, the run's own
+   * durable id for direct interactive runs). Detail envelopes carry it so
+   * the renderer binds starts/terminals by durable source identity instead
+   * of the legacy FIFO branch that an orphaned queued row can poison.
+   */
   constructor(
     private readonly runId: string,
-    private readonly conversationId: string
+    private readonly conversationId: string,
+    private readonly sourceRunId?: string | null
   ) {}
 
   /** Wrap one chunk into the routed detail-event envelope. */
@@ -27,6 +35,7 @@ export class AIChatRunEventAdapter {
       emittedAt: new Date().toISOString(),
       eventType: chunk.eventType,
       payload: chunk as unknown as Record<string, unknown>,
+      ...(this.sourceRunId ? { sourceRunId: this.sourceRunId } : {}),
     };
   }
 

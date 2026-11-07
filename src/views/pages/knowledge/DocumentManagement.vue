@@ -797,12 +797,12 @@ const { t } = useI18n();
     const getFileTypeIcon = (fileType?: string) => {
       if (!fileType) return 'mdi-file';
       const icons: Record<string, string> = {
-        pdf: 'mdi-file-pdf',
+        pdf: 'mdi-file-pdf-box',
         txt: 'mdi-file-document',
         doc: 'mdi-file-word',
         docx: 'mdi-file-word',
         html: 'mdi-file-code',
-        md: 'mdi-file-markdown',
+        md: 'mdi-language-markdown',
         pptx: 'mdi-file-powerpoint',
         ppt: 'mdi-file-powerpoint'
       };

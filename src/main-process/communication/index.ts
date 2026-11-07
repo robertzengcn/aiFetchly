@@ -2,7 +2,6 @@
 // export { default as AsyncMsg } from "./async-msg";
 import { registerExtraModulesIpcHandlers } from "@/main-process/communication/extramodule-ipc";
 import { registerScheduleIpcHandlers } from "@/main-process/communication/scheduleIpc";
-import { registerYellowPagesIpcHandlers } from "@/main-process/communication/yellowPagesIpc";
 import SyncMsg from "@/main-process/communication/sync-msg";
 import AsyncMsg from "@/main-process/communication/async-msg";
 import { BrowserWindow } from "electron";
@@ -23,6 +22,8 @@ import { registerAiChatV2IpcHandlers } from "@/main-process/communication/ai-cha
 import { registerGeneratedImageExportIpcHandlers } from "@/main-process/communication/generatedImageExportIpc";
 import { registerAiFileOpenIpcHandlers } from "@/main-process/communication/ai-file-open-ipc";
 import { registerAiChatWorkspaceIpcHandlers } from "@/main-process/communication/ai-chat-workspace-ipc";
+import { registerAiChatRendererMetricsIpcHandlers } from "@/main-process/communication/aiChatRendererMetricsIpc";
+import { registerAiChatWorkspaceActionCountIpcHandlers } from "@/main-process/communication/aiChatWorkspaceActionCountIpc";
 import { registerAiChatAtMentionIpcHandlers } from "@/main-process/communication/ai-chat-at-mention-ipc";
 import { registerAiChatGoalIpcHandlers } from "@/main-process/communication/ai-chat-goal-ipc";
 import { registerToolResultIpcHandlers } from "@/main-process/communication/tool-result-ipc";
@@ -66,6 +67,7 @@ import { TokenComputerUseSettingsStore } from "@/service/computerUse/ComputerUse
 import { registerAIProviderIpcHandlers } from "@/main-process/communication/ai-provider-ipc";
 import { registerAiChatVoiceIpcHandlers } from "@/main-process/communication/ai-chat-v2-voice-ipc";
 import { registerAIArtifactIpcHandlers } from "@/main-process/communication/ai-artifact-ipc";
+import { registerPluginArtifactIpcHandlers } from "@/main-process/communication/plugin-artifact-ipc";
 import { registerAIWorkspaceMemoryIpcHandlers } from "@/main-process/communication/ai-workspace-memory-ipc";
 import { registerPortableWorkspaceMemoryIpcHandlers } from "@/main-process/communication/portable-workspace-memory-ipc";
 import { registerEmailReceiveIpcHandlers } from "@/main-process/communication/emailReceive-ipc";
@@ -106,7 +108,6 @@ export function registerCommunicationIpcHandlers(
     AIChatV2EventBroadcaster.getInstance().register(win);
     registerExtraModulesIpcHandlers();
     registerScheduleIpcHandlers();
-    registerYellowPagesIpcHandlers();
     registerSearchIpcHandlers();
     registeProxyIpcHandlers();
     registerEmailextractionIpcHandlers();
@@ -130,6 +131,10 @@ export function registerCommunicationIpcHandlers(
     registerGeneratedImageExportIpcHandlers();
     registerAiFileOpenIpcHandlers();
     registerAiChatWorkspaceIpcHandlers();
+    // Audit R2 G01: renderer projection aggregates → main telemetry merge.
+    registerAiChatRendererMetricsIpcHandlers();
+    // R8 §2: renderer-originated workspace action counts.
+    registerAiChatWorkspaceActionCountIpcHandlers();
     registerAiChatAtMentionIpcHandlers();
     registerAiChatGoalIpcHandlers();
     registerToolResultIpcHandlers();
@@ -195,6 +200,7 @@ export function registerCommunicationIpcHandlers(
     registerAIProviderIpcHandlers();
     registerAiChatVoiceIpcHandlers();
     registerAIArtifactIpcHandlers();
+    registerPluginArtifactIpcHandlers();
     registerAIWorkspaceMemoryIpcHandlers();
     registerPortableWorkspaceMemoryIpcHandlers();
     registerEmailReceiveIpcHandlers();

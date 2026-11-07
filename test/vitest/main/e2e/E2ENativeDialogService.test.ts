@@ -55,7 +55,10 @@ describe("E2ENativeDialogService", () => {
     writeManifest(path.join(root, "state.json"), {
       open: { action: "confirmed", paths: [inRoot] },
     });
-    const svc = new E2ENativeDialogService(makeEnv(root), path.join(root, "state.json"));
+    const svc = new E2ENativeDialogService(
+      makeEnv(root),
+      path.join(root, "state.json")
+    );
     const result = await svc.showOpenDialog({ title: "pick" });
     expect(result.canceled).toBe(false);
     expect(result.filePaths).toEqual([inRoot]);
@@ -65,7 +68,10 @@ describe("E2ENativeDialogService", () => {
     writeManifest(path.join(root, "state.json"), {
       open: { action: "canceled" },
     });
-    const svc = new E2ENativeDialogService(makeEnv(root), path.join(root, "state.json"));
+    const svc = new E2ENativeDialogService(
+      makeEnv(root),
+      path.join(root, "state.json")
+    );
     const result = await svc.showOpenDialog({});
     expect(result.canceled).toBe(true);
     expect(result.filePaths).toEqual([]);
@@ -73,7 +79,10 @@ describe("E2ENativeDialogService", () => {
 
   it("fails closed when no response is configured for the dialog kind", async () => {
     writeManifest(path.join(root, "state.json"), {});
-    const svc = new E2ENativeDialogService(makeEnv(root), path.join(root, "state.json"));
+    const svc = new E2ENativeDialogService(
+      makeEnv(root),
+      path.join(root, "state.json")
+    );
     await expect(svc.showSaveDialog({})).rejects.toThrow(
       /no response is configured/
     );
@@ -83,7 +92,10 @@ describe("E2ENativeDialogService", () => {
     writeManifest(path.join(root, "state.json"), {
       open: { action: "confirmed", paths: ["/etc/passwd"] },
     });
-    const svc = new E2ENativeDialogService(makeEnv(root), path.join(root, "state.json"));
+    const svc = new E2ENativeDialogService(
+      makeEnv(root),
+      path.join(root, "state.json")
+    );
     const result = await svc.showOpenDialog({});
     // The only configured path was outside the root -> no in-root paths -> canceled.
     expect(result.canceled).toBe(true);
@@ -93,8 +105,31 @@ describe("E2ENativeDialogService", () => {
     writeManifest(path.join(root, "state.json"), {
       message: { action: "confirmed" },
     });
-    const svc = new E2ENativeDialogService(makeEnv(root), path.join(root, "state.json"));
+    const svc = new E2ENativeDialogService(
+      makeEnv(root),
+      path.join(root, "state.json")
+    );
     const result = await svc.showMessageBox({ message: "ok?" });
     expect(result.response).toBe(0);
+  });
+
+  // Multi-path "open" manifests drive pick-in-order: the first dialog returns
+  // paths[0], the next paths[1], and the last configured folder repeats. Both
+  // folders must stay inside the E2E root (out-of-root entries are filtered
+  // before consumption, same as the single-entry mode).
+  it("serves multi-path open manifests as a FIFO queue and repeats the last entry", async () => {
+    const insideA = path.join(root, "in-root-a");
+    const insideB = path.join(root, "in-root-b");
+    writeManifest(path.join(root, "state.json"), {
+      open: { action: "confirmed", paths: [insideA, insideB] },
+    });
+    const svc = new E2ENativeDialogService(
+      makeEnv(root),
+      path.join(root, "state.json")
+    );
+    expect((await svc.showOpenDialog({})).filePaths).toEqual([insideA]);
+    expect((await svc.showOpenDialog({})).filePaths).toEqual([insideB]);
+    expect((await svc.showOpenDialog({})).filePaths).toEqual([insideB]);
+    expect((await svc.showOpenDialog({})).filePaths).toEqual([insideB]);
   });
 });

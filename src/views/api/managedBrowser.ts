@@ -56,7 +56,7 @@ export async function listActiveSessions(): Promise<
 }
 
 export async function startManagedBrowser(input: {
-  accountId: number;
+  accountId?: number;
   purpose: string;
   requestedStartUrl?: string;
   conversationId?: string;

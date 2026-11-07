@@ -64,6 +64,11 @@ const VBtn = {
 const SlotStub = { template: "<div><slot /></div>" };
 const InlineStub = { template: "<span />" };
 
+/** VIcon stub that keeps the icon text inspectable (mounted slot content). */
+const CapturingIcon = {
+  template: `<i data-testid="v-icon-capture"><slot /></i>`,
+};
+
 function makeQuestion(
   items: AskUserQuestionItem[],
   overrides: Partial<AIChatPlanQuestionView> = {}
@@ -137,6 +142,67 @@ function oneAnswered(wrapper: ReturnType<typeof mountCard>): AnsweredEvent {
 }
 
 describe("AiChatV2QuestionCard — free-text 'Other' option", () => {
+  /**
+   * MDI glyph guard companion: the option bullet icons must use glyph names
+   * the installed @mdi/font ships (`checkbox-blank/checkbox-marked`,
+   * `radiobox-blank/radiobox-marked`). The old `mdi-checkbox`/`mdi-radiobox`
+   * names have no `::before` rule in this font, so the bullets rendered
+   * invisibly. Assert the glyph switches with the selection state.
+   */
+  it("swaps the option bullet glyph blank <-> marked on selection", async () => {
+    const wrapper = mount(AiChatV2QuestionCard, {
+      props: { question: makeQuestion([MULTI]) },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          VCard: SlotStub,
+          VCardItem: SlotStub,
+          VCardText: SlotStub,
+          VCardActions: SlotStub,
+          VIcon: CapturingIcon,
+          VChip: InlineStub,
+          VSpacer: InlineStub,
+        },
+      },
+    });
+
+    const optionAt = (idx: number) =>
+      wrapper.findAll('[data-testid="question-option"]')[idx]!;
+    const iconText = (idx: number): string =>
+      optionAt(idx).find('[data-testid="v-icon-capture"]').text();
+
+    // Unchecked -> blank checkbox glyph present in the installed font.
+    expect(iconText(0)).toContain("mdi-checkbox-blank");
+    expect(iconText(0)).not.toContain("marked");
+
+    await optionAt(0).trigger("click");
+
+    // Checked → marked checkbox glyph (installed font).
+    expect(iconText(0)).toContain("mdi-checkbox-marked");
+    // The other option stays blank.
+    expect(iconText(1)).toContain("mdi-checkbox-blank");
+
+    // Single-select list uses the radiobox family the same way.
+    const radio = mount(AiChatV2QuestionCard, {
+      props: { question: makeQuestion([SINGLE]) },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          VCard: SlotStub,
+          VCardItem: SlotStub,
+          VCardText: SlotStub,
+          VCardActions: SlotStub,
+          VIcon: CapturingIcon,
+          VChip: InlineStub,
+          VSpacer: InlineStub,
+        },
+      },
+    });
+    expect(
+      radio.findAll('[data-testid="question-option"]')[0].text()
+    ).toContain("mdi-radiobox-blank");
+  });
+
   it("emits a custom single-select answer with customText", async () => {
     const wrapper = mountCard(makeQuestion([SINGLE]));
 

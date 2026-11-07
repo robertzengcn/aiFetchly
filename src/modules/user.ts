@@ -18,8 +18,6 @@ import { TokenRefreshService } from "@/modules/tokenRefresh";
 import { SqliteDb } from "@/config/SqliteDb";
 import { ScheduleManager } from "@/modules/ScheduleManager";
 import { SearchController } from "@/controller/SearchController";
-import { YellowPagesController } from "@/controller/YellowPagesController";
-import { YellowPagesProcessManager } from "@/modules/YellowPagesProcessManager";
 import { WebSocketClient } from "@/modules/WebSocketClient";
 import { VectorDatabasePool } from "@/modules/factories/VectorDatabasePool";
 import { stopChatScheduler } from "@/main-process/chatSchedulerLifecycleRegistry";
@@ -38,8 +36,6 @@ export class User {
     WebSocketClient.resetInstance();
     await ScheduleManager.destroyInstance();
     SearchController.resetInstance();
-    YellowPagesController.resetInstance();
-    YellowPagesProcessManager.resetInstance();
     await VectorDatabasePool.clearAllInstances();
     await SqliteDb.destroyInstance();
 

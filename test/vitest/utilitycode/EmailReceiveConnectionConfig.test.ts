@@ -137,6 +137,17 @@ describe("buildImapFlowOptions", () => {
     expect(options.secure).toBe(true);
     expect(options.doSTARTTLS).toBe(false);
   });
+
+  it("keeps a probe connection from idling and allows a slow greeting", () => {
+    const options = buildImapFlowOptions(
+      makeConfig({ protocol: "imap", port: 993, ssl: true }),
+      "configured",
+      "probe"
+    );
+
+    expect(options.disableAutoIdle).toBe(true);
+    expect(options.greetingTimeout).toBe(30_000);
+  });
 });
 
 describe("shouldRetryWithImplicitTls", () => {

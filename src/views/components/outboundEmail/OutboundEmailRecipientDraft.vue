@@ -28,6 +28,7 @@
         <span class="ml-1">{{ draft.senderAddress }}</span>
       </div>
       <v-btn
+        v-if="props.editable"
         variant="tonal"
         size="small"
         color="primary"
@@ -105,12 +106,19 @@ import type { OutboundEmailDraftView } from "@/views/api/outboundEmailDelivery";
  * read-only mode it shows the subject/body/sender preview; in edit mode it
  * collects edits that — on save — create a new revision and invalidate any
  * prior approval (§13.3). The parent owns the actual revision-write call;
- * this component only emits the edited payload.
+ * this component only emits the edited payload. An already-attempted batch
+ * is a progress surface (§8.1/FR-OUT-006): `editable=false` hides the Edit
+ * affordance entirely.
  */
-const props = defineProps<{
-  draft: OutboundEmailDraftView;
-  editMode: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    draft: OutboundEmailDraftView;
+    editMode: boolean;
+    /** False hides the Edit affordance (already-attempted batch). */
+    editable?: boolean;
+  }>(),
+  { editable: true }
+);
 
 const emit = defineEmits<{
   (e: "edit-requested"): void;

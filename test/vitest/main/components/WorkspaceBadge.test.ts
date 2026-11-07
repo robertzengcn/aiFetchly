@@ -22,6 +22,7 @@ const i18n = createI18n({
         badgeLabel: "Workspace",
         notSet: "No workspace set",
         changeFolder: "Change folder",
+        removeAction: "Remove workspace",
         chooseAction: "Choose workspace",
         chooseHint: "Pick a folder for this conversation's workspace.",
         loading: "Loading workspace…",
@@ -73,16 +74,16 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     expect(
       wrapper.find('[data-testid="workspace-badge-choose"]').exists()
     ).toBe(false);
-    expect(
-      wrapper.find('[data-testid="workspace-badge-path"]').exists()
-    ).toBe(false);
+    expect(wrapper.find('[data-testid="workspace-badge-path"]').exists()).toBe(
+      false
+    );
   });
 
   it("renders an explicit Choose action with explanatory context when no workspace is set", async () => {
     const wrapper = mountBadge({ workspace: null });
-    expect(
-      wrapper.find('[data-testid="workspace-badge-unset"]').exists()
-    ).toBe(true);
+    expect(wrapper.find('[data-testid="workspace-badge-unset"]').exists()).toBe(
+      true
+    );
     expect(wrapper.text()).toContain("No workspace set");
     expect(wrapper.text()).toContain(
       "Pick a folder for this conversation's workspace."
@@ -185,5 +186,36 @@ describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
     expect(
       wrapper.find('[data-testid="workspace-badge-busy-reason"]').exists()
     ).toBe(false);
+  });
+
+  // FR-WSP-002 remove leg: an explicit Remove affordance when a workspace is
+  // set, hidden while loading/unset, gated like the other actions (FR-WS-007).
+  it("renders an accessible Remove action when a workspace is set and emits on click", async () => {
+    const wrapper = mountBadge({ workspace: workspace() });
+    const remove = wrapper.get('[data-testid="workspace-badge-remove"]');
+    expect(remove.attributes("aria-label")).toBe("Remove workspace");
+    expect(remove.attributes("title")).toBe("Remove workspace");
+    await remove.trigger("click");
+    expect(wrapper.emitted("request-remove-workspace")).toHaveLength(1);
+  });
+
+  it("does not render the Remove action while loading or when unset", () => {
+    const loading = mountBadge({ workspace: null, loading: true });
+    expect(
+      loading.find('[data-testid="workspace-badge-remove"]').exists()
+    ).toBe(false);
+    const unset = mountBadge({ workspace: null });
+    expect(unset.find('[data-testid="workspace-badge-remove"]').exists()).toBe(
+      false
+    );
+  });
+
+  it("blocks the Remove action while a run is active (FR-WS-007)", async () => {
+    const wrapper = mountBadge({ workspace: workspace(), busy: true });
+    const remove = wrapper.get('[data-testid="workspace-badge-remove"]');
+    expect(remove.attributes("disabled")).toBeDefined();
+    expect(remove.attributes("aria-label")).toBe("Available after current run");
+    await remove.trigger("click");
+    expect(wrapper.emitted("request-remove-workspace")).toBeUndefined();
   });
 });

@@ -9,6 +9,15 @@
       <v-card-title class="d-flex align-center ga-2">
         <v-icon size="small" aria-hidden="true">mdi-account-arrow-right</v-icon>
         <span>{{ t("managedBrowser.handoff.title") }}</span>
+        <v-spacer />
+        <v-btn
+          data-testid="mb-handoff-close"
+          icon="mdi-close"
+          variant="text"
+          density="comfortable"
+          :aria-label="t('managedBrowser.handoff.close') || 'Close'"
+          @click="onClose"
+        />
       </v-card-title>
       <v-card-text>
         <p class="text-body-2 mb-2">
@@ -42,7 +51,7 @@
           }}
         </p>
       </v-card-text>
-      <v-card-actions>
+      <v-card-actions class="mb-handoff-dialog__actions">
         <v-btn
           data-testid="mb-handoff-verify"
           color="primary"
@@ -62,7 +71,6 @@
         >
           {{ t("managedBrowser.handoff.extend") || "Extend time (10 min)" }}
         </v-btn>
-        <v-spacer />
         <v-btn
           data-testid="mb-handoff-cancel"
           variant="text"
@@ -112,6 +120,12 @@ function onDialogInput(value: boolean): void {
   emit("update:modelValue", value);
 }
 
+/** Close (X) control: only hides the dialog; the session card keeps the
+ * verify / resume / extend / stop controls, so no session action is taken. */
+function onClose(): void {
+  emit("update:modelValue", false);
+}
+
 const reason = computed(() => props.status?.handoffReason ?? null);
 const expiresAtEpochMs = computed(
   () => props.status?.handoffExpiresAtEpochMs ?? null
@@ -153,3 +167,15 @@ const countdownLabel = computed(() => {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 });
 </script>
+
+<style scoped>
+/* The three receipt buttons total ~570px — wider than the 480px dialog and
+   everything less on narrow windows. Without wrap the nowrap flex row is
+   clipped by the card (overflow-x hidden): labels end up chopped mid-word
+   ("EXTEND TIM") and "Cancel task" is unreachable — so the dialog cannot be
+   closed at all. Wrap instead so every action stays visible and clickable. */
+.mb-handoff-dialog__actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+</style>

@@ -491,6 +491,88 @@ describe("AIChatCoordinator", () => {
     expect(fake.turns).toHaveLength(0);
   });
 
+  /**
+   * Capability-parity PRD FR-SUB-004/FR-IMG-004/FR-HIS-002: the workspace
+   * idle dispatch must carry the SAME submission context the Chat V2 stream
+   * edge accepts — pasted bodies, confirmed image batches, opaque history
+   * references, and the retry-stable submission id — all the way into the
+   * engine request. A field accepted by the schema but dropped by
+   * buildEngineRequest would silently change model behavior per surface.
+   */
+  it("forwards submission context through the idle dispatch into the engine request", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+
+    const accepted = await coordinator.startRun({
+      ...request(6),
+      pastedContents: { "1": "pasted body text" },
+      confirmedGeneratedImageBatch: {
+        references: [
+          { messageId: "m1", imageIndex: 0 },
+          { messageId: "m2", imageIndex: 1 },
+        ],
+      },
+      historySelectionIds: ["src-1", "src-2"],
+      submissionId: "11111111-2222-3333-4444-555555555555",
+    });
+    expect(accepted.ok).toBe(true);
+    await waitFor(() => fake.turns.length === 1);
+    const engineRequest = fake.turns[0].input.request;
+    expect(engineRequest.pastedContents).toEqual({ "1": "pasted body text" });
+    // Codex P1: the confirmed batch travels via ConfirmedBatchReferenceRegistry
+    // (staged at dispatch ownership), NEVER on the engine request (strip
+    // contract) — assert both sides.
+    expect(engineRequest.confirmedGeneratedImageBatch).toBeUndefined();
+    const { getConfirmedBatchReferenceRegistry } = await import(
+      "@/service/ConfirmedBatchReferenceRegistry"
+    );
+    const staged = getConfirmedBatchReferenceRegistry().consume("v2-test-6");
+    expect(staged?.map((r) => ({ messageId: r.messageId, imageIndex: r.imageIndex }))).toEqual([
+      { messageId: "m1", imageIndex: 0 },
+      { messageId: "m2", imageIndex: 1 },
+    ]);
+    expect(engineRequest.historySelectionIds).toEqual(["src-1", "src-2"]);
+    expect(engineRequest.submissionId).toBe(
+      "11111111-2222-3333-4444-555555555555"
+    );
+  });
+
+  /**
+   * Busy-path parity (FR-SUB-004): the coordinator hands the FULL request
+   * (context included) to the busySubmit port — the IPC adapter forwards it
+   * into the durable pending queue, whose schema already accepts these
+   * fields.
+   */
+  it("hands submission context to the busy-submit delegation intact", async () => {
+    const busyRequests: Array<
+      Parameters<AIChatCoordinator["startRun"]>[0]
+    > = [];
+    const { coordinator, fake } = buildCoordinator(
+      undefined,
+      async (busyRequest) => {
+        busyRequests.push(busyRequest);
+        return { pendingRunId: "pending-p-6" };
+      }
+    );
+    await SqliteDb.ensureInitialized();
+
+    fake.setStatus("v2-test-7", "running");
+    const accepted = await coordinator.startRun({
+      ...request(7),
+      pastedContents: { "2": "queued paste body" },
+      historySelectionIds: ["src-9"],
+      submissionId: "99999999-2222-3333-4444-555555555555",
+    });
+    expect(accepted.ok).toBe(true);
+    expect(busyRequests).toHaveLength(1);
+    expect(busyRequests[0].pastedContents).toEqual({ "2": "queued paste body" });
+    expect(busyRequests[0].historySelectionIds).toEqual(["src-9"]);
+    expect(busyRequests[0].submissionId).toBe(
+      "99999999-2222-3333-4444-555555555555"
+    );
+    expect(fake.turns).toHaveLength(0);
+  });
+
   it("cancel stops a queue-owned engine turn with no coordinator run", async () => {
     const { coordinator, fake } = buildCoordinator();
     await SqliteDb.ensureInitialized();
@@ -599,6 +681,44 @@ describe("AIChatCoordinator", () => {
     await waitFor(async () => {
       const row = await runModel.getByRunId(accepted.response.runId);
       return row?.status === "cancelled";
+    });
+  });
+
+  it("R10 B01: a cancel bound to a stale run id never cancels the conversation's newer run", async () => {
+    const { coordinator, fake } = buildCoordinator();
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(31));
+    await waitFor(() => fake.turns.length === 1);
+    if (!accepted.ok) return;
+    const turn = fake.turns[0];
+
+    // A captured claim whose run id no longer resolves to the CURRENT run
+    // of the claimed conversation is stale: no-op — newer work survives.
+    const stale = await coordinator.cancelRun({
+      conversationId: "v2-test-31",
+      runId: "stale-run-id",
+    });
+    expect(stale.cancelled).toBe(false);
+    expect(fake.stopCalls).not.toContain("v2-test-31");
+    expect(coordinator.ownsConversation("v2-test-31")).toBe(true);
+
+    // The happy path is unchanged: cancelling with the CURRENT run id works.
+    const valid = await coordinator.cancelRun({
+      conversationId: "v2-test-31",
+      runId: accepted.response.runId,
+    });
+    expect(valid.cancelled).toBe(true);
+    expect(fake.stopCalls).toContain("v2-test-31");
+    emit(turn.input.eventSink, {
+      type: "cancelled",
+      conversationId: "v2-test-31",
+      messageId: "assistant-1",
+      fullContent: "partial",
+    });
+    turn.resolve({
+      type: "cancelled",
+      conversationId: "v2-test-31",
+      assistantMessageId: "assistant-1",
     });
   });
 
@@ -770,6 +890,27 @@ describe("AIChatCoordinator", () => {
     const row = await runModel.getByRunId(accepted.response.runId);
     expect(row?.errorSummary).toContain("busy");
   });
+
+  it("R8 P2-7: a failed interactive run marks the sidebar with failure attention", async () => {
+    const { coordinator, router, fake, runModel } = buildCoordinator();
+    const win = fakeWindow(36);
+    win.register(router);
+    await SqliteDb.ensureInitialized();
+    const accepted = await coordinator.startRun(request(36));
+    if (!accepted.ok) return;
+    await waitFor(() => fake.turns.length === 1);
+    fake.turns[0].reject(new Error("engine vanished"));
+
+    await waitFor(async () => {
+      const row = await runModel.getByRunId(accepted.response.runId);
+      return row?.status === "failed";
+    });
+    await waitFor(() => win.summaries.some((s) => s.reason === "run_failed"));
+    const failedSummary = win.summaries.find((s) => s.reason === "run_failed");
+    expect(failedSummary?.attention).toBe("failure");
+    // Status metadata only — no transcript bodies in the attention event.
+    expect(JSON.stringify(failedSummary ?? {})).not.toContain("engine vanished");
+  });
 });
 
 describe("summary event privacy (FR-022)", () => {
@@ -826,7 +967,11 @@ describe("summary event privacy (FR-022)", () => {
       "unread",
       "lastActivityAt",
       "runId",
+      "sourceRunId",
+      "runOwner",
       "title",
+      // Chat-titles design §10.3: bounded integer title version — no content.
+      "titleRevision",
       "reason",
     ]);
     for (const summary of win.summaries) {

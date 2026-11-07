@@ -3,6 +3,11 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { createRouter, createMemoryHistory, type Router } from "vue-router";
 import PluginManager from "@/views/components/plugins/PluginManager.vue";
+import {
+  enqueueRoutePush,
+  enqueueRouteWork,
+  resetRoutePushQueueForTests,
+} from "@/views/utils/enqueueRoutePush";
 
 const { api } = vi.hoisted(() => ({
   api: {
@@ -115,6 +120,11 @@ async function createTestRouter(
         name: "PluginsManagement",
         component: { template: "<div />" },
       },
+      {
+        path: "/aiworkspace",
+        name: "AI_Chat_Workspace",
+        component: { template: "<div />" },
+      },
     ],
   });
   await router.push(initialPath);
@@ -141,6 +151,7 @@ function mountManager(router: Router) {
 
 describe("PluginManager", () => {
   beforeEach(() => {
+    resetRoutePushQueueForTests();
     api.list.mockReset();
     api.toggle.mockReset();
     api.uninstall.mockReset();
@@ -155,6 +166,26 @@ describe("PluginManager", () => {
     const w = mountManager(router);
     await flushPromises();
     expect(w.find('[data-testid="stub-catalog"]').exists()).toBe(true);
+    expect(router.currentRoute.value.query.tab).toBe("discover");
+  });
+
+  it("does not pull the center back to Plugins when New chat was queued first", async () => {
+    let releasePlugins: () => void = () => undefined;
+    const pluginsNav = enqueueRouteWork(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePlugins = resolve;
+        })
+    );
+    await Promise.resolve();
+    const router = await createTestRouter("/plugins/management");
+    const chatNav = enqueueRoutePush(router, { name: "AI_Chat_Workspace" });
+    const wrapper = mountManager(router);
+    releasePlugins();
+    await Promise.all([pluginsNav, chatNav]);
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe("AI_Chat_Workspace");
+    wrapper.unmount();
   });
 
   it("selects each top-level section from the query", async () => {

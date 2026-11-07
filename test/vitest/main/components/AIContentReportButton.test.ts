@@ -108,4 +108,28 @@ describe("AIContentReportButton", () => {
     await w.find('[data-testid="ai-content-report-btn"]').trigger("click");
     expect(w.emitted("report")).toBeFalsy();
   });
+
+  /** R8 P2-12 (FR-RPT-009, A11Y-001): in compact mode the "Reported"
+   * state must still be perceivable — the accessible name changes to the
+   * reported label and the icon gets a visually distinct, non-color-only
+   * marker. */
+  it("announces Reported in the accessible name even in compact mode", () => {
+    const w = mountButton({ compact: true, reported: true });
+    const btn = w.find('[data-testid="ai-content-report-btn"]');
+    expect((btn.element as HTMLButtonElement).getAttribute("aria-label")).toBe(
+      "Reported"
+    );
+    expect((btn.element as HTMLButtonElement).getAttribute("title")).toBe(
+      "Reported"
+    );
+  });
+
+  it("marks the icon with a visible non-color Reported state in compact mode", () => {
+    const w = mountButton({ compact: true, reported: true });
+    // The icon swaps to the filled flag with a distinct testid marker —
+    // perceivable without color and without text.
+    expect(w.find('[data-testid="ai-content-report-reported-icon"]').exists()).toBe(
+      true
+    );
+  });
 });

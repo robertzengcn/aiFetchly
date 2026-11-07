@@ -35,15 +35,21 @@ vi.mock("@/service/ToolExecutor", () => ({
   },
 }));
 
-vi.mock("@/config/usersetting", () => ({
-  Token: class {
-    getValue() {
-      return "";
-    }
-  },
-  USER_AI_ENABLED: "true",
-  TOKENNAME: "user-social-market-token",
-}));
+vi.mock("@/config/usersetting", async (importOriginal) => {
+  // T01 (R9): partial mock — the rollout keys used by AIChatWorkspaceRollout
+  // through the IPC/login import chain stay defined.
+  const actual = await importOriginal<typeof import("@/config/usersetting")>();
+  return {
+    ...actual,
+    Token: class {
+      getValue() {
+        return "";
+      }
+    },
+    USER_AI_ENABLED: "true",
+    TOKENNAME: "user-social-market-token",
+  };
+});
 
 vi.mock("@/modules/token", () => ({
   Token: class {

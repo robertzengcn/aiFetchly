@@ -13,7 +13,6 @@ import { EmailMarketingTaskModule } from "@/modules/EmailMarketingTaskModule";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
 //import {VideoDownloadTaskModule} from "@/modules/VideoDownloadTaskModule"
 import { EmailSearchTaskModule } from "./EmailSearchTaskModule";
-import { YellowPagesModule } from "./YellowPagesModule";
 import { GoogleMapsModule } from "./GoogleMapsModule";
 import { YandexMapsModule } from "./YandexMapsModule";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
@@ -39,7 +38,6 @@ export interface TaskExecutorServiceDeps {
   buckEmailTaskModel: BuckEmailTaskModule;
   searchModel: SearchModule;
   emailSeachTaskModule: EmailSearchTaskModule;
-  yellowPagesModule: YellowPagesModule;
   googleMapsModule: GoogleMapsModule;
   yandexMapsModule: YandexMapsModule;
   aiMessageTaskModule: AiMessageTaskModule;
@@ -52,7 +50,6 @@ export class TaskExecutorService {
   //private videoDownloadTaskModel: VideoDownloadTaskModule;
   private searchModel: SearchModule;
   private emailSeachTaskModule: EmailSearchTaskModule;
-  private yellowPagesModule: YellowPagesModule;
   private googleMapsModule: GoogleMapsModule;
   private yandexMapsModule: YandexMapsModule;
   private aiMessageTaskModule: AiMessageTaskModule;
@@ -74,7 +71,6 @@ export class TaskExecutorService {
     this.searchModel = deps?.searchModel ?? new SearchModule();
     this.emailSeachTaskModule =
       deps?.emailSeachTaskModule ?? new EmailSearchTaskModule();
-    this.yellowPagesModule = deps?.yellowPagesModule ?? new YellowPagesModule();
     this.googleMapsModule = deps?.googleMapsModule ?? new GoogleMapsModule();
     this.yandexMapsModule = deps?.yandexMapsModule ?? new YandexMapsModule();
     this.aiMessageTaskModule =
@@ -111,9 +107,6 @@ export class TaskExecutorService {
           break;
         case TaskType.BUCK_EMAIL:
           taskOutputId = await this.executeBuckEmailTask(schedule.task_id);
-          break;
-        case TaskType.YELLOW_PAGES:
-          taskOutputId = await this.executeYellowPagesTask(schedule.task_id);
           break;
         case TaskType.GOOGLE_MAPS:
           taskOutputId = await this.executeGoogleMapsTask(schedule.task_id);
@@ -246,26 +239,6 @@ export class TaskExecutorService {
       return taskId;
     } catch (error) {
       log.error(`Failed to execute bulk email task ${taskId}:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Execute a Yellow Pages task
-   * @param taskId The Yellow Pages task ID
-   * @returns The task output ID
-   */
-  async executeYellowPagesTask(taskId: number): Promise<number> {
-    try {
-      log.info(`Executing Yellow Pages task ${taskId}`);
-
-      // Start the Yellow Pages task using the YellowPagesModule
-      await this.yellowPagesModule.startTask(taskId);
-
-      log.info(`Yellow Pages task ${taskId} started successfully`);
-      return taskId;
-    } catch (error) {
-      log.error(`Failed to execute Yellow Pages task ${taskId}:`, error);
       throw error;
     }
   }
@@ -447,31 +420,6 @@ export class TaskExecutorService {
           const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
           status = buckEmailTask?.status || undefined;
           break;
-        case TaskType.YELLOW_PAGES:
-          const yellowPagesStatus = await this.yellowPagesModule.getTaskStatus(
-            taskId
-          );
-          // Map ITaskManager.TaskStatus to commonType.TaskStatus
-          switch (yellowPagesStatus) {
-            case 0: // TaskStatus.Pending
-              status = TaskStatus.Notstart;
-              break;
-            case 1: // TaskStatus.InProgress
-              status = TaskStatus.Processing;
-              break;
-            case 2: // TaskStatus.Completed
-              status = TaskStatus.Complete;
-              break;
-            case 3: // TaskStatus.Failed
-              status = TaskStatus.Error;
-              break;
-            case 4: // TaskStatus.Paused
-              status = TaskStatus.Cancel;
-              break;
-            default:
-              status = TaskStatus.Error;
-          }
-          break;
         case TaskType.GOOGLE_MAPS: {
           const gmRecord = await this.googleMapsModule.getSearchRecord(taskId);
           if (!gmRecord) {
@@ -614,10 +562,6 @@ export class TaskExecutorService {
               buckEmailTask.status
             );
           }
-          break;
-        case TaskType.YELLOW_PAGES:
-          // Stop the Yellow Pages task
-          await this.yellowPagesModule.stopTask(taskId);
           break;
         case TaskType.GOOGLE_MAPS:
           await this.googleMapsModule.cancelSearch(
@@ -764,14 +708,6 @@ export class TaskExecutorService {
         case TaskType.BUCK_EMAIL:
           const buckEmailTask = await this.buckEmailTaskModel.read(taskId);
           taskExists = !!buckEmailTask;
-          break;
-        case TaskType.YELLOW_PAGES:
-          try {
-            await this.yellowPagesModule.getTaskStatus(taskId);
-            taskExists = true;
-          } catch (error) {
-            taskExists = false;
-          }
           break;
         case TaskType.GOOGLE_MAPS: {
           const gmRecord = await this.googleMapsModule.getSearchRecord(taskId);

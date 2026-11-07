@@ -25,11 +25,18 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
  *   not an 8-char slice (AIChatQueryLoop.executeAsyncTool).
  */
 
+// R9 T04: key-aware Token mock — a blanket "true" also fed USERSDBPATH,
+// making every worker open the same cwd-relative `./true/` scraper.db;
+// concurrent full-suite workers then hit `database is locked` during
+// between-round DB bookkeeping and the turn fails. Empty dbpath takes the
+// per-worker isolated TMPDIR fallback (test/vitest/_setup/isolatedTmpDir.ts).
 vi.mock("@/modules/token", () => ({
   Token: class {
     constructor() {
       return {
-        getValue: vi.fn().mockReturnValue("true"),
+        getValue: vi.fn(
+        (key: string) => (key === "user_dbpath" ? "" : "true")
+      ),
       };
     }
   },

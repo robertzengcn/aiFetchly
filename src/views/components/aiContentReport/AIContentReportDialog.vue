@@ -150,6 +150,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { createAIContentReport } from "@/views/api/aiContentReport";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import { encodeReportImagePreview } from "./AIContentReportImageEncoder";
 import type { ReportableOutputDescriptor } from "./reportableOutput";
 import {
@@ -288,6 +289,9 @@ watch(
           contentType: d.contentType,
         });
       }
+      // R8 §2 (design §18.1): the dialog-opened count belongs in the
+      // bounded workspace action counter — fire-and-forget, labels only.
+      void recordWorkspaceActionCount("report", "dialog_open", "ok");
       // Default-select EVERY available image, including a single one (PRD
       // §9.2: thumbnails with each image selected by default). The user may
       // deselect extras when there are multiple, but at least one must remain.

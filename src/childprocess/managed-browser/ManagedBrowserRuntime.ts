@@ -101,7 +101,9 @@ export function assertCommandAllowed(
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
     case "VERIFY_MANUAL_LOGIN":
-      return state === "user_login_in_progress"
+      // The handoff dialog's "I've finished logging in" is this command.
+      // Takeover and captcha land in `handoff`, not `user_login_in_progress`.
+      return state === "user_login_in_progress" || state === "handoff"
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
     default:
@@ -139,7 +141,10 @@ const EXPLICIT_EDGES_ENTRIES: ReadonlyArray<
     "user_login_in_progress",
     new Set(["verifying_manual_login", "user_login_in_progress"]),
   ],
-  ["verifying_manual_login", new Set(["ready", "user_login_in_progress"])],
+  [
+    "verifying_manual_login",
+    new Set(["ready", "user_login_in_progress", "handoff"]),
+  ],
   [
     "ready",
     new Set(["running", "awaiting_approval", "challenge_detected", "handoff"]),
@@ -157,7 +162,10 @@ const EXPLICIT_EDGES_ENTRIES: ReadonlyArray<
     new Set(["challenge_resolving", "handoff", "verifying_login", "ready"]),
   ],
   ["challenge_resolving", new Set(["verifying_login", "ready", "handoff"])],
-  ["handoff", new Set(["verifying_login", "ready"])],
+  [
+    "handoff",
+    new Set(["verifying_login", "verifying_manual_login", "ready"]),
+  ],
   ["failed", new Set(["stopping"])],
 ];
 

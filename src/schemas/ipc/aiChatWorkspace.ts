@@ -1,4 +1,6 @@
 import { z } from "zod/v4";
+import { aiChatV2PastedContentsSchema } from "@/schemas/aiChatV2PastedText";
+import { aiChatHistorySelectionIdsSchema } from "@/schemas/aiChatHistorySelections";
 
 /**
  * Strict Zod v4 schemas for the ai-chat-workspace:* IPC boundary
@@ -117,6 +119,64 @@ export const startChatRunRequestSchema = z
       .max(3)
       .optional(),
     resourceClass: z.literal("general").optional(),
+    /**
+     * FR-SUB-004 (capability-parity PRD): send-time paste bodies — the same
+     * bounded map the Chat V2 stream edge accepts (`aiChatV2PastedContents
+     * Schema`), so both surfaces reach identical engine request behavior.
+     */
+    pastedContents: aiChatV2PastedContentsSchema.optional(),
+    /**
+     * FR-HIS-002 transport: opaque archive references (never passage
+     * bodies) + the retry-stable submission identity. The main process
+     * re-resolves each id against ownership/epoch/budget.
+     */
+    historySelectionIds: aiChatHistorySelectionIdsSchema.optional(),
+    submissionId: z.string().min(8).max(64).optional(),
+    /**
+     * FR-IMG-004 trusted channel: the user-confirmed generated-image batch
+     * reference set (above the 3-reference direct cap). Mirrors the pending
+     * queue's `aiChatPendingCreateInputSchema` contract so one staging
+     * implementation serves both surfaces.
+     */
+    confirmedGeneratedImageBatch: z
+      .strictObject({
+        references: z
+          .array(
+            z.strictObject({
+              messageId: z.string().min(1).max(100),
+              imageIndex: z.number().int().min(0).max(50),
+            })
+          )
+          .min(1)
+          .max(50),
+      })
+      .optional(),
+    /**
+     * Audit R2 G01 trusted-channel association: declares that THIS run is a
+     * plan continuation so main can measure
+     * `plan_decision_to_continuation_ms` at the durable acceptance boundary.
+     * Identity only (bounded plan id/version + decision enum) — never plan
+     * content — and it never reaches the engine request payload.
+     */
+    planContinuation: z
+      .strictObject({
+        planId: z.string().min(1).max(100),
+        version: z.number().int().positive(),
+        action: z.enum(["approve-plan", "reject-plan", "request-plan-changes"]),
+      })
+      .optional(),
+    /**
+     * Audit G01 (design §18.2 "submit click to durable acceptance"):
+     * renderer-origin click epoch stamp for the full submission journey.
+     * Timing association only (bounded integer) — main closes the sample
+     * at the queue acceptance receipt and the stamp never reaches the
+     * engine request payload.
+     */
+    journeyStart: z
+      .strictObject({
+        clickAtEpochMs: z.number().int().min(0).max(9_000_000_000_000),
+      })
+      .optional(),
   })
   .strict();
 
@@ -141,9 +201,30 @@ export const markConversationReadRequestSchema = z
 export const renameConversationRequestSchema = z
   .object({
     conversationId: conversationIdSchema,
-    title: z.string().min(1).max(200),
+    title: z
+      .string()
+      .min(1)
+      .max(200)
+      // Chat-titles FR-06: canonical normalization shared with the Module
+      // boundary — trim, collapse inner whitespace/newlines, reject empty.
+      .transform((value) => value.replace(/\s+/g, " ").trim())
+      .refine((value) => value.length > 0, {
+        message: "Title must not be empty or whitespace-only",
+      }),
   })
   .strict();
+
+/**
+ * Chat-titles design §10.1: authoritative post-commit rename response. A
+ * missing conversation is a STABLE FAILURE, never success-with-renamed=false.
+ */
+export interface RenameConversationResponse {
+  readonly renamed: true;
+  readonly conversationId: string;
+  readonly title: string;
+  readonly titleRevision: number;
+  readonly titleSource: "user";
+}
 
 /** Confirmed destructive deletion (PRD §11.5) — renderer confirms first. */
 export const deleteConversationRequestSchema = z
@@ -199,9 +280,29 @@ export type WorkspaceActivityRequestPayload = z.infer<
 
 export const workspaceFlagGetRequestSchema = z.object({}).strict();
 
+/**
+ * Rollout control names (design §23.1). "redesign" toggles the workspace
+ * shell visibility preference; the adapter names toggle one presentation or
+ * dispatch adapter independently — flags never change authorization rules,
+ * database ownership, or persisted identity formats.
+ */
+export const WORKSPACE_ROLLOUT_FEATURES = [
+  "redesign",
+  "shared_orchestration",
+  "specialized_results",
+  "voice_memory",
+] as const;
+
+export type WorkspaceRolloutFeature = (typeof WORKSPACE_ROLLOUT_FEATURES)[number];
+
+export const workspaceRolloutFeatureSchema = z.enum(
+  WORKSPACE_ROLLOUT_FEATURES
+);
+
 export const workspaceFlagSetRequestSchema = z
   .object({
     enabled: z.boolean(),
+    feature: z.optional(workspaceRolloutFeatureSchema),
   })
   .strict();
 

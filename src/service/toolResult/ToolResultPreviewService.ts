@@ -34,6 +34,14 @@ export interface PreviewRequest {
   readonly kind: ToolResultPreviewKind;
   /** True when `text`/`value` is the entire captured output. */
   readonly isComplete: boolean;
+  /**
+   * Per-request byte-budget override. Batch aggregate receipts are parsed by
+   * the renderer, so their outcome opts into `batchPreviewMaxBytes`; without
+   * an override the configured default ceiling applies. Clamped to the
+   * receipt schema's own preview cap so validation never halves the text
+   * into a mid-token cut.
+   */
+  readonly maxBytes?: number;
 }
 
 /** A bounded preview plus whether it represents everything. */
@@ -47,6 +55,14 @@ export interface PreviewResult {
 
 /** Marker inserted where a head/tail preview omitted the middle. */
 export const OMITTED_REGION_MARKER = "\n… [middle of output omitted] …\n";
+
+/**
+ * Hard ceiling on ANY preview (including per-request overrides): the receipt
+ * schema's own `preview.max(8192)`. Staying at or below it means the halving
+ * loop in `buildReceipt` never has to cut a preview to make the receipt
+ * validate, which would produce a mid-token truncation.
+ */
+export const TOOL_RESULT_RECEIPT_PREVIEW_MAX_BYTES = 8 * 1024;
 
 const READ_MORE =
   "use the output_id from this receipt, then pass next_cursor until complete is true";
@@ -64,6 +80,20 @@ export class ToolResultPreviewService {
 
   /** Build a bounded preview for one captured output. */
   build(request: PreviewRequest): PreviewResult {
+    if (request.maxBytes !== undefined) {
+      // Clamp per-request budgets: nothing may exceed the receipt schema cap,
+      // and nothing may ask for a non-positive budget.
+      const clamped = Math.max(
+        0,
+        Math.min(
+          request.maxBytes,
+          TOOL_RESULT_RECEIPT_PREVIEW_MAX_BYTES
+        )
+      );
+      if (clamped !== this.maxBytes) {
+        return new ToolResultPreviewService(clamped).build(request);
+      }
+    }
     switch (request.kind) {
       case "records":
         return this.recordsPreview(request);

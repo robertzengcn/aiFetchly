@@ -23,7 +23,7 @@
  */
 
 import { e2eTest as test, expect } from "../fixtures/base";
-import { assertCleanTeardown } from "../support/assertions";
+import { assertCleanTeardown, assertImagesDecoded } from "../support/assertions";
 import {
   chatRoot,
   composerTextarea,
@@ -61,6 +61,7 @@ test.describe("Generated-image editing round-trip (Electron integration)", () =>
     await aiApp.mainWindow.getByTestId("ai-chat-send").click();
     const imageBlocks = chatRoot(aiApp).locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(1, { timeout: 30_000 });
+    await assertImagesDecoded(chatRoot(aiApp), { minCount: 1 });
     await expect(
       imageBlocks.nth(0).getByRole("button", { name: "Use as reference" })
     ).toBeVisible();
@@ -98,6 +99,7 @@ test.describe("Generated-image editing round-trip (Electron integration)", () =>
     // 4. The turn completes with a SECOND generated image and never asks for
     //    a workspace.
     await expect(imageBlocks).toHaveCount(2, { timeout: 30_000 });
+    await assertImagesDecoded(chatRoot(aiApp), { minCount: 2 });
     await expect(
       chatRoot(aiApp).locator(".workspace-required-card")
     ).toHaveCount(0);
@@ -124,6 +126,7 @@ test.describe("Generated-image editing round-trip (Electron integration)", () =>
 
     const imageBlocks = chatRoot(aiApp).locator(".v2-message__generated-image");
     await expect(imageBlocks).toHaveCount(2);
+    await assertImagesDecoded(chatRoot(aiApp), { minCount: 2 });
 
     /** Send one edit turn with the currently selected references and return
      * the request's image-part hashes. */

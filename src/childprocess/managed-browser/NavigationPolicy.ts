@@ -14,6 +14,8 @@
 export interface NavigationPolicyOptions {
   /** Registrable origins the platform adapter allows (login/SSO included). */
   readonly allowedOrigins: readonly string[];
+  /** Main-selected account-free mode; HTTPS public hosts only. */
+  readonly publicBrowsing?: boolean;
   /** Development/test mode: permit http: loopback fixture pages. */
   readonly allowLoopbackFixtures?: boolean;
 }
@@ -123,7 +125,7 @@ export function evaluateNavigationTarget(
   if (loopback && !options.allowLoopbackFixtures) {
     return { allowed: false, reasonCode: "private_network_blocked" };
   }
-  if (hostMatchesAllowed(hostname, options.allowedOrigins)) {
+  if (options.publicBrowsing || hostMatchesAllowed(hostname, options.allowedOrigins)) {
     return { allowed: true };
   }
   return { allowed: false, reasonCode: "cross_origin_not_allowed" };

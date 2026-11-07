@@ -125,7 +125,11 @@ vi.mock("@/service/AIChatConversationTurnCoordinator", () => ({
   },
 }));
 vi.mock("@/api/aiChatApi", () => ({
-  AiChatApi: class {},
+  AiChatApi: class {
+    listOpenAIModels(): { data: Array<{ id: string }> } {
+      return { data: [{ id: "model-a" }] };
+    }
+  },
 }));
 vi.mock("@/service/AIChatAuthExpiredHandler", () => ({
   redirectToLoginOnAuthExpired: () => undefined,
@@ -146,6 +150,7 @@ import {
   AI_CHAT_V2_PENDING_CREATE,
   AI_CHAT_V2_PENDING_STEER,
   AI_CHAT_V2_PENDING_CANCEL,
+  AI_CHAT_V2_MODELS,
 } from "@/config/channellist";
 
 function callChannel(
@@ -186,6 +191,20 @@ describe("pending-message IPC handlers", () => {
     expect(queueSpies.submit).not.toHaveBeenCalled();
   });
 
+  /** R8 P3: the model list is a metadata call, not a generation bypass —
+   * it must return the same denied envelope as the other chat handlers
+   * when AI is not enabled (PRD §14 item 1). */
+  it("gates the model list behind chat availability", async () => {
+    chatAvailable = false;
+    const result = await callChannel(AI_CHAT_V2_MODELS, undefined);
+    expect(result.status).toBe(false);
+    expect(result.msg).toContain("not available");
+
+    chatAvailable = true;
+    const allowed = await callChannel(AI_CHAT_V2_MODELS, undefined);
+    expect(allowed.status).toBe(true);
+  });
+
   it("rejects oversized messages with a stable error", async () => {
     const result = await callChannel(AI_CHAT_V2_PENDING_CREATE, {
       clientRequestId: "cr-2",
@@ -221,6 +240,53 @@ describe("pending-message IPC handlers", () => {
       clientRequestId: "cr-4",
       request: { message: "hello", conversationId: "v2-a" },
     });
+  });
+
+  /**
+   * R8 §2 E2E-followup: the legacy AiChatV2 composer's ordinary send now
+   * always carries the §13.3 stable submission identity (and opaque history
+   * selections when chips are selected) inside its ChatV2StreamRequest. The
+   * pending-create strict schema must mirror the WORKSPACE_START_RUN
+   * contract and accept them — otherwise EVERY legacy-dock send is rejected
+   * with the raw zod "Invalid input" (rollback surface unusable).
+   */
+  it("accepts the §13.3 submissionId and opaque history selection ids", async () => {
+    queueSpies.submit.mockResolvedValue({
+      conversationId: "v2-a",
+      disposition: "dispatch_scheduled",
+      pendingMessage: { pendingMessageId: "pm-2", status: "queued" },
+    });
+    const result = await callChannel(AI_CHAT_V2_PENDING_CREATE, {
+      clientRequestId: "cr-5",
+      request: {
+        message: "hello",
+        conversationId: "v2-a",
+        submissionId: "sub-1234567890",
+        historySelectionIds: ["c2VlZGVkLXJlZg004", "c2VlZGVkLXJlZg005"],
+      },
+    });
+    expect(result.status).toBe(true);
+    expect(queueSpies.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          submissionId: "sub-1234567890",
+          historySelectionIds: ["c2VlZGVkLXJlZg004", "c2VlZGVkLXJlZg005"],
+        }),
+      })
+    );
+  });
+
+  it("still rejects content-bearing history selections (opaque ids only)", async () => {
+    const result = await callChannel(AI_CHAT_V2_PENDING_CREATE, {
+      clientRequestId: "cr-6",
+      request: {
+        message: "hello",
+        conversationId: "v2-a",
+        historySelectionIds: ["raw passage text with spaces!"],
+      },
+    });
+    expect(result.status).toBe(false);
+    expect(queueSpies.submit).not.toHaveBeenCalled();
   });
 
   it("surfaces queue service error codes in the message", async () => {

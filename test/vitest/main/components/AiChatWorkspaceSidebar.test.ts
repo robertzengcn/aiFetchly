@@ -16,6 +16,14 @@ vi.mock("vue-router", () => ({
   useRoute: () => route,
 }));
 
+const bootstrapWorkspaceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/views/api/aiChatWorkspace", () => ({
+  bootstrapWorkspace: bootstrapWorkspaceMock,
+  subscribeSummaryEvents: vi.fn(() => () => undefined),
+  subscribeTitleEvents: vi.fn(() => () => undefined),
+}));
+
 const i18n = createI18n({
   legacy: false,
   locale: "en",
@@ -23,6 +31,10 @@ const i18n = createI18n({
     en: {
       workspaceChat: {
         newChat: "New chat",
+        renameDialog: {
+          renameAction: "Rename chat",
+          menuButtonLabel: "Conversation actions",
+        },
         automations: "Automations",
         insights: "Insights",
         knowledgeLibrary: "Knowledge Library",
@@ -37,6 +49,10 @@ const i18n = createI18n({
           loadError: "Failed to load workspaces",
           empty: "No conversations yet",
           unassigned: "Other chats",
+          projects: "Project",
+          refresh: "Refresh projects",
+          collapse: "Collapse projects",
+          expand: "Expand projects",
           needsAttentionCount: "{count} conversations need attention",
         },
       },
@@ -126,6 +142,7 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
       conversationId,
       workspaceKey: null,
       title: `Chat ${conversationId}`,
+      titleRevision: 0,
       preview: "Preview",
       runtimeStatus: "idle",
       attention: "none",
@@ -220,6 +237,7 @@ describe("AiChatWorkspaceSidebar current-route vs selection semantics (FR-SHELL-
       conversationId,
       workspaceKey: null,
       title: `Chat ${conversationId}`,
+      titleRevision: 0,
       preview: "Preview",
       runtimeStatus: "idle",
       attention: "none",
@@ -323,5 +341,195 @@ describe("AiChatWorkspaceSidebar current-route vs selection semantics (FR-SHELL-
         .get('[data-testid="workspace-conversation-g1"]')
         .attributes("aria-selected")
     ).toBe("true");
+  });
+});
+describe("AiChatWorkspaceSidebar row actions (chat titles)", () => {
+  function mountSidebarWithMenus() {
+    return mount(AiChatWorkspaceSidebar, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          AccountMenu: { template: '<div data-testid="account-menu-stub" />' },
+          "v-menu": {
+            template:
+              '<div class="menu-stub"><slot name="activator" :props="{ }" /><slot /></div>',
+          },
+          "v-list": {
+            template: '<div role="menu"><slot /></div>',
+          },
+          "v-list-item": {
+            template:
+              '<div role="menuitem" :data-testid="dataTestId" @click="$emit(\'click\')"><slot />{{ title }}</div>',
+            props: ["title", "prependIcon", "dataTestId"],
+            emits: ["click"],
+          },
+          "v-icon": { template: "<i />" },
+        },
+      },
+    });
+  }
+
+  function rowSummary(
+    conversationId: string,
+    workspaceKey: string | null
+  ): WorkspaceConversationSummary {
+    return {
+      conversationId,
+      workspaceKey,
+      title: `Chat ${conversationId}`,
+      titleRevision: 0,
+      preview: "Preview",
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      activeRunId: null,
+    };
+  }
+
+  it("renders a sibling actions menu button for unassigned and grouped rows", async () => {
+    const store = useChatWorkspaceStore();
+    store.unassigned = [rowSummary("u1", null)];
+    store.workspaces = [
+      {
+        workspaceKey: "ws-a",
+        displayName: "Workspace A",
+        canonicalRootPath: null,
+        approvalState: "approved",
+        conversations: [rowSummary("g1", "ws-a")],
+      },
+    ];
+    const wrapper = mountSidebarWithMenus();
+    // The unassigned folder defaults collapsed — expand it first.
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="workspace-row-menu-u1"]').exists()
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="workspace-row-menu-g1"]').exists()
+    ).toBe(true);
+    // The actions button must NOT join the data-nav-row roving-focus chain.
+    const menuButton = wrapper.find(
+      '[data-testid="workspace-row-menu-u1"]'
+    );
+    expect(menuButton.attributes("data-nav-row")).toBeUndefined();
+  });
+
+  it("rename menu action emits the row's conversation id, not the selected one", async () => {
+    const store = useChatWorkspaceStore();
+    store.unassigned = [rowSummary("u1", null), rowSummary("u2", null)];
+    const wrapper = mountSidebarWithMenus();
+    // Select u1 (via store selection), then expand and use u2's menu.
+    store.setSelected("u1");
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="workspace-row-rename-u2"]')
+      .trigger("click");
+    const renameEvents = wrapper.emitted("rename");
+    expect(renameEvents).toEqual([["u2"]]);
+    // Navigation was not triggered by the actions menu.
+    expect(wrapper.emitted("select")).toBeUndefined();
+    expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("AiChatWorkspaceSidebar Project header (manual refresh + collapse)", () => {
+  function conversation(conversationId: string): WorkspaceConversationSummary {
+    return {
+      conversationId,
+      workspaceKey: null,
+      title: `Chat ${conversationId}`,
+      titleRevision: 0,
+      preview: "Preview",
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      activeRunId: null,
+    };
+  }
+
+  beforeEach(() => {
+    bootstrapWorkspaceMock.mockReset();
+    bootstrapWorkspaceMock.mockResolvedValue({
+      workspaces: [],
+      unassigned: [],
+      selectedConversationId: null,
+    });
+  });
+
+  async function mountWithBootstrapData() {
+    bootstrapWorkspaceMock.mockResolvedValue({
+      workspaces: [
+        {
+          workspaceKey: "ws_a",
+          displayName: "project",
+          canonicalRootPath: "/tmp/project",
+          approvalState: "approved",
+          conversations: [conversation("g1")],
+        },
+      ],
+      unassigned: [conversation("u1"), conversation("u2")],
+      selectedConversationId: null,
+    });
+    const store = useChatWorkspaceStore();
+    await store.bootstrap();
+    const wrapper = mountSidebar();
+    // "Other chats" defaults to collapsed — expand it.
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    return { wrapper, store };
+  }
+
+  it("renders a visible Project heading with refresh and collapse controls", () => {
+    const wrapper = mountSidebar();
+    const header = wrapper.get('[data-testid="workspace-tree-header"]');
+    expect(header.text()).toContain("Project");
+    expect(wrapper.find('[data-testid="workspace-tree-refresh"]').exists()).toBe(
+      true
+    );
+    const collapse = wrapper.get('[data-testid="workspace-tree-collapse"]');
+    expect(collapse.attributes("aria-expanded")).toBe("true");
+  });
+
+  it("refresh button re-loads the sidebar projection", async () => {
+    const { wrapper, store } = await mountWithBootstrapData();
+    const callsBefore = bootstrapWorkspaceMock.mock.calls.length;
+    await wrapper
+      .get('[data-testid="workspace-tree-refresh"]')
+      .trigger("click");
+    await flushPromises();
+    expect(bootstrapWorkspaceMock.mock.calls.length).toBe(callsBefore + 1);
+    // The store re-applied the authoritative projection — content stays visible.
+    expect(store.visibleWorkspaceGroups.length).toBe(1);
+    // The refresh is not stuck in a loading state after settling.
+    expect(
+      wrapper.get('[data-testid="workspace-tree-refresh"]').attributes("data-loading")
+    ).toBeUndefined();
+  });
+
+  it("collapse folds the project tree; expand restores it", async () => {
+    const { wrapper } = await mountWithBootstrapData();
+    expect(wrapper.text()).toContain("Chat g1");
+
+    await wrapper.get('[data-testid="workspace-tree-collapse"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.get('[data-testid="workspace-tree-collapse"]').attributes("aria-expanded")
+    ).toBe("false");
+    // Folder rows and unassigned rows are hidden; the header remains.
+    expect(wrapper.find('[data-testid="workspace-conversation-g1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-nav-row="unassigned"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="workspace-tree-header"]').exists()).toBe(true);
+
+    await wrapper.get('[data-testid="workspace-tree-collapse"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.get('[data-testid="workspace-tree-collapse"]').attributes("aria-expanded")
+    ).toBe("true");
+    expect(wrapper.find('[data-testid="workspace-conversation-g1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-nav-row="unassigned"]').exists()).toBe(true);
   });
 });

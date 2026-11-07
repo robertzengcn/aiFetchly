@@ -14,6 +14,7 @@
     @update:tab="chatWorkspace.setInspectorTab"
     @update:width="chatWorkspace.setInspectorWidth"
     @compact="onCompact"
+    @open-memory="onOpenMemory"
     @close="onClose"
   />
 </template>
@@ -41,11 +42,10 @@ const conversationId = computed<string | null>(() => {
 async function onCompact(): Promise<void> {
   if (!conversationId.value) return;
   try {
-    // Repair: the legacy ai-chat-v2:compact-conversation channel has NO
-    // main-process handler (removed by the §13.1 "START-only" contract) —
-    // it rejected and the inspector Compact action silently no-oped. Route
-    // the action through the bounded incremental coordinator
-    // (compaction-start, §13.1).
+    // B05/G02 repair: the legacy ai-chat-v2:compact-conversation channel has
+    // NO main-process handler/allowlist (removed by the §13.1 "START-only"
+    // contract) — route the action through the bounded incremental
+    // coordinator (compaction-start, §13.1).
     await startCompaction(conversationId.value);
   } catch {
     // Non-fatal — the activity tab still shows run progress.
@@ -55,5 +55,11 @@ async function onCompact(): Promise<void> {
 function onClose(): void {
   chatWorkspace.setInspectorOpen(false);
   inspector.close();
+}
+
+/** R8 P2 (FR-WSP-007): the Context-inspector memory entry opens the same
+ * shared overlay the workspace badge entry opens (single store owner). */
+function onOpenMemory(): void {
+  chatWorkspace.openMemoryOverlay();
 }
 </script>

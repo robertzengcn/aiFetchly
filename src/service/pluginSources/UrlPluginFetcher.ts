@@ -9,6 +9,7 @@ import { GitPluginFetcher } from "./GitPluginFetcher";
 import { LocalZipPluginFetcher } from "./LocalZipPluginFetcher";
 import { PLUGIN_PACKAGE_LIMITS } from "@/entityTypes/pluginTypes";
 import type { PluginError } from "@/entityTypes/pluginTypes";
+import { isE2ELoopbackHttpZipUrl } from "./e2eLoopbackZipUrl";
 import {
   PLUGIN_HTTP_MAX_REDIRECTS,
   PluginHttpDownloadService,
@@ -43,27 +44,16 @@ import {
 
 export type UrlClass = "zip" | "git" | "github" | "rejected" | "unknown";
 
-/**
- * E2E-only: loopback http zip URL served by the FakePluginHub fixture.
- * Gated on BOTH AIFETCHLY_E2E=1 and the launcher-only AIFETCHLY_E2E_ROOT
- * sentinel (set exclusively by the sanitized E2E launcher and validated by
- * the E2E bootstrap) so a packaged or developer launch with a hostile
- * AIFETCHLY_E2E env var alone can never activate the exception.
- */
-function isE2ELoopbackHttpZipUrl(raw: string): boolean {
-  if (process.env.AIFETCHLY_E2E !== "1") return false;
-  if (!process.env.AIFETCHLY_E2E_ROOT) return false;
-  if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(raw)) return false;
-  return /\.zip(\?.*)?$/i.test(raw);
-}
-
 export function classifyUrlKind(raw: string): UrlClass {
   if (!raw) return "unknown";
-  if (raw.startsWith("http://")) return "rejected";
   // GitHub FIRST (git-free GitHub plugin installation design §6.3): an
   // eligible github.com URL — including a trailing .git — must take the
   // archive path, never native Git. Non-GitHub .git stays Git.
   if (/^https:\/\/github\.com\//i.test(raw)) return "github";
+  // Insecure http is rejected EXCEPT the E2E-only loopback .zip gate below
+  // (both AIFETCHLY_E2E variables set). The unconditional early reject that
+  // used to sit above the GitHub check made this branch unreachable and
+  // broke the gate — non-loopback http still lands on "rejected" here.
   if (raw.startsWith("http://")) {
     return isE2ELoopbackHttpZipUrl(raw) ? "zip" : "rejected";
   }

@@ -249,28 +249,6 @@ export const PLATFORM_VALIDATE = "platform:validate";
 export const PLATFORM_STATISTICS = "platform:statistics";
 export const PLATFORM_TOGGLE = "platform:toggle";
 
-// Yellow Pages Management Channels
-export const YELLOW_PAGES_CREATE = "yellow_pages:create";
-export const YELLOW_PAGES_UPDATE = "yellow_pages:update";
-export const YELLOW_PAGES_DELETE = "yellow_pages:delete";
-export const YELLOW_PAGES_START = "yellow_pages:start";
-export const YELLOW_PAGES_STOP = "yellow_pages:stop";
-export const YELLOW_PAGES_PAUSE = "yellow_pages:pause";
-export const YELLOW_PAGES_RESUME = "yellow_pages:resume";
-export const YELLOW_PAGES_LIST = "yellow_pages:list";
-export const YELLOW_PAGES_DETAIL = "yellow_pages:detail";
-export const YELLOW_PAGES_PROGRESS = "yellow_pages:progress";
-export const YELLOW_PAGES_RESULTS = "yellow_pages:results";
-export const YELLOW_PAGES_EXPORT = "yellow_pages:export";
-export const YELLOW_PAGES_BULK = "yellow_pages:bulk";
-export const YELLOW_PAGES_HEALTH = "yellow_pages:health";
-export const YELLOW_PAGES_PLATFORMS = "yellow_pages:platforms";
-export const YELLOW_PAGES_STATISTICS = "yellow_pages:statistics";
-export const YELLOW_PAGES_KILL_PROCESS = "yellow_pages:kill_process";
-export const YELLOW_PAGES_CHECK_ORPHANED_PROCESSES =
-  "yellow_pages:check_orphaned_processes";
-export const YELLOW_PAGES_HANDLE_PREVIOUS_SESSION =
-  "yellow_pages:handle_previous_session";
 
 // Language Preference Channels
 export const LANGUAGE_PREFERENCE_GET = "language:preference:get";
@@ -357,6 +335,13 @@ export const AI_CHAT_V2_REJECT_PLAN = "ai-chat-v2:reject-plan";
 export const AI_CHAT_V2_REQUEST_PLAN_CHANGES =
   "ai-chat-v2:request-plan-changes";
 export const AI_CHAT_V2_PLAN_VERSIONS = "ai-chat-v2:plan-versions";
+/**
+ * Renderer->Main (R12): reconcile persisted plan decision transitions
+ * against deterministic pending continuation ids. Returns the one
+ * recoverable continuation intent (commit-to-response crash gap) or null.
+ */
+export const AI_CHAT_V2_PLAN_CONTINUATION_RECOVER =
+  "ai-chat-v2:plan-continuation-recover";
 export const AI_CHAT_V2_GET_TOOL_APPROVAL_MODE =
   "ai-chat-v2:get-tool-approval-mode";
 export const AI_CHAT_V2_SET_TOOL_APPROVAL_MODE =
@@ -546,11 +531,19 @@ export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
 /** Main→Renderer: redacted sidebar projection updates (no content bodies). */
 export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
   "ai-chat-workspace:summary-event";
+/** Main→Renderer: revisioned title-only updates (chat-titles design §10.2). */
+export const AI_CHAT_WORKSPACE_TITLE_UPDATED = "ai-chat-workspace:title-updated";
 /** Main→Renderer: selected-conversation detailed run events. */
 export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
 /** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
 export const AI_CHAT_WORKSPACE_GET_FLAG = "ai-chat-workspace:get-flag";
 export const AI_CHAT_WORKSPACE_SET_FLAG = "ai-chat-workspace:set-flag";
+/** Audit R2 G01: renderer→main bounded metrics push (diagnostics export). */
+export const AI_CHAT_RENDERER_METRICS_PUSH =
+  "ai-chat-renderer-metrics:push";
+/** R8 §2: renderer-originated workspace action counts (bounded labels). */
+export const AI_CHAT_WORKSPACE_ACTION_COUNT =
+  "ai-chat-v2:workspace-action-count";
 
 // AI Provider (Local/Custom) Settings Channels
 export const AI_PROVIDER_SETTINGS_GET = "ai-provider:settings:get";
@@ -714,6 +707,7 @@ export const AGENT_DEFINITION_LIST = "agent-runtime:definition-list";
 export const AGENT_TASK_DETAIL = "agent-runtime:task-detail";
 export const AGENT_TASK_TRANSCRIPT = "agent-runtime:task-transcript";
 export const AGENT_TASK_LIST = "agent-runtime:task-list";
+export const AGENT_TASK_CANCEL = "agent-runtime:task-cancel";
 export const AGENT_RESUME_TOOL_AFTER_PERMISSION =
   "agent-runtime:resume-tool-after-permission";
 
@@ -813,6 +807,14 @@ export const AI_USER_MEMORY_LIST = "ai:user-memory:list";
 // AI Artifacts (read; creation happens through the Chat V2 stream tool)
 export const AI_ARTIFACT_GET = "ai-artifact:get";
 export const AI_ARTIFACT_LIST = "ai-artifact:list";
+
+// Plugin file artifacts (host-owned store; design §13.4)
+export const PLUGIN_ARTIFACT_LIST = "plugin-artifact:list";
+export const PLUGIN_ARTIFACT_PREVIEW = "plugin-artifact:preview";
+export const PLUGIN_ARTIFACT_EXPORT = "plugin-artifact:export";
+export const PLUGIN_ARTIFACT_DELETE = "plugin-artifact:delete";
+/** G03: execution journals (interrupted/salvaged runs) for a conversation. */
+export const PLUGIN_ARTIFACT_LIST_JOURNAL = "plugin-artifact:list-journal";
 export const AI_USER_MEMORY_CREATE = "ai:user-memory:create";
 export const AI_USER_MEMORY_UPDATE = "ai:user-memory:update";
 export const AI_USER_MEMORY_ARCHIVE = "ai:user-memory:archive";

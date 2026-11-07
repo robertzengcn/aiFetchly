@@ -152,7 +152,6 @@ function checkPermission(skillName: string): PermissionCheckResult {
   // Check stored permission
   const token = new Token();
   const stored = readSearchScrapePermissionToken(token, skillName);
-
   if (stored === "granted") {
     return { allowed: true, needsPrompt: false };
   }

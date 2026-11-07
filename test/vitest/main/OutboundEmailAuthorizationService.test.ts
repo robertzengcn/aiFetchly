@@ -242,6 +242,80 @@ describe("OutboundEmailAuthorizationService.createReviewApproval", () => {
     expect(active?.tokenHash).toMatch(/^[0-9a-f]{64}$/);
     expect(active?.type).toBe("exact_draft_approval");
   });
+
+  // R9 review fix (FR-OUT-006 + FR-OUT-007/009 reopen contract): once the
+  // batch's delivery was attempted or settled — including the INCONCLUSIVE
+  // delivery_unknown — a new review approval must fail closed. Otherwise the
+  // reopened receipt dialog's fresh authorizationId mints a fresh idempotency
+  // key (H(batchId, authorizationId, batchHash)) and the claim creates a
+  // SECOND attempt: a duplicate delivery of the same batch.
+  it("fails closed for any batch whose delivery was already attempted or settled", async () => {
+    const refusedStatuses = [
+      "queued",
+      "sending",
+      "sent",
+      "partially_sent",
+      "delivery_unknown",
+      "failed",
+      "discarded",
+    ] as const;
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    for (const status of refusedStatuses) {
+      const { batchId } = await seedIntentAndBatch(
+        draftModel,
+        makeIntent({
+          mode: "review_first",
+          sourceUserMessageId: `msg-refused-${status}`,
+        }),
+        makeBatch({
+          batchHash: "d".repeat(64),
+          status,
+          sourceUserMessageId: `msg-refused-${status}`,
+        })
+      );
+
+      const result = await service.createReviewApproval({
+        batchId,
+        batchHash: "d".repeat(64),
+        sourceUserMessageId: "msg-1",
+      });
+
+      expect(result.success, `status ${status} must refuse approval`).toBe(
+        false
+      );
+      expect(result.code).toBe("batch_not_authorizable");
+      // No new active authorization: the fresh-claim-key duplicate path is dead.
+      const authModel = new OutboundEmailAuthorizationModel(tmpDir);
+      expect(await authModel.findActiveByBatch(batchId)).toBeNull();
+    }
+  });
+
+  it("still approves a pre-authorization batch (awaiting_review, preflight_failed)", async () => {
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const service = new OutboundEmailAuthorizationService(tmpDir);
+    for (const status of ["awaiting_review", "preflight_failed"] as const) {
+      const { batchId } = await seedIntentAndBatch(
+        draftModel,
+        makeIntent({
+          mode: "review_first",
+          sourceUserMessageId: `msg-ok-${status}`,
+        }),
+        makeBatch({
+          batchHash: "e".repeat(64),
+          status,
+          sourceUserMessageId: `msg-ok-${status}`,
+        })
+      );
+
+      const result = await service.createReviewApproval({
+        batchId,
+        batchHash: "e".repeat(64),
+        sourceUserMessageId: "msg-1",
+      });
+      expect(result.success, `status ${status} must still approve`).toBe(true);
+    }
+  });
 });
 
 describe("OutboundEmailAuthorizationService.invalidateOnRevisionChange", () => {

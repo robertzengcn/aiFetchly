@@ -3,13 +3,14 @@ import {
   SystemSettingGroupDisplay,
   SystemSettingDisplay,
 } from "@/entityTypes/systemsettingType";
+import type { SystemSettingGroupEntity } from "@/entity/SystemSettingGroup.entity";
 
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
 import { log } from "@/modules/Logger";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
 // import {SystemSetting,SystemSettingGroup,SystemSettingDetail} from '@/model/modelIndex';
 import { SystemSettingOptionModule } from "@/modules/SystemSettingOptionModule";
-import { language_preference } from "@/config/settinggroupInit";
+import { language_preference, settinggroupInit } from "@/config/settinggroupInit";
 export class SystemSettingController {
   private systemSettingModule: SystemSettingModule;
   private systemSettingGroupModule: SystemSettingGroupModule;
@@ -31,7 +32,9 @@ export class SystemSettingController {
     await this.systemSettingOptionModule.ensureConnection();
   }
   public async selectAllSystemSettings(): Promise<SystemSettingGroupDisplay[]> {
-    const grouplist = await this.systemSettingGroupModule.listall();
+    const grouplist = this.sortGroupsForDisplay(
+      await this.systemSettingGroupModule.listall()
+    );
     const result: SystemSettingGroupDisplay[] = [];
     if (grouplist) {
       for (const group of grouplist) {
@@ -75,6 +78,29 @@ export class SystemSettingController {
       }
     }
     return result;
+  }
+
+  /**
+   * Order groups for the settings page's left menu.
+   *
+   * Existing installs seeded group rows in the historical declaration order,
+   * so their DB ids do not match today's display order. Groups are sorted by
+   * their position in `settinggroupInit` (the canonical display order, with
+   * "User Preferences" first); groups unknown to the config keep their
+   * original relative order after the known ones.
+   */
+  private sortGroupsForDisplay(
+    groups: SystemSettingGroupEntity[]
+  ): SystemSettingGroupEntity[] {
+    const knownOrder = settinggroupInit.map((group) => group.name);
+    const orderIndex = new Map<string, number>(
+      knownOrder.map((name, index) => [name, index])
+    );
+    return [...groups].sort((a, b) => {
+      const indexA = orderIndex.get(a.name) ?? Number.MAX_SAFE_INTEGER;
+      const indexB = orderIndex.get(b.name) ?? Number.MAX_SAFE_INTEGER;
+      return indexA - indexB;
+    });
   }
 
   //update system setting

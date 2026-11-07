@@ -32,3 +32,12 @@ export const SANITIZE_HTML_SSR_NO_EXTERNAL = [
 ];
 
 export const TURNDOWN_SSR_NO_EXTERNAL = ["turndown", "@mixmark-io/domino"];
+
+// js-yaml is a runtime require of the WorkspaceConfigWatchWorker bundle
+// (PortableMemoryFileScanner parses portable-memory frontmatter). It is not in
+// forge.config.js EXTERNAL_DEPENDENCIES, so electron-forge's keep-list drops it
+// from the package and packageAfterPrune fails with "Packaged app is missing
+// runtime dependencies required by generated bundles:
+// WorkspaceConfigWatchWorker.js: js-yaml". js-yaml is pure JS, so bundle it into
+// the worker instead of relying on NODE_PATH→asar from app.asar.unpacked.
+export const JS_YAML_SSR_NO_EXTERNAL = ["js-yaml"];
