@@ -28,7 +28,7 @@ describe("AgentTaskControlService pause cap (T24/C-FR-09)", () => {
 
 describe("AgentTaskControlService", () => {
   it("runs the control gate: closed while paused, reopened only on resume", async () => {
-    let now = 0;
+    const now = 0;
     const service = new AgentTaskControlService(() => now);
     service.register("task-1", "conv-1");
     const gate = service.getGate("task-1");

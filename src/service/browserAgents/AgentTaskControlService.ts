@@ -215,13 +215,16 @@ export class AgentTaskControlService {
    * each tool call, between actions of a running program).
    */
   public getGate(taskId: string): AgentTaskControlGate {
-    const service = this;
+    // P0-fix (lint): no-this-alias — arrow closures capture the class
+    // instance lexically instead of aliasing `this`.
+    const readRecord = (): TaskControlRecord | undefined =>
+      this.tasks.get(taskId);
     return {
       get state(): AgentTaskControlState {
-        return service.tasks.get(taskId)?.state ?? "cancelled";
+        return readRecord()?.state ?? "cancelled";
       },
-      async waitUntilOpen(signal: AbortSignal): Promise<void> {
-        const record = service.tasks.get(taskId);
+      waitUntilOpen: async (signal: AbortSignal): Promise<void> => {
+        const record = this.tasks.get(taskId);
         if (!record) {
           throw new Error("task_not_found");
         }
@@ -236,10 +239,10 @@ export class AgentTaskControlService {
             reject(new Error("task_cancelled"));
           };
           signal.addEventListener("abort", onAbort, { once: true });
-          let set = service.waiters.get(taskId);
+          let set = this.waiters.get(taskId);
           if (!set) {
             set = new Set();
-            service.waiters.set(taskId, set);
+            this.waiters.set(taskId, set);
           }
           set.add({
             resolve: () => {

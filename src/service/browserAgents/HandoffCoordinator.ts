@@ -85,7 +85,7 @@ export async function awaitUserResolution(
   input.signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    while (true) {
+    for (;;) {
       if (input.signal?.aborted) {
         return "cancelled";
       }

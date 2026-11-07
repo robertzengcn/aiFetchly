@@ -611,7 +611,6 @@ describe("F05 lifecycle checks at every await boundary", () => {
   });
 
   it("an action held across a pause+resume during persistActionIntent is discarded, never dispatched", async () => {
-    let runner: BrowserTaskRunner;
     const deps = makeRunnerDeps([
       {
         status: "decided",
@@ -630,11 +629,15 @@ describe("F05 lifecycle checks at every await boundary", () => {
     };
     // A user pause+resume (takeover round-trip) lands while the journal
     // write is in flight — generation bumps and the held action is stale.
+    let runnerRef: BrowserTaskRunner | null = null;
     const persistActionIntent = async (): Promise<void> => {
-      deps.control.setState(runner.taskId, "paused");
-      deps.control.resume(runner.taskId);
+      if (runnerRef === null) {
+        return;
+      }
+      deps.control.setState(runnerRef.taskId, "paused");
+      deps.control.resume(runnerRef.taskId);
     };
-    runner = new BrowserTaskRunner(
+    const runner: BrowserTaskRunner = new BrowserTaskRunner(
       {
         sessionId: "mb_f05b",
         conversationId: "conv-1",
@@ -643,6 +646,7 @@ describe("F05 lifecycle checks at every await boundary", () => {
       },
       { ...deps, persistActionIntent }
     );
+    runnerRef = runner;
     const result = await runner.run();
     // The held CLICK never reached the page.
     expect(dispatched).toEqual([]);
