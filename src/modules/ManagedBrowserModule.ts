@@ -1804,38 +1804,65 @@ record.currentUrl = message.observation.url || record.currentUrl;
         `[ManagedBrowserModule] bind ${sessionId}: old lease ${oldKey} release -> ${released}`
       );
     }
-    (record as { leaseToken: string }).leaseToken = leaseToken;
-    (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
-    (record as { accountId: number }).accountId = accountId;
-    record.authenticated = true;
-    // F11: the account's platform definition reaches the WORKER too — a
-    // still-public worker (platformId=0) never captures refreshed
-    // cookies, so a signed_in result would lack the promised persistent
-    // account session. The record's platform metadata follows the
-    // account.
-    const account = await this.accountLookup(accountId);
-    const bindManifest =
-      getPlatformManifest(account?.platformId ?? 0) ??
-      (await this.deriveManifestFromSite(account?.platformId ?? 0));
-    if (account && bindManifest) {
-      (record as { platformId: number; platformLabel: string }).platformId =
-        account.platformId;
-      (record as { platformLabel: string }).platformLabel =
-        bindManifest.platformName;
-      (record as { accountLabel: string }).accountLabel =
-        account.accountLabel;
-      await record.client
-        .request(
+    // P1/C-FR-13: every pre-publication step (account lookup, manifest,
+    // worker acknowledgement) runs BEFORE the record mutates — a failure
+    // rolls the account lease back and throws, never leaving a partially
+    // committed bind.
+    const rollbackAccountLease = (): void => {
+      this.leaseService.release(newKey, sessionId, leaseToken);
+    };
+    let account: { platformId: number; accountLabel: string } | null = null;
+    let bindManifest: PlatformSessionDefinition | undefined;
+    try {
+      account = await this.accountLookup(accountId);
+      if (!account) {
+        throw new ManagedBrowserError("account_not_found");
+      }
+      // F11: the account's platform definition reaches the WORKER too — a
+      // still-public worker (platformId=0) never captures refreshed
+      // cookies, so a signed_in result would lack the promised persistent
+      // account session.
+      bindManifest =
+        getPlatformManifest(account.platformId) ??
+        (await this.deriveManifestFromSite(account.platformId));
+      if (!bindManifest) {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "bind_manifest_missing"
+        );
+      }
+      // P1: worker acknowledgement with ONE bounded retry — an uncertain
+      // response is retried before the bind is declared complete; a final
+      // failure throws (no false authenticated publication).
+      const requestAck = (): Promise<unknown> =>
+        record.client.request(
           {
             type: "BIND_PLATFORM",
-            platform: toWorkerPlatform(bindManifest),
+            platform: toWorkerPlatform(bindManifest!),
             captureCookies: true,
           },
           MANAGED_BROWSER_TIMEOUTS.singleActionMs,
           (m) => m.type === "SESSION_STATE_CHANGED"
-        )
-        .catch(() => undefined);
+        );
+      try {
+        await requestAck();
+      } catch {
+        await requestAck();
+      }
+    } catch (error) {
+      rollbackAccountLease();
+      throw error;
     }
+    // The worker acknowledged — NOW the record commits.
+    (record as { leaseToken: string }).leaseToken = leaseToken;
+    (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
+    (record as { accountId: number }).accountId = accountId;
+    (record as { platformId: number; platformLabel: string }).platformId =
+      account!.platformId;
+    (record as { platformLabel: string }).platformLabel =
+      bindManifest!.platformName;
+    (record as { accountLabel: string }).accountLabel = account!.accountLabel;
+    record.authenticated = true;
     this.pushStatus(record);
   }
 

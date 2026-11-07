@@ -1851,3 +1851,93 @@ describe("ManagedBrowserModule.bindAccountToSession (F03)", () => {
     expect(status?.authenticated).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P1: bind completes only after worker acknowledgement
+// ---------------------------------------------------------------------------
+
+describe("bindAccountToSession worker acknowledgement (P1/C-FR-13)", () => {
+  it("a missing account rolls the lease back and never publishes", async () => {
+    const h = makeHarness({
+      // Only the BIND target's lookup fails; start's own lookup for the
+      // public session must succeed.
+      accountLookup: async (accountId: number) =>
+        accountId === 404 ? null : { platformId: 2, accountLabel: "My Channel" },
+    });
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, 404)
+    ).rejects.toMatchObject({ code: "account_not_found" });
+    // No BIND_PLATFORM ever sent; the account lease was ROLLED BACK; the
+    // record is untouched.
+    expect(
+      h.clients[0].sent.some((m) => m.type === "BIND_PLATFORM")
+    ).toBe(false);
+    expect(h.lease.releaseCalls).toContainEqual([
+      accountLeaseKey(404),
+      started.sessionId,
+      "acct-tok",
+    ]);
+    expect(h.module.getStatus(started.sessionId)?.accountId).toBe(0);
+  });
+
+  it("a worker rejection rolls back and never marks authenticated", async () => {
+    const h = makeHarness({
+      startScript: {
+        BIND_PLATFORM: () => {
+          throw new Error("worker_request_timeout");
+        },
+      },
+    });
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID)
+    ).rejects.toBeDefined();
+    const status = h.module.getStatus(started.sessionId);
+    // No partially committed bind: still public, still unauthenticated.
+    expect(status?.accountId).toBe(0);
+    expect(status?.authenticated).not.toBe(true);
+    // The account lease was rolled back.
+    expect(h.lease.releaseCalls).toContainEqual([
+      accountLeaseKey(ACCOUNT_ID),
+      started.sessionId,
+      "acct-tok",
+    ]);
+  });
+
+  it("an uncertain first ack is retried before declaring success", async () => {
+    let bindAttempts = 0;
+    const h = makeHarness({
+      startScript: {
+        BIND_PLATFORM: () => {
+          bindAttempts++;
+          if (bindAttempts === 1) {
+            throw new Error("worker_request_timeout");
+          }
+          return stateChangedReply("mb_ack", "running", "platform_bound");
+        },
+      },
+    });
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    expect(bindAttempts).toBe(2);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+  });
+});
