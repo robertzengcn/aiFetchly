@@ -20,7 +20,10 @@ import {
 } from "@/modules/PlatformSessionManifest";
 import { AccountSessionService } from "@/modules/AccountSessionService";
 import { getDefaultBrowserAiAvailabilityService } from "@/service/browserDecision/BrowserAiAvailabilityService";
-import { parseUrlIdentity } from "@/service/browserDecision/RegistrableDomain";
+import {
+  parseUrlIdentity,
+  registrableDomainOf,
+} from "@/service/browserDecision/RegistrableDomain";
 import type { WorkerLoginRecipe } from "@/schemas/worker/managedBrowser";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
 import {
@@ -1710,17 +1713,14 @@ record.currentUrl = message.observation.url || record.currentUrl;
   }
 
   /** P1/S-FR-04: record a visited origin's registrable domain (bounded). */
-  private async recordVisitedDomain(
+  private recordVisitedDomain(
     record: ActiveSessionRecord,
     origin: string | null
-  ): Promise<void> {
+  ): void {
     if (!origin) {
       return;
     }
     try {
-      const { registrableDomainOf } = await import(
-        "@/service/browserDecision/RegistrableDomain"
-      );
       const domain = registrableDomainOf(new URL(origin).hostname);
       if (!domain) {
         return;
@@ -1749,6 +1749,27 @@ record.currentUrl = message.observation.url || record.currentUrl;
    */
   public getSessionVisitedDomains(sessionId: string): readonly string[] {
     return [...(this.sessionRedirectLedger.get(sessionId) ?? [])];
+  }
+
+  /**
+   * P1/S-FR-04: propose extra login domains from the session's
+   * AUTHORITATIVE redirect ledger — model-supplied domain lists are
+   * ignored; only domains the session actually visited are proposed for
+   * confirmation.
+   */
+  public async proposeExtraDomainsFromSession(
+    sessionId: string,
+    siteId: number
+  ): Promise<
+    import("@/modules/BrowserSiteModule").SiteUpsertConfirmation | null
+  > {
+    const { getDefaultBrowserSiteModule } = await import(
+      "@/modules/BrowserSiteModule"
+    );
+    return await getDefaultBrowserSiteModule().proposeAdditionalDomains({
+      siteId,
+      visitedDomains: this.getSessionVisitedDomains(sessionId),
+    });
   }
 
   /**

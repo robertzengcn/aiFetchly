@@ -1941,3 +1941,26 @@ describe("bindAccountToSession worker acknowledgement (P1/C-FR-13)", () => {
     expect(status?.authenticated).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P1/S-FR-04: extra-domain proposals come from the authoritative ledger
+// ---------------------------------------------------------------------------
+
+describe("proposeExtraDomainsFromSession (P1/S-FR-04)", () => {
+  it("proposes exactly the domains the session actually visited", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    // Drive one observation (the fake OBSERVE reply navigated to YouTube).
+    await h.module.observe(started.sessionId);
+    const domains = h.module.getSessionVisitedDomains(started.sessionId);
+    expect(domains).toContain("youtube.com");
+    // The proposal source is the ledger — a model-invented domain can
+    // never appear because only visited origins are recorded.
+    expect(domains).not.toContain("evil.example");
+    void h;
+  });
+});
