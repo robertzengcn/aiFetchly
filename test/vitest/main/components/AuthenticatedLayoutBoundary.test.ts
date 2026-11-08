@@ -40,7 +40,7 @@ describe("AuthenticatedLayoutBoundary shell rollback round-trip", () => {
   });
 
   it("defaults the shell flag to on for first run", async () => {
-    localStorage.clear();
+    window.localStorage?.clear();
     vi.resetModules();
     const mod = await import("@/views/composables/useInnerPageShellFlag");
     expect(mod.useInnerPageShellFlag().shellEnabled.value).toBe(true);

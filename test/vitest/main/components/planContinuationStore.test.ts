@@ -10,7 +10,7 @@ import {
 } from "@/views/utils/planContinuationStore";
 
 beforeEach(() => {
-  localStorage.clear();
+  window.localStorage?.clear();
 });
 
 /**

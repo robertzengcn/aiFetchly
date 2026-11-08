@@ -497,7 +497,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  localStorage.clear();
+  window.localStorage?.clear();
   // R12: main reconcile defaults to "nothing recoverable" — every existing
   // selection path then keeps banner-less behavior.
   recoverPlanContinuationMock.mockResolvedValue(null);

@@ -61,7 +61,7 @@ async function bootstrapWith(
 }
 
 beforeEach(() => {
-  localStorage.clear();
+  window.localStorage?.clear();
   setActivePinia(createPinia());
   bootstrapWorkspaceMock.mockReset();
   bootstrapWorkspaceMock.mockResolvedValue({
