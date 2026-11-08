@@ -19,7 +19,8 @@ import {
 import { MANAGED_BROWSER_ACTION_LIMITS } from "@/config/managedBrowser";
 
 const base = {
-  protocolVersion: 1,
+  // F01: the wire contract is protocol v2.
+  protocolVersion: 2,
   sessionId: "mb_7f2abc123def",
   requestId: "req-0001",
   sequence: 0,
@@ -115,7 +116,7 @@ describe("worker inbound schema", () => {
   it("rejects a wrong protocol version", () => {
     const result = managedBrowserInboundSchema().safeParse({
       ...validStartSession,
-      protocolVersion: 2,
+      protocolVersion: 1, // v1 is the retired contract
     });
     expect(result.success).toBe(false);
   });
@@ -193,7 +194,7 @@ describe("browser action program schema", () => {
 describe("worker outbound schema", () => {
   it("accepts WORKER_READY without a prior session sequence dependency", () => {
     const result = managedBrowserOutboundSchema().safeParse({
-      protocolVersion: 1,
+      protocolVersion: 2,
       type: "WORKER_READY",
       sessionId: "mb_7f2abc123def",
       requestId: "evt-boot",
@@ -228,7 +229,7 @@ describe("worker outbound schema", () => {
 
   it("rejects a heartbeat with an invalid lag bucket", () => {
     const result = managedBrowserOutboundSchema().safeParse({
-      protocolVersion: 1,
+      protocolVersion: 2,
       type: "WORKER_HEARTBEAT",
       sessionId: "mb_7f2abc123def",
       requestId: "evt-hb",

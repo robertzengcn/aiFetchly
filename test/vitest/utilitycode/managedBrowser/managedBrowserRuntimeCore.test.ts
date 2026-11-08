@@ -232,8 +232,12 @@ describe("NavigationPolicy", () => {
 
 describe("ManagedBrowserRuntime state guards", () => {
   it("rejects actions while the user has control (FR-HANDOFF-002)", () => {
+    // F10: login_required is a NON-user-control state — automated
+    // sign-in RUNS there, so RUN_ACTIONS must be allowed.
+    expect(assertCommandAllowed("login_required", "RUN_ACTIONS").ok).toBe(
+      true
+    );
     const userControlStates = [
-      "login_required",
       "user_login_in_progress",
       "handoff",
     ] as const;
