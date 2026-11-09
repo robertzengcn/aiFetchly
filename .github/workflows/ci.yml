@@ -323,10 +323,18 @@ jobs:
       - name: Build E2E Electron artifacts (main + preload)
         run: yarn build:e2e
 
+      - name: Install Playwright Chromium (browser-fixture specs)
+        # The _electron specs drive the project's installed Electron binary;
+        # the browserSignIn fixture spec additionally drives a plain
+        # Chromium page against the local HTTPS fixture — its browser must
+        # be present.
+        run: npx playwright install chromium
+
       - name: Run Electron E2E under xvfb
-        # Playwright drives the project's installed Electron binary (no Chromium
-        # download). The renderer is served by the Vite dev server via the
-        # playwright.config.ts webServer.
+        # Playwright drives the project's installed Electron binary for the
+        # _electron specs; the browser fixture spec uses the Chromium
+    #    installed above. The renderer is served by the Vite dev server
+        # and the login fixture by the playwright.config.ts webServers.
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn playwright test
 
