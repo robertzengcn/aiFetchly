@@ -58,7 +58,7 @@ export default defineConfig({
     {
       command:
         "node --experimental-strip-types test/e2e/fixtures/fakeLoginSiteBoot.ts",
-      url: "https://localhost:8443/__e2e__/submit-count",
+      url: "http://127.0.0.1:8444/health",
       ignoreHTTPSErrors: true,
       reuseExistingServer: !process.env.CI,
       timeout: 30_000,

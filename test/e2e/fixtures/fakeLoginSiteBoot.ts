@@ -4,9 +4,25 @@
  */
 import { startFakeLoginSite } from "./fakeLoginSite.ts";
 
+import * as http from "node:http";
+
 const port = Number(process.env.E2E_LOGIN_SITE_PORT ?? 8_443);
 
 const site = await startFakeLoginSite(port);
+
+// P1-fix (CI): Playwright's webServer readiness poll uses Node's fetch,
+// which REJECTS the self-signed HTTPS cert on some Node versions (CI
+// Node 22) even with ignoreHTTPSErrors configured. Serve a PLAIN HTTP
+// health endpoint alongside the fixture so readiness never depends on
+// TLS negotiation.
+const httpHealthPort = port + 1;
+const health = http.createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "text/plain" });
+  res.end("ok");
+});
+health.listen(httpHealthPort, "127.0.0.1");
+process.on("SIGTERM", () => health.close());
+process.on("SIGINT", () => health.close());
 // The boot wrapper cannot pick the ephemeral port — rebind expectations:
 // startFakeLoginSite binds 127.0.0.1:0, so expose the chosen port for the
 // harness log and keep the process alive for Playwright.
