@@ -2487,16 +2487,17 @@ export class AIChatQueryLoop {
     // an inline await here deadlocks fake-timer environments (the same
     // hazard the install-boundary refreshes hit); the first turn falls
     // back to the documented defaults, later turns use the cache.
-    void (async () => {
-      try {
-        this.modelContextWindowTokens =
-          await new (await import("@/service/AIChatModelCatalogService"))
-            .AIChatModelCatalogService()
-            .getContextWindow(input.request.model);
-      } catch {
-        this.modelContextWindowTokens = 0;
-      }
-    })();
+    // Skip the live fetch in Vitest unless the test injected a catalog.
+    if (this.deps.modelCatalogService || process.env.VITEST !== "true") {
+      void (async () => {
+        try {
+          this.modelContextWindowTokens =
+            await this.modelCatalogService.getContextWindow(input.request.model);
+        } catch {
+          this.modelContextWindowTokens = 0;
+        }
+      })();
+    }
     try {
       // Load provider context/output limits before the first preflight.
       // The default resolver is sync and reads the catalog cache; without
