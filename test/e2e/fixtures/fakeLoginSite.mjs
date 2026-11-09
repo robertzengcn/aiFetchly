@@ -18,28 +18,22 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import https from "node:https";
-import type { AddressInfo } from "node:net";
 
-export interface FakeLoginSite {
-  readonly port: number;
-  readonly close: () => Promise<void>;
-}
-
-interface LoginSubmit {
-  username: string;
-  password: string;
-}
-
+/** F23: handle to the running loopback fixture. */
+/**
+ * @param {number} [requestedPort]
+ * @returns {Promise<{ port: number, close: () => Promise<void> }>}
+ */
 export function startFakeLoginSite(
   /** F23: bind an explicit port (the specs hardcode 8443); 0 = ephemeral. */
   requestedPort = 0
-): Promise<FakeLoginSite> {
-  let lastSubmit: LoginSubmit | null = null;
+) {
+  let lastSubmit = null;
   let submitCount = 0;
   let rejectLogins = false;
   // F23: the seed the specs injected (account + site) — the app-hook layer
   // reads it back with GET /__e2e__/seed.
-  let lastSeed: unknown = null;
+  let lastSeed = null;
 
   // F23: a locally generated self-signed pair via openssl (present in
   // the project's Git Bash environment) — the fixture is loopback only
@@ -73,19 +67,19 @@ export function startFakeLoginSite(
     },
     (req, res) => {
       const url = new URL(req.url ?? "/", "https://localhost");
-      const sendJson = (code: number, body: unknown): void => {
+      const sendJson = (code, body) => {
         res.writeHead(code, { "content-type": "application/json" });
         res.end(JSON.stringify(body));
       };
 
       if (req.method === "POST" && url.pathname === "/__e2e__/mode") {
         let raw = "";
-        req.on("data", (chunk: Buffer) => {
+        req.on("data", (chunk) => {
           raw += String(chunk);
         });
         req.on("end", () => {
           try {
-            const parsed = JSON.parse(raw || "{}") as { reject?: boolean };
+            const parsed = JSON.parse(raw || "{}");
             rejectLogins = parsed.reject === true;
           } catch {
             /* keep previous mode */
@@ -97,13 +91,13 @@ export function startFakeLoginSite(
 
       if (req.method === "POST" && url.pathname === "/__e2e__/submit") {
         let raw = "";
-        req.on("data", (chunk: Buffer) => {
+        req.on("data", (chunk) => {
           raw += String(chunk);
         });
         req.on("end", () => {
           submitCount++;
           try {
-            const parsed = JSON.parse(raw || "{}") as LoginSubmit;
+            const parsed = JSON.parse(raw || "{}");
             lastSubmit = parsed;
           } catch {
             lastSubmit = null;
@@ -128,7 +122,7 @@ export function startFakeLoginSite(
       if (req.method === "POST" && url.pathname === "/__e2e__/seed") {
         // The harness records the seed; the app-side hook consumes it.
         let raw = "";
-        req.on("data", (chunk: Buffer) => {
+        req.on("data", (chunk) => {
           raw += String(chunk);
         });
         req.on("end", () => {
@@ -200,7 +194,7 @@ export function startFakeLoginSite(
 
   return new Promise((resolve) => {
     server.listen(requestedPort, "127.0.0.1", () => {
-      const port = (server.address() as AddressInfo).port;
+      const port = server.address().port;
       resolve({
         port,
         close: () =>

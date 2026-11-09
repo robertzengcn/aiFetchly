@@ -41,7 +41,8 @@ export default defineConfig({
   // fails loudly instead of silently double-serving.
   webServer: [
     {
-      command: `yarn dev:renderer --port ${
+      // npm (not yarn): works on hosts where the yarn shim is absent.
+      command: `npm run dev:renderer -- --port ${
         process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
       } --strictPort --host 127.0.0.1`,
       url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
@@ -57,7 +58,7 @@ export default defineConfig({
     // verification.
     {
       command:
-        "node --experimental-strip-types test/e2e/fixtures/fakeLoginSiteBoot.ts",
+        "node test/e2e/fixtures/fakeLoginSiteBoot.mjs",
       url: "http://127.0.0.1:8444/health",
       ignoreHTTPSErrors: true,
       reuseExistingServer: !process.env.CI,
