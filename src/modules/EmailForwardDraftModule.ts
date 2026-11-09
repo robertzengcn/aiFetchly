@@ -76,6 +76,20 @@ export class EmailForwardDraftModule extends BaseModule {
     }
   }
 
+  /**
+   * R5-08: durable resume anchor — newest still-open draft for a message
+   * (survives page remounts and restarts; terminal states never match).
+   */
+  async findOpenDraftForMessage(messageId: number): Promise<EmailForwardDraftEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.findOpenDraftForMessage(messageId);
+    } catch (error) {
+      log.error("Error finding open draft for message:", error);
+      throw error;
+    }
+  }
+
   async readRevision(id: number): Promise<EmailForwardRevisionEntity | null> {
     try {
       await this.ensureConnection();

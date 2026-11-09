@@ -104,6 +104,15 @@
         @restored="onRestored"
       ></EmailOrganizationOperationCard>
 
+      <!-- R5-08: durable history + Undo across navigation/restart. -->
+      <EmailOrganizationOperationHistory
+        v-if="message"
+        :message-id="message.id"
+        class="mb-4"
+        @restored="onRestored"
+        @operation-active="onHistoryOperationActive"
+      ></EmailOrganizationOperationHistory>
+
       <v-card variant="tonal" class="pa-3 mb-4">
         <div><b>{{ t("emailReceive.from") }}:</b> {{ message.fromName ? message.fromName + " <" + message.fromAddress + ">" : message.fromAddress }}</div>
         <div><b>{{ t("emailReceive.reply_to") }}:</b> {{ message.replyToAddress || "—" }}</div>
@@ -127,7 +136,7 @@
 
     <EmailForwardReviewDialog
       :message-id="forwardDialogMessageId"
-      :existing-draft-id="forwardDialogMessageId !== null ? savedDraftIds.get(forwardDialogMessageId) ?? null : null"
+      :existing-draft-id="forwardDialogMessageId !== null ? openDraftId : null"
       @closed="forwardDialogMessageId = null"
       @sent="onForwardSent"
       @draft-saved="onDraftSaved"
@@ -139,6 +148,7 @@
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import EmailForwardReviewDialog from "@/views/components/emailOrganization/EmailForwardReviewDialog.vue";
 import EmailOrganizationOperationCard from "@/views/components/emailOrganization/EmailOrganizationOperationCard.vue";
+import EmailOrganizationOperationHistory from "@/views/components/emailOrganization/EmailOrganizationOperationHistory.vue";
 import { ref, computed, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -146,11 +156,12 @@ import { getReceivedMessage } from "@/views/api/emailreceive";
 import {
   moveMessageToTrash,
   restoreFromOperation,
+  getForwardDraftForMessage,
 } from "@/views/api/emailorganization";
 import type { ReceivedMessageDetailDto } from "@/entityTypes/emailReceiveTypes";
 import type { SendForwardResultDto } from "@/views/api/emailorganization";
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
@@ -158,8 +169,11 @@ const message = ref<ReceivedMessageDetailDto | null>(null);
 const loading = ref(true);
 
 const forwardDialogMessageId = ref<number | null>(null);
-// T13: saved draft ids per message, so reopening resumes instead of recreating.
-const savedDraftIds = ref(new Map<number, number>());
+// R5-08: the saved draft is resolved DURABLY from the database (open draft
+// for this message) when the dialog opens — never from page-local state, so
+// resume survives navigation and restarts, and a sent/discarded draft
+// frees the message for a new forward automatically.
+const openDraftId = ref<number | null>(null);
 const trashing = ref(false);
 const restoring = ref(false);
 const actionMessage = ref<string | null>(null);
@@ -241,8 +255,16 @@ function setActionMessage(text: string, type: "success" | "error" | "warning" | 
   actionMessageType.value = type;
 }
 
-function openForwardDialog(): void {
+async function openForwardDialog(): Promise<void> {
   if (message.value === null) return;
+  // R5-08: resolve the durable open draft BEFORE the dialog mounts.
+  try {
+    const open = await getForwardDraftForMessage(message.value.id);
+    openDraftId.value = open.draftId;
+  } catch (error) {
+    console.error("Failed to resolve the open forward draft:", error);
+    openDraftId.value = null;
+  }
   forwardDialogMessageId.value = message.value.id;
 }
 
@@ -268,7 +290,7 @@ async function trashMessage(): Promise<void> {
       );
     } else {
       setActionMessage(
-        `${t("emailOrganization.action_failed") || "Action failed"}: ${result.errorCode ?? result.status}`,
+        `${t("emailOrganization.action_failed") || "Action failed"}: ${orgErrorCode(result.errorCode) || result.status}`,
         "error"
       );
     }
@@ -295,7 +317,7 @@ async function restoreLastTrash(): Promise<void> {
       );
     } else {
       setActionMessage(
-        `${t("emailOrganization.action_failed") || "Action failed"}: ${result.errorCode ?? result.status}`,
+        `${t("emailOrganization.action_failed") || "Action failed"}: ${orgErrorCode(result.errorCode) || result.status}`,
         "error"
       );
     }
@@ -308,6 +330,22 @@ async function restoreLastTrash(): Promise<void> {
 
 function onForwardSent(result: SendForwardResultDto): void {
   forwardDialogMessageId.value = null;
+  // R5-08: sent (or already-submitted) drafts are terminal — the next
+  // Forward opens fresh because the durable lookup no longer returns them.
+  if (result.status === "submitted" || result.status === "already_processed") {
+    openDraftId.value = null;
+  }
+  // R5-02 (AC-22): surface the Sent-copy warning separately when present.
+  if (result.status === "submitted" && result.sentCopyStatus !== undefined) {
+    if (result.sentCopyStatus === "failed" || result.sentCopyStatus === "unknown") {
+      setActionMessage(
+        t("emailOrganization.sent_copy_warning", { status: result.sentCopyStatus }) ||
+          `The message was submitted, but the Sent copy could not be verified (${result.sentCopyStatus}).`,
+        "warning"
+      );
+      return;
+    }
+  }
   if (result.status === "submitted" && result.outcome === "partially_succeeded") {
     setActionMessage(
       `${t("emailOrganization.forward_submitted") || "Forward submitted"}: ` +
@@ -341,17 +379,16 @@ function onForwardSent(result: SendForwardResultDto): void {
     }
   } else {
     setActionMessage(
-      `${t("emailOrganization.action_failed") || "Action failed"}: ${result.code ?? result.status}`,
+      `${t("emailOrganization.action_failed") || "Action failed"}: ${orgErrorCode(result.code) || (result.code ?? result.status)}`,
       "error"
     );
   }
 }
 
 function onDraftSaved(draftId: number): void {
-  // T13: remember the saved draft so reopening resumes it.
-  if (message.value !== null) {
-    savedDraftIds.value.set(message.value.id, draftId);
-  }
+  // R5-08: keep the in-page anchor in sync; the durable lookup on the next
+  // dialog open remains the source of truth.
+  openDraftId.value = draftId;
   setActionMessage(
     t("emailOrganization.draft_saved") || "Forward draft saved. Reopen Forward to review and send it.",
     "info"
@@ -360,6 +397,19 @@ function onDraftSaved(draftId: number): void {
 
 function onRestored(): void {
   lastTrashOperationId.value = null;
+}
+
+function onHistoryOperationActive(operationId: string): void {
+  // R5-08: an action started from history surfaces through the same card.
+  activeOperationId.value = operationId;
+  operationCardVisible.value = true;
+}
+
+/** R5-08: localized reason codes; unknown codes render the raw value. */
+function orgErrorCode(code: string | null | undefined): string {
+  if (!code) return "";
+  const key = `emailOrganization.error_code.${code}`;
+  return te(key) ? t(key) : code;
 }
 </script>
 <style scoped>

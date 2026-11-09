@@ -115,6 +115,21 @@ export class EmailForwardDraftModel extends BaseDb {
     return await this.draftRepository.findOne({ where: { id } });
   }
 
+  /**
+   * R5-08: the durable resume anchor — the newest still-open draft for a
+   * message (draft/ready/failed). Submitted/discarded/expired-terminal
+   * drafts do not match, so a finished forward frees the message for a new
+   * draft and a saved draft survives page remounts and app restarts.
+   */
+  async findOpenDraftForMessage(messageId: number): Promise<EmailForwardDraftEntity | null> {
+    return await this.draftRepository
+      .createQueryBuilder("draft")
+      .where("draft.messageId = :messageId", { messageId })
+      .andWhere("draft.status IN (:...open)", { open: ["draft", "ready", "failed"] })
+      .orderBy("draft.id", "DESC")
+      .getOne();
+  }
+
   async readRevision(id: number): Promise<EmailForwardRevisionEntity | null> {
     return await this.revisionRepository.findOne({ where: { id } });
   }

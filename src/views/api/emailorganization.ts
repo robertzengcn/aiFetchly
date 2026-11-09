@@ -5,6 +5,7 @@ import {
   EMAIL_FORWARD_DRAFT_CREATE,
   EMAIL_FORWARD_DRAFT_UPDATE,
   EMAIL_FORWARD_DRAFT_DETAIL,
+  EMAIL_FORWARD_DRAFT_FOR_MESSAGE,
   EMAIL_FORWARD_DRAFT_DISCARD,
   EMAIL_ORG_AUTHORIZE,
   EMAIL_ORG_SEND,
@@ -88,6 +89,8 @@ export interface SendForwardResultDto {
   accepted?: string[];
   rejected?: string[];
   unknown?: string[];
+  /** R5-02 (AC-22): Sent-copy result, separate from the submission. */
+  sentCopyStatus?: "not_requested" | "pending" | "saved" | "failed" | "unknown";
   code?: string;
   error?: string;
 }
@@ -139,6 +142,16 @@ export async function updateForwardDraft(input: {
 
 export async function getForwardDraftDetail(draftId: number): Promise<ForwardDraftPreviewDto> {
   return await windowInvoke(EMAIL_FORWARD_DRAFT_DETAIL, { draftId });
+}
+
+/**
+ * R5-08: the durable resume anchor — the still-open draft for a message
+ * (survives page remounts and restarts), or null when none exists.
+ */
+export async function getForwardDraftForMessage(
+  messageId: number
+): Promise<{ draftId: number | null; status: string | null }> {
+  return await windowInvoke(EMAIL_FORWARD_DRAFT_FOR_MESSAGE, { messageId });
 }
 
 export async function discardForwardDraft(draftId: number): Promise<{ discarded: boolean }> {

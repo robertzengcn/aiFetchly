@@ -118,6 +118,7 @@ export const EMAIL_FORWARD_DRAFT_CREATE = "email:forward:draft:create";
 export const EMAIL_FORWARD_DRAFT_UPDATE = "email:forward:draft:update";
 export const EMAIL_FORWARD_DRAFT_DETAIL = "email:forward:draft:detail";
 export const EMAIL_FORWARD_DRAFT_DISCARD = "email:forward:draft:discard";
+export const EMAIL_FORWARD_DRAFT_FOR_MESSAGE = "email:forward:draft:for-message";
 export const EMAIL_ORG_AUTHORIZE = "email:organization:authorize";
 export const EMAIL_ORG_SEND = "email:organization:forward:send";
 export const EMAIL_ORG_TRASH = "email:organization:trash";

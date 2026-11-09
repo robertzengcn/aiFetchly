@@ -63,6 +63,13 @@ export const emailForwardDraftDetailInputSchema = lazySchema(() =>
   })
 );
 
+/** R5-08: durable draft resume — the open draft for one message, if any. */
+export const emailForwardDraftForMessageInputSchema = lazySchema(() =>
+  z.strictObject({
+    messageId: positiveInt,
+  })
+);
+
 export const emailOrgAuthorizeInputSchema = lazySchema(() =>
   z.strictObject({
     draftId: positiveInt,

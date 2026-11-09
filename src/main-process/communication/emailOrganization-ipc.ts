@@ -10,6 +10,7 @@ import {
   EMAIL_FORWARD_DRAFT_CREATE,
   EMAIL_FORWARD_DRAFT_UPDATE,
   EMAIL_FORWARD_DRAFT_DETAIL,
+  EMAIL_FORWARD_DRAFT_FOR_MESSAGE,
   EMAIL_FORWARD_DRAFT_DISCARD,
   EMAIL_ORG_AUTHORIZE,
   EMAIL_ORG_SEND,
@@ -30,6 +31,7 @@ import {
   emailForwardDraftCreateInputSchema,
   emailForwardDraftUpdateInputSchema,
   emailForwardDraftDetailInputSchema,
+  emailForwardDraftForMessageInputSchema,
   emailOrgAuthorizeInputSchema,
   emailOrgSendInputSchema,
   emailOrgTrashInputSchema,
@@ -47,6 +49,7 @@ import { EmailForwardDraftService } from "@/service/emailOrganization/EmailForwa
 import { EmailForwardDeliveryService } from "@/service/emailOrganization/EmailForwardDeliveryService";
 import { EmailMailboxActionService } from "@/service/emailOrganization/EmailMailboxActionService";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
 import {
   isLocationBackfillReady,
   ORGANIZATION_BACKFILL_PENDING_CODE,
@@ -203,6 +206,23 @@ export function registerEmailOrganizationIpcHandlers(): void {
         return await service.readDraftDetail(input.draftId);
       } catch (error) {
         log.error("EMAIL_FORWARD_DRAFT_DETAIL failed:", error);
+        throw toStructuredError(error);
+      }
+    }
+  );
+
+  // R5-08: the durable resume anchor — reopen Forward resumes the saved
+  // draft for this message (or null once it reached a terminal state).
+  registerValidatedHandler(
+    EMAIL_FORWARD_DRAFT_FOR_MESSAGE,
+    emailForwardDraftForMessageInputSchema,
+    async (input) => {
+      try {
+        const module = new EmailForwardDraftModule();
+        const draft = await module.findOpenDraftForMessage(input.messageId);
+        return { draftId: draft?.id ?? null, status: draft?.status ?? null };
+      } catch (error) {
+        log.error("EMAIL_FORWARD_DRAFT_FOR_MESSAGE failed:", error);
         throw toStructuredError(error);
       }
     }

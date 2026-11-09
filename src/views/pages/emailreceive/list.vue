@@ -47,7 +47,23 @@
         @keyup.enter="reload"
       ></v-text-field>
       <v-btn color="primary" @click="reload">{{ t("common.search") }}</v-btn>
+      <!-- R5-08 (FR-18/FR-19): search → frozen preview → execute/cancel bulk. -->
+      <v-spacer></v-spacer>
+      <v-btn
+        color="error"
+        variant="tonal"
+        data-testid="org-bulk-open"
+        :disabled="!emailServiceId"
+        @click="bulkDialogOpen = true"
+      >
+        <v-icon start>mdi-delete-sweep</v-icon>{{ t("emailOrganization.bulk_open") || "Bulk trash" }}
+      </v-btn>
     </div>
+
+    <EmailOrganizationBulkDialog
+      v-model="bulkDialogOpen"
+      :email-service-id="emailServiceId"
+    ></EmailOrganizationBulkDialog>
 
     <v-alert
       v-if="!emailServiceId"
@@ -129,6 +145,7 @@
 
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
+import EmailOrganizationBulkDialog from "@/views/components/emailOrganization/EmailOrganizationBulkDialog.vue";
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -145,6 +162,7 @@ const router = useRouter();
 const route = useRoute();
 
 const emailServiceId = ref<number | null>(null);
+const bulkDialogOpen = ref(false);
 const emailServices = ref<EmailServiceListdata[]>([]);
 const serverItems = ref<ReceivedMessageListDto[]>([]);
 const totalItems = ref(0);
