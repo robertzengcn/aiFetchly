@@ -261,7 +261,11 @@ describe("AIChatQueryEngine generator-mode consumption (FR-018/001, design §8)"
     // The generator is suspended at the tool_call yield with the consumer's
     // awaited save still pending: the tool must NOT have started (§8).
     expect(state.toolStarted).toBe(false);
-    expect(collector.events.some((e) => e.type === "tool_call")).toBe(true);
+    // The event lands on the sink asynchronously — poll (bounded) so CI
+    // load cannot race the delivery against this assertion.
+    await vi.waitFor(() =>
+      expect(collector.events.some((e) => e.type === "tool_call")).toBe(true)
+    );
 
     resolveSave({});
     const outcome = await outcomePromise;
