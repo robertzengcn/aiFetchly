@@ -40,6 +40,27 @@ Validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgent
 | --- | --- | --- |
 | Site registry (S-FR-04, completion evidence row) | **End-to-end ledger wiring**: `proposeExtraDomainsFromSession(sessionId, siteId)` proposes extra login domains exclusively from the session's authoritative redirect ledger (`getSessionVisitedDomains`), and the recorder is synchronous (static import) so the ledger is committed the moment an observation lands. Test: a driven observation lands `youtube.com` in the ledger and a model-invented domain can never appear. | `1a8937368` |
 
+## CI stabilization round (2026-11-10, implementation HEAD: `2cc9e4c4b` — CI fully green)
+
+The branch was pushed and CI (`.github/workflows/ci.yml`: lint → unit → components → main → utility → packaged-renderer guards → **Package smoke test** → **Electron E2E**) was driven to fully green over ten fix rounds. Every round's defect, fix and evidence:
+
+| Round | CI defect found | Fix | Commit |
+| --- | --- | --- | --- |
+| 1 | `yarn lint`: no-this-alias (getGate), constant-condition loop, prefer-const ×2 | `getGate` refactored to arrow closures over lexical `this`; `while(true)` → `for(;;)`; const fixes | `572f3d84d` |
+| 2 | **preload invoke allowlist guard**: the four task-control channels used by `views/api` were missing from preload | `BROWSER_TASK_PAUSE/TAKE_CONTROL/RESUME/STOP`, `BROWSER_BATCH_RETURN_NOW` added to the preload allowlist (+ import) | in hardening commit |
+| 3 | Load-sensitive test flakes (credential-card race, coordinator wait) | fixed sleeps → bounded polling | `980847006` |
+| 4 | **utility settings-keys gate**: the 14 browser setting-group keys had no translations | all 14 keys × 6 languages added (en/zh/es/fr/de/ja) | `a5b8fdfd5` |
+| 5 | **utility schema drift**: protocol-v1 fixtures rejected after the F01 v2 contract; `login_required` wrongly listed as user-control (F10) | fixtures updated to v2 + wrong-version now rejects v1; login_required asserted ALLOWED for RUN_ACTIONS | `f9d53a915` |
+| 6 | **component suite (196 failures, CI-flaky)**: Node 26 + happy-dom leaves `window.localStorage` undefined on some workers | functional in-memory storage shim installed by the shared component setup when the DOM storage is missing — **181 files / 1589 tests now pass everywhere** | `2af9c05cc` |
+| 7 | testmain load race: the `tool_call` sink event raced its assertion on a cold module graph | bounded `vi.waitFor` poll (the file's own established pattern) | `791b8efff` |
+| 8 | **E2E aborted with NO artifacts**: Playwright Chromium never installed in the E2E job (the browserSignIn fixture spec needs a plain Chromium page) | `npx playwright install chromium` step added | `0b6a7b802` |
+| 9 | E2E crash isolation: a webServer failure aborted the whole run without artifacts | fixture webServer moved OUT of playwright config into the job step (a fixture crash now surfaces as test failures WITH artifacts); vite webServer runs via `npx` (no yarn shim dependency) | `703db2b71` |
+| 10 | **ROOT CAUSE of rounds 8–9's no-artifact aborts**: a SyntaxError (`\"` escaped quotes) in the fixme-marked browser specs aborted EVERY e2e run at collection — before any report or result existed | escaped quotes removed; `playwright test --list` collection now clean (204 tests in 49 files) | `2cc9e4c4b` |
+
+Also during this round: the login fixture was converted to plain `.mjs` (no Node type-stripping dependency) with a plain-HTTP health endpoint for webServer readiness; the vite webServer uses `npx` directly; **one operational incident was caused and corrected** — a stale-port check mis-identified Docker Desktop's backend (`com.docker.backend.exe`) and `wslrelay.exe` as the fixture's leftover listener on 8443 and force-killed them; Docker Desktop was relaunched immediately (backend restored, verified) and WSL relay respawns on demand.
+
+Final CI state on `2cc9e4c4b`: **Lint and unit tests ✓, Package smoke test ✓ (packaged-delivery evidence GREEN on CI), Electron E2E (Playwright) ✓.**
+
 ## Remaining implementation and acceptance work
 
 | Area | Open TODO and completion evidence |
