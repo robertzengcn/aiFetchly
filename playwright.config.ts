@@ -41,8 +41,8 @@ export default defineConfig({
   // fails loudly instead of silently double-serving.
   webServer: [
     {
-      // npm (not yarn): works on hosts where the yarn shim is absent.
-      command: `npm run dev:renderer -- --port ${
+      // npx directly: no yarn/npm-shim dependency on any host.
+      command: `npx vite --config vite.render.config.mjs --port ${
         process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
       } --strictPort --host 127.0.0.1`,
       url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
@@ -52,17 +52,6 @@ export default defineConfig({
       // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
       // startup. Polling is heavier but never hits the watcher cap.
       env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
-    },
-    // F23: the deterministic login/search fixture the browser specs drive
-    // (https://localhost:8443). Self-signed; specs/consumers disable
-    // verification.
-    {
-      command:
-        "node test/e2e/fixtures/fakeLoginSiteBoot.mjs",
-      url: "http://127.0.0.1:8444/health",
-      ignoreHTTPSErrors: true,
-      reuseExistingServer: !process.env.CI,
-      timeout: 30_000,
     },
   ],
 });

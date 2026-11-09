@@ -336,7 +336,16 @@ jobs:
     #    installed above. The renderer is served by the Vite dev server
         # and the login fixture by the playwright.config.ts webServers.
         run: |
+          # P1: start the deterministic login fixture OUTSIDE playwright — a
+          # fixture crash then surfaces as failed tests (with artifacts)
+          # instead of aborting the whole run without any.
+          node test/e2e/fixtures/fakeLoginSiteBoot.mjs &
+          FIXTURE_PID=
+          sleep 2
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn playwright test
+          EXIT=0
+          kill $FIXTURE_PID 2>/dev/null || true
+          exit $EXIT
 
       - name: Upload E2E diagnostics
         if: always()
