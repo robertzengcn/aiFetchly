@@ -45,8 +45,8 @@ interface SubmissionInfo {
   readonly rejected?: ReadonlyArray<string | { address?: string }>;
   readonly messageId?: string;
   readonly response?: string;
-  /** T16: nodemailer exposes the raw composed MIME for Sent-copy append. */
-  readonly raw?: Buffer;
+  /** T16/R5-02: the session-captured raw composed MIME (null when absent). */
+  readonly raw?: Buffer | null;
 }
 
 export interface ForwardSender {
@@ -70,6 +70,8 @@ export type SendForwardOutcome =
       readonly accepted: readonly string[];
       readonly rejected: readonly string[];
       readonly unknown: readonly string[];
+      /** R5-02 (AC-22): the Sent-copy result, separate from submission. */
+      readonly sentCopyStatus: EmailSentCopyStatus;
       readonly requestCorrelationId: string;
     }
   | {
@@ -285,6 +287,10 @@ export class EmailForwardDeliveryService extends BaseModule {
       return { status: "failed", operationId: operation.operationId, code: "LOCAL_COMMIT_PENDING", error: "Item could not be claimed.", requestCorrelationId };
     }
 
+    // R5-01: tracks whether the dispatch fence was WON — the catch block
+    // may only transition the draft when we actually hold the fence (a
+    // pre-fence throw leaves the draft in `ready`, untouched).
+    let fenceHeld = false;
     try {
       // ---- Recheck sending identity against the frozen revision ----
       const service = await this.serviceModule.getEmailService(revision.sendingAccountId);
@@ -385,8 +391,6 @@ export class EmailForwardDeliveryService extends BaseModule {
         ...(attachments.length > 0 ? { attachments } : {}),
       };
 
-      await this.operationModule.markAttemptDispatched(claim.attemptId);
-
       // R4-01: revision-bound dispatch fence — the atomic ready→dispatching
       // CAS fences edit/discard for the whole SMTP window. Losing the CAS
       // means an edit/discard won; the old content never leaves.
@@ -403,6 +407,12 @@ export class EmailForwardDeliveryService extends BaseModule {
           requestCorrelationId
         );
       }
+      fenceHeld = true;
+
+      // R5-01: the attempt is `dispatched` only after the fence wins and only
+      // immediately before the socket write — a fence loss must not leave a
+      // dispatched attempt claiming the old content was on the wire.
+      await this.operationModule.markAttemptDispatched(claim.attemptId);
 
       const info = await sender.sendMail(mailOptions);
       const { accepted, rejected, unknown } = classifyRecipients(info, envelopeRecipients);
@@ -410,20 +420,33 @@ export class EmailForwardDeliveryService extends BaseModule {
       // T16 (AC-22): attempt the Sent-copy append only after SMTP accepted
       // at least one recipient. A failed append is a SEPARATE warning — it
       // never changes submission state and never triggers a resend.
+      // R5-02: the append targets the SENDING account's mailbox (where the
+      // provider's Sent folder lives), not the source message's account.
       const sentCopyStatus: EmailSentCopyStatus = await (async () => {
         if (accepted.length === 0) return "not_requested";
-        if (info.raw === undefined || info.raw.length === 0) return "not_requested";
-        const loc = await this.locationModule.readByMessageId(draft.messageId).catch(() => null);
-        if (loc === null) return "unknown";
-        const receiveConfig = await new EmailServiceModule()
-          .getEmailServiceReceiveConfig(loc.emailServiceId)
+        if (info.raw == null || info.raw.length === 0) {
+          // R5-02: the submission was requested with a copy expectation and
+          // the bytes are missing — that is unknown, never "not_requested".
+          return "unknown";
+        }
+        if (resolveSentCopyStrategy(service.host) === "provider_managed") {
+          // Design §9.4: never append blindly — a provider that provably
+          // stores its own Sent mail is skipped by the tested catalog only.
+          return "not_requested";
+        }
+        const receiveConfig = await this.serviceModule
+          .getEmailServiceReceiveConfig(revision.sendingAccountId)
           .catch(() => null);
         if (receiveConfig === null) return "unknown";
         const appendResult = await this.adapter
           .appendSent(receiveConfig, info.raw)
           .catch(() => ({ status: "failed" as const, reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: "append threw" }));
         if (appendResult.status === "saved") return "saved";
-        if (appendResult.status === "skipped") return "not_requested";
+        if (appendResult.status === "skipped") {
+          // No discoverable Sent folder: whether the provider stored its own
+          // copy is unknowable from here — honest unknown, not a non-request.
+          return "unknown";
+        }
         log.warn(
           `[EmailForwardDeliveryService] Sent-copy append failed (${requestCorrelationId}): ${appendResult.sanitizedError}`
         );
@@ -463,8 +486,42 @@ export class EmailForwardDeliveryService extends BaseModule {
         }),
       });
 
+      // R5-01: pair every fence win with a terminal draft transition — the
+      // draft must end submitted or failed-and-released, never stranded in
+      // `dispatching`. Unknown outcomes mark submitted too: SMTP may have
+      // happened, and re-sending is barred by the operation idempotency key.
       if (outcome === "succeeded" || outcome === "partially_succeeded" || outcome === "outcome_unknown") {
-        await this.draftModule.markSubmitted(draft.id, revision.id);
+        const submitted = await this.draftModule.markSubmitted(draft.id, revision.id);
+        if (!submitted) {
+          // A durable error on an already-sent message: force the terminal
+          // state out of `dispatching` and record it for support evidence.
+          log.error(
+            `[EmailForwardDeliveryService] markSubmitted lost for draft ${draft.id} after SMTP (${outcome}); forcing submitted`,
+            requestCorrelationId
+          );
+          await this.draftModule.forceTerminalFromDispatching(draft.id, "submitted");
+          await this.operationModule.recordAudit({
+            operationId: operation.operationId,
+            itemId: claim.itemId,
+            messageId: draft.messageId,
+            emailServiceId: draft.emailServiceId,
+            action: "forward_draft_submit_state_failed",
+            status: outcome,
+            reasonCode: "LOCAL_COMMIT_PENDING",
+            detail: { requestCorrelationId },
+          }).catch(() => undefined);
+        }
+      } else if (outcome === "failed") {
+        // R5-01: all envelope recipients rejected — SMTP provably delivered
+        // nothing, so the fence releases into the editable `failed` state.
+        const released = await this.draftModule.markSendFailed(draft.id, revision.id);
+        if (!released) {
+          log.error(
+            `[EmailForwardDeliveryService] markSendFailed lost for draft ${draft.id}; forcing failed`,
+            requestCorrelationId
+          );
+          await this.draftModule.forceTerminalFromDispatching(draft.id, "failed");
+        }
       }
 
 
@@ -513,6 +570,7 @@ export class EmailForwardDeliveryService extends BaseModule {
         accepted,
         rejected,
         unknown,
+        sentCopyStatus,
         requestCorrelationId,
       };
     } catch (error) {
@@ -532,6 +590,19 @@ export class EmailForwardDeliveryService extends BaseModule {
         .catch((finalizeError: unknown) => {
           log.error("[EmailForwardDeliveryService] finalize-after-error failed:", finalizeError);
         });
+      // R5-01: the fence is still held after a throw past the dispatch point
+      // — SMTP may have happened, so the draft lands in `submitted` (never a
+      // re-sendable state) instead of being stranded in `dispatching`.
+      if (fenceHeld) {
+        const submittedAfterError = await this.draftModule
+          .markSubmitted(draft.id, revision.id)
+          .catch(() => false);
+        if (!submittedAfterError) {
+          await this.draftModule
+            .forceTerminalFromDispatching(draft.id, "submitted")
+            .catch(() => undefined);
+        }
+      }
       return { status: "outcome_unknown", operationId: operation.operationId, requestCorrelationId };
     }
   }
@@ -577,6 +648,25 @@ export class EmailForwardDeliveryService extends BaseModule {
   }
 }
 
+/**
+ * R5-02 (design §9.4): per-provider Sent-copy strategy. The default is to
+ * append the submitted bytes to the sending account's special-use Sent
+ * folder; a provider is added to PROVIDER_MANAGED_SENT_HOSTS only with
+ * operator-tested evidence that it stores its own Sent mail (an untested
+ * guess would silently lose the user's copy).
+ */
+export type SentCopyStrategy = "append" | "provider_managed";
+
+const PROVIDER_MANAGED_SENT_HOSTS: ReadonlySet<string> = new Set([]);
+
+export function resolveSentCopyStrategy(smtpHost: string | null | undefined): SentCopyStrategy {
+  const host = (smtpHost ?? "").trim().toLowerCase();
+  if (host !== "" && PROVIDER_MANAGED_SENT_HOSTS.has(host)) {
+    return "provider_managed";
+  }
+  return "append";
+}
+
 function classifyRecipients(
   info: SubmissionInfo,
   envelopeRecipients: readonly string[]
@@ -611,7 +701,9 @@ export function createOutboundSenderFactory(): ForwardSenderFactory {
           rejected: (info as { rejected?: ReadonlyArray<string | { address?: string }> }).rejected,
           messageId: (info as { messageId?: string }).messageId,
           response: (info as { response?: string }).response,
-          raw: (info as { message?: Buffer }).message,
+          // R5-02: nodemailer's SMTP result does NOT populate `info.message`;
+          // the session's stream plugin captured the exact submitted bytes.
+          raw: session.capturedRawMessage(),
         };
       },
     };

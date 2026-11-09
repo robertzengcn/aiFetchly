@@ -170,12 +170,19 @@ export class OutboundSmtpSession {
   private lastRawMessage: Buffer | null = null;
 
   constructor(private readonly param: EmailServiceEntitydata) {
-    this.transporter = createOutboundSmtpTransporter(param);
-    // R4-08: the 'stream' plugin stage runs AFTER nodemailer compiled
-    // mail.message — tee the raw bytes so the Sent-copy append sends the
-    // same bytes that were submitted (production replaces the audit's
-    // injected-buffer fixture).
-    this.transporter.use("stream", (mail: { message?: { createReadStream(): NodeJS.ReadableStream } }, callback: () => void) => {
+    this.transporter = this.createTransporter("configured");
+  }
+
+  /**
+   * R5-02: the 'stream' plugin stage runs AFTER nodemailer compiled
+   * mail.message — tee the raw bytes so the Sent-copy append sends the
+   * same bytes that were submitted. Installed on EVERY transporter the
+   * session builds (the TLS-retry transporter included), otherwise the
+   * successful retry attempt would submit bytes nobody captured.
+   */
+  private createTransporter(mode: SmtpTlsMode): Transporter {
+    const transporter = createOutboundSmtpTransporter(this.param, mode);
+    transporter.use("stream", (mail: { message?: { createReadStream(): NodeJS.ReadableStream } }, callback: () => void) => {
       const chunks: Buffer[] = [];
       const stream = mail.message?.createReadStream();
       if (stream === undefined) {
@@ -189,6 +196,7 @@ export class OutboundSmtpSession {
         callback();
       });
     });
+    return transporter;
   }
 
   /** Raw composed MIME of the last send, when the stream stage captured it. */
@@ -199,6 +207,8 @@ export class OutboundSmtpSession {
   async sendMail(
     mailOptions: SendMailOptions
   ): Promise<SentMessageInfo> {
+    // A fresh send must never observe the previous attempt's bytes.
+    this.lastRawMessage = null;
     try {
       return await this.transporter.sendMail(mailOptions);
     } catch (error: unknown) {
@@ -208,7 +218,7 @@ export class OutboundSmtpSession {
       }
       closeSmtpTransporter(this.transporter);
       this.mode = retryMode;
-      this.transporter = createOutboundSmtpTransporter(this.param, retryMode);
+      this.transporter = this.createTransporter(retryMode);
       return await this.transporter.sendMail(mailOptions);
     }
   }

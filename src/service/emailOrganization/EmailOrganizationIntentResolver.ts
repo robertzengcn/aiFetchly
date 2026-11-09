@@ -49,6 +49,51 @@ const SEND_PHRASES: PhraseSet = [
   "undo the deletion",
   "undo that",
   "undo this",
+  // R5-07: ordinary non-English send instructions (zh/es/fr/de/ja).
+  "转发给",
+  "转发这封",
+  "转发一下",
+  "现在发送",
+  "立即发送",
+  "发送它",
+  "删掉它",
+  "删除这封",
+  "删除它",
+  "移到废纸篓",
+  "移入废纸篓",
+  "撤销删除",
+  "恢复它",
+  "reenvíalo",
+  "reenvíalo ahora",
+  "reenvíalo ya",
+  "envíalo ahora",
+  "elimínalo",
+  "elimínalo ya",
+  "bórralo",
+  "muévelo a la papelera",
+  "restáuralo",
+  "deshaz la eliminación",
+  "transfère-le",
+  "transfère-le maintenant",
+  "envoie-le maintenant",
+  "supprime-le",
+  "mets-le à la corbeille",
+  "restaure-le",
+  "annule la suppression",
+  "leite es weiter",
+  "leite es jetzt weiter",
+  "schick es jetzt",
+  "sende es jetzt",
+  "lösche es",
+  "in den papierkorb verschieben",
+  "stelle es wieder her",
+  "mache das rückgängig",
+  "転送して",
+  "今すぐ転送して",
+  "今すぐ送って",
+  "削除して",
+  "ゴミ箱へ移動",
+  "元に戻して",
 ];
 
 const REVIEW_PHRASES: PhraseSet = [
@@ -62,6 +107,19 @@ const REVIEW_PHRASES: PhraseSet = [
   "prepare a review",
   "先给我看",
   "先让我",
+  "先看看",
+  "发之前给我",
+  "muéstramelo antes",
+  "déjamelo ver antes",
+  "antes de enviar",
+  "montre-le-moi avant",
+  "montre-moi avant",
+  "avant d'envoyer",
+  "zeig es mir zuerst",
+  "zeig es mir, bevor",
+  "bevor du sendest",
+  "まず見せて",
+  "送る前に見せて",
 ];
 
 const DRAFT_PHRASES: PhraseSet = [
@@ -77,6 +135,17 @@ const DRAFT_PHRASES: PhraseSet = [
   "without sending",
   "草稿",
   "不要发送",
+  "只写草稿",
+  "先别发送",
+  "borrador",
+  "solo un borrador",
+  "no lo envíes todavía",
+  "brouillon",
+  "juste un brouillon",
+  "entwurf",
+  "nur einen entwurf",
+  "下書き",
+  "まだ送らないで",
 ];
 
 const NEGATION_PHRASES: PhraseSet = [
@@ -94,11 +163,26 @@ const NEGATION_PHRASES: PhraseSet = [
   "不要转发",
   "不要删除",
   "不要移动",
+  "别转发",
+  "别删除",
+  "别移动",
   "не пересылать",
   "ne pas transférer",
   "no reenvíes",
+  "no lo reenvíes",
+  "no lo elimines",
+  "no lo muevas",
+  "ne le supprime pas",
+  "ne l'envoie pas",
+  "ne le déplace pas",
   "nicht weiterleiten",
+  "nicht löschen",
+  "nicht senden",
+  "nicht verschieben",
   "転送しないで",
+  "削除しないで",
+  "送らないで",
+  "移動しないで",
 ];
 
 /** T02: capability questions — information requests, never actions. */
@@ -113,6 +197,15 @@ const CAPABILITY_QUESTION_PHRASES: PhraseSet = [
   "can emails be forwarded",
   "怎么转发",
   "如何转发",
+  "可以转发吗",
+  "能转发吗",
+  "¿se puede reenviar",
+  "¿puedo reenviar",
+  "peut-on transférer",
+  "puis-je transférer",
+  "kann weitergeleitet werden",
+  "kann ich weiterleiten",
+  "転送できますか",
 ];
 
 const ACTION_TOPIC_MARKERS: PhraseSet = [
@@ -130,6 +223,7 @@ const ACTION_TOPIC_MARKERS: PhraseSet = [
   "恢复",
   "撤销",
   "发送",
+  "废纸篓",
   "weiterleiten",
   "löschen",
   "papierkorb",
@@ -138,6 +232,9 @@ const ACTION_TOPIC_MARKERS: PhraseSet = [
   "eliminar",
   "papelera",
   "restaurar",
+  "reenví",
+  "envíalo",
+  "transfèr",
   "転送",
   "削除",
   "ゴミ箱",
@@ -145,6 +242,28 @@ const ACTION_TOPIC_MARKERS: PhraseSet = [
 
 function normalizeText(text: string): string {
   return text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * R5-07 (AC-13 hardening): strips QUOTED/PASTED email content from the
+ * trusted current-turn text before intent matching. Reply-quote lines
+ * (`> …`) and localized forward/original separator blocks are host-owned
+ * shapes — instruction phrases inside them belong to the pasted message,
+ * never to the user's own instruction. Residual risk for unquoted pastes
+ * is bounded by the payload-unambiguity gate in the chat loop: the direct
+ * path only authorizes an exact, single-message payload with explicit
+ * recipients, executed once, audited, and (for Trash) undoable.
+ */
+export function prepareTrustedIntentText(userText: string): string {
+  const withoutQuotedLines = userText
+    .split("\n")
+    .filter((line) => !/^\s*>/.test(line))
+    .join("\n");
+  return withoutQuotedLines
+    .replace(
+      /-{3,}\s*(original message|forwarded message|original message below|mensaje original|message transféré|weitergeleitete nachricht|転送メッセージ|元のメッセージ|原始邮件|转发的邮件|转发的消息)[\s\S]*$/i,
+      "\n"
+    );
 }
 
 function matchesAny(text: string, phrases: PhraseSet): string | null {
@@ -239,4 +358,78 @@ export function resolveEmailOrganizationIntent(
 
 export function isDirectSendIntent(mode: EmailOrganizationIntentMode): boolean {
   return mode === "send_now";
+}
+
+/**
+ * R5-07: host-owned payload-unambiguity check for the direct-send path.
+ * A trusted current-turn `send_now` may skip the second permission card
+ * ONLY when the tool call resolves to ONE exact message with an explicit
+ * payload — bulk selections, missing recipients and malformed arguments
+ * all refuse (safe default stays review). The model cannot influence this
+ * verdict beyond proposing the arguments; the host parses them itself.
+ */
+export function isUnambiguousDirectSendPayload(
+  toolName: string,
+  args: unknown
+): boolean {
+  if (typeof args !== "object" || args === null) return false;
+  const record = args as Record<string, unknown>;
+  const singleMessageId = (value: unknown): boolean =>
+    typeof value === "number" && Number.isInteger(value) && value > 0;
+  const explicitAddresses = (value: unknown): boolean =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (entry) =>
+        typeof entry === "string" &&
+        /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(entry.trim())
+    );
+
+  switch (toolName) {
+    case "send_email_forward": {
+      // The send call submits ONE frozen draft revision (draft_id +
+      // revision_id); the frozen payload binding (recipients, attachments,
+      // content hash) lives in that revision and the hash-bound
+      // authorization minted inside the tool. Both ids must be exact.
+      return (
+        singleMessageId(record.draft_id) &&
+        singleMessageId(record.revision_id) &&
+        record.selection_id === undefined
+      );
+    }
+    case "create_email_forward_draft": {
+      // The direct path requires an EXPLICIT payload: exactly one source
+      // message and explicit recipient addresses (cc/bcc optional strings).
+      if (!singleMessageId(record.message_id)) return false;
+      if (!explicitAddresses(record.to)) return false;
+      if (
+        record.cc !== undefined &&
+        !(Array.isArray(record.cc) &&
+          record.cc.every((entry) => typeof entry === "string" && entry.trim() !== ""))
+      ) {
+        return false;
+      }
+      if (
+        record.bcc !== undefined &&
+        !(Array.isArray(record.bcc) &&
+          record.bcc.every((entry) => typeof entry === "string" && entry.trim() !== ""))
+      ) {
+        return false;
+      }
+      return record.selection_id === undefined;
+    }
+    case "move_email_to_trash":
+      // Single-message trash only; bulk selections need the review flow.
+      return singleMessageId(record.message_id) && record.selection_id === undefined;
+    case "restore_email":
+      // Restore binds to ONE recorded operation; a frozen selection needs
+      // its own review.
+      return (
+        typeof record.operation_id === "string" &&
+        record.operation_id.length >= 8 &&
+        record.selection_id === undefined
+      );
+    default:
+      return false;
+  }
 }

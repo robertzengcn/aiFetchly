@@ -109,6 +109,20 @@ export class EmailForwardDraftModule extends BaseModule {
     }
   }
 
+  /** R5-02: revision bound to an operation's payload hash (reconcile input). */
+  async findRevisionByPayloadHash(
+    draftId: number,
+    composedHash: string
+  ): Promise<EmailForwardRevisionEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.findRevisionByPayloadHash(draftId, composedHash);
+    } catch (error) {
+      log.error("Error finding revision by payload hash:", error);
+      throw error;
+    }
+  }
+
   /** R4-01: returns a pre-SMTP-fenced draft to ready. */
   async releaseDispatching(draftId: number, revisionId: number): Promise<boolean> {
     try {
@@ -116,6 +130,37 @@ export class EmailForwardDraftModule extends BaseModule {
       return await this.draftModel.releaseDispatching(draftId, revisionId);
     } catch (error) {
       log.error("Error releasing draft dispatching:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * R5-01: all recipients rejected — release the fence into the editable
+   * `failed` state (delivery is definitively not going to happen).
+   */
+  async markSendFailed(draftId: number, revisionId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.markSendFailed(draftId, revisionId);
+    } catch (error) {
+      log.error("Error marking forward draft send-failed:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * R5-01 last-resort fence exit when the CAS transitions above all lose on
+   * a draft we still fence; never strands the draft in `dispatching`.
+   */
+  async forceTerminalFromDispatching(
+    draftId: number,
+    terminal: "submitted" | "failed"
+  ): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.forceTerminalFromDispatching(draftId, terminal);
+    } catch (error) {
+      log.error("Error forcing draft terminal state:", error);
       throw error;
     }
   }

@@ -5,6 +5,7 @@ import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule
 import type { LegacyBackfillEntry } from "@/model/EmailMessageLocation.model";
 import type { EmailOrganizationProtocol } from "@/entityTypes/emailOrganizationTypes";
 import { parseNamespacedProviderUid } from "@/service/emailReceive/EmailReplyIdentity";
+import { setLocationBackfillReady } from "@/service/emailOrganization/emailOrganizationReadiness";
 
 const BACKFILL_BATCH_SIZE = 500;
 
@@ -42,6 +43,8 @@ export class EmailOrganizationStartupService extends BaseModule {
   /**
    * Runs the location backfill at most once per process. Safe to call
    * concurrently: the model's backfill is transactional and idempotent.
+   * R5-10: flips the process-wide readiness gate ONLY on success — remote
+   * organization actions stay disabled (fail closed) until this resolves.
    */
   async ensureLocationBackfill(): Promise<number> {
     if (this.backfillComplete) return 0;
@@ -88,6 +91,7 @@ export class EmailOrganizationStartupService extends BaseModule {
         if (batch.length < BACKFILL_BATCH_SIZE) break;
       }
       this.backfillComplete = true;
+      setLocationBackfillReady(true);
       if (totalInserted > 0) {
         log.info(
           `[EmailOrganization] location backfill complete: ${totalInserted} legacy_unverified rows inserted`
@@ -95,10 +99,11 @@ export class EmailOrganizationStartupService extends BaseModule {
       }
       return totalInserted;
     } catch (error) {
-      // Non-fatal: organization actions verify locations before use, and the
-      // backfill is retried on the next startup.
+      // R5-10: the gate stays CLOSED on failure (no organization moves on a
+      // database whose location backfill failed). A retry path may call this
+      // again in the same process.
       log.error(
-        "[EmailOrganization] location backfill failed (will retry on next startup):",
+        "[EmailOrganization] location backfill failed (organization actions stay disabled):",
         error
       );
       return totalInserted;

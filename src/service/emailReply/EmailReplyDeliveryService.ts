@@ -922,6 +922,40 @@ export class EmailReplyDeliveryService {
       requestCorrelationId,
       assistedProbe,
     } = input;
+    // 7a-anti. R5-04 (§10.4): an open reply-invalidation obligation for this
+    // message means a prior move could not invalidate pending approvals —
+    // sending now could answer from a stale approval after the move. The
+    // obligation's repair path resolves it; until then the send refuses with
+    // a safe finalize of the unsent claim (never a manufactured outcome).
+    let obligationOpen = false;
+    try {
+      obligationOpen = await this.draftModule.hasOpenInvalidationObligation(message.id);
+    } catch {
+      // hasOpenInvalidationObligation already fails closed (true), but a
+      // thrown connection error must also refuse.
+      obligationOpen = true;
+    }
+    if (obligationOpen) {
+      const code: EmailReplyPolicyCode = "reply_invalidation_pending";
+      await this.draftModule.finalizeSendOutcome({
+        attemptId,
+        draftId: draft.id,
+        approvalId: approval.id,
+        emailServiceId,
+        messageId: message.id,
+        outcome: "failed",
+        providerMessageId: null,
+        failureCode: code,
+        sanitizedError: "Unsent (SMTP never called): a pending reply invalidation obligation is open.",
+        guardId: guardRow?.id ?? null,
+        requestCorrelationId,
+      });
+      throw new SendPolicyRejection(
+        "Send rejected: the message moved and its pending approvals could not be invalidated yet; retry after the mailbox settles.",
+        code,
+        requestCorrelationId
+      );
+    }
     // 7. Mark the attempt `submitted` at the SMTP handoff boundary (P0.6) so a
     //    crash here is recoverable to delivery_unknown rather than left claimed.
     await this.attemptModule.markSubmitted(attemptId, new Date(this.nowForInvocation()));

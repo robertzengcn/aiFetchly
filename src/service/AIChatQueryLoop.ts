@@ -175,7 +175,11 @@ import {
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
-import { resolveEmailOrganizationIntent } from "@/service/emailOrganization/EmailOrganizationIntentResolver";
+import {
+  isUnambiguousDirectSendPayload,
+  prepareTrustedIntentText,
+  resolveEmailOrganizationIntent,
+} from "@/service/emailOrganization/EmailOrganizationIntentResolver";
 import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
@@ -4372,15 +4376,66 @@ export class AIChatQueryLoop {
             const lastUserMessage = [...input.messages]
               .reverse()
               .find((message) => message.role === "user");
-            const userText = extractUserMessageText(lastUserMessage);
+            // R5-07 (AC-13): quoted/pasted email content is stripped BEFORE
+            // intent matching — instruction phrases inside a paste belong to
+            // the pasted message, not to the user's own instruction.
+            const userText = prepareTrustedIntentText(
+              extractUserMessageText(lastUserMessage)
+            );
             const organizationDecision = resolveEmailOrganizationIntent(userText);
-            // R03 (review hardening): the gate's enforcement direction is
-            // BLOCKING — review/draft/negation intents refuse the mutation.
-            // send_now still shows the generic permission card: pasted email
-            // content in the same user message could otherwise self-authorize
-            // a destructive mutation via substring intent matching (AC-13).
+            // R03 (review hardening) + R5-07: review/draft/negation intents
+            // refuse the mutation. A trusted current-turn `send_now` skips
+            // the second card ONLY when the proposed payload is unambiguous
+            // (one exact message/revision/operation, explicit recipients) —
+            // the host parses the arguments itself; anything ambiguous
+            // degrades to the review path (safe default, AC-13).
+            let payloadUnambiguous = false;
             if (organizationDecision.mode === "send_now") {
-              organizationSendGateAllowed = false;
+              let parsedArgs: unknown = undefined;
+              try {
+                parsedArgs =
+                  typeof call.arguments === "string" && call.arguments !== ""
+                    ? (JSON.parse(call.arguments) as unknown)
+                    : call.arguments;
+              } catch {
+                parsedArgs = undefined;
+              }
+              payloadUnambiguous = isUnambiguousDirectSendPayload(call.name, parsedArgs);
+            }
+            if (organizationDecision.mode === "send_now" && payloadUnambiguous) {
+              // PRD §5.1/AC-01: the explicit user request IS the
+              // confirmation, bound to this turn and this frozen payload;
+              // the tool still runs entitlement, validation, durable
+              // operation and once-only authorization internally.
+              organizationSendGateAllowed = true;
+            } else if (organizationDecision.mode === "send_now") {
+              yield buildToolCallEvent(call.arguments ?? {});
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                organizationGateBlocked: true,
+                code: "review_required",
+                reason:
+                  "The request to act immediately did not resolve to one unambiguous payload. Present the draft or selection for review and wait for the user's explicit go-ahead.",
+              });
+              yield {
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  organizationGateBlocked: true,
+                  code: "review_required",
+                },
+              };
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
             } else {
               yield buildToolCallEvent(call.arguments ?? {});
               const blockedContent = serializeToolResultContent({

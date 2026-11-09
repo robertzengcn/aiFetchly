@@ -323,6 +323,10 @@ export class EmailOrganizationOperationModel extends BaseDb {
           unknownRecipientsJson: input.unknownRecipients
             ? JSON.stringify(input.unknownRecipients)
             : undefined,
+          // R5-02/R5-03: durable per-item evidence (sent-copy status, move
+          // destination mapping) lives on the item row too, so projections
+          // and restore lineage read it without joining attempts.
+          resultJson: input.resultJson ?? undefined,
           completedAt: new Date(),
         })
         .where("id = :itemId AND status IN (:...resolvable)", {
@@ -689,6 +693,9 @@ export class EmailOrganizationOperationModel extends BaseDb {
         unknownCount: display.unresolved,
         pendingCount: display.pending,
         cancelledCount: display.cancelled,
+        // R5-04: explicit heartbeat — SQLite does not honor ON UPDATE for
+        // this column, and the orphan sweeper relies on freshness.
+        updatedAt: new Date(),
         completedAt:
           nextStatus !== "running" && nextStatus !== "prepared" && nextStatus !== "awaiting_approval" && nextStatus !== "authorized"
             ? operation.completedAt ?? new Date()

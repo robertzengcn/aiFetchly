@@ -252,8 +252,10 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
         "message move"
       );
       if (!result || typeof result !== "object") {
-        // The command ran but the server answered with a failure/empty range.
-        return { status: "failed", reasonCode: "PROVIDER_REJECTED", sanitizedError: "move command did not confirm" };
+        // R5-04 (design §10.3): the command was ISSUED — lack of a parseable
+        // proof is unknown, not a definitive rejection (a retry could move
+        // the message twice). Reconciliation decides from mailbox evidence.
+        return { status: "failed", reasonCode: "OUTCOME_UNKNOWN", sanitizedError: "move command did not confirm" };
       }
       const uidMap = result.uidMap;
       const destinationUid = uidMap instanceof Map ? uidMap.get(Number(location.uid)) : undefined;
@@ -323,6 +325,10 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
       if (input.unreadOnly) query["seen"] = false;
       if (input.subject && input.subject.trim() !== "") query["subject"] = input.subject.trim();
       if (input.fromAddress && input.fromAddress.trim() !== "") query["from"] = input.fromAddress.trim();
+      // R5-02: exact Message-ID header match (forward reconcile vs Sent).
+      if (input.messageIdHeader && input.messageIdHeader.trim() !== "") {
+        query["header"] = { "message-id": input.messageIdHeader.trim() };
+      }
       const uids = await withTimeout(
         session.connection.search(query, { uid: true }),
         COMMAND_TIMEOUT_MS,

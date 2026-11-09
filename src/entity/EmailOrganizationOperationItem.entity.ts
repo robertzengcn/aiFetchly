@@ -36,6 +36,12 @@ export class EmailOrganizationOperationItemEntity extends AuditableEntity {
   @Column("text", { nullable: true }) rejectedRecipientsJson!: string | null;
   @Column("text", { nullable: true }) unknownRecipientsJson!: string | null;
 
+  /**
+   * Durable per-item result evidence (R5-02/R5-03): move destination
+   * mapping, sent-copy status, reconcile markers. Sanitized values only.
+   */
+  @Column("text", { nullable: true }) resultJson!: string | null;
+
   @Column("varchar", { length: 50, nullable: true }) errorCode!: string | null;
   /** Sanitized only: never raw SMTP/IMAP dumps, credentials or bodies. */
   @Column("text", { nullable: true }) sanitizedError!: string | null;

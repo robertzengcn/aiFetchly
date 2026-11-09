@@ -85,7 +85,13 @@ export class EmailForwardDraftModel extends BaseDb {
       if (draft.currentRevisionId !== expectedCurrentRevisionId) {
         return { ok: false } as const;
       }
-      if (draft.status !== "draft" && draft.status !== "ready") {
+      // R5-01: a failed (all-recipients-rejected) draft stays editable — the
+      // edit appends a revision and returns the draft to `ready`.
+      if (
+        draft.status !== "draft" &&
+        draft.status !== "ready" &&
+        draft.status !== "failed"
+      ) {
         return { ok: false } as const;
       }
 
@@ -111,6 +117,19 @@ export class EmailForwardDraftModel extends BaseDb {
 
   async readRevision(id: number): Promise<EmailForwardRevisionEntity | null> {
     return await this.revisionRepository.findOne({ where: { id } });
+  }
+
+  /**
+   * R5-02: resolves the exact revision an operation's payload hash binds to
+   * (forward reconciliation needs the composed Message-ID to search Sent).
+   */
+  async findRevisionByPayloadHash(
+    draftId: number,
+    composedHash: string
+  ): Promise<EmailForwardRevisionEntity | null> {
+    return await this.revisionRepository.findOne({
+      where: { draftId, composedHash },
+    });
   }
 
   /**
@@ -160,6 +179,51 @@ export class EmailForwardDraftModel extends BaseDb {
     return (result.affected ?? 0) === 1;
   }
 
+  /**
+   * R5-01: distinct failed-and-released state — every envelope recipient was
+   * rejected, so SMTP provably delivered nothing and the draft returns to an
+   * editable (not sendable) state. The user edits (new revision → ready) or
+   * discards from here.
+   */
+  async markSendFailed(draftId: number, revisionId: number): Promise<boolean> {
+    const result = await this.draftRepository
+      .createQueryBuilder()
+      .update(EmailForwardDraftEntity)
+      .set({ status: "failed" })
+      .where(
+        "id = :draftId AND currentRevisionId = :revisionId AND status = :dispatching",
+        { draftId, revisionId, dispatching: "dispatching" }
+      )
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
+  /**
+   * R5-01 last-resort fence exit: when the CAS transitions above all fail on
+   * a draft we still hold the dispatch fence for (revision row raced in a way
+   * that must not happen while fenced), force a terminal state so the draft
+   * is never stranded in `dispatching`. Only transitions out of `dispatching`.
+   */
+  async forceTerminalFromDispatching(
+    draftId: number,
+    terminal: "submitted" | "failed"
+  ): Promise<boolean> {
+    const result = await this.draftRepository
+      .createQueryBuilder()
+      .update(EmailForwardDraftEntity)
+      .set(
+        terminal === "submitted"
+          ? { status: "submitted", submittedAt: new Date() }
+          : { status: "failed" }
+      )
+      .where("id = :draftId AND status = :dispatching", {
+        draftId,
+        dispatching: "dispatching",
+      })
+      .execute();
+    return (result.affected ?? 0) === 1;
+  }
+
   /** R17: every revision of a draft, for full-retention purge on discard. */
   async listRevisionsForPurge(
     draftId: number
@@ -178,7 +242,7 @@ export class EmailForwardDraftModel extends BaseDb {
       .set({ status: "discarded" })
       .where("id = :draftId AND status IN (:...allowed)", {
         draftId,
-        allowed: ["draft", "ready"],
+        allowed: ["draft", "ready", "failed"],
       })
       .execute();
     return (result.affected ?? 0) === 1;

@@ -68,6 +68,7 @@ export const emailOrganizationOperationItemWriteSchema = lazySchema(() =>
     acceptedRecipientsJson: z.string().nullable().optional(),
     rejectedRecipientsJson: z.string().nullable().optional(),
     unknownRecipientsJson: z.string().nullable().optional(),
+    resultJson: z.string().nullable().optional(),
     errorCode: z.string().max(50).nullable().optional(),
     sanitizedError: z.string().nullable().optional(),
     claimedAt: z.coerce.date().nullable().optional(),

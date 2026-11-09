@@ -231,7 +231,9 @@ export class EmailForwardDraftService extends BaseModule {
     if (!draft) {
       throw new EmailOrganizationActionError("SOURCE_NOT_FOUND", "Draft not found.", false);
     }
-    if (draft.status !== "draft" && draft.status !== "ready") {
+    // R5-01: `failed` (all recipients rejected) stays editable — the edit
+    // appends a revision and returns the draft to `ready`.
+    if (draft.status !== "draft" && draft.status !== "ready" && draft.status !== "failed") {
       throw new EmailOrganizationActionError(
         "REVISION_CHANGED",
         "Draft is no longer editable.",

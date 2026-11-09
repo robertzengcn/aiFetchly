@@ -10,7 +10,7 @@ export const emailForwardDraftWriteSchema = lazySchema(() =>
   z.object({
     messageId: z.number().int().positive(),
     emailServiceId: z.number().int().positive(),
-    status: z.enum(["draft", "ready", "dispatching", "submitted", "discarded"]).optional(),
+    status: z.enum(["draft", "ready", "dispatching", "submitted", "discarded", "failed"]).optional(),
     currentRevisionId: z.number().int().nullable().optional(),
     conversationId: z.number().int().nullable().optional(),
     provenance: z.enum(["ai", "user"]).optional(),

@@ -145,6 +145,10 @@ export class EmailOrganizationSelectionService extends BaseModule {
     } else {
       // Restore destinations freeze at prepare time from durable trash
       // provenance (review S4): never accepted from the caller at execution.
+      // R5-03: the full after-locator (uid + UIDVALIDITY + originating
+      // operation) is required and the message must STILL sit at that
+      // recorded result NOW — a historical Trash row that is not the
+      // current occurrence is never restorable through bulk.
       const recorded = await this.operationModule.findSucceededTrashDestinations(uniqueIds);
       const missing = uniqueIds.filter((id) => recorded[id] === undefined);
       if (missing.length > 0) {
@@ -153,6 +157,32 @@ export class EmailOrganizationSelectionService extends BaseModule {
           `No successful AiFetchly Trash record for message(s) ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "…" : ""}; restore needs recorded provenance.`,
           false
         );
+      }
+      const withoutLocator = uniqueIds.filter(
+        (id) => recorded[id].destinationUid === null || recorded[id].destinationUidValidity === null
+      );
+      if (withoutLocator.length > 0) {
+        throw new EmailOrganizationActionError(
+          "LOCATION_STALE",
+          `Trash record(s) ${withoutLocator.slice(0, 5).join(", ")} lack a verified destination locator; restore fails closed.`,
+          false
+        );
+      }
+      for (const messageId of uniqueIds) {
+        const location = byMessageId.get(messageId);
+        const lineage = recorded[messageId];
+        if (
+          location === undefined ||
+          location.folderPath !== lineage.folder ||
+          location.providerUid !== lineage.destinationUid ||
+          location.uidValidity !== lineage.destinationUidValidity
+        ) {
+          throw new EmailOrganizationActionError(
+            "LOCATION_STALE",
+            `Message ${messageId} is no longer at its recorded Trash destination; restore its CURRENT operation instead.`,
+            false
+          );
+        }
       }
       destinations = Object.fromEntries(
         uniqueIds.map((id) => [id, recorded[id].folder])

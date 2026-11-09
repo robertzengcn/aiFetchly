@@ -87,7 +87,9 @@ export type EmailForwardDraftStatus =
   /** R4-01: revision-bound dispatch fence — edits/discard refuse while set. */
   | "dispatching"
   | "submitted"
-  | "discarded";
+  | "discarded"
+  /** R5-01: every recipient was rejected; the fence is released for editing. */
+  | "failed";
 
 /** Sent-copy tracking, independent from SMTP submission (design §9.4). */
 export type EmailSentCopyStatus =
@@ -215,6 +217,8 @@ export interface EmailOrganizationItemDto {
   readonly errorCode: string | null;
   readonly sanitizedError: string | null;
   readonly recipientOutcomes: readonly EmailForwardRecipientOutcome[];
+  /** R5-02: forward items project the Sent-copy status separately (AC-22). */
+  readonly sentCopyStatus?: EmailSentCopyStatus | null;
 }
 
 /** Safe operation detail for tools/UI. */
@@ -279,6 +283,12 @@ export const EMAIL_ORGANIZATION_LIMITS = {
   unapprovedArtifactTtlMs: 24 * 60 * 60 * 1000,
   /** Capability cache TTL. */
   capabilityCacheTtlMs: 5 * 60 * 1000,
+  /**
+   * R5-04: the orphan sweeper only settles operations with no progress for
+   * this long — a live executor refreshes the heartbeat on every claim/
+   * finalize, so freshly queued or running bulk work is never cancelled.
+   */
+  orphanSettleThresholdMs: 30 * 60 * 1000,
 } as const;
 
 /** Attachment part IDs are opaque, generated, and validated against this. */

@@ -47,6 +47,11 @@ import { EmailForwardDraftService } from "@/service/emailOrganization/EmailForwa
 import { EmailForwardDeliveryService } from "@/service/emailOrganization/EmailForwardDeliveryService";
 import { EmailMailboxActionService } from "@/service/emailOrganization/EmailMailboxActionService";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import {
+  isLocationBackfillReady,
+  ORGANIZATION_BACKFILL_PENDING_CODE,
+  organizationBackfillPendingMessage,
+} from "@/service/emailOrganization/emailOrganizationReadiness";
 import { EmailOrganizationAuthorizationModule } from "@/modules/EmailOrganizationAuthorizationModule";
 import { projectOperation } from "@/service/EmailOrganizationAiTools";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
@@ -82,6 +87,20 @@ function toStructuredError(error: unknown): never {
 
 function newUiActionId(): string {
   return `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * R5-10 (design §5.3): mutating channels fail closed until the startup
+ * location backfill completed in this process — no organization moves on a
+ * database whose location provenance is incomplete.
+ */
+function assertOrganizationReady(): void {
+  if (!isLocationBackfillReady()) {
+    throw new StructuredIpcError(organizationBackfillPendingMessage(), {
+      code: ORGANIZATION_BACKFILL_PENDING_CODE,
+      next_action: "retry_allowed",
+    });
+  }
 }
 
 // Module-scoped so the 5-minute capability cache actually serves its TTL
@@ -130,6 +149,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
     emailForwardDraftCreateInputSchema,
     async (input) => {
       try {
+        assertOrganizationReady();
         const service = new EmailForwardDraftService();
         return await service.createDraft({
           messageId: input.messageId,
@@ -243,6 +263,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
     emailOrgSendInputSchema,
     async (input) => {
       try {
+        assertOrganizationReady();
         const delivery = new EmailForwardDeliveryService();
         return await delivery.sendApprovedForward({
           draftId: input.draftId,
@@ -259,6 +280,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
   // ---- Mailbox mutations (manual controls; AI tool path is separate) ----
   registerValidatedHandler(EMAIL_ORG_TRASH, emailOrgTrashInputSchema, async (input) => {
     try {
+      assertOrganizationReady();
       const actionService = new EmailMailboxActionService();
       return input.selectionId !== undefined
         ? await actionService.trashSelection({
@@ -279,6 +301,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
 
   registerValidatedHandler(EMAIL_ORG_RESTORE, emailOrgRestoreInputSchema, async (input) => {
     try {
+      assertOrganizationReady();
       const actionService = new EmailMailboxActionService();
       return await actionService.restoreFromOperation({
         priorOperationId: input.operationId,
@@ -320,6 +343,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
     emailOrgSelectionPrepareInputSchema,
     async (input) => {
       try {
+        assertOrganizationReady();
         const service = new EmailOrganizationSelectionService();
         return await service.prepareSelection({
           emailServiceId: input.emailServiceId,
@@ -364,6 +388,7 @@ export function registerEmailOrganizationIpcHandlers(): void {
     emailOrgTrashSelectionStartInputSchema,
     async (input) => {
       try {
+        assertOrganizationReady();
         const actionService = new EmailMailboxActionService();
         return await actionService.startTrashSelection({
           selectionId: input.selectionId,

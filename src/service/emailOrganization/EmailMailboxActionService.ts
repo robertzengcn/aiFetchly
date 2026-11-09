@@ -6,7 +6,9 @@ import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule
 import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
-import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
+import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
+import { parseStringArrayJson } from "@/utils/jsonArray";
+import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
 import { ImapEmailMailboxAdapter as DefaultMailboxAdapter } from "@/service/emailOrganization/ImapEmailMailboxAdapter";
 import {
@@ -67,7 +69,7 @@ export class EmailMailboxActionService extends BaseModule {
   private readonly operationModule: EmailOrganizationOperationModule;
   private readonly replyDraftModule: EmailReplyDraftModule;
   private readonly adapter: EmailMailboxAdapter;
-  private readonly capabilityService: EmailOrganizationCapabilityService | null;
+  private readonly capabilityService: EmailOrganizationCapabilityService;
 
   constructor(options?: {
     adapter?: EmailMailboxAdapter;
@@ -78,13 +80,14 @@ export class EmailMailboxActionService extends BaseModule {
     this.locationModule = new EmailMessageLocationModule();
     this.operationModule = new EmailOrganizationOperationModule();
     this.replyDraftModule = new EmailReplyDraftModule();
-    this.adapter =
-      options?.adapter ?? this.createDefaultAdapter();
-    this.capabilityService = options?.capabilityService ?? null;
-  }
-
-  private createDefaultAdapter(): EmailMailboxAdapter {
-    return new DefaultMailboxAdapter();
+    this.adapter = options?.adapter ?? new DefaultMailboxAdapter();
+    // R5-05: production ALWAYS resolves Trash through the capability
+    // service's writable-and-unambiguous policy. The default shares the
+    // injected adapter so tests exercise the real wiring with a fake
+    // adapter alone (no capabilityService injection shortcut).
+    this.capabilityService =
+      options?.capabilityService ??
+      new EmailOrganizationCapabilityService({ adapter: this.adapter });
   }
 
   /** R07: per-account coordination spanning preflight→claim→I/O→persist. */
@@ -315,6 +318,10 @@ export class EmailMailboxActionService extends BaseModule {
       return await this.projectResult(operation.operationId);
     }
 
+    // R5-04: durable dispatch evidence — reconciliation may only treat
+    // "still at source" as proven non-dispatch when this marker is absent.
+    await this.operationModule.markAttemptDispatched(claim.attemptId);
+
     const move = await this.adapter.moveMessage(
       receiveConfig,
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
@@ -468,14 +475,44 @@ export class EmailMailboxActionService extends BaseModule {
     origin: TrashMessageInput["origin"],
     kind: "trash" | "restore"
   ): Promise<void> {
+    // R5-05: restore destinations are validated once per bulk run — folders
+    // that vanished or are read-only fail their items DESTINATION_INVALID.
+    const unwritable = kind === "restore"
+      ? await this.resolveUnwritableRestoreDestinations(selection.emailServiceId, Object.values(destinations))
+      : undefined;
     for (const messageId of messageIds) {
       const operation = await this.operationModule.readOperation(operationId);
       if (operation?.cancelRequestedAt !== null && operation?.cancelRequestedAt !== undefined) {
         await this.operationModule.cancelPending(operationId);
         break;
       }
-      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, selection, kind, origin);
+      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, selection, kind, origin, unwritable);
     }
+  }
+
+  /**
+   * R5-05: restore destinations must exist AND be writable at execution
+   * time. Returns the subset of destination folders that are missing or
+   * read-only (unknown listing → every destination counts as unusable).
+   */
+  private async resolveUnwritableRestoreDestinations(
+    emailServiceId: number,
+    destinationFolders: readonly string[]
+  ): Promise<Set<string>> {
+    const all = new Set(destinationFolders);
+    const receiveConfig = await this.resolveReceiveConfig(emailServiceId);
+    if (!receiveConfig) return all;
+    const listing = await this.adapter.listFolders(receiveConfig);
+    if (listing.status !== "listed") return all;
+    const byPath = new Map(listing.folders.map((folder) => [folder.path, folder]));
+    const unwritable = new Set<string>();
+    for (const folder of all) {
+      const info = byPath.get(folder);
+      if (info === undefined || !info.writable) {
+        unwritable.add(folder);
+      }
+    }
+    return unwritable;
   }
 
   async trashSelection(input: {
@@ -578,6 +615,10 @@ export class EmailMailboxActionService extends BaseModule {
       return await this.projectResult(operationResult.operation.operationId);
     }
     const operationId = operationResult.operation.operationId;
+    // R5-05: restore destination validation, shared with the detached path.
+    const unwritable = kind === "restore"
+      ? await this.resolveUnwritableRestoreDestinations(selection.emailServiceId, Object.values(destinations))
+      : undefined;
 
     for (const messageId of messageIds) {
       // FR-20: check the durable cancel flag before the NEXT claim; already
@@ -587,7 +628,7 @@ export class EmailMailboxActionService extends BaseModule {
         await this.operationModule.cancelPending(operationId);
         break;
       }
-      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, selection, kind, origin);
+      await this.bulkOne(operationId, messageId, destinations[messageId] ?? null, selection, kind, origin, unwritable);
     }
     return await this.projectResult(operationId);
   }
@@ -599,7 +640,8 @@ export class EmailMailboxActionService extends BaseModule {
     destinationFolder: string | null,
     selection: EmailOrganizationSelectionEntity,
     kind: "trash" | "restore",
-    origin: TrashMessageInput["origin"]
+    origin: TrashMessageInput["origin"],
+    unwritableDestinations?: ReadonlySet<string>
   ): Promise<void> {
     const items = await this.operationModule.listItems(operationId);
     const item = items.find((entry) => entry.messageId === messageId);
@@ -652,6 +694,42 @@ export class EmailMailboxActionService extends BaseModule {
       });
       return;
     }
+    // R5-05: a restore destination that vanished or is read-only now fails
+    // that item alone (DESTINATION_INVALID), never a silent best-effort move.
+    if (kind === "restore" && unwritableDestinations?.has(destinationFolder) === true) {
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId,
+        status: "failed",
+        errorCode: "DESTINATION_INVALID",
+        sanitizedError: `Restore destination "${destinationFolder}" is missing or read-only.`,
+      });
+      return;
+    }
+    if (kind === "restore") {
+      // R5-03: execution re-binds the CURRENT occurrence to the recorded
+      // Trash result — folder, uid AND uidValidity must all match the
+      // durable provenance right now; an archived/moved message refuses.
+      const recorded = await this.operationModule.findSucceededTrashDestinations([messageId]);
+      const lineage = recorded[messageId];
+      if (
+        lineage === undefined ||
+        lineage.destinationUid === null ||
+        lineage.destinationUidValidity === null ||
+        location.folderPath !== lineage.folder ||
+        location.providerUid !== lineage.destinationUid ||
+        location.uidValidity !== lineage.destinationUidValidity
+      ) {
+        await this.operationModule.finalizeItem({
+          itemId: item.id,
+          operationId,
+          status: "failed",
+          errorCode: "LOCATION_STALE",
+          sanitizedError: "Message is no longer the recorded result of its Trash operation; restore the current operation instead.",
+        });
+        return;
+      }
+    }
 
     const claim = await this.operationModule.claimItem({
       operationId,
@@ -693,6 +771,9 @@ export class EmailMailboxActionService extends BaseModule {
       });
       return;
     }
+    // R5-04: dispatch marker goes on immediately before the wire command.
+    await this.operationModule.markAttemptDispatched(claim.attemptId);
+
     const move = await this.adapter.moveMessage(
       receiveConfig,
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
@@ -707,16 +788,19 @@ export class EmailMailboxActionService extends BaseModule {
    * returned when the message legitimately has no frozen entry.
    */
   /**
-   * R4-02: reply invalidation for a location change. Failures are surfaced
-   * durably (audit) instead of swallowed, so an old approval cannot linger
-   * usable after a move.
+   * R4-02 + R5-04: reply invalidation for a location change. Returns TRUE
+   * only when the invalidation landed. A failure persists a durable
+   * obligation (reply admission refuses until it is resolved) and every
+   * later repair path retries it — a move is never a clean success while
+   * old approvals may still send.
    */
   private async invalidateRepliesForMove(
     messageId: number,
     destinationFolder: string,
     itemId: number,
-    operationId: string
-  ): Promise<void> {
+    operationId: string,
+    emailServiceId: number
+  ): Promise<boolean> {
     try {
       const invalidated = await this.replyDraftModule.invalidateUnsentDraftsForMessage(
         messageId,
@@ -727,11 +811,19 @@ export class EmailMailboxActionService extends BaseModule {
           `[EmailMailboxActionService] invalidated ${invalidated} pending reply draft(s) after move of message ${messageId}`
         );
       }
+      // The invalidation landed: any open obligation for this message clears.
+      await this.replyDraftModule.resolveInvalidationObligations(messageId).catch(() => undefined);
+      return true;
     } catch (error) {
       log.error(
         `[EmailMailboxActionService] reply invalidation FAILED for message ${messageId}:`,
         error instanceof Error ? error.message : String(error)
       );
+      // R5-04: the obligation survives the process — reply admission checks
+      // it before every send until a repair resolves it.
+      await this.replyDraftModule
+        .recordInvalidationObligation({ messageId, emailServiceId, destinationFolder })
+        .catch(() => undefined);
       await this.operationModule
         .recordAudit({
           operationId,
@@ -743,6 +835,7 @@ export class EmailMailboxActionService extends BaseModule {
           detail: { destinationFolder },
         })
         .catch(() => undefined);
+      return false;
     }
   }
 
@@ -818,10 +911,11 @@ export class EmailMailboxActionService extends BaseModule {
           "No restore destination folder is recorded; pick a folder."
         );
       }
-      // R06: stale-Undo binding — the message must STILL be where the prior
-      // trash operation left it (same folder + same provider uid from the
-      // recorded mapping); otherwise this old intent must not mutate the
-      // newer state.
+      // R06 + R5-03: stale-Undo binding — the message must STILL be where
+      // the prior trash operation left it. uid, UIDVALIDITY and the
+      // originating operation id are ALL required; a missing field fails
+      // closed (a historical Trash row that is not the current occurrence
+      // must never be movable by an old Undo).
       const current = await this.locationModule.readByMessageId(messageId);
       let afterUid: string | null = null;
       let afterUidValidity: string | null = null;
@@ -846,19 +940,41 @@ export class EmailMailboxActionService extends BaseModule {
           }
         }
       }
+      if (afterUid === null || afterUidValidity === null) {
+        return this.failedResult(
+          "LOCATION_STALE",
+          "The Trash record has no verified destination locator; use the message's current location to move it."
+        );
+      }
       const lineageIntact =
         current !== null &&
         current.state === "verified" &&
         current.folderPath === priorItem?.destinationFolderPath &&
-        (afterUid === null || current.providerUid === afterUid) &&
+        current.providerUid === afterUid &&
         // T05: a UIDVALIDITY reset with the same numeric UID must not pass.
-        (afterUidValidity === null || current.uidValidity === afterUidValidity);
+        current.uidValidity === afterUidValidity &&
+        // R5-03: the current row must have been AUTHORED by this exact
+        // operation — an older successful Trash row does not bind newer state.
+        current.lastOperationId === prior.operationId;
       if (!lineageIntact) {
         return this.failedResult(
           "LOCATION_STALE",
           `Message ${messageId} moved since this Trash operation; use its current operation to restore.`
         );
       }
+    }
+
+    // R5-05: the restore destination must exist and be writable NOW (a
+    // removed/renamed original folder fails closed before any move).
+    const unwritableRestoreDestinations = await this.resolveUnwritableRestoreDestinations(
+      prior.emailServiceId,
+      [...new Set([...destinations.values()].filter((folder): folder is string => folder !== null))]
+    );
+    if (unwritableRestoreDestinations.size > 0) {
+      return this.failedResult(
+        "DESTINATION_INVALID",
+        `Restore destination(s) missing or read-only: ${[...unwritableRestoreDestinations].slice(0, 3).join(", ")}.`
+      );
     }
 
     const operation = await this.operationModule.createOperation({
@@ -938,6 +1054,9 @@ export class EmailMailboxActionService extends BaseModule {
       return;
     }
 
+    // R5-04: dispatch marker goes on immediately before the wire command.
+    await this.operationModule.markAttemptDispatched(claim.attemptId);
+
     const move = await this.adapter.moveMessage(
       receiveConfig,
       { folderPath: location.folderPath, uidValidity: location.uidValidity, uid: location.providerUid },
@@ -981,6 +1100,43 @@ export class EmailMailboxActionService extends BaseModule {
           });
       }
       const destinationUid = move.destinationUid;
+      if (destinationUid === null) {
+        // R5-03: the server confirmed the move but returned no uid map —
+        // there is NO verified destination locator, so the item is unknown
+        // (never `succeeded`): the null-uid restore check must not treat
+        // this as lineage. The cached location flips to stale honestly.
+        const currentRow = await this.locationModule.readByMessageId(messageId);
+        await this.locationModule
+          .applyMove({
+            messageId,
+            expectedVersion: claimFrozenVersion ?? currentRow?.version ?? 0,
+            folderPath: destinationFolder,
+            uidValidity: move.destinationUidValidity ?? currentRow?.uidValidity ?? "",
+            providerUid: currentRow?.providerUid ?? "",
+            state: "stale",
+            lastOperationId: operationId,
+          })
+          .catch(() => undefined);
+        await this.operationModule.finalizeItem({
+          itemId,
+          operationId,
+          status: "outcome_unknown",
+          errorCode: "OUTCOME_UNKNOWN",
+          sanitizedError: "The move was issued but the server returned no destination uid map; reconcile.",
+          attemptId: attemptId ?? null,
+        });
+        await this.operationModule.recordAudit({
+          operationId,
+          itemId,
+          messageId,
+          emailServiceId,
+          action: "move_outcome_pending",
+          status: "outcome_unknown",
+          reasonCode: "OUTCOME_UNKNOWN",
+          detail: { destinationFolder },
+        });
+        return;
+      }
       // Optimistic fence against the CLAIM-FROZEN version: a fresh read
       // here would always pass and silently overwrite a concurrent move.
       const currentRow = await this.locationModule.readByMessageId(messageId);
@@ -1011,21 +1167,34 @@ export class EmailMailboxActionService extends BaseModule {
       }
       // Reply coordination (design §10.4): the location changed, so any
       // pending reply approval bound to the old location is invalid now.
-      try {
-        const invalidated = await this.replyDraftModule.invalidateUnsentDraftsForMessage(
+      // R5-04: a failed invalidation is NOT a clean success — the item stays
+      // unknown until the durable obligation lands (reconcile retries it).
+      const repliesInvalidated = await this.invalidateRepliesForMove(
+        messageId,
+        destinationFolder,
+        itemId,
+        operationId,
+        emailServiceId
+      );
+      if (!repliesInvalidated) {
+        await this.operationModule.finalizeItem({
+          itemId,
+          operationId,
+          status: "outcome_unknown",
+          errorCode: "REPLY_INVALIDATION_PENDING",
+          sanitizedError: "The move completed but pending reply approvals could not be invalidated; reconcile.",
+        });
+        await this.operationModule.recordAudit({
+          operationId,
+          itemId,
           messageId,
-          `message moved to ${destinationFolder}`
-        );
-        if (invalidated > 0) {
-          log.info(
-            `[EmailMailboxActionService] invalidated ${invalidated} pending reply draft(s) after move of message ${messageId}`
-          );
-        }
-      } catch (error) {
-        log.warn(
-          `[EmailMailboxActionService] reply invalidation failed for message ${messageId}:`,
-          error instanceof Error ? error.message : String(error)
-        );
+          emailServiceId,
+          action: "move_outcome_pending",
+          status: "outcome_unknown",
+          reasonCode: "REPLY_INVALIDATION_PENDING",
+          detail: { destinationFolder },
+        });
+        return;
       }
       await this.operationModule.finalizeItem({
         itemId,
@@ -1133,14 +1302,17 @@ export class EmailMailboxActionService extends BaseModule {
   }
 
   /**
-   * R4-11: settle ORPHANED pending work — nonterminal operations with
-   * pending items but no live executor (crash before first claim or
-   * between items). Pending items are cancelled (never silently replayed);
-   * completed outcomes stay; in-flight claimed items reconcile by lease.
+   * R4-11 + R5-04: settle ORPHANED pending work — nonterminal operations
+   * with pending items but no live executor. An operation only counts as
+   * orphaned when its heartbeat (updatedAt, refreshed on every claim/
+   * finalize/cancel) is older than the settle threshold AND it holds no
+   * claimed items — work that is merely waiting for the account lock or
+   * progressing through a bulk loop is never cancelled by the timer.
    */
   async settleOrphanedPendingOperations(): Promise<number> {
     await this.ensureConnection();
     const operations = await this.operationModule.findNonTerminalOperations();
+    const staleBefore = new Date(Date.now() - EMAIL_ORGANIZATION_LIMITS.orphanSettleThresholdMs);
     let settled = 0;
     for (const operation of operations) {
       try {
@@ -1150,8 +1322,15 @@ export class EmailMailboxActionService extends BaseModule {
           const items = await this.operationModule.listItems(operation.operationId);
           const pending = items.filter((item) => item.status === "pending");
           if (pending.length === 0) return;
-          // Operations older than the settle threshold with pending items and
-          // no live claims are orphaned — stop the unstarted work.
+          // In-flight claimed items belong to a live (or crashed) executor
+          // whose outcome reconciles by lease — never swept here.
+          const hasLiveClaim = items.some((item) => item.status === "claimed");
+          if (hasLiveClaim) return;
+          // R5-04: freshness gate — an operation touched within the settle
+          // threshold (including one created seconds ago in this process,
+          // queued behind the account lock) is NOT orphaned.
+          const lastActivity = operation.updatedAt ?? operation.requestedAt;
+          if (lastActivity.getTime() > staleBefore.getTime()) return;
           await this.operationModule.cancelPending(operation.operationId);
           settled += pending.length;
         });
@@ -1179,10 +1358,17 @@ export class EmailMailboxActionService extends BaseModule {
     // R04: kind guard — MOVE reconciliation applies only to mailbox moves.
     // Forward/SMTP uncertainty is NEVER resolved from the source mailbox
     // (source presence does not prove a submission did not happen).
+    if (operation.kind === "forward") {
+      // R5-02: forward uncertainty resolves from durable SMTP/Sent evidence
+      // only — the Sent search never resubmits and never touches source mail.
+      return await this.runSerialized(operation.emailServiceId, async () =>
+        await this.reconcileForwardOperationInternal(operation, operationId)
+      );
+    }
     if (operation.kind !== "trash" && operation.kind !== "restore") {
       return this.failedResult(
         "OUTCOME_UNKNOWN",
-        "Forward operations reconcile through SMTP/Sent evidence, not mailbox moves; status remains unknown."
+        "This operation kind has no mailbox reconciliation path; status remains unknown."
       );
     }
     // R07: reconciliation mutates the same rows as in-flight moves — it runs
@@ -1190,6 +1376,104 @@ export class EmailMailboxActionService extends BaseModule {
     return await this.runSerialized(operation.emailServiceId, async () =>
       await this.reconcileOperationInternal(operation, operationId)
     );
+  }
+
+  /**
+   * R5-02 (design §9.4/§10.3): evidence-only reconciliation for forward
+   * operations. Searches the SENDING account's Sent folder for the frozen
+   * composed Message-ID; finding it proves the server accepted the DATA
+   * (never proof per recipient). A missing copy is NOT proof of non-delivery
+   * — the outcome stays unknown. SMTP is never called again.
+   */
+  private async reconcileForwardOperationInternal(
+    operation: EmailOrganizationOperationEntity,
+    operationId: string
+  ): Promise<MailboxActionOutcome> {
+    const items = await this.operationModule.listItems(operationId);
+    const unresolved = items.filter((item) => item.status === "outcome_unknown");
+    if (unresolved.length === 0) {
+      return await this.projectResult(operationId);
+    }
+    if (operation.draftId === null) {
+      return this.failedResult("OUTCOME_UNKNOWN", "Forward operation has no draft binding; status remains unknown.");
+    }
+
+    const draft = await new EmailForwardDraftModule().readDraft(operation.draftId);
+    if (!draft) {
+      return this.failedResult("OUTCOME_UNKNOWN", "Forward draft is gone; status remains unknown.");
+    }
+    const revision = await new EmailForwardDraftModule().findRevisionByPayloadHash(
+      draft.id,
+      operation.payloadHash
+    );
+    if (!revision) {
+      return this.failedResult("OUTCOME_UNKNOWN", "The frozen forward revision is gone; status remains unknown.");
+    }
+
+    const receiveConfig = await this.resolveReceiveConfig(revision.sendingAccountId);
+    if (!receiveConfig) {
+      return this.failedResult("ACCOUNT_NOT_AVAILABLE", "Sending account receive configuration is unavailable.");
+    }
+    const listing = await this.adapter.listFolders(receiveConfig);
+    if (listing.status !== "listed") {
+      return this.failedResult("ACCOUNT_NOT_AVAILABLE", "Sent folder discovery failed; status remains unknown.");
+    }
+    const sentFolder = listing.folders.find((folder) => folder.specialUse === "\\Sent")?.path;
+    if (sentFolder === undefined) {
+      // No discoverable Sent folder: absence of a copy is not evidence of
+      // non-delivery — leave the honest unknown.
+      return await this.projectResult(operationId);
+    }
+    const search = await this.adapter.searchUids(receiveConfig, sentFolder, {
+      messageIdHeader: revision.composedMessageId,
+      cap: 5,
+    });
+    if (search.status !== "listed") {
+      return this.failedResult("ACCOUNT_NOT_AVAILABLE", "Sent search failed; status remains unknown.");
+    }
+    const sentCopyFound = search.candidates.length > 0;
+
+    for (const item of unresolved) {
+      // Accepted envelope recipients recorded at submit time (SMTP truth).
+      const accepted = parseStringArrayJson(item.acceptedRecipientsJson);
+      const rejected = parseStringArrayJson(item.rejectedRecipientsJson);
+      const unknownRecipients = parseStringArrayJson(item.unknownRecipientsJson);
+      if (!sentCopyFound || accepted.length === 0) {
+        // A missing Sent copy is never proof of non-delivery (design §10.3).
+        await this.operationModule.finalizeItem({
+          itemId: item.id,
+          operationId,
+          status: "outcome_unknown",
+          errorCode: "OUTCOME_UNKNOWN",
+          sanitizedError: "No durable SMTP/Sent evidence of delivery; manual resolution required.",
+        });
+        continue;
+      }
+      const outcome: "succeeded" | "partially_succeeded" =
+        rejected.length === 0 && unknownRecipients.length === 0
+          ? "succeeded"
+          : "partially_succeeded";
+      await this.operationModule.finalizeItem({
+        itemId: item.id,
+        operationId,
+        status: outcome,
+        resultJson: JSON.stringify({
+          reconciled: true,
+          reconciledFrom: "sent_copy_evidence",
+          sentCopyFound: true,
+        }),
+      });
+      await this.operationModule.recordAudit({
+        operationId,
+        itemId: item.id,
+        messageId: item.messageId,
+        emailServiceId: operation.emailServiceId,
+        action: "forward_reconciled_from_sent_evidence",
+        status: outcome,
+        detail: { sentFolder },
+      });
+    }
+    return await this.projectResult(operationId);
   }
 
   private async reconcileOperationInternal(
@@ -1279,8 +1563,15 @@ export class EmailMailboxActionService extends BaseModule {
             }),
           });
           // R4-02: every successful repair path invalidates pending replies —
-          // the location changed, so old approvals must not send.
-          await this.invalidateRepliesForMove(item.messageId, item.destinationFolderPath ?? "Trash", item.id, operationId);
+          // the location changed, so old approvals must not send. R5-04: the
+          // retry also resolves the durable obligation on success.
+          await this.invalidateRepliesForMove(
+            item.messageId,
+            item.destinationFolderPath ?? "Trash",
+            item.id,
+            operationId,
+            operation.emailServiceId
+          );
           await this.operationModule.recordAudit({
             operationId,
             itemId: item.id,
@@ -1318,7 +1609,13 @@ export class EmailMailboxActionService extends BaseModule {
           resultJson: JSON.stringify({ reconciled: true, destinationFolder: item.destinationFolderPath }),
         });
         // R4-02: reconcile-side reply invalidation (same as ordinary MOVE).
-        await this.invalidateRepliesForMove(item.messageId, item.destinationFolderPath, item.id, operationId);
+        await this.invalidateRepliesForMove(
+          item.messageId,
+          item.destinationFolderPath,
+          item.id,
+          operationId,
+          operation.emailServiceId
+        );
         await this.operationModule.recordAudit({
           operationId,
           itemId: item.id,
@@ -1339,15 +1636,30 @@ export class EmailMailboxActionService extends BaseModule {
           sanitizedError: "Source folder is empty but no destination mapping exists; manual resolution required.",
         });
       } else if (presence.status === "present") {
-        // Still at source: the move did not happen. Mark failed so the user
-        // can retry under a fresh authorization (proven non-dispatch here).
-        await this.operationModule.finalizeItem({
-          itemId: item.id,
-          operationId,
-          status: "failed",
-          errorCode: "NETWORK_BEFORE_DISPATCH",
-          sanitizedError: "Message still at source; the move did not complete.",
-        });
+        // R5-04: `failed` requires PROOF the command never reached the
+        // server. A dispatched attempt whose message is still at source may
+        // still be completing server-side — it stays unknown until a later
+        // observation. Only an attempt that was never dispatched (claimed,
+        // no dispatch marker) is proven non-dispatch.
+        const attempts = await this.operationModule.listAttemptsForItem(item.id);
+        const wasDispatched = attempts.some((attempt) => attempt.phase === "dispatched");
+        if (wasDispatched) {
+          await this.operationModule.finalizeItem({
+            itemId: item.id,
+            operationId,
+            status: "outcome_unknown",
+            errorCode: "OUTCOME_UNKNOWN",
+            sanitizedError: "Move was dispatched but the message is still at source; a later observation decides.",
+          });
+        } else {
+          await this.operationModule.finalizeItem({
+            itemId: item.id,
+            operationId,
+            status: "failed",
+            errorCode: "NETWORK_BEFORE_DISPATCH",
+            sanitizedError: "Message still at source and no dispatch evidence; the move did not run.",
+          });
+        }
       }
     }
     return await this.projectResult(operationId);
@@ -1394,31 +1706,21 @@ export class EmailMailboxActionService extends BaseModule {
       .digest("hex");
   }
 
+  /**
+   * R5-05: the Trash destination is ALWAYS resolved by the capability
+   * service — exactly one writable special-use \\Trash folder, else null
+   * (read-only Trash, ambiguity and POP3 all refuse). There is no second
+   * resolver that could bypass the writable check.
+   */
   private async resolveTrashFolder(emailServiceId: number): Promise<string | null> {
-    if (this.capabilityService) {
-      const capabilities = await this.capabilityService.getCapabilities(emailServiceId);
-      return capabilities.trashFolderPath;
-    }
-    // T06: the fallback resolver enforces the SAME fail-closed rules as the
-    // capability service — ambiguity never guesses the first match.
-    const receiveConfig = await this.resolveReceiveConfig(emailServiceId);
-    if (!receiveConfig) return null;
-    const listing = await this.adapter.listFolders(receiveConfig);
-    if (listing.status !== "listed") return null;
-    const trashFolders = listing.folders.filter(
-      (folder) => folder.specialUse === "\\Trash"
-    );
-    return trashFolders.length === 1 ? trashFolders[0].path : null;
+    const capabilities = await this.capabilityService.getCapabilities(emailServiceId);
+    return capabilities.trashFolderPath;
   }
 
   private async resolveReceiveConfig(
     emailServiceId: number
   ): Promise<EmailReceiveConnectionConfig | null> {
-    if (this.capabilityService) {
-      return await this.capabilityService.getReceiveConfig(emailServiceId);
-    }
-    const { EmailServiceModule } = await import("@/modules/emailServiceModule");
-    return await new EmailServiceModule().getEmailServiceReceiveConfig(emailServiceId);
+    return await this.capabilityService.getReceiveConfig(emailServiceId);
   }
 
   private async projectResult(

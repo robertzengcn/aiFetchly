@@ -135,7 +135,11 @@ export class EmailForwardMaterializer {
     }
     const sourceFullSourceHash = hashBytes(source);
 
-    const parsed = await simpleParser(source);
+    // R5-06: skipImageLinks keeps the original cid: references in parsed.html
+    // (mailparser would otherwise inline them as data: URIs, destroying the
+    // CID→part link the relink pass needs). Text/attachment parsing is
+    // unaffected by this option.
+    const parsed = await simpleParser(source, { skipImageLinks: true });
     assertSupportedMime(parsed);
 
     const rawAttachments = extractAttachments(parsed);
@@ -486,15 +490,18 @@ function buildHtmlBody(
  * selected for the forward stay referenced by the forwarded HTML. Does NOT
  * loosen the general incoming sanitizer used at receive time.
  */
-const DATA_URI_PATTERN =
-  /src\s*=\s*(["'])(data:[^;]+;base64,([A-Za-z0-9+/=\s]+?))\1/gi;
 
 /**
- * R01: mailparser inlines CID images as data: URIs. Relink each inlined
- * image back to its `cid:` content-id when the owning part is SELECTED;
- * drop the image when the part exists but was not selected. Returns null
- * only when the input is null (text-only source).
+ * R5-06: relinks CID images by PART IDENTITY. The source is parsed with
+ * mailparser's `skipImageLinks` option, so the HTML still carries its
+ * original `src="cid:…"` references — each reference resolves directly to
+ * the parsed MIME part with that content-id. Selection is per part, never
+ * per byte-equality or per HTML occurrence order: identical-byte parts
+ * keep their own references, repeated references to one part all survive
+ * with it, and an unselected part's references are removed.
  */
+const CID_SRC_PATTERN = /src\s*=\s*(["'])cid:([^'"\s]{1,256})\1/gi;
+
 export function relinkCidImages(
   html: string | null,
   rawAttachments: ReadonlyArray<{
@@ -506,50 +513,29 @@ export function relinkCidImages(
   findings: string[]
 ): string | null {
   if (html === null) return null;
-  // T10 (hash map, prefers SELECTED on identical-byte collisions): distinct
-  // CIDs with identical bytes render identically, so relinking every data:
-  // URI to the selected part's content-id is semantically correct — the
-  // rendered bytes match and the referenced part travels with the message.
-  // Dropping the reference (as a byte→last-CID map did pre-19e440d2f) is
-  // what corrupted content.
-  // Candidates per content hash, in attachment order. mailparser replaces
-  // each cid: ref in document order with the referenced part's data: URI, so
-  // the Nth occurrence of a hash in the HTML maps to the Nth same-byte part
-  // — preserving part identity even when distinct CIDs carry identical
-  // bytes (audit T10).
-  const candidatesByHash = new Map<
-    string,
-    Array<{ cid: string; selected: boolean }>
-  >();
+  // A cid may be referenced by several parts only on malformed input; the
+  // reference travels when ANY owning part is selected (the outgoing MIME
+  // carries every selected part with that content-id).
+  const selectedByCid = new Map<string, boolean>();
   for (const attachment of rawAttachments) {
     if (attachment.cid === null) continue;
-    const key = crypto
-      .createHash("sha256")
-      .update(attachment.content)
-      .digest("hex");
     const selected =
       selection.mode === "all" ||
       (selection.mode === "parts" && selection.partIds.includes(attachment.partId));
-    const list = candidatesByHash.get(key) ?? [];
-    list.push({ cid: attachment.cid, selected });
-    candidatesByHash.set(key, list);
+    selectedByCid.set(attachment.cid, (selectedByCid.get(attachment.cid) ?? false) || selected);
   }
-  const consumedByHash = new Map<string, number>();
-  return html.replace(DATA_URI_PATTERN, (match, _quote: string, _uri: string, base64: string) => {
-    const key = crypto
-      .createHash("sha256")
-      .update(Buffer.from(base64.replace(/\s/g, ""), "base64"))
-      .digest("hex");
-    const candidates = candidatesByHash.get(key);
-    if (candidates === undefined) return match; // unrelated embedded data URI
-    const consumed = consumedByHash.get(key) ?? 0;
-    consumedByHash.set(key, consumed + 1);
-    const candidate = candidates[consumed % candidates.length];
-    if (!candidate.selected) {
-      findings.push("unselected_inline_image_removed");
-      return 'src=""';
+  return html.replace(CID_SRC_PATTERN, (match, quote: string, cid: string) => {
+    const selected = selectedByCid.get(cid);
+    if (selected === undefined) {
+      // Reference to a part the parser could not resolve: keep the original
+      // markup (never degrade content we do not own).
+      return match;
     }
-    return `src="cid:${candidate.cid}"`;
+    if (!selected) {
+      findings.push("unselected_inline_image_removed");
+      return `src=${quote}""`;
+    }
+    return match;
   });
 }
 

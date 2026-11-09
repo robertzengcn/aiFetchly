@@ -125,6 +125,8 @@ export interface ServerSearchInput {
   readonly since?: Date;
   readonly before?: Date;
   readonly unreadOnly?: boolean;
+  /** R5-02: exact Message-ID header match (forward reconcile vs Sent). */
+  readonly messageIdHeader?: string;
   /** Maximum candidates to accept from this folder's SEARCH. */
   readonly cap: number;
   /**

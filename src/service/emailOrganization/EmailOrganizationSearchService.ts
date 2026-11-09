@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { BaseModule } from "@/modules/baseModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
@@ -15,11 +16,18 @@ import { log } from "@/modules/Logger";
  * UTC date bounds. Local mode queries the stored rows; server mode runs a
  * bounded IMAP SEARCH per folder and reports honest completeness. Trash is
  * searched ONLY when explicitly included in folderPaths.
+ *
+ * R5-09: cursors are bound to the exact account + query that produced them
+ * (a foreign cursor is refused, never replayed), positions advance by the
+ * UIDs actually consumed (including candidates dropped by the exact date
+ * filter), and unknown completeness never masquerades as a filtered answer.
  */
 
 const SERVER_SCAN_CANDIDATE_CAP = 1000;
 const SERVER_SCAN_BUDGET_MS = 30_000;
 const SERVER_SCAN_PAGE_MAX = 100;
+/** Matched UIDs fetched per SEARCH window (bounds per-call envelope fetches). */
+const SERVER_SCAN_WINDOW = 200;
 
 export interface OrganizationSearchInput {
   readonly emailServiceId: number;
@@ -120,6 +128,8 @@ export class EmailOrganizationSearchService extends BaseModule {
         false
       );
     }
+    // R5-09: the continuation cursor feeds the model's keyset predicate.
+    const keysetBefore = decodeLocalCursor(input.cursor, searchQueryHash(input, null));
     const result = await this.messageModule.searchForOrganization({
       emailServiceId: input.emailServiceId,
       excludeFolderPath: excludedFolder ?? undefined,
@@ -130,12 +140,14 @@ export class EmailOrganizationSearchService extends BaseModule {
       receivedTo: input.receivedTo ? new Date(input.receivedTo) : undefined,
       unreadOnly: input.unreadOnly,
       hasAttachments: input.hasAttachments,
+      keysetBefore,
       limit: pageSize,
     });
     const folders = await this.locationModule.readByMessageIds(
       result.rows.map((row) => row.id)
     );
     const folderByMessageId = new Map(folders.map((row) => [row.messageId, row.folderPath]));
+    const lastRow = result.rows[result.rows.length - 1];
     return {
       source: "local",
       emailServiceId: input.emailServiceId,
@@ -155,13 +167,13 @@ export class EmailOrganizationSearchService extends BaseModule {
       complete: !result.truncated,
       truncated: result.truncated,
       nextCursor:
-        result.truncated && result.rows.length > 0
-          ? Buffer.from(
-              JSON.stringify({
-                receivedAt: result.rows[result.rows.length - 1].receivedAt.toISOString(),
-                id: result.rows[result.rows.length - 1].id,
-              })
-            ).toString("base64")
+        result.truncated && lastRow !== undefined
+          ? encodeCursor({
+              v: 1,
+              q: searchQueryHash(input, null),
+              receivedAt: lastRow.receivedAt.toISOString(),
+              id: lastRow.id,
+            })
           : null,
       lastSyncAt: service.lastReceiveSyncAt ? service.lastReceiveSyncAt.toISOString() : null,
       limitation:
@@ -173,8 +185,10 @@ export class EmailOrganizationSearchService extends BaseModule {
 
   /**
    * Bounded server scan (design §11): IMAP SEARCH per folder, capped at
-   * 1000 candidates; envelope metadata fetched only for the requested
-   * page. Reaching the cap reports complete:false with a resumable note.
+   * 1000 candidates; the scan advances window-by-window INSIDE a folder
+   * until the page fills or the folder is exhausted, so continuation
+   * resumes at the exact (folder, matched-UID offset) actually consumed —
+   * including candidates dropped by the exact date filter (R5-09).
    */
   private async searchServer(
     input: OrganizationSearchInput
@@ -199,6 +213,16 @@ export class EmailOrganizationSearchService extends BaseModule {
       );
     }
     const pageSize = Math.min(Math.max(input.pageSize ?? 25, 1), SERVER_SCAN_PAGE_MAX);
+    // R5-09: an exact true/false attachment filter the server cannot apply
+    // is REFUSED — returning the unfiltered page would be a silent broader
+    // hit list (PRD §7). Attachment presence on server rows reports unknown.
+    if (input.hasAttachments !== undefined) {
+      throw new EmailOrganizationActionError(
+        "VALIDATION_FAILED",
+        "Attachment presence cannot be evaluated by a server search; use source: 'local' or drop the hasAttachments filter.",
+        false
+      );
+    }
     const rows: OrganizationSearchResultRow[] = [];
     const failedFolders: Array<{ folderPath: string; reasonCode: string }> = [];
     const searchedFolders: string[] = [];
@@ -207,100 +231,96 @@ export class EmailOrganizationSearchService extends BaseModule {
     // Design §11: bounded work — 1000 candidates or 30 seconds overall.
     const deadline = Date.now() + SERVER_SCAN_BUDGET_MS;
     let budgetExhausted = false;
-    // R15/T09: cursor = base64 {folderIndex, uidOffset} — uidOffset skips
-    // matched UIDs WITHIN the folder so continuation never repeats a page.
-    let cursorState = { folderIndex: 0, uidOffset: 0 };
-    if (input.cursor !== undefined) {
-      try {
-        const decoded = JSON.parse(Buffer.from(input.cursor, "base64").toString("utf8")) as {
-          folderIndex?: number;
-          uidOffset?: number;
-        };
-        cursorState = {
-          folderIndex: typeof decoded.folderIndex === "number" ? decoded.folderIndex : 0,
-          uidOffset: typeof decoded.uidOffset === "number" ? decoded.uidOffset : 0,
-        };
-      } catch {
-        throw new EmailOrganizationActionError(
-          "VALIDATION_FAILED",
-          "Invalid continuation cursor; start a fresh search.",
-          false
-        );
-      }
-    }
+    // R5-09: the resume position is the (folder, matched-UID offset) the
+    // previous page actually stopped at; the query hash refuses foreign
+    // cursors and out-of-range/negative fields are rejected outright.
+    const queryHash = searchQueryHash(input, folders);
+    const cursorState = decodeServerCursor(input.cursor, queryHash, folders.length);
     const fromMs = input.receivedFrom ? new Date(input.receivedFrom).getTime() : null;
     const toMs = input.receivedTo ? new Date(input.receivedTo).getTime() : null;
-    const hasAttachmentFilter = input.hasAttachments !== undefined;
+    let resumePosition: { folderIndex: number; uidOffset: number } | null = null;
+    let foldersExhausted = true;
 
-    for (let folderIndex = cursorState.folderIndex; folderIndex < folders.length; folderIndex += 1) {
+    outer: for (let folderIndex = cursorState.folderIndex; folderIndex < folders.length; folderIndex += 1) {
       const folder = folders[folderIndex];
-      if (candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP) {
-        capped = true;
-        break;
-      }
-      if (Date.now() >= deadline) {
-        budgetExhausted = true;
-        break;
-      }
-      const result = await this.adapter.searchUids(
-        receiveConfig,
-        folder,
-        {
-          fromAddress: input.fromAddress,
-          subject: input.subject,
-          since: input.receivedFrom ? new Date(input.receivedFrom) : undefined,
-          before: input.receivedTo ? new Date(input.receivedTo) : undefined,
-          unreadOnly: input.unreadOnly,
-          cap: SERVER_SCAN_CANDIDATE_CAP - candidatesSeen,
-          metadataLimit: Math.max(pageSize - rows.length, 0),
-          uidOffset: folderIndex === cursorState.folderIndex ? cursorState.uidOffset : 0,
+      let uidOffset = folderIndex === cursorState.folderIndex ? cursorState.uidOffset : 0;
+      for (;;) {
+        if (rows.length >= pageSize) {
+          resumePosition = { folderIndex, uidOffset };
+          foldersExhausted = false;
+          break outer;
         }
-      );
-      // Review (false completeness): a failed folder search is never a
-      // "no matches" result — it is disclosed and forces complete:false.
-      if (result.status !== "listed") {
-        failedFolders.push({ folderPath: folder, reasonCode: result.reasonCode });
-        continue;
-      }
-      searchedFolders.push(folder);
-      // T09: candidates returned already skip the folder's uid offset.
-      candidatesSeen += cursorState.folderIndex === folderIndex
-        ? cursorState.uidOffset + result.candidates.length
-        : result.candidates.length;
-      capped = capped || result.capped || candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP;
-      // R15: hasAttachments is NOT server-filterable — it is reported as
-      // unknown (null) and forces incomplete results rather than silently
-      // returning rows that may fail the requested predicate.
-      for (const candidate of result.candidates.slice(0, pageSize - rows.length)) {
+        if (candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP) {
+          capped = true;
+          resumePosition = { folderIndex, uidOffset };
+          foldersExhausted = false;
+          break outer;
+        }
+        if (Date.now() >= deadline) {
+          budgetExhausted = true;
+          resumePosition = { folderIndex, uidOffset };
+          foldersExhausted = false;
+          break outer;
+        }
+        const windowCap = Math.min(SERVER_SCAN_WINDOW, SERVER_SCAN_CANDIDATE_CAP - candidatesSeen);
+        const result = await this.adapter.searchUids(
+          receiveConfig,
+          folder,
+          {
+            fromAddress: input.fromAddress,
+            subject: input.subject,
+            since: input.receivedFrom ? new Date(input.receivedFrom) : undefined,
+            before: input.receivedTo ? new Date(input.receivedTo) : undefined,
+            unreadOnly: input.unreadOnly,
+            cap: windowCap,
+            uidOffset,
+          }
+        );
+        // Review (false completeness): a failed folder search is never a
+        // "no matches" result — it is disclosed and forces complete:false.
+        if (result.status !== "listed") {
+          failedFolders.push({ folderPath: folder, reasonCode: result.reasonCode });
+          continue outer;
+        }
+        searchedFolders.push(folder);
+        candidatesSeen += result.candidates.length;
         // R15: exact UTC post-filter over the coarse IMAP date search.
-        const rowMs = candidate.date !== null ? new Date(candidate.date).getTime() : null;
-        if (fromMs !== null && (rowMs === null || rowMs < fromMs)) continue;
-        if (toMs !== null && (rowMs === null || rowMs >= toMs)) continue;
-        rows.push({
-          messageId: null,
-          providerUid: candidate.uid,
-          folderPath: folder,
-          fromAddress: candidate.fromAddress ?? "",
-          subject: candidate.subject ?? "",
-          receivedAt: candidate.date ?? "",
-          isUnread: candidate.seen === false,
-          hasAttachments: hasAttachmentFilter ? null : false,
-        });
+        // Rejected candidates were CONSUMED: the window advances past them.
+        for (const candidate of result.candidates) {
+          const rowMs = candidate.date !== null ? new Date(candidate.date).getTime() : null;
+          if (fromMs !== null && (rowMs === null || rowMs < fromMs)) continue;
+          if (toMs !== null && (rowMs === null || rowMs >= toMs)) continue;
+          if (rows.length >= pageSize) break;
+          rows.push({
+            messageId: null,
+            providerUid: candidate.uid,
+            folderPath: folder,
+            fromAddress: candidate.fromAddress ?? "",
+            subject: candidate.subject ?? "",
+            receivedAt: candidate.date ?? "",
+            isUnread: candidate.seen === false,
+            hasAttachments: null,
+          });
+        }
+        uidOffset += result.candidates.length;
+        if (result.candidates.length < windowCap) {
+          // Folder exhausted: continue with the next folder at offset 0.
+          break;
+        }
       }
-      if (rows.length >= pageSize) break;
     }
-    // R15: a page-full exit before the LAST folder means more results exist.
-    // T09: a page that fills mid-folder emits a cursor with the advanced
-    // uidOffset so continuation resumes exactly where this page stopped.
+    // R5-09: the cursor points at the exact consumed position — the folder
+    // being scanned and its matched-UID offset (dropped candidates included).
     const pageCutShort = rows.length >= pageSize;
-    const nextCursor = pageCutShort
-      ? Buffer.from(
-          JSON.stringify({
-            folderIndex: cursorState.folderIndex,
-            uidOffset: cursorState.uidOffset + rows.length,
+    const nextCursor =
+      !foldersExhausted && resumePosition !== null
+        ? encodeCursor({
+            v: 1,
+            q: queryHash,
+            folderIndex: resumePosition.folderIndex,
+            uidOffset: resumePosition.uidOffset,
           })
-        ).toString("base64")
-      : null;
+        : null;
 
     const limitationParts: string[] = [];
     if (capped) {
@@ -320,7 +340,7 @@ export class EmailOrganizationSearchService extends BaseModule {
     }
     if (!capped && !budgetExhausted && failedFolders.length === 0) {
       limitationParts.push(
-        "Server metadata is a bounded scan, not an exact total; attachment presence is not server-filtered and reports false locally."
+        "Server metadata is a bounded scan, not an exact total; attachment presence is not server-filtered and reports unknown."
       );
     }
 
@@ -331,14 +351,133 @@ export class EmailOrganizationSearchService extends BaseModule {
       failedFolders,
       rows,
       totalMatched: rows.length,
-      complete:
-        !capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && !hasAttachmentFilter,
+      complete: !capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && foldersExhausted,
       truncated: rows.length >= pageSize,
       lastSyncAt: null,
-      limitation: hasAttachmentFilter
-        ? `${limitationParts.join(" ")} Attachment presence is not server-searchable; rows report it as unknown.`.trim()
-        : limitationParts.join(" "),
+      limitation: limitationParts.join(" "),
       nextCursor,
     };
   }
+}
+
+/** Opaque cursor payload: version + query binding + mode position. */
+interface SearchCursorPayload {
+  readonly v: number;
+  readonly q: string;
+}
+
+function encodeCursor(payload: SearchCursorPayload & Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+}
+
+/** Stable binding of account + normalized filters (+ folder scope) → hash. */
+function searchQueryHash(
+  input: OrganizationSearchInput,
+  folders: readonly string[] | null
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        emailServiceId: input.emailServiceId,
+        folders,
+        fromAddress: input.fromAddress?.trim().toLowerCase() ?? null,
+        subject: input.subject?.trim() ?? null,
+        receivedFrom: input.receivedFrom ?? null,
+        receivedTo: input.receivedTo ?? null,
+        unreadOnly: input.unreadOnly === true,
+        hasAttachments: input.hasAttachments ?? null,
+      })
+    )
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function decodeCursorBase(cursor: string | undefined, expectedQueryHash: string): Record<string, unknown> {
+  if (cursor === undefined) {
+    return { v: 1, q: expectedQueryHash } as Record<string, unknown>;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, "base64").toString("utf8")) as unknown;
+  } catch {
+    throw new EmailOrganizationActionError(
+      "VALIDATION_FAILED",
+      "Invalid continuation cursor; start a fresh search.",
+      false
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new EmailOrganizationActionError(
+      "VALIDATION_FAILED",
+      "Invalid continuation cursor; start a fresh search.",
+      false
+    );
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.v !== 1 || typeof record.q !== "string" || record.q !== expectedQueryHash) {
+    // A cursor from a different account/query/folder scope is never
+    // replayed against another search (R5-09).
+    throw new EmailOrganizationActionError(
+      "VALIDATION_FAILED",
+      "The continuation cursor does not belong to this search; start a fresh search.",
+      false
+    );
+  }
+  return record;
+}
+
+/** R5-09: local keyset cursor → strict (receivedAt, id) position. */
+function decodeLocalCursor(
+  cursor: string | undefined,
+  expectedQueryHash: string
+): { receivedAt: Date; id: number } | undefined {
+  if (cursor === undefined) return undefined;
+  const record = decodeCursorBase(cursor, expectedQueryHash);
+  const id = record.id;
+  const receivedAt = record.receivedAt;
+  if (
+    typeof id !== "number" ||
+    !Number.isInteger(id) ||
+    id < 1 ||
+    typeof receivedAt !== "string" ||
+    Number.isNaN(new Date(receivedAt).getTime())
+  ) {
+    throw new EmailOrganizationActionError(
+      "VALIDATION_FAILED",
+      "Invalid continuation cursor; start a fresh search.",
+      false
+    );
+  }
+  return { receivedAt: new Date(receivedAt), id };
+}
+
+/** R5-09: server cursor → validated (folderIndex, uidOffset) position. */
+function decodeServerCursor(
+  cursor: string | undefined,
+  expectedQueryHash: string,
+  folderCount: number
+): { folderIndex: number; uidOffset: number } {
+  const record = decodeCursorBase(cursor, expectedQueryHash);
+  const folderIndex = record.folderIndex;
+  const uidOffset = record.uidOffset;
+  if (
+    typeof folderIndex !== "number" ||
+    !Number.isInteger(folderIndex) ||
+    folderIndex < 0 ||
+    folderIndex >= folderCount ||
+    typeof uidOffset !== "number" ||
+    !Number.isInteger(uidOffset) ||
+    uidOffset < 0
+  ) {
+    // Negative offsets would slice from the END of the UID list; an
+    // out-of-range folder index would scan zero folders and report a
+    // bogus empty complete page — both rejected outright.
+    throw new EmailOrganizationActionError(
+      "VALIDATION_FAILED",
+      "Invalid continuation cursor; start a fresh search.",
+      false
+    );
+  }
+  return { folderIndex, uidOffset };
 }

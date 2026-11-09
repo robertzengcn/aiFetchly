@@ -8,11 +8,17 @@ import { EmailOrganizationSelectionService } from "@/service/emailOrganization/E
 import { EmailOrganizationSearchService } from "@/service/emailOrganization/EmailOrganizationSearchService";
 import type { OrganizationSearchResult } from "@/service/emailOrganization/EmailOrganizationSearchService";
 import { isRetryableOrganizationErrorCode } from "@/service/emailOrganization/EmailOrganizationErrors";
+import {
+  isLocationBackfillReady,
+  ORGANIZATION_BACKFILL_PENDING_CODE,
+  organizationBackfillPendingMessage,
+} from "@/service/emailOrganization/emailOrganizationReadiness";
 import { EmailOrganizationAuthorizationModule } from "@/modules/EmailOrganizationAuthorizationModule";
 import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
 import type { ForwardDraftPreview } from "@/service/emailOrganization/EmailForwardDraftService";
 import type { EmailOrganizationOperationDto } from "@/entityTypes/emailOrganizationTypes";
 import type { EmailOrganizationItemStatus } from "@/entityTypes/emailOrganizationTypes";
+import type { EmailSentCopyStatus } from "@/entityTypes/emailOrganizationTypes";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { log } from "@/modules/Logger";
@@ -165,6 +171,20 @@ async function gateAiEntitlement(): Promise<EmailOrganizationToolResult<never> |
   return { success: false, error: "AI is disabled", code: "AI_DISABLED" };
 }
 
+/**
+ * R5-10: mutating tools run only after the startup location backfill
+ * completed in this process (design §5.3). The gate is host-owned state —
+ * it cannot be influenced by tool arguments or message content.
+ */
+function gateOrganizationReadiness(): EmailOrganizationToolResult<never> | null {
+  if (isLocationBackfillReady()) return null;
+  return {
+    success: false,
+    error: organizationBackfillPendingMessage(),
+    code: ORGANIZATION_BACKFILL_PENDING_CODE,
+  };
+}
+
 function failure(error: unknown): EmailOrganizationToolResult<never> {
   if (error instanceof Error && error.name === "EmailOrganizationActionError") {
     const actionError = error as Error & { code: string; retryable: boolean };
@@ -261,6 +281,8 @@ export async function createEmailForwardDraft(
 ): Promise<EmailOrganizationToolResult<{ draft: ForwardDraftPreview }>> {
   const gate = await gateAiEntitlement();
     if (gate !== null) return gate;
+  const readinessGate = gateOrganizationReadiness();
+  if (readinessGate !== null) return readinessGate;
     try {
     const input = createForwardDraftSchema.parse(args);
     const service = new EmailForwardDraftService();
@@ -289,6 +311,8 @@ export async function updateEmailForwardDraft(
 ): Promise<EmailOrganizationToolResult<{ draft: ForwardDraftPreview }>> {
   const gate = await gateAiEntitlement();
     if (gate !== null) return gate;
+  const readinessGate = gateOrganizationReadiness();
+  if (readinessGate !== null) return readinessGate;
     try {
     const input = updateForwardDraftSchema.parse(args);
     const service = new EmailForwardDraftService();
@@ -318,6 +342,8 @@ export async function sendEmailForward(
     if (scheduledGuard !== null) return scheduledGuard;
     const gate = await gateAiEntitlement();
     if (gate !== null) return gate;
+  const readinessGate = gateOrganizationReadiness();
+  if (readinessGate !== null) return readinessGate;
     try {
     const input = sendForwardSchema.parse(args);
     const draftModule = new EmailForwardDraftModule();
@@ -389,6 +415,8 @@ export async function moveEmailToTrash(
     if (scheduledGuard !== null) return scheduledGuard;
     const gate = await gateAiEntitlement();
     if (gate !== null) return gate;
+  const readinessGate = gateOrganizationReadiness();
+  if (readinessGate !== null) return readinessGate;
     try {
     const input = moveToTrashSchema.parse(args);
     const actionService = new EmailMailboxActionService();
@@ -429,6 +457,8 @@ export async function restoreEmail(
     if (scheduledGuard !== null) return scheduledGuard;
     const gate = await gateAiEntitlement();
     if (gate !== null) return gate;
+  const readinessGate = gateOrganizationReadiness();
+  if (readinessGate !== null) return readinessGate;
     try {
     const input = restoreEmailSchema.parse(args);
     const actionService = new EmailMailboxActionService();
@@ -518,6 +548,8 @@ export async function prepareEmailSelection(
 ): Promise<EmailOrganizationToolResult<{ selection: Record<string, unknown> }>> {
   const gate = await gateAiEntitlement();
     if (gate !== null) return gate;
+  const readinessGate = gateOrganizationReadiness();
+  if (readinessGate !== null) return readinessGate;
     try {
     const input = prepareSelectionSchema.parse(args);
     const service = new EmailOrganizationSelectionService();
@@ -544,6 +576,31 @@ function mapSelection(
     return { mode: "parts", partIds: selection.part_ids };
   }
   return { mode: selection.mode };
+}
+
+/**
+ * R5-02: reads the durable Sent-copy status from an item's result evidence.
+ * Absent evidence → null (the caller renders nothing rather than guessing).
+ */
+export function sentCopyStatusFromResultJson(
+  resultJson: string | null
+): EmailSentCopyStatus | null {
+  if (resultJson === null) return null;
+  try {
+    const parsed = JSON.parse(resultJson) as { sentCopyStatus?: unknown };
+    if (
+      parsed.sentCopyStatus === "not_requested" ||
+      parsed.sentCopyStatus === "pending" ||
+      parsed.sentCopyStatus === "saved" ||
+      parsed.sentCopyStatus === "failed" ||
+      parsed.sentCopyStatus === "unknown"
+    ) {
+      return parsed.sentCopyStatus;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** Public operation projection (safe per-item detail, no bodies/credentials). */
@@ -574,6 +631,7 @@ export function projectOperation(
     acceptedRecipientsJson: string | null;
     rejectedRecipientsJson: string | null;
     unknownRecipientsJson: string | null;
+    resultJson?: string | null;
   }>
 ): EmailOrganizationOperationDto {
 
@@ -602,6 +660,11 @@ export function projectOperation(
         ...parseStringArrayJson(item.rejectedRecipientsJson).map((address) => ({ address, outcome: "rejected" as const })),
         ...parseStringArrayJson(item.unknownRecipientsJson).map((address) => ({ address, outcome: "unknown" as const })),
       ],
+      // R5-02: the Sent-copy status is projected so the card and the tool
+      // can warn separately from the submission outcome (AC-22).
+      ...(operation.kind === "forward"
+        ? { sentCopyStatus: sentCopyStatusFromResultJson(item.resultJson ?? null) }
+        : {}),
     })),
     createdAt: operation.requestedAt.toISOString(),
     completedAt: operation.completedAt ? operation.completedAt.toISOString() : null,
