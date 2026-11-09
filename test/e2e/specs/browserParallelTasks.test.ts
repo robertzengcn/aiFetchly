@@ -19,7 +19,7 @@ import { expect, test } from "@playwright/test";
  * browserSignIn.test.ts, which PASSES).
  */
 test.describe("browser parallel tasks E2E (deterministic fixture)", () => {
-  test.fixme(\"CAPTCHA wait on one task does not block the other; resume completes", async ({
+  test.fixme("CAPTCHA wait on one task does not block the other; resume completes", async ({
     page,
   }) => {
     await page.goto("https://localhost:8443/__e2e__/parallel-harness");
@@ -51,7 +51,7 @@ test.describe("browser parallel tasks E2E (deterministic fixture)", () => {
     expect(await cleanup.json()).toMatchObject({ openSessions: 0 });
   });
 
-  test.fixme(\"Stop cancels all tasks and releases every lease", async ({ page }) => {
+  test.fixme("Stop cancels all tasks and releases every lease", async ({ page }) => {
     await page.goto("https://localhost:8443/__e2e__/parallel-harness");
     await page.getByTestId("run-batch").click();
     await page.getByTestId("stop-all").click();

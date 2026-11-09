@@ -22,7 +22,7 @@ import { expect, test } from "@playwright/test";
 test.describe("browser decision task E2E (deterministic fixture)", () => {
   const BASE = "https://localhost:8443";
 
-  test.fixme(\"search task completes with verified criteria and a compact final observation", async ({
+  test.fixme("search task completes with verified criteria and a compact final observation", async ({
     page,
   }) => {
     await page.goto(`${BASE}/search?q=none`);
@@ -47,7 +47,7 @@ test.describe("browser decision task E2E (deterministic fixture)", () => {
     expect(result!.finalObservation?.url).toContain("/results");
   });
 
-  test.fixme(\"a mid-task provider config change aborts without redirecting data", async ({
+  test.fixme("a mid-task provider config change aborts without redirecting data", async ({
     page,
   }) => {
     await page.goto(`${BASE}/search?q=none`);
@@ -66,7 +66,7 @@ test.describe("browser decision task E2E (deterministic fixture)", () => {
     expect(result!.reason).toBe("provider_config_changed");
   });
 
-  test.fixme(\"unverifiable DONE reports partial, never success", async ({ page }) => {
+  test.fixme("unverifiable DONE reports partial, never success", async ({ page }) => {
     await page.goto(`${BASE}/search?q=none`);
     const result = await page.evaluate(() =>
       (window as unknown as {
