@@ -69,7 +69,7 @@ export function registerWebSocketIpcHandlers(win: BrowserWindow): void {
    */
   registerValidatedHandler(
     WEBSOCKET_SEND,
-    lazySchema(() => z.record(z.unknown())),
+    lazySchema(() => z.record(z.string(), z.unknown())),
     async (input) => {
       const wsClient = WebSocketClient.getInstance();
       return wsClient.send(input);

@@ -42,7 +42,7 @@ const workspaceIdSchema = z.string().min(1);
  * intentionally couples the protocol to the type — a breaking change to
  * the snapshot shape must flow through this module.
  */
-const snapshotSchema: z.ZodType<AIFetchlyConfigSnapshot> = z.custom(
+const snapshotSchema: z.ZodType<AIFetchlyConfigSnapshot> = z.custom<AIFetchlyConfigSnapshot>(
   (val): val is AIFetchlyConfigSnapshot =>
     typeof val === "object" &&
     val !== null &&
@@ -112,7 +112,7 @@ export const portableMemorySchema = z.object({
   diagnostics: z.array(portableDiagnosticSchema).max(200),
 });
 
-const diffSchema: z.ZodType<AIFetchlyConfigDiff> = z.custom(
+const diffSchema: z.ZodType<AIFetchlyConfigDiff> = z.custom<AIFetchlyConfigDiff>(
   (val): val is AIFetchlyConfigDiff =>
     typeof val === "object" &&
     val !== null &&
@@ -121,7 +121,7 @@ const diffSchema: z.ZodType<AIFetchlyConfigDiff> = z.custom(
     Array.isArray((val as { removed?: unknown }).removed)
 );
 
-const diagnosticSchema: z.ZodType<AIFetchlyConfigDiagnostic> = z.custom(
+const diagnosticSchema: z.ZodType<AIFetchlyConfigDiagnostic> = z.custom<AIFetchlyConfigDiagnostic>(
   (val): val is AIFetchlyConfigDiagnostic =>
     typeof val === "object" &&
     val !== null &&

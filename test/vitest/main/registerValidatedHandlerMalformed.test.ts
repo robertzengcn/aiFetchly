@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-// NOTE: the wrapper and its production schemas are Zod v3-typed (`ZodTypeDef`),
-// so this test imports bare `zod` — matching registerValidatedHandler.test.ts.
+// NOTE: this test imports bare `zod` — matching registerValidatedHandler.test.ts.
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
 
