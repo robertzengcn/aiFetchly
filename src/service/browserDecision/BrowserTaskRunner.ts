@@ -403,11 +403,20 @@ export class BrowserTaskRunner {
           // must stay same-site (or an observed link); EXTRACT's target
           // must exist in the current observation's candidates.
           if (action.operation === "NAVIGATE" && action.url) {
-            const { parseUrlIdentity } = await import(
+            const { parseUrlIdentityWithOptions } = await import(
               "@/service/browserDecision/RegistrableDomain"
             );
-            const currentIdentity = parseUrlIdentity(observation.url);
-            const targetIdentity = parseUrlIdentity(action.url);
+            // X1: HTTPS-only identity for NAVIGATE — an https→http
+            // downgrade (or a loopback/private-name target) yields no
+            // target identity and is rejected.
+            const currentIdentity = parseUrlIdentityWithOptions(
+              observation.url,
+              {}
+            );
+            const targetIdentity = parseUrlIdentityWithOptions(
+              action.url,
+              { httpsOnly: true }
+            );
             if (
               !targetIdentity ||
               !currentIdentity ||

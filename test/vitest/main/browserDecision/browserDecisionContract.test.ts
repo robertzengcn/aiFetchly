@@ -10,6 +10,7 @@ import { buildTaskBudget, limitsForRoute } from "@/service/browserDecision/Brows
 import {
   hostnameAllowedBySuffixes,
   parseUrlIdentity,
+  parseUrlIdentityWithOptions,
   registrableDomainOf,
 } from "@/service/browserDecision/RegistrableDomain";
 
@@ -131,5 +132,46 @@ describe("RegistrableDomain", () => {
     expect(hostnameAllowedBySuffixes("not-example.com", ["example.com"])).toBe(false);
     expect(hostnameAllowedBySuffixes("example.com.evil.test", ["example.com"])).toBe(false);
     expect(hostnameAllowedBySuffixes("www.example.com", [])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// X1: registrable-domain hardening (private suffixes, loopback, downgrades)
+// ---------------------------------------------------------------------------
+
+describe("RegistrableDomain X1 hardening", () => {
+  it("separates tenants on private public suffixes (github.io)", () => {
+    const attacker = registrableDomainOf("attacker.github.io");
+    const victim = registrableDomainOf("victim.github.io");
+    // WITHOUT the private-suffix entries both collapsed to "github.io".
+    expect(attacker).toBe("attacker.github.io");
+    expect(victim).toBe("victim.github.io");
+    expect(attacker).not.toBe(victim);
+  });
+
+  it("keeps country second-level suffixes out of registrable domains", () => {
+    expect(registrableDomainOf("school.edu.cn")).toBe("school.edu.cn");
+    expect(registrableDomainOf("site.co.ke")).toBe("site.co.ke");
+    expect(registrableDomainOf("app.herokuapp.com")).toBe("app.herokuapp.com");
+  });
+
+  it("loopback and private-name hosts are never registrable", () => {
+    expect(registrableDomainOf("localhost")).toBeNull();
+    expect(registrableDomainOf("tenant.localhost")).toBeNull();
+    expect(registrableDomainOf("service.local")).toBeNull();
+    expect(registrableDomainOf("db.internal")).toBeNull();
+  });
+
+  it("parseUrlIdentityWithOptions rejects http when httpsOnly is set", () => {
+    expect(
+      parseUrlIdentityWithOptions("http://example.test/page", {
+        httpsOnly: true,
+      })
+    ).toBeNull();
+    expect(
+      parseUrlIdentityWithOptions("https://example.test/page", {
+        httpsOnly: true,
+      })
+    ).not.toBeNull();
   });
 });

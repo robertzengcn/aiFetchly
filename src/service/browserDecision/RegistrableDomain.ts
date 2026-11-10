@@ -44,7 +44,71 @@ const MULTI_LABEL_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
   "com.ua", "net.ua", "org.ua",
   "com.pl", "net.pl", "org.pl",
   "co.id", "net.id", "or.id", "web.id",
-]);
+  // X1 (2026-11-10 audit): private public-suffix entries — WITHOUT
+  // these, unrelated tenants of a hosting platform collide into one
+  // registrable domain (attacker.github.io === victim.github.io),
+  // which once released stored passwords across tenants.
+  "github.io", "gitlab.io", "herokuapp.com", "vercel.app",
+  "netlify.app", "pages.dev", "blogspot.com", "web.app",
+  "appspot.com", "firebaseapp.com", "firebaseio.com",
+  "azurewebsites.net", "azurestaticapps.net", "cloudfront.net",
+  "s3.amazonaws.com", "s3.dualstack.amazonaws.com",
+  "workers.dev", "r2.dev", "fastly.net", "edgekey.net",
+  "ghost.io", "surge.sh", "now.sh", "reinterpretapp.com",
+  // X1: country second-level suffixes missing from the original list.
+  "co.ke", "or.ke", "ne.ke", "go.ke", "ac.ke",
+  "com.sa", "net.sa", "org.sa", "edu.sa", "gov.sa",
+  "gob.mx", "edu.mx", "org.mx",
+  "ltd.uk", "plc.uk", "gov.uk", "nhs.uk", "police.uk",
+  "edu.cn", "ac.cn", "mil.cn", "org.cn",
+  "ac.in", "edu.in", "res.in", "mil.in",
+  "gov.ph", "edu.ph", "mil.ph", "i.ph", "ngo.ph",
+  "co.at", "or.at", "ac.at", "gv.at", "priv.at",
+  "com.pt", "org.pt", "edu.pt", "gov.pt",
+  "com.es", "org.es", "gob.es", "edu.es",
+  "com.se", "org.se", "pp.se",
+  "com.gr", "org.gr", "edu.gr", "net.gr",
+  "com.ro", "org.ro", "nom.ro",
+  "com.ec", "net.ec", "gob.ec",
+  "com.ve", "net.ve", "org.ve", "gob.ve",
+  "com.bo", "net.bo", "org.bo", "gob.bo",
+  "com.py", "net.py", "org.py", "gov.py",
+  "com.pe", "net.pe", "org.pe", "edu.pe",
+  "com.do", "net.do", "org.do", "gob.do",
+  "com.gt", "net.gt", "org.gt", "gob.gt",
+  "com.sv", "org.sv", "edu.sv", "gob.sv",
+  "com.ni", "net.ni", "org.ni", "gob.ni",
+  "com.cr", "net.cr", "org.cr", "ed.cr", "go.cr",
+  "co.ma", "net.ma", "org.ma", "ac.ma", "gov.ma",
+  "com.dz", "org.dz", "net.dz", "gov.dz", "edu.dz",
+  "com.tn", "net.tn", "org.tn", "gov.tn", "edu.tn",
+  "com.ly", "net.ly", "org.ly", "gov.ly", "edu.ly",
+  "com.jo", "org.jo", "net.jo", "gov.jo", "edu.jo",
+  "com.lb", "org.lb", "net.lb", "gov.lb", "edu.lb",
+  "com.kz", "net.kz", "org.kz", "edu.kz", "gov.kz",
+  "com.uz", "net.uz", "org.uz", "gov.uz",
+  "com.ge", "net.ge", "org.ge", "edu.ge", "gov.ge",
+  "com.am", "net.am", "org.am", "edu.am", "gov.am",
+  "com.az", "net.az", "org.az", "edu.az", "gov.az",
+  "com.et", "gov.et", "org.et", "edu.et", "net.et",
+  "co.tz", "or.tz", "ne.tz", "go.tz", "ac.tz",
+  "co.ug", "or.ug", "ne.ug", "go.ug", "ac.ug",
+  "com.gh", "org.gh", "net.gh", "edu.gh", "gov.gh",
+  "com.ng", "org.ng", "net.ng", "edu.ng", "gov.ng",
+  "com.zm", "org.zm", "net.zm", "edu.zm", "gov.zm",
+  "co.zw", "org.zw", "net.zw", "gov.zw", "ac.zw",
+  "com.bd", "net.bd", "org.bd", "edu.bd", "gov.bd",
+  "com.lk", "net.lk", "org.lk", "edu.lk", "gov.lk",
+  "com.np", "net.np", "org.np", "edu.np", "gov.np",
+  "com.af", "net.af", "org.af", "edu.af", "gov.af",
+  "co.ir", "net.ir", "org.ir", "ac.ir", "gov.ir",
+  "co.hu", "org.hu", "2000.hu",
+  "co.yu", "org.yu", "edu.yu",
+  "co.vi", "org.vi",
+  "com.ai", "net.ai", "org.ai", "off.ai", "n.om",
+  "co.mz", "org.mz", "net.mz", "gov.mz", "edu.mz",
+  "co.hu", "2000.hu", "erotika.hu", "jogasz.hu", "otters.hu",
+  "org.net.cn", "edu.cn", "ac.cn", "mil.cn", ]);
 
 /** Single-label public suffixes too broad to be a registrable domain. */
 const SINGLE_LABEL_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
@@ -79,6 +143,19 @@ export function registrableDomainOf(hostname: string | null | undefined): string
     return null;
   }
   const labels = host.split(".").filter((label) => label.length > 0);
+  // X1: loopback / private-name hosts can NEVER be registrable
+  // domains — a credential site must not be creatable on
+  // localhost/.local/.internal, and tenant names under them must not
+  // collide. (E2E fixtures use direct suffix matching, not this
+  // function, so loopback fixtures remain usable behind their flag.)
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal")
+  ) {
+    return null;
+  }
   if (labels.length < 2) {
     return null;
   }
@@ -99,6 +176,18 @@ export function registrableDomainOf(hostname: string | null | undefined): string
 
 /** Full identity of a URL string: null when the URL is not valid HTTPS/HTTP. */
 export function parseUrlIdentity(rawUrl: string): ParsedUrlIdentity | null {
+  return parseUrlIdentityWithOptions(rawUrl, {});
+}
+
+export interface ParseUrlIdentityOptions {
+  /** X1: reject http:// targets (NAVIGATE must not allow downgrades). */
+  readonly httpsOnly?: boolean;
+}
+
+export function parseUrlIdentityWithOptions(
+  rawUrl: string,
+  options: ParseUrlIdentityOptions
+): ParsedUrlIdentity | null {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -106,6 +195,9 @@ export function parseUrlIdentity(rawUrl: string): ParsedUrlIdentity | null {
     return null;
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return null;
+  }
+  if (options.httpsOnly && parsed.protocol !== "https:") {
     return null;
   }
   const registrableDomain = registrableDomainOf(parsed.hostname);
