@@ -173,19 +173,52 @@ Worker in `src/childprocess/` führen rechenintensive Aufgaben wie Scraping und 
 
 AI Chat kann die gehostete aiFetchly-KI oder einen vom Nutzer konfigurierten OpenAI-kompatiblen Provider verwenden. Öffnen Sie **System Settings -> AI Provider**, um den Modus zu wechseln und einen lokalen oder eigenen Provider zu speichern.
 
-## Automatisierung mit verwaltetem Browser
+## Automatisierung mit verwaltetem Browser (Browser Use) <a id="automatisierung-mit-verwaltetem-browser"></a>
 
-aiFetchly enthält einen Browser, den der KI-Agent tatsächlich steuern kann. Der Agent öffnet ein normales, sichtbares Chrome-/Chromium-Fenster auf Ihrem Desktop, beobachtet die Seite und führt die gewünschten Schritte aus, während die Anwendung Sitzungsstatus, Freigaben, Fortschritt und Ergebnisse anzeigt.
+aiFetchly enthält eine autonome Browser-Laufzeitumgebung (Browser Use), die der KI-Agent direkt steuern kann. Der Agent öffnet ein sichtbares, normales Chrome-/Chromium-Fenster auf Ihrem Desktop, erfasst die Seite semantisch und führt die gewünschten Schritte aus, während die Anwendung den Sitzungsstatus, Freigaben, Fortschritt und Ergebnisse in Echtzeit anzeigt.
 
-Die Funktion ist für Websites und Konten gedacht, die Ihnen gehören oder die Sie betreiben dürfen. Sie umgeht weder MFA noch Anmelde- oder Sicherheitsprüfungen, Plattform-Sicherheitskontrollen oder Zugriffsbeschränkungen.
+Diese Funktion ist für die Web- und Social-Media-Automatisierung auf Websites und Konten konzipiert, die Sie besitzen oder autorisiert betreiben. Sie respektiert strikte Sicherheitsgrenzen: Sie umgeht weder MFA noch Anmelde- oder Sicherheitsprüfungen, Plattformrichtlinien oder Zugriffsbeschränkungen.
+
+### Architektonische Prozessisolation
+
+Die Browser-Use-Laufzeitumgebung folgt einem strikten dreistufigen Prozessisolationsmodell:
+
+```text
+Electron-Renderer (Vue 3 UI)
+  Sitzungskarten, Live-Status, Freigabedialoge, manuelle Übernahme-Overlays
+  Greift NIEMALS auf Roh-Cookies, CDP-Sockets oder interne Anmeldedaten zu
+             │
+             │ contextBridge + Zod-validiertes IPC
+             ▼
+Electron-Hauptprozess
+  ManagedBrowserSupervisor, ManagedBrowserLeaseService, ManagedBrowserAiToolService
+  Kontosperren, AES-256-Cookie-Entschlüsselung/Verschlüsselung, Risikorichtlinien, Audit
+             │
+             │ Privates utilityProcess-IPC (pro Sitzung separat verworfen)
+             ▼
+src/childprocess/managed-browser/
+  ManagedBrowserRuntime, BrowserFingerprintPolicy, BrowserObservationService,
+  PageReferenceRegistry, BrowserActionExecutor, ChallengeDetector
+             │
+             │ Puppeteer 25.x
+             ▼
+Sichtbares Chrome / Chromium
+  Temporäres isoliertes Profil + kontoisolierter Ressourcen-Cache
+```
+
+- **Hauptprozess**: Überwacht den Lebenszyklus, exklusive Kontoleases, Cookie-Sicherheit, Freigaberichtlinien und das Audit-Protokoll.
+- **Dedizierter Utility-Prozess (`src/childprocess/managed-browser/`)**: Ein separater Utility-Prozess pro Sitzung steuert Chrome über Puppeteer. Alle flüchtigen Browser-Handles, CDP-Sitzungen und DOM-Knoten bleiben strikt im Worker isoliert.
+- **Renderer-Prozess**: Vollständig isoliert von Cookies, Netzwerk-Tokens und CDP-Schnittstellen.
 
 ### Sitzung starten
 
-- **AI Chat**: Beschreiben Sie eine Aufgabe, die einen Browser braucht – der Agent lädt die Browser-Tools selbst.
-- **Tool Account → Open managed browser**: Nutzt die gespeicherte Anmeldung eines Kontos für seine Plattform.
-- **Sitzungskarte im Arbeitsbereich**: Laufenden Browser ansehen, steuern oder stoppen.
+Es gibt drei Möglichkeiten, eine verwaltete Browsersitzung zu starten:
 
-Öffentliches Surfen braucht kein Konto. Jede Website – auch soziale Netzwerke und Seiten mit Anmeldepflicht – lässt sich ohne gespeicherten Tool Account öffnen; ist eine Anmeldung nötig, übergibt aiFetchly dasselbe Fenster an Sie, statt das Öffnen zu verweigern oder auf einen HTTP-Abruf auszuweichen. Mit einem gespeicherten Konto wird stattdessen die verschlüsselte Cookie-Sitzung wiederverwendet.
+- **AI Chat**: Beschreiben Sie eine Aufgabe, die einen Browser erfordert (z. B. „Öffne YouTube und suche nach unbeantworteten Kommentaren der letzten Woche“), und der Agent aktiviert die Browser-Tools automatisch.
+- **Tool Account → Open managed browser**: Nutzt die gespeicherte, authentifizierte Sitzung eines Kontos, um sich direkt mit der Plattform zu verbinden.
+- **Sitzungskarte im Arbeitsbereich**: Aktiven Browser einsehen, interaktiv steuern, übernehmen oder stoppen.
+
+**Öffentliches Surfen benötigt kein Konto.** Jede Website (einschließlich sozialer Netzwerke und anmeldepflichtiger Seiten) kann ohne gespeicherten Tool Account über ein temporäres Einmalprofil und eine direkte Verbindung geöffnet werden. Erfordert die Website eine Anmeldung, übergibt aiFetchly dasselbe Fenster an Sie zur manuellen Eingabe, statt das Öffnen zu verweigern oder auf einen einfachen HTTP-Abruf auszuweichen. Mit einem gespeicherten Konto werden die verschlüsselten Cookies vor der Navigation entschlüsselt und angewendet.
 
 ### Verfügbare Browser-Tools
 
@@ -193,17 +226,31 @@ Die Funktion ist für Websites und Konten gedacht, die Ihnen gehören oder die S
 |------|-------|
 | `browser_start_session` | Sitzung für eine URL oder einen gespeicherten Tool Account starten |
 | `browser_get_status` | Sitzungsstatus und bereinigte aktuelle URL lesen |
-| `browser_observe` | Begrenzten semantischen Snapshot der Seite und ihrer Elemente holen |
+| `browser_observe` | Begrenzten semantischen Snapshot der Seite und ihrer interaktiven Elemente holen |
 | `browser_navigate` | Zu einer erlaubten `http(s)`-URL navigieren |
-| `browser_run_actions` | Begrenztes strukturiertes Programm ausführen (Klick, Eingabe, Scrollen, Warten, Extrahieren, Schleife) |
-| `browser_screenshot` | Vorschaubild der Seite für die Unterhaltung aufnehmen |
-| `browser_request_handoff` | Pausieren und Sie um Übernahme bitten |
-| `browser_resume_after_handoff` | Nach Ihrer Bestätigung fortsetzen |
+| `browser_run_actions` | Strukturiertes Aktionsprogramm ausführen (Klick, Eingabe, Tasten, Scrollen, Warten, Extrahieren, Schleifen) |
+| `browser_screenshot` | Vorschaubild der sichtbaren Seite für die Unterhaltung aufnehmen |
+| `browser_request_handoff` | Automatisierung pausieren und Sie um manuelle Übernahme bitten |
+| `browser_resume_after_handoff` | Automatisierung nach Ihrer Bestätigung fortsetzen |
 | `browser_evaluate_script` | Geprüftes JavaScript im Seitenkontext ausführen (mit Freigabe) |
 | `browser_clear_cache` | Cache des aktuellen Kontos nach Bestätigung leeren |
-| `browser_stop_session` | Browser stoppen und schließen |
+| `browser_stop_session` | Chrome stoppen, Worker beenden und Kontolease freigeben |
 
-`browser_observe` liefert Referenzen wie `@e1 [button] "Search"` zusammen mit einer Seitenrevision; veraltete Referenzen werden nach Navigation oder Neuladen abgelehnt, damit nicht das falsche Element angeklickt wird.
+`browser_observe` liefert kompakte semantische Referenzen wie `@e1 [button] "Search"`, gebunden an eine spezifische Seitenrevision. Ändert sich die Seite durch Navigation oder DOM-Mutationen, werden veraltete Referenzen sofort abgewiesen, um Fehlklicks zu verhindern.
+
+Das Tool `browser_run_actions` unterstützt eine strukturierte DSL für Aktionsprogramme, mit der mehrstufige Abläufe in einem einzigen atomaren Aufruf ausgeführt werden können. Es ist über die `ToolJobRegistry` für Live-Fortschrittsberichte und sofortigen Abbruch registriert. Weitergehende DOM-Arbeiten erfolgen über `browser_evaluate_script`, das streng im Webseiten-Kontext ausgeführt wird – niemals mit Node.js-, Electron- oder Dateisystem-Rechten.
+
+### Sitzungsstatus und Kontrollen
+
+Eine aktive Sitzung übermittelt in Echtzeit ihren aktuellen Status (`starting`, `checking browser`, `applying login session`, `verifying login`, `login required`, `ready`, `working`, `awaiting approval`, `verification challenge`, `you have control`, `stopping`, `stopped`, `failed`) zusammen mit Konto, Plattform, bereinigter Domain, Proxy-Status und Laufzeit.
+
+Interaktive Kontrollen auf der Sitzungskarte:
+
+- **KI pausieren**: Verhindert, dass der Agent weitere Aktionen an den Browser sendet;
+- **Übernehmen**: Direkt im sichtbaren Chrome-Fenster klicken und tippen;
+- **Anmeldung abgeschlossen / Aufgabe fortsetzen**: Sitzung überprüfen, aktualisierte Cookies sichern und die Steuerung an den Agenten zurückgeben;
+- **Zeit verlängern**: Mehr Zeit für manuelle Eingaben gewähren;
+- **Browser stoppen**: Laufende Aktionen abbrechen, aktualisierte Cookies sicher speichern, Chrome und den Worker sauber beenden und das Konto freigeben.
 
 ### Freigaben und Sicherheit
 
@@ -216,7 +263,13 @@ Die Funktion ist für Websites und Konten gedacht, die Ihnen gehören oder die S
 | Privilegiertes Skript | Jedes JavaScript in der Seite | Skript, Origin, Zweck, Timeout und erwartete Ausgabe vor der Freigabe |
 | Authentifizierung | Passwort, MFA, Passkey, Sicherheits-CAPTCHA | Immer manuell durch Sie |
 
-Seiteninhalte gelten als nicht vertrauenswürdige Daten: Eine Website kann den Agenten nicht zu einer übersprungenen Freigabe überreden, das Modell kann seine eigene Aktion nicht als sicher markieren, und eine ausdrückliche Ablehnung bleibt bestehen. Cookies gelangen nie in Renderer, Modell, Tool-Ergebnisse, Logs oder Analytics – nur der Hauptprozess entschlüsselt sie, nur der Browser-Worker wendet sie an. Nach erfolgreicher Anmeldung wird die erneuerte Sitzung wieder verschlüsselt gespeichert.
+Sicherheitsgarantien:
+
+- Webinhalte gelten als nicht vertrauenswürdig: Prompts auf Webseiten können Freigaberichtlinien nicht umgehen.
+- Das Modell kann eigene Aktionen nicht als sicher einstufen, und Nutzerablehnungen sind bindend.
+- Die Fingerprint-Richtlinie gleicht den echten Chrome-Binärdaten, wodurch widersprüchliche Merkmale vermieden werden, die Bot-Erkennungen auslösen.
+- Gespeicherte Cookies werden über `safeStorage` (AES-256-GCM) verschlüsselt und nach Domains gefiltert; sie gelangen nie in den Renderer, in Prompts, Tool-Ausgaben oder Logs.
+- Nach erfolgreicher manueller Anmeldung oder Aufgabenabschluss werden erneuerte Sitzungen automatisch wieder verschlüsselt gesichert.
 
 ### Einstellungen und Cache
 
@@ -229,15 +282,25 @@ Seiteninhalte gelten als nicht vertrauenswürdige Daten: Eine Website kann den A
 | **Maximum managed-browser cache** | 500 MB | Begrenzt den Speicherplatz (100–2048 MB) |
 | **Clear cache when aiFetchly closes** | Aus | Leert den Browser-Cache beim Beenden |
 
-Das Panel zeigt außerdem die ungefähre Cache-Größe, die letzte Löschung sowie Aktionen zum Leeren des Caches eines Kontos oder aller verwalteten Browser. Das Leeren entfernt nie verschlüsselte Cookies, gespeicherte Anmeldungen, Konten oder Downloads.
+Das Panel zeigt die ungefähre Cache-Größe, die letzte Bereinigung sowie Funktionen zum Leeren des Caches eines einzelnen Kontos oder aller Browser. Das Leeren entfernt niemals verschlüsselte Cookies, gespeicherte Anmeldungen, Konten oder Downloads.
 
-Vollständige Anforderungen, Sicherheitsmodell, Fingerprint-Richtlinie und Rollout-Plan stehen in [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md).
+### Implementierungsreferenzen
+
+- `src/service/ManagedBrowserSupervisor.ts`, `ManagedBrowserLeaseService.ts`, `ManagedBrowserAiToolService.ts` — Hauptprozess-Supervisor, Lease-Verwaltung, Tool-Dispatching, Risikoklassifizierung und Freigabekoordination.
+- `src/modules/ManagedBrowserModule.ts`, `ManagedBrowserSettingsModule.ts`, `ManagedBrowserCacheModule.ts` — Geschäftslogik, Cookie-Verwaltung und Einstellungspersistenz.
+- `src/childprocess/managed-browser/` — isolierter Worker pro Sitzung: Puppeteer-Laufzeit, Navigations- und Fingerprint-Richtlinien, semantische Beobachtung, Aktionsausführung, Challenge-Erkennung und Cookie-Injektion.
+- `src/childprocess/managed-browser-cache/` — Hintergrund-Worker für Cache-Größenberechnung, Eviction und Bereinigung.
+- `src/views/components/aiChatV2/ManagedBrowserSessionCard.vue`, `ManagedBrowserHandoffDialog.vue`, `src/views/components/settings/ManagedBrowserSettingsPanel.vue` — Sitzungskarten, Freigabedialoge und Einstellungsansichten.
+
+Vollständige Anforderungen und technische Designverträge finden Sie in:
+- Produktanforderungen: [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md)
+- Technisches Design: [`docs/prd/puppeteer-managed-social-browser-technical-design.md`](docs/prd/puppeteer-managed-social-browser-technical-design.md)
 
 ## Dokumentation
 
 Die vollständige Dokumentation finden Sie unter [docs.aifetchly.com](https://docs.aifetchly.com).
 
-KI-gesteuerter verwalteter Browser (sichtbare Chrome-Sitzungen, Browser-Tools, Freigaben, manuelle Übernahme, Fingerprint, Cache): [Produktanforderungen](docs/prd/puppeteer-managed-social-browser-prd.md).
+KI-gesteuerter verwalteter Browser / Browser Use (sichtbare Chrome-Sitzungen, Browser-Tools, Aktionsprogramme, Freigaben, manuelle Übernahme, Fingerprint, Cache): [Produktanforderungen](docs/prd/puppeteer-managed-social-browser-prd.md) und [Technisches Design](docs/prd/puppeteer-managed-social-browser-technical-design.md).
 
 Die offizielle Website der Anwendung ist [aifetchly.com](https://www.aifetchly.com).
 

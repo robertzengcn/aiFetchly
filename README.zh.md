@@ -175,19 +175,52 @@ AI Chat 可以使用托管的 aiFetchly AI，也可以使用用户配置的 Open
 
 支持的预设包括 Ollama、LM Studio、OpenAI、OpenRouter、vLLM、LocalAI 和 Custom。Provider 配置需要 base URL 和默认模型，本地 Provider 的 API key 可选，第三方托管 Provider 建议配置 API key。
 
-## 受管浏览器自动化
+## 受管浏览器自动化（Browser Use） <a id="受管浏览器自动化"></a>
 
-aiFetchly 内置一个真正由 AI 驱动的浏览器。Agent 会打开一个你能在桌面上看到的、正常的有头 Chrome/Chromium 窗口，观察当前页面，并按你的要求完成操作，同时应用界面展示会话状态、审批、进度和结果。
+aiFetchly 内置由 AI 驱动的自主浏览器（Browser Use）运行环境。Agent 会打开一个桌面上可见的、正常的有头 Chrome/Chromium 窗口，观察页面语义结构，并按你的要求执行操作，同时应用界面实时展示会话状态、审批、进度与结果。
 
-该功能用于操作你拥有或被授权运营的网站与账号，不会绕过 MFA、登录/安全验证、平台安全策略或访问限制。
+该功能专为用户拥有或被授权运营的网站与账号自动化设计，严格遵循安全边界：不会绕过 MFA、登录/安全验证、平台安全策略或访问限制。
+
+### 架构与进程隔离
+
+浏览器自动化遵循严格的三层进程隔离模型：
+
+```text
+Electron 渲染进程 (Vue 3 UI)
+  会话卡片、实时状态、审批弹窗、人工接管浮层
+  绝不接触原始 Cookie、Worker 句柄、CDP 端点或内部凭据
+             │
+             │ contextBridge + Zod 校验 IPC
+             ▼
+Electron 主进程
+  ManagedBrowserSupervisor, ManagedBrowserLeaseService, ManagedBrowserAiToolService
+  账号租约、AES-256 Cookie 解密与重新加密、动作风险判定、审计日志
+             │
+             │ 私有 utilityProcess IPC (每个会话独立派生)
+             ▼
+src/childprocess/managed-browser/
+  ManagedBrowserRuntime, BrowserFingerprintPolicy, BrowserObservationService,
+  PageReferenceRegistry, BrowserActionExecutor, ChallengeDetector
+             │
+             │ Puppeteer 25.x
+             ▼
+有头 Chrome / Chromium
+  临时隔离配置文件 + 账号级资源缓存
+```
+
+- **主进程**：监督生命周期、账号租约（每个账号最多一个活跃浏览器）、Cookie 加密解密、审批策略与审计记录。易失性 Puppeteer 对象绝不进入主进程。
+- **专用 Utility 进程（`src/childprocess/managed-browser/`）**：每个会话由一个独立的 Utility 子进程通过 Puppeteer 驱动 Chrome。所有浏览器句柄、CDP 会话和 DOM 节点严格隔离在子进程内。
+- **渲染进程**：与 Cookie、网络 Token 和 CDP 接口完全物理隔离。
 
 ### 启动会话
 
-- **AI Chat**：直接描述需要浏览器的任务，Agent 会自行加载浏览器工具。
-- **Tool Account → Open managed browser**：复用已保存账号的登录状态连接对应平台。
-- **AI 工作区的会话卡片**：查看、控制或停止正在运行的浏览器。
+启动受管浏览器会话的三种方式：
 
-公开浏览不需要任何账号。任何网站（包括社交网络和必须登录的站点）都可以在没有保存 Tool Account 的情况下打开；需要登录时，aiFetchly 会把同一个窗口交给你处理，而不是拒绝打开或改用 HTTP 抓取。使用已保存账号打开时，则复用加密存储的 Cookie 会话。
+- **AI Chat**：直接描述需要浏览器的任务（如“打开 YouTube 并查找最近一周的未回复评论”），Agent 会自动加载浏览器工具。
+- **Tool Account → Open managed browser**：复用已保存账号的登录状态直接连接对应平台。
+- **AI 工作区的会话卡片**：查看、交互控制、接管或停止正在运行的浏览器。
+
+**公开浏览不需要任何账号。** 任何网站（包括社交网络和必须登录的站点）都可以在没有保存 Tool Account 的情况下打开，使用临时的一次性配置文件和直接网络连接。如果网站需要登录，aiFetchly 会把当前窗口平滑转交给你手动完成，而不是拒绝打开或改用静态 HTTP 抓取。使用已保存账号打开时，主进程会在跳转前解密并注入 Cookie。
 
 ### Agent 可用的浏览器工具
 
@@ -195,17 +228,31 @@ aiFetchly 内置一个真正由 AI 驱动的浏览器。Agent 会打开一个你
 |------|------|
 | `browser_start_session` | 为某个 URL 或已保存的 Tool Account 启动会话 |
 | `browser_get_status` | 读取会话状态和当前已脱敏 URL |
-| `browser_observe` | 获取有界的页面语义快照与可交互元素 |
+| `browser_observe` | 获取有界的页面语义快照与可交互元素引用 |
 | `browser_navigate` | 跳转到允许的 `http(s)` 地址 |
-| `browser_run_actions` | 执行有界的结构化动作程序（点击、输入、滚动、等待、提取、循环） |
-| `browser_screenshot` | 为当前对话截取页面缩略图 |
-| `browser_request_handoff` | 暂停并请你接管 |
-| `browser_resume_after_handoff` | 你确认后恢复 |
+| `browser_run_actions` | 执行有界的结构化动作程序（点击、输入、按键、滚动、等待、提取、循环） |
+| `browser_screenshot` | 为当前对话截取可视页面缩略图 |
+| `browser_request_handoff` | 暂停自动化并请求人工接管 |
+| `browser_resume_after_handoff` | 人工接管完成后确认恢复自动化 |
 | `browser_evaluate_script` | 在页面上下文中执行经审核的 JavaScript（需审批） |
 | `browser_clear_cache` | 确认后清理当前账号的浏览器缓存 |
-| `browser_stop_session` | 停止并关闭浏览器 |
+| `browser_stop_session` | 停止 Chrome、终止 Worker 并释放账号租约 |
 
-`browser_observe` 返回形如 `@e1 [button] "Search"` 的引用，并附带页面版本号；页面版本变化后旧引用会被拒绝，避免点错元素。结构化动作无法表达的 DOM 逻辑可以用 `browser_evaluate_script` 完成，脚本只在网页上下文运行，不会以 Node.js、Electron、Shell 或文件系统权限执行。
+`browser_observe` 返回形如 `@e1 [button] "Search"` 的紧凑语义引用，并绑定具体的页面版本号（Page Revision）。一旦页面因导航或 DOM 变动而更新，过期引用会立即被拒绝，杜绝点错元素的风险。
+
+`browser_run_actions` 工具支持结构化动作程序 DSL，允许在单个原子工具调用中执行多步骤连续操作（点击、输入、按键、滚动、等待选择器/导航、数据提取、悬停、有限循环），并通过 `ToolJobRegistry` 注册为异步任务，支持实时进度报告和即时取消。超出结构化动作的复杂 DOM 操作可通过 `browser_evaluate_script` 完成，脚本严格在网页上下文执行，绝不具备 Node.js、Electron、Shell 或文件系统权限。
+
+### 会话状态与控制
+
+运行中的会话会实时上报当前状态（`starting`、`checking browser`、`applying login session`、`verifying login`、`login required`、`ready`、`working`、`awaiting approval`、`verification challenge`、`you have control`、`stopping`、`stopped`、`failed`），并显示账号、平台、脱敏域名、代理状态和运行耗时。
+
+会话卡片提供的交互控制：
+
+- **暂停 AI**：阻止 Agent 继续发送后续浏览器动作；
+- **手动接管**：直接在桌面可见的 Chrome 窗口中点击和输入；
+- **已完成登录 / 继续任务**：验证登录有效性，捕获更新后的会话并交回控制权；
+- **延长接管时间**：为人工验证保留更充裕的接管时长；
+- **停止浏览器**：中止当前操作，安全持久化最新会话，正常退出 Chrome 和 Worker 进程并释放租约。
 
 ### 审批与安全
 
@@ -218,7 +265,13 @@ aiFetchly 内置一个真正由 AI 驱动的浏览器。Agent 会打开一个你
 | 特权脚本 | 任意页面内 JavaScript | 展示脚本、域名、用途、超时和预期输出后审批 |
 | 身份验证 | 密码、MFA、通行密钥、安全验证码 | 始终交由你手动完成 |
 
-网页内容被视为不可信数据，因此页面无法说服 Agent 跳过审批；模型不能自行把操作标记为安全；目标或页面版本在审批后发生变化时，审批会失效。Cookie 不会进入渲染进程、模型上下文、工具结果、日志或分析数据，只有主进程负责解密、浏览器 Worker 负责应用；登录成功后新的会话会被重新加密保存。
+安全机制保证：
+
+- 网页内容被视为不可信数据，页面内的提示词注入无法诱导 Agent 跳过审批策略。
+- 模型无法自行将操作标记为安全，用户拒绝具有最高权威。
+- 原生指纹策略匹配真实的 Chrome 版本与运行环境，避免因伪造矛盾特征触发反爬检测。
+- Cookie 采用 `safeStorage`（AES-256-GCM）加密存储并进行域名白名单过滤，绝不进入渲染进程、提示词上下文、工具返回结果或日志。
+- 会话接管或任务完成后，会自动抓取最新 Cookie 并重新加密持久化，无需手动重新导出。
 
 ### 设置与缓存
 
@@ -233,13 +286,23 @@ aiFetchly 内置一个真正由 AI 驱动的浏览器。Agent 会打开一个你
 
 面板还显示缓存大小、上次清理时间，以及清理单个账号或全部受管浏览器缓存的入口。清理缓存不会删除加密 Cookie、已保存登录、账号记录或下载文件。
 
-完整需求、安全模型、指纹策略和上线计划见 [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md)。
+### 实现代码参考
+
+- `src/service/ManagedBrowserSupervisor.ts`, `ManagedBrowserLeaseService.ts`, `ManagedBrowserAiToolService.ts` — 主进程监督器、租约管理、工具分发、风险判定、审批与缓存协调。
+- `src/modules/ManagedBrowserModule.ts`, `ManagedBrowserSettingsModule.ts`, `ManagedBrowserCacheModule.ts` — 业务逻辑、账号 Cookie 调度与设置持久化。
+- `src/childprocess/managed-browser/` — 会话级独立 Worker 子进程：Puppeteer 运行时、导航与指纹策略、语义观察服务、动作程序执行、验证码挑战检测与 Cookie 应用。
+- `src/childprocess/managed-browser-cache/` — 独立的缓存大小计算、淘汰与清理 Worker。
+- `src/views/components/aiChatV2/ManagedBrowserSessionCard.vue`, `ManagedBrowserHandoffDialog.vue`, `src/views/components/settings/ManagedBrowserSettingsPanel.vue` — 前端会话卡片、审批与接管弹窗、设置面板。
+
+完整产品需求与技术设计规范见：
+- 产品需求：[`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md)
+- 技术设计：[`docs/prd/puppeteer-managed-social-browser-technical-design.md`](docs/prd/puppeteer-managed-social-browser-technical-design.md)
 
 ## 文档
 
 完整文档请访问 [docs.aifetchly.com](https://docs.aifetchly.com)。
 
-AI 操控受管浏览器（可见 Chrome 会话、浏览器工具、审批、人工接管、指纹策略、缓存）：[产品需求](docs/prd/puppeteer-managed-social-browser-prd.md)。
+AI 操控受管浏览器 / Browser Use（可见 Chrome 会话、浏览器工具、动作程序、审批、人工接管、指纹策略、缓存）：[产品需求](docs/prd/puppeteer-managed-social-browser-prd.md) 与 [技术设计](docs/prd/puppeteer-managed-social-browser-technical-design.md)。
 
 应用官方网站是 [aifetchly.com](https://www.aifetchly.com)。
 
