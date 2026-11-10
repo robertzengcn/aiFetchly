@@ -138,6 +138,8 @@ Validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgent
 
 Remaining from the §10 order: X1 (tldts), P0-8 (proxy ciphertext readers — googleMaps/yandexMaps-ipc, Proxy.model, SearchModule), P0-9 (card mounting + picker/domain-confirmation IPC), P0-10 (root-conversation threading), X2/X4/X5 sweeps, and the missing-feature groups.
 
+**CI status after this round (`2970f10e6`): Electron E2E (Playwright) ✓ green; Lint and unit tests ✓; the Package smoke job's runner died mid-packaging ("Build Linux package" terminated without completing — the known infra starvation class, same as the earlier "hosted runner lost communication"); the job is being re-triggered.**
+
 ## 2. Cross-cutting defect patterns (fix every instance together)
 
 ### X1 — Registrable domain (eTLD+1) is not a public-suffix library (security)
