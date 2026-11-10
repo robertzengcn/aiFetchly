@@ -1025,6 +1025,7 @@ export const E2E_SEED_EMAIL_SERVICE = "e2e:seed-email-service";
 export const E2E_SEED_RECEIVED_MESSAGE = "e2e:seed-received-message";
 export const E2E_SEED_AUTO_REPLY_AUDIT = "e2e:seed-auto-reply-audit";
 export const E2E_SEED_REPLY_DRAFT = "e2e:seed-reply-draft";
+export const E2E_SEED_MESSAGE_LOCATION = "e2e:seed-message-location";
 
 // ---------------------------------------------------------------------------
 // Recoverable large tool results (AI Chat V2).

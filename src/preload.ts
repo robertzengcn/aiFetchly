@@ -635,6 +635,7 @@ import {
   E2E_SEED_RECEIVED_MESSAGE,
   E2E_SEED_AUTO_REPLY_AUDIT,
   E2E_SEED_REPLY_DRAFT,
+  E2E_SEED_MESSAGE_LOCATION,
 } from "@/config/channellist";
 import {
   LOCAL_AI_RUNTIME_LIST,
@@ -1572,6 +1573,7 @@ contextBridge.exposeInMainWorld("api", {
       E2E_SEED_RECEIVED_MESSAGE,
       E2E_SEED_AUTO_REPLY_AUDIT,
       E2E_SEED_REPLY_DRAFT,
+      E2E_SEED_MESSAGE_LOCATION,
       // Application lifecycle (exit & system tray, design §10) — NOT AI-gated
       APPLICATION_LIFECYCLE_GET_STATE,
       APPLICATION_CLOSE_CHOICE_ACK,
