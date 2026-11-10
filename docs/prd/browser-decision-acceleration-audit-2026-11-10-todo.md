@@ -120,6 +120,24 @@ Line numbers below refer to `94d8f8834`.
 
 ---
 
+## 0. Fix round 2026-11-11 (implementation HEAD: `ba6b2b54e`)
+
+The execution/safety blocker group (§10 order step 1) is closed and integration-proven:
+
+| Defect | Fix and evidence | Commit |
+| --- | --- | --- |
+| **P0-1 — the runner blocks itself** | `runActions` split into the guarded public wrapper (legacy tools keep the ownership guard) and the private UNGUARDED `runActionsCore`; `runAuthorizedForRunner` calls the core directly — the runner's lease IS the ownership. **The audit's requested integration test now exists and PASSES**: `executeTask → one CLICK decision → ACTION_RESULT → terminal completed with verified criteria`, going through the REAL service (mocked only at the AI-transport/module boundary) — before the fix this exact path died with `runner_error:session_not_owned`. | `e0375d9a9` |
+| **P0-3 — approval bypass via unresolvable refs** | fail-closed: a targeted ref missing from the attested observation throws `stale_page_reference / target_ref_not_in_attested_observation` BEFORE classification; model-authored `expectedRole/expectedName` are stripped at the boundary and only main-process-attested descriptors are stamped. Tests: a ghost ref is rejected with nothing dispatched; an attacker-authored descriptor never reaches the worker (the attested one is stamped). | `e0375d9a9` |
+| **P0-4 — press_key classified as read** | `press_key` removed from READ_ACTION_TYPES; press_key/clear/hover/go_back/reload classify `consequential_write / side_effect_unverifiable` (approval). Matrix test updated. | `e0375d9a9` |
+| **P0-5 — revision regression after handoff** | all three `registry.reset(runtime.pageRevision + 1)` sites now use `registry.currentRevision + 1` (runtime.pageRevision never advanced) — revisions are no longer reused after handoff/manual-login, and the main-process cache rule no longer rejects every post-handoff observation. | `e0375d9a9` |
+| **X6 — tool result drops stopCode/extracted/handoffReason** | the core's ACTION_RESULT return carries `stopCode` + `extracted`; a `HANDOFF_REQUIRED` message passes through with its reason (the executor-forced handoff is now awaited in-job by the runner instead of counting a failure and dying `observation_unavailable`); the seam maps all three. | `e0375d9a9` |
+| **P0-6 — start-session ignores the proxy** | the model-facing zod union is mapped into the discriminated `BrowserProxySelection` (`mapProxySelection`) before `start` — proxy_id/direct/auto now behave as requested (public+auto no longer fails unconditionally). | `ba6b2b54e` |
+| **P0-7 — proxy switch destroys the session before validating** | `switchSessionProxy` serialized per session (`proxy_switch_in_progress` error code added); selection + health-check prevalidation runs BEFORE `stop()` (a refused switch leaves the working session untouched); a start failure after validation restores a session on the same lineage. | `ba6b2b54e` |
+
+Validation: `tsc --noEmit` exit 0; browserDecision + browserLogin + browserAgents + managedBrowser + i18n **666 tests pass**; utility managedBrowser **150 pass**. The cache-module flake seen once mid-round passes in isolation (load-sensitive, same class as CI round 3).
+
+Remaining from the §10 order: X1 (tldts), P0-8 (proxy ciphertext readers — googleMaps/yandexMaps-ipc, Proxy.model, SearchModule), P0-9 (card mounting + picker/domain-confirmation IPC), P0-10 (root-conversation threading), X2/X4/X5 sweeps, and the missing-feature groups.
+
 ## 2. Cross-cutting defect patterns (fix every instance together)
 
 ### X1 — Registrable domain (eTLD+1) is not a public-suffix library (security)
