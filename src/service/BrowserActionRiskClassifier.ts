@@ -73,7 +73,8 @@ const READ_ACTION_TYPES = new Set([
   "screenshot",
   "wait_for",
   "scroll",
-  "press_key",
+  // P0-4: press_key is NOT a read — Enter submits forms; classification
+  // falls through to the focused-element check below.
   "get_status",
   "request_handoff",
   "resume_after_handoff",
@@ -143,6 +144,17 @@ export class BrowserActionRiskClassifier {
       case "clear_cache":
         riskClass = "local_data_delete";
         reasonCode = "local_cache_delete";
+        break;
+      // P0-4: press_key (Enter submits), clear, hover (can trigger
+      // navigation/modals), go_back and reload are consequential by
+      // default — the focused-element context is unknown to the model.
+      case "press_key":
+      case "clear":
+      case "hover":
+      case "go_back":
+      case "reload":
+        riskClass = "consequential_write";
+        reasonCode = "side_effect_unverifiable";
         break;
       case "click":
       case "select":

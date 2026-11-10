@@ -281,6 +281,27 @@ describe("risk routing", () => {
     const program = {
       actions: [{ type: "click", ref: "e_abc", pageRevision: 1 }],
     };
+    // P0-3: the ref must exist in the ATTESTED observation — the fake
+    // module exposes one containing e_abc so the click classifies normally.
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        observationId: "obs-p03",
+        pageRevision: 1,
+        url: "https://www.youtube.com",
+        origin: "https://www.youtube.com",
+        title: "YouTube",
+        state: "ready",
+        // A NON-consequential label: the test's intent is an ordinary
+        // reversible click ("Publish" would match the consequential
+        // descriptor markers and always demand approval).
+        elements: [
+          { ref: "e_abc", role: "button", name: "Open details" },
+        ],
+        visibleText: "page text",
+        notices: [],
+        truncated: false,
+      })
+    );
     // The program-level registry confirmation covers ref-only clicks; a
     // credential URL inside the program still forces approval/handoff:
     const err = await errorOf(
@@ -309,7 +330,16 @@ describe("risk routing", () => {
       { ...CTX, skipPermissionCheck: true }
     );
     expect(result.effect).toBe("known");
-    expect(module.runActions).toHaveBeenCalledWith(SESSION_ID, program);
+    // P0-3: the dispatched program is the ATTESTED one — ref/type
+    // preserved, descriptors stamped from the observation.
+    expect(module.runActions).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.objectContaining({
+        actions: [
+          expect.objectContaining({ type: "click", ref: "e_abc" }),
+        ],
+      })
+    );
   });
 });
 
@@ -978,4 +1008,73 @@ describe("executeTask admission serialization (F16/P0)", () => {
       reasonCode: "session_owned_by_active_runner",
     });
   });
+});
+
+describe("P0-3 fail-closed refs", () => {
+  it("a targeted ref missing from the attested observation is rejected, never auto-executed", async () => {
+    const module = makeModule(); // getLastObservation → null
+    const service = makeService({ module });
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 1,
+          program: {
+            actions: [{ type: "click", ref: "e_ghost", pageRevision: 1 }],
+          },
+        },
+        { ...CTX, skipPermissionCheck: true }
+      )
+    );
+    expect(err.code).toBe("stale_page_reference");
+    // The module was never called — nothing executed.
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
+
+  it("model-authored expectedRole/expectedName are stripped at the boundary", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        observationId: "obs-p03b",
+        pageRevision: 1,
+        url: "https://www.youtube.com",
+        origin: "https://www.youtube.com",
+        title: "YouTube",
+        state: "ready",
+        elements: [{ ref: "e_abc", role: "button", name: "Real Name" }],
+        visibleText: "page text",
+        notices: [],
+        truncated: false,
+      })
+    );
+    const service = makeService({ module });
+    await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 1,
+        program: {
+          actions: [
+            {
+              type: "click",
+              ref: "e_abc",
+              pageRevision: 1,
+              expectedRole: "link",
+              expectedName: "Attacker-chosen name",
+            },
+          ],
+        },
+        },
+        { ...CTX, skipPermissionCheck: true }
+      );
+      const dispatched = (module.runActions as ReturnType<typeof vi.fn>).mock
+        .calls[0][1] as {
+        actions: Array<{ expectedName?: string; expectedRole?: string }>;
+      };
+      // The model-authored descriptor never reaches the worker — the
+      // ATTESTED one is stamped in its place.
+      expect(dispatched.actions[0]!.expectedName).toBe("Real Name");
+      expect(
+        JSON.stringify(dispatched)
+      ).not.toContain("Attacker-chosen name");
+    });
 });

@@ -353,7 +353,9 @@ export class WorkerSession {
         case "authenticated": {
           await this.captureAndSendRefreshedCookies(payload.requestId);
           this.runtime.transition("ready");
-          this.registry.reset(this.runtime.pageRevision + 1);
+          // P0-5: bump from the REGISTRY's own revision — runtime.pageRevision
+      // never advances, so the old form reused revisions after handoffs.
+      this.registry.reset(this.registry.currentRevision + 1);
           this.send({
             ...this.base(payload.requestId),
             type: "SESSION_READY",
@@ -676,7 +678,9 @@ export class WorkerSession {
     const assessment = await this.assess();
     if (assessment.state === "authenticated") {
       this.runtime.transition("ready");
-      this.registry.reset(this.runtime.pageRevision + 1);
+      // P0-5: bump from the REGISTRY's own revision — runtime.pageRevision
+      // never advances, so the old form reused revisions after handoffs.
+      this.registry.reset(this.registry.currentRevision + 1);
       this.send({
         ...this.base(requestId),
         type: "SESSION_STATE_CHANGED",
@@ -718,7 +722,9 @@ export class WorkerSession {
     if (assessment.state === "authenticated") {
       await this.captureAndSendRefreshedCookies(requestId);
       this.runtime.transition("ready");
-      this.registry.reset(this.runtime.pageRevision + 1);
+      // P0-5: bump from the REGISTRY's own revision — runtime.pageRevision
+      // never advances, so the old form reused revisions after handoffs.
+      this.registry.reset(this.registry.currentRevision + 1);
       this.send({
         ...this.base(requestId),
         type: "SESSION_STATE_CHANGED",

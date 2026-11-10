@@ -567,9 +567,33 @@ export class ManagedBrowserAiToolService {
       );
     }
     // F16/P0: an active runner owns this session — legacy tools wait.
+    // P0-1: the RUNNER reaches runActionsCore directly (it owns the
+    // session by construction); this guard must never apply to it.
     this.assertNoRunnerOwnership(parsed.data.session_id);
+    return this.runActionsCore(parsed.data, context);
+  }
+
+  /**
+   * P0-1: the UNGUARDED core shared by the legacy tool (after its
+   * ownership guard) and by the runner (whose lease is the ownership).
+   */
+  private async runActionsCore(
+    data: {
+      session_id: string;
+      program: BrowserActionProgram;
+      page_revision: number;
+    },
+    context: BrowserToolExecutionContext
+  ): Promise<Record<string, unknown>> {
+    const parsed = {
+      data: {
+        session_id: data.session_id,
+        program: data.program,
+        page_revision: data.page_revision,
+      },
+    };
     const sessionStatus = this.ensureSession(parsed.data.session_id, context?.conversationId);
-    const program = parsed.data.program as BrowserActionProgram;
+    let program = parsed.data.program as BrowserActionProgram;
 
     // Risk gate over the whole program (§15.4).
     // GAP-01: resolve every element ref against the LATEST sanitized
@@ -584,6 +608,52 @@ export class ManagedBrowserAiToolService {
       const element = observation?.elements.find((e) => e.ref === ref);
       return element ? { role: element.role, name: element.name } : null;
     };
+    // P0-3 (D-AC-04/05): a targeted ref that is NOT in the attested
+    // observation fails closed — with no descriptor the classifier
+    // would treat the action as an unnamed auto-approved target, and
+    // the worker would fall back to its own registry descriptor.
+    for (const action of flattenProgramActions(program.actions)) {
+      if (
+        (action.type === "click" ||
+          action.type === "fill" ||
+          action.type === "select" ||
+          action.type === "hover" ||
+          action.type === "clear" ||
+          action.type === "wait_for") &&
+        "ref" in action &&
+        typeof action.ref === "string" &&
+        !descriptorFor(action.ref)
+      ) {
+        throw new ManagedBrowserAiToolError(
+          "stale_page_reference",
+          undefined,
+          "target_ref_not_in_attested_observation"
+        );
+      }
+    }
+    // P0-3 (D-FR-27): model-authored expectedRole/expectedName are
+    // STRIPPED at the boundary — only the main-process-attested
+        // descriptors may be stamped onto the program.
+    const stripExpected = (nodes: readonly BrowserAction[]): BrowserAction[] =>
+      nodes.map((node) => {
+        if (node.type === "if") {
+          return {
+            ...node,
+            then: stripExpected(node.then),
+            ...(node.else ? { else: stripExpected(node.else) } : {}),
+            expectedRole: undefined,
+            expectedName: undefined,
+          };
+        }
+        if (node.type === "repeat") {
+          return { ...node, body: stripExpected(node.body), expectedRole: undefined, expectedName: undefined };
+        }
+        const { expectedRole: _er, expectedName: _en, ...rest } = node as Record<string, unknown>;
+        void _er;
+        void _en;
+        return rest as BrowserAction;
+      });
+    program = { ...program, actions: stripExpected(program.actions) } as BrowserActionProgram;
     const assessment = this.classifier.classifyProgram(
       flattenProgramActions(program.actions).map((action) => {
         if (
@@ -752,16 +822,32 @@ export class ManagedBrowserAiToolService {
       );
       emit(total - 1);
       if (result.type !== "ACTION_RESULT") {
+        if (result.type === "HANDOFF_REQUIRED") {
+          // X6: the executor-forced handoff reaches the runner in-job
+          // (awaitHandoff) instead of falling through as a failure.
+          return {
+            type: "HANDOFF_REQUIRED",
+            effect: "unknown",
+            pageRevision: 0,
+            handoffReason: (result as { reason?: string }).reason ?? null,
+            contentNotice: UNTRUSTED_CONTENT_NOTICE,
+          };
+        }
         return {
           effect: "unknown",
           pageRevision: 0,
           contentNotice: UNTRUSTED_CONTENT_NOTICE,
         };
       }
+      // X6: stopCode + extracted ride through — the LLM must tell
+      // unknown_effect/consecutive_failures from success, and EXTRACT
+      // payloads must reach the runner's completion criteria.
       return {
         effect: result.effect,
         pageRevision: result.pageRevision,
         contentNotice: UNTRUSTED_CONTENT_NOTICE,
+        stopCode: result.stopCode ?? null,
+        extracted: result.extracted ?? [],
         results: result.results.map((r) => ({
           actionIndex: r.actionIndex,
           type: r.type,
@@ -1084,7 +1170,8 @@ export class ManagedBrowserAiToolService {
       intent: "browser_execute_task",
     };
     try {
-      const message = (await this.runActions(
+      // P0-1: the runner calls the UNGUARDED core — it owns the session.
+      const message = (await this.runActionsCore(
         {
           session_id: sessionId,
           program: program as never,
@@ -1095,11 +1182,17 @@ export class ManagedBrowserAiToolService {
         type?: string;
         effect?: string;
         pageRevision?: number;
+        stopCode?: string | null;
+        handoffReason?: string | null;
         results?: Array<{ success: boolean; errorCode?: string | null }>;
         extracted?: readonly unknown[];
       };
       if (message.type === "HANDOFF_REQUIRED") {
-        return { kind: "stop", stopCode: "handoff_required" };
+        return {
+          kind: "stop",
+          stopCode: "handoff_required",
+          reasonCode: message.handoffReason ?? undefined,
+        };
       }
       return {
         kind: "executed",
@@ -1109,6 +1202,9 @@ export class ManagedBrowserAiToolService {
           success: r.success,
           errorCode: r.errorCode ?? null,
         })),
+        // X6: the executor's stop codes survive (unknown_effect,
+        // consecutive_failures, ...) so the runner can stop honestly.
+        ...(message.stopCode ? { stopCode: message.stopCode } : {}),
         // F07: EXTRACT payloads reach the runner's completion criteria.
         ...(message.extracted ? { extracted: message.extracted } : {}),
       };
