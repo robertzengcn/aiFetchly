@@ -53,6 +53,10 @@ aiFetchly transforme une intention métier en workflows exécutables :
 
 ![Paramètres AI Provider aiFetchly](docs/images/readme/ai-provider-settings.png)
 
+### Gestion de la mémoire IA
+
+![Gestion de la mémoire IA aiFetchly](docs/images/readme/memory_edit.png)
+
 ## Capacités de l'agent
 
 ### Espace de travail IA
@@ -60,6 +64,7 @@ aiFetchly transforme une intention métier en workflows exécutables :
 | Capacité | Description |
 |----------|-------------|
 | **Chat IA avec outils** | Travaillez avec un assistant qui peut appeler des outils approuvés, utiliser le contexte métier et mener des tâches en plusieurs étapes. |
+| **Gestion de la mémoire IA** | Gérez la mémoire IA durable dans une interface dédiée : mémoire utilisateur (faits et préférences mémorisés d'une conversation à l'autre) et mémoire d'espace de travail (connaissances propres au projet). Créez, modifiez, archivez ou supprimez des mémoires, filtrez par type/statut/source, recherchez et consolidez la mémoire issue du chat et des agents. |
 | **AI Providers personnalisés** | Alimentez AI Chat avec un fournisseur compatible OpenAI : Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI ou endpoint personnalisé. |
 | **Exécution de tâches métier** | Lancez recherche, extraction, traitement de fichiers, rédaction, planification et automatisation sans jongler entre plusieurs SaaS. |
 | **Assistant email client IA** | Rédigez, envoyez et répondez aux emails clients avec le contexte de vos documents et données de workflow. |

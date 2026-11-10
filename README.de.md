@@ -53,6 +53,10 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 
 ![aiFetchly AI-Provider-Einstellungen](docs/images/readme/ai-provider-settings.png)
 
+### KI-Speicherverwaltung
+
+![aiFetchly KI-Speicherverwaltung](docs/images/readme/memory_edit.png)
+
 ## Agent-Funktionen
 
 ### KI-Agent-Arbeitsbereich
@@ -60,6 +64,7 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 | Funktion | Beschreibung |
 |----------|--------------|
 | **KI-Chat mit Tools** | Arbeiten Sie mit einem Assistenten, der freigegebene Tools aufrufen, Geschäftskontext nutzen und mehrstufige Aufgaben erledigen kann. |
+| **KI-Speicherverwaltung** | Verwalten Sie dauerhaften KI-Speicher in einer dedizierten Oberfläche: Benutzerspeicher (Fakten und Präferenzen, die sich die KI über Unterhaltungen hinweg merkt) und Arbeitsbereichsspeicher (projektspezifisches Wissen). Erstellen, bearbeiten, archivieren oder löschen Sie Erinnerungen, filtern Sie nach Typ/Status/Quelle, suchen Sie und führen Sie Speicherkonsolidierungen aus Chat- und Agentenaktivitäten durch. |
 | **Eigene AI Provider** | Nutzen Sie OpenAI-kompatible Anbieter wie Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI oder eigene Endpunkte. |
 | **Ausführung von Business-Aufgaben** | Recherche, Extraktion, Dateiverarbeitung, Nachrichtenerstellung, Planung und Automatisierung ohne Wechsel zwischen mehreren SaaS-Tools. |
 | **KI-Assistent für Kunden-E-Mails** | Entwerfen, senden und beantworten Sie Kunden-E-Mails mit Kontext aus Dokumenten und Workflow-Daten. |

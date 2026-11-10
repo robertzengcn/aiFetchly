@@ -53,6 +53,10 @@ aiFetchly convierte una intención de negocio en flujos ejecutables:
 
 ![Configuración de AI Provider en aiFetchly](docs/images/readme/ai-provider-settings.png)
 
+### Gestión de memoria de IA
+
+![Gestión de memoria de IA de aiFetchly](docs/images/readme/memory_edit.png)
+
 ## Capacidades del agente
 
 ### Espacio de trabajo de IA
@@ -60,6 +64,7 @@ aiFetchly convierte una intención de negocio en flujos ejecutables:
 | Capacidad | Descripción |
 |-----------|-------------|
 | **Chat de IA con herramientas** | Trabaja con un asistente que puede usar herramientas aprobadas, contexto empresarial y tareas de varios pasos. |
+| **Gestión de memoria de IA** | Administre la memoria duradera de la IA en una interfaz dedicada: memoria de usuario (hechos y preferencias que la IA recuerda entre conversaciones) y memoria del espacio de trabajo (conocimiento a nivel de proyecto). Cree, edite, archive o elimine memorias, filtre por tipo/estado/fuente, busque y ejecute consolidación de memoria a partir de la actividad del chat y del agente. |
 | **AI Providers personalizados** | Usa cualquier proveedor compatible con OpenAI, incluidos Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI o un endpoint personalizado. |
 | **Ejecución de tareas empresariales** | Ejecuta investigación, extracción, procesamiento de archivos, borradores, programación y automatizaciones sin cambiar entre varias herramientas SaaS. |
 | **Asistente de email para clientes** | Redacta, envía y responde emails con contexto de tus documentos y datos de trabajo. |

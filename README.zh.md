@@ -53,6 +53,10 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 
 ![aiFetchly AI Provider 设置](docs/images/readme/ai-provider-settings.png)
 
+### AI 记忆管理
+
+![aiFetchly AI 记忆管理](docs/images/readme/memory_edit.png)
+
 ## Agent 能力
 
 ### AI Agent 工作空间
@@ -60,6 +64,7 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 | 能力 | 说明 |
 |------|------|
 | **可使用工具的 AI 聊天** | 在桌面工作空间中，让 AI 助手调用经过批准的工具、使用业务上下文并完成多步骤任务。 |
+| **AI 记忆管理** | 在专用界面中管理持久 AI 记忆：用户记忆（跨会话记住的事实和偏好）和工作区记忆（项目级知识）。支持创建、编辑、归档或删除记忆，按类型/状态/来源筛选，搜索，以及基于聊天和 Agent 活动运行记忆整合。 |
 | **自定义 AI Provider** | AI Chat 支持 OpenAI 兼容 Provider，包括 Ollama、LM Studio、OpenAI、OpenRouter、vLLM、LocalAI 或自定义端点。 |
 | **业务任务执行** | 执行调研、提取、文件处理、消息草拟、定时和自动化流程，无需在多个 SaaS 工具之间切换。 |
 | **AI 客户邮件助手** | 使用业务文档和流程数据作为上下文，草拟、发送和回复客户邮件。 |
