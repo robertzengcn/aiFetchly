@@ -41,6 +41,10 @@ aiFetchly はビジネス上の意図を実行可能なワークフローに変�
 
 ![aiFetchly AI agent ワークスペース](docs/images/readme/hero-ai-chat.png)
 
+### 管理ブラウザ（Browser Use）
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
+
 ### 知識ライブラリ
 
 ![aiFetchly 知識ライブラリ](docs/images/readme/knowledge-library.png)
@@ -176,6 +180,8 @@ AI Chat は hosted aiFetchly AI またはユーザー設定の OpenAI 互換 Pro
 ## 管理ブラウザ自動化（Browser Use） <a id="管理ブラウザ自動化"></a>
 
 aiFetchly には AI Agent が直接駆動できる自律型ブラウザ実行環境（Browser Use）が組み込まれています。Agent はデスクトップ上に表示される通常の Chrome/Chromium ウィンドウを開き、ページのセマンティック構造を観察して要求された手順を実行します。アプリ側ではセッション状態、承認、進捗、結果をリアルタイムに確認できます。
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
 
 この機能は、ユーザーが所有している、または運用を許可されている Web サイトやアカウントの自動化を目的としており、厳格な安全境界を遵守します。MFA、ログイン/セキュリティ確認、プラットフォームの安全ポリシー、アクセス制限を回避することはありません。
 

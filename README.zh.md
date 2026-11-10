@@ -41,6 +41,10 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 
 ![aiFetchly AI agent 工作区](docs/images/readme/hero-ai-chat.png)
 
+### 受管浏览器（Browser Use）
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
+
 ### 知识库
 
 ![aiFetchly 知识库](docs/images/readme/knowledge-library.png)
@@ -178,6 +182,8 @@ AI Chat 可以使用托管的 aiFetchly AI，也可以使用用户配置的 Open
 ## 受管浏览器自动化（Browser Use） <a id="受管浏览器自动化"></a>
 
 aiFetchly 内置由 AI 驱动的自主浏览器（Browser Use）运行环境。Agent 会打开一个桌面上可见的、正常的有头 Chrome/Chromium 窗口，观察页面语义结构，并按你的要求执行操作，同时应用界面实时展示会话状态、审批、进度与结果。
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
 
 该功能专为用户拥有或被授权运营的网站与账号自动化设计，严格遵循安全边界：不会绕过 MFA、登录/安全验证、平台安全策略或访问限制。
 

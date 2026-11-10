@@ -52,6 +52,10 @@ aiFetchly helps you turn business intent into executable workflows:
 
 ![aiFetchly AI agent workspace](docs/images/readme/hero-ai-chat.png)
 
+### Managed Browser (Browser Use)
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
+
 ### Knowledge Library
 
 ![aiFetchly knowledge library](docs/images/readme/knowledge-library.png)
@@ -304,6 +308,8 @@ The settings screen can refresh available models, test chat and streaming suppor
 ## Managed Browser Automation (Browser Use) <a id="managed-browser-automation"></a>
 
 aiFetchly includes a built-in, autonomous browser use runtime that the AI agent can drive directly. The agent starts a normal, headed Chrome or Chromium window that you can see on your desktop, observes the page semantically, and executes the steps you requested while the application displays real-time session status, approvals, progress, and results.
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
 
 It is designed for authorized social-platform and web automation on sites and accounts you own or manage. It strictly enforces safety boundaries: it does not bypass MFA, login/security challenges, platform safety controls, or access restrictions.
 

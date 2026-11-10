@@ -41,6 +41,10 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 
 ![aiFetchly KI-Agent-Arbeitsbereich](docs/images/readme/hero-ai-chat.png)
 
+### Verwalteter Browser (Browser Use)
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
+
 ### Wissensbibliothek
 
 ![aiFetchly Wissensbibliothek](docs/images/readme/knowledge-library.png)
@@ -176,6 +180,8 @@ AI Chat kann die gehostete aiFetchly-KI oder einen vom Nutzer konfigurierten Ope
 ## Automatisierung mit verwaltetem Browser (Browser Use) <a id="automatisierung-mit-verwaltetem-browser"></a>
 
 aiFetchly enthält eine autonome Browser-Laufzeitumgebung (Browser Use), die der KI-Agent direkt steuern kann. Der Agent öffnet ein sichtbares, normales Chrome-/Chromium-Fenster auf Ihrem Desktop, erfasst die Seite semantisch und führt die gewünschten Schritte aus, während die Anwendung den Sitzungsstatus, Freigaben, Fortschritt und Ergebnisse in Echtzeit anzeigt.
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
 
 Diese Funktion ist für die Web- und Social-Media-Automatisierung auf Websites und Konten konzipiert, die Sie besitzen oder autorisiert betreiben. Sie respektiert strikte Sicherheitsgrenzen: Sie umgeht weder MFA noch Anmelde- oder Sicherheitsprüfungen, Plattformrichtlinien oder Zugriffsbeschränkungen.
 

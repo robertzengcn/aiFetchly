@@ -41,6 +41,10 @@ aiFetchly convierte una intención de negocio en flujos ejecutables:
 
 ![Espacio de trabajo del agente de IA de aiFetchly](docs/images/readme/hero-ai-chat.png)
 
+### Navegador gestionado (Browser Use)
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
+
 ### Biblioteca de conocimiento
 
 ![Biblioteca de conocimiento de aiFetchly](docs/images/readme/knowledge-library.png)
@@ -176,6 +180,8 @@ AI Chat puede usar la IA alojada de aiFetchly o un proveedor compatible con Open
 ## Automatización con navegador gestionado (Browser Use) <a id="automatización-con-navegador-gestionado"></a>
 
 aiFetchly incluye un entorno de ejecución autónomo de navegador (Browser Use) que el agente de IA puede conducir directamente. El agente abre una ventana normal de Chrome/Chromium visible en tu escritorio, observa semánticamente la página y ejecuta los pasos requeridos mientras la aplicación muestra en tiempo real el estado, las aprobaciones, el progreso y los resultados.
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
 
 Está diseñado para automatización web y en redes sociales en sitios y cuentas que posees o estás autorizado a operar, respetando estrictamente los límites de seguridad: no evita MFA, desafíos de acceso/seguridad, políticas de la plataforma ni restricciones de acceso.
 
