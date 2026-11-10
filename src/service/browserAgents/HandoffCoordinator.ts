@@ -34,7 +34,14 @@ export interface AwaitUserResolutionInput {
 
 /** F06: session states that mean the user is STILL in the window. */
 const HANDOFF_WAITING_STATES: ReadonlySet<ManagedBrowserSessionState> = new Set(
-  ["handoff", "user_login_in_progress", "verifying_manual_login"]
+  [
+    // X4: login_required is NOT a resolution — the user dialog opened
+    // but the session still needs the credential flow to complete.
+    "handoff",
+    "user_login_in_progress",
+    "verifying_manual_login",
+    "login_required",
+  ]
 );
 /** F06: session states that mean the window can never resolve. */
 const HANDOFF_DEAD_STATES: ReadonlySet<ManagedBrowserSessionState> = new Set(

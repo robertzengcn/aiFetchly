@@ -163,8 +163,17 @@ export class AgentTaskControlService {
     if (!record) {
       return;
     }
+    // X4: a terminal record never opens interventions (the sweep timer
+    // would leak), and an explicit PAUSE keeps its own state — an
+    // intervention on a paused task must not downgrade it to
+    // waiting_for_user (the UI never shows "Paused by you" then).
+    if (TERMINAL_STATES.has(record.state)) {
+      return;
+    }
     record.openIntervention = { reason, startedAtEpochMs: this.now() };
-    this.setState(taskId, "waiting_for_user", reason);
+    if (record.state !== "paused") {
+      this.setState(taskId, "waiting_for_user", reason);
+    }
     this.ensurePauseCapSweep();
   }
 

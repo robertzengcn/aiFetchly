@@ -1552,7 +1552,13 @@ export class ManagedBrowserAiToolService {
               ? "completed"
               : result.status === "cancelled"
                 ? "cancelled"
-                : "failed",
+                : result.status === "partial" &&
+                    (result.reason === "handoff_expired" ||
+                      result.reason === "handoff_cancelled")
+                  // X4: PRD requires interrupted for expiry/cancel —
+                  // NOT failed.
+                  ? "interrupted"
+                  : "failed",
           reason: result.reason,
         });
       } catch {
