@@ -21,13 +21,14 @@ function classify(
 
 describe("BrowserActionRiskClassifier matrix", () => {
   it("classifies reads as auto", () => {
+    // P0-4: press_key moved OUT of reads — Enter submits forms, so it
+    // is consequential (approved via the focused-element check).
     for (const actionType of [
       "observe",
       "extract",
       "screenshot",
       "wait_for",
       "scroll",
-      "press_key",
       "get_status",
     ]) {
       const result = classify({ actionType });
