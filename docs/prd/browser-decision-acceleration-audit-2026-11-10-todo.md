@@ -140,6 +140,10 @@ Remaining from the §10 order: X1 (tldts), P0-8 (proxy ciphertext readers — go
 
 **CI status after this round (`2970f10e6`): Electron E2E (Playwright) ✓ green; Lint and unit tests ✓; the Package smoke job's runner died mid-packaging ("Build Linux package" terminated without completing — the known infra starvation class, same as the earlier "hosted runner lost communication"); the job is being re-triggered.**
 
+**Additional round 2026-11-11 (HEAD: `970f5d93c`):**
+- **X1 closed** (functional form): private public-suffix tenants isolated (github.io/gitlab.io/herokuapp.com/vercel.app/netlify.app/pages.dev/web.app/appspot.com/azurewebsites.net/cloudfront.net/s3 + workers.dev etc. — attacker.github.io and victim.github.io no longer collapse to github.io), ~40 missing country second-level suffixes (co.ke, com.sa, gob.mx, ltd.uk, plc.uk, edu.cn, ac.in, gov.ph, co.at...), loopback/`.local`/`.internal` hosts never registrable, `parseUrlIdentityWithOptions({httpsOnly})` wired into runner NAVIGATE (https→http downgrades rejected). The audit's `tldts` suggestion could not be installed (yarn unavailable on this host + CI frozen-lockfile); the curated list now covers every audited suffix — noted as the remaining formal step: swap to tldts when a yarn-capable host is available. Tests: tenant separation, edu.cn/co.ke/herokuapp isolation, loopback rejection, httpsOnly.
+- **X4 partial closed**: login_required added to the coordinator's waiting set (an opened dialog is not a resolution); terminal records never open interventions (sweep-timer leak fixed); explicit PAUSE keeps `paused` instead of being downgraded to `waiting_for_user`; handoff expiry/cancel now record **interrupted** instead of failed in the durable terminal.
+
 ## 2. Cross-cutting defect patterns (fix every instance together)
 
 ### X1 — Registrable domain (eTLD+1) is not a public-suffix library (security)
