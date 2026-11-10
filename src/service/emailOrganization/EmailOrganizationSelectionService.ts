@@ -159,7 +159,10 @@ export class EmailOrganizationSelectionService extends BaseModule {
         );
       }
       const withoutLocator = uniqueIds.filter(
-        (id) => recorded[id].destinationUid === null || recorded[id].destinationUidValidity === null
+        (id) =>
+          recorded[id].destinationUid === null ||
+          recorded[id].destinationUidValidity === null ||
+          recorded[id].trashFolder === null
       );
       if (withoutLocator.length > 0) {
         throw new EmailOrganizationActionError(
@@ -171,9 +174,12 @@ export class EmailOrganizationSelectionService extends BaseModule {
       for (const messageId of uniqueIds) {
         const location = byMessageId.get(messageId);
         const lineage = recorded[messageId];
+        // R5-03: the message must STILL be the recorded result of that Trash
+        // operation — the exact Trash-side folder, uid AND uidValidity.
         if (
           location === undefined ||
-          location.folderPath !== lineage.folder ||
+          lineage.trashFolder === null ||
+          location.folderPath !== lineage.trashFolder ||
           location.providerUid !== lineage.destinationUid ||
           location.uidValidity !== lineage.destinationUidValidity
         ) {

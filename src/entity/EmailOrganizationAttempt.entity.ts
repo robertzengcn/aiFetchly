@@ -25,6 +25,14 @@ export class EmailOrganizationAttemptEntity extends AuditableEntity {
   @Column("varchar", { length: 20, default: "claimed" })
   phase!: EmailOrganizationAttemptPhase;
 
+  /**
+   * R5-04: durable dispatch evidence — set when the command was handed to
+   * the wire. The `phase` column resets to `resolved` at finalization, so
+   * reconciliation keys on THIS timestamp: a dispatched attempt whose
+   * outcome is unknown never counts as proven non-dispatch.
+   */
+  @Column("datetime", { nullable: true }) dispatchedAt!: Date | null;
+
   @Column("datetime") leaseExpiresAt!: Date;
 
   /** Provider-assigned Message-ID returned by SMTP when available. */

@@ -27,6 +27,7 @@ import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailMessageLocationModel } from "@/model/EmailMessageLocation.model";
 import { EmailOrganizationAuthorizationModule } from "@/modules/EmailOrganizationAuthorizationModule";
+import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
 import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 
 let dbpath = "";
@@ -971,5 +972,249 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
     // (a new revision/authorization), not marked submitted.
     const detail = await draftService.readDraftDetail(preview.draftId);
     expect(detail.revisionId).toBe(preview.revisionId);
+  });
+
+
+  // ---- R5-01: every fence win ends in a terminal draft state ----
+
+  it("R5-01: an all-rejected send releases the fence into the editable `failed` state", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => ({ accepted: [], rejected: ["finance@example.test"] }), []),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("failed");
+    const draftModule = new EmailForwardDraftModule();
+    const draft = await draftModule.readDraft(preview.draftId);
+    // The dispatch fence must NOT strand the draft in `dispatching`.
+    expect(draft?.status).toBe("failed");
+    // A failed draft stays editable (appendRevision allows draft/ready/failed).
+    const updated = await draftService.updateDraft({
+      draftId: preview.draftId,
+      expectedRevisionId: preview.revisionId,
+      note: "fixed recipients",
+    });
+    expect(updated.revisionNumber).toBe(2);
+    const afterEdit = await draftModule.readDraft(preview.draftId);
+    expect(afterEdit?.status).toBe("ready");
+  });
+
+  it("R5-01: a throw past the fence lands the draft in `submitted` and marks the attempt dispatched AFTER the fence", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => new Error("connection reset during DATA"), []),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("outcome_unknown");
+    const draftModule = new EmailForwardDraftModule();
+    const draft = await draftModule.readDraft(preview.draftId);
+    // SMTP may have happened: the draft is submitted, never stranded.
+    expect(draft?.status).toBe("submitted");
+    // The attempt reached `dispatched` (it went past the fence), and the
+    // operation stays needs_reconciliation for evidence-based reconcile.
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    expect(op?.status).toBe("needs_reconciliation");
+    const items = await delivery["operationModule"].listItems(op?.operationId ?? "");
+    const attempts = await delivery["operationModule"].listAttemptsForItem(items[0].id);
+    // The attempt passed the dispatch point (dispatched → resolved with the
+    // interrupted-submission evidence on the item).
+    expect(attempts[0].phase).toBe("resolved");
+    expect(items[0].sanitizedError).toContain("Submission interrupted");
+  });
+
+  it("R5-01: a pre-fence refusal never stamps dispatch evidence on the attempt", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    // The sending identity changed after approval: the claim exists but the
+    // fence is never won — R5-01 forbids dispatch evidence on that path.
+    const repo = SqliteDb.getInstance(dbpath).connection.getRepository(EmailServiceEntity);
+    await repo.update({ id: ACCOUNT_ID }, { from: "changed@example.test" });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => {
+        throw new Error("SMTP must never be called");
+      }, []),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.code).toBe("REVISION_CHANGED");
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    const items = await delivery["operationModule"].listItems(op?.operationId ?? "");
+    const attempts = await delivery["operationModule"].listAttemptsForItem(items[0].id);
+    // The item is definitively failed and the attempt stays `claimed` —
+    // dispatch evidence requires a WON fence.
+    expect(items[0].status).toBe("failed");
+    expect(attempts.every((attempt) => attempt.phase === "claimed")).toBe(true);
+    // Restore identity for later tests.
+    await repo.update({ id: ACCOUNT_ID }, { from: "ops@example.test" });
+  });
+
+  // ---- R5-02: Sent-copy status is captured, honest and projected ----
+
+  it("R5-02: missing raw bytes after an accepted send surface as unknown (never not_requested)", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => ({ accepted: ["finance@example.test"], rejected: [] }), []),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("submitted");
+    // R5-02: no captured bytes + an attempted copy = unknown, not a silent
+    // "not requested".
+    if (outcome.status === "submitted") {
+      expect(outcome.sentCopyStatus).toBe("unknown");
+    }
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    const items = await delivery["operationModule"].listItems(op?.operationId ?? "");
+    expect(items[0].resultJson).toContain('"sentCopyStatus":"unknown"');
+  });
+
+  it("R5-02: an append failure records `failed` on the item and the submitted outcome carries it", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const failingAppendAdapter = new FakeAdapter(() => ({
+      status: "fetched",
+      source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+      uidValidity: "4242",
+    }));
+    failingAppendAdapter.appendSent = async () => ({
+      status: "failed",
+      reasonCode: "PROVIDER_REJECTED",
+      sanitizedError: "append rejected",
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: failingAppendAdapter,
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(
+        () => ({ accepted: ["finance@example.test"], rejected: [], raw: Buffer.from("RAW-MIME") }),
+        []
+      ),
+    });
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    expect(outcome.status).toBe("submitted");
+    if (outcome.status === "submitted") {
+      expect(outcome.sentCopyStatus).toBe("failed");
+    }
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    const items = await delivery["operationModule"].listItems(op?.operationId ?? "");
+    expect(items[0].resultJson).toContain('"sentCopyStatus":"failed"');
   });
 });

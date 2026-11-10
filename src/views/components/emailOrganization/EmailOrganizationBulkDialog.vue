@@ -385,7 +385,9 @@ watch(
     if (open) {
       void loadCapabilities();
     }
-  }
+  },
+  // A dialog mounted already-open (restored session) still loads caps.
+  { immediate: true }
 );
 
 onBeforeUnmount(() => {

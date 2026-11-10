@@ -283,14 +283,24 @@ export class EmailOrganizationSearchService extends BaseModule {
           continue outer;
         }
         searchedFolders.push(folder);
+        // The adapter's own truncation claim always forces incomplete.
+        capped = capped || result.capped;
         candidatesSeen += result.candidates.length;
         // R15: exact UTC post-filter over the coarse IMAP date search.
-        // Rejected candidates were CONSUMED: the window advances past them.
+        // R5-09: the cursor advances by the candidates actually CONSUMED —
+        // date-filtered candidates included — and stops mid-window when the
+        // page fills, so the next page resumes at the first unprocessed UID.
+        let consumedInWindow = 0;
+        let pageFilled = false;
         for (const candidate of result.candidates) {
+          if (rows.length >= pageSize) {
+            pageFilled = true;
+            break;
+          }
+          consumedInWindow += 1;
           const rowMs = candidate.date !== null ? new Date(candidate.date).getTime() : null;
           if (fromMs !== null && (rowMs === null || rowMs < fromMs)) continue;
           if (toMs !== null && (rowMs === null || rowMs >= toMs)) continue;
-          if (rows.length >= pageSize) break;
           rows.push({
             messageId: null,
             providerUid: candidate.uid,
@@ -302,7 +312,12 @@ export class EmailOrganizationSearchService extends BaseModule {
             hasAttachments: null,
           });
         }
-        uidOffset += result.candidates.length;
+        uidOffset += consumedInWindow;
+        if (pageFilled) {
+          resumePosition = { folderIndex, uidOffset };
+          foldersExhausted = false;
+          break outer;
+        }
         if (result.candidates.length < windowCap) {
           // Folder exhausted: continue with the next folder at offset 0.
           break;
@@ -458,6 +473,9 @@ function decodeServerCursor(
   expectedQueryHash: string,
   folderCount: number
 ): { folderIndex: number; uidOffset: number } {
+  if (cursor === undefined) {
+    return { folderIndex: 0, uidOffset: 0 };
+  }
   const record = decodeCursorBase(cursor, expectedQueryHash);
   const folderIndex = record.folderIndex;
   const uidOffset = record.uidOffset;

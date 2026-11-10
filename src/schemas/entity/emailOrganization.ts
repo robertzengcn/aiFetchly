@@ -83,6 +83,7 @@ export const emailOrganizationAttemptWriteSchema = lazySchema(() =>
     attemptNumber: z.number().int().positive(),
     claimTokenHash: z.string().length(64),
     phase: z.enum(["claimed", "dispatched", "resolved"]).optional(),
+    dispatchedAt: z.coerce.date().nullable().optional(),
     leaseExpiresAt: z.coerce.date(),
     providerMessageId: z.string().max(998).nullable().optional(),
     resultJson: z.string().nullable().optional(),

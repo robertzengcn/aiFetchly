@@ -116,6 +116,7 @@ export class EmailOrganizationOperationModule extends BaseModule {
       number,
       {
         folder: string;
+        trashFolder: string | null;
         destinationUid: string | null;
         destinationUidValidity: string | null;
         resultingVersion: number;

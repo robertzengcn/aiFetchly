@@ -716,7 +716,8 @@ export class EmailMailboxActionService extends BaseModule {
         lineage === undefined ||
         lineage.destinationUid === null ||
         lineage.destinationUidValidity === null ||
-        location.folderPath !== lineage.folder ||
+        lineage.trashFolder === null ||
+        location.folderPath !== lineage.trashFolder ||
         location.providerUid !== lineage.destinationUid ||
         location.uidValidity !== lineage.destinationUidValidity
       ) {
@@ -1642,7 +1643,10 @@ export class EmailMailboxActionService extends BaseModule {
         // observation. Only an attempt that was never dispatched (claimed,
         // no dispatch marker) is proven non-dispatch.
         const attempts = await this.operationModule.listAttemptsForItem(item.id);
-        const wasDispatched = attempts.some((attempt) => attempt.phase === "dispatched");
+        // R5-04: dispatch evidence is the DURABLE dispatchedAt timestamp —
+        // the phase resets to `resolved` at finalization, so a dispatched
+        // attempt that reconciled by lease expiry keeps its proof.
+        const wasDispatched = attempts.some((attempt) => attempt.dispatchedAt !== null);
         if (wasDispatched) {
           await this.operationModule.finalizeItem({
             itemId: item.id,

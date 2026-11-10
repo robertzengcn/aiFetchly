@@ -232,6 +232,8 @@ export interface OrganizationSearchResultDto {
     /** null = unknown (server rows cannot report attachment presence). */
     hasAttachments: boolean | null;
   }>;
+  /** Folders whose server search failed; completeness is false when set. */
+  failedFolders: Array<{ folderPath: string; reasonCode: string }>;
   totalMatched: number;
   complete: boolean;
   truncated: boolean;

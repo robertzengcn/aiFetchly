@@ -7,6 +7,11 @@ import {
   EmailOrganizationStartupService,
   deriveProtocolFromProviderUid,
 } from "@/service/emailOrganization/EmailOrganizationStartupService";
+import {
+  isLocationBackfillReady,
+  setLocationBackfillReady,
+} from "@/service/emailOrganization/emailOrganizationReadiness";
+import { createEmailForwardDraft } from "@/service/EmailOrganizationAiTools";
 import { EmailMessageLocationModel } from "@/model/EmailMessageLocation.model";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 
@@ -106,5 +111,27 @@ describe("EmailOrganizationStartupService.ensureLocationBackfill", () => {
     expect(deriveProtocolFromProviderUid("pop3:abc")).toBe("pop3");
     expect(deriveProtocolFromProviderUid("imap:abc:1:2")).toBe("imap");
     expect(deriveProtocolFromProviderUid("17")).toBe("imap");
+  });
+
+  // ---- R5-10: the readiness gate opens only on backfill success ----
+
+  it("R5-10: a successful backfill opens the process-wide readiness gate", async () => {
+    setLocationBackfillReady(false);
+    expect(isLocationBackfillReady()).toBe(false);
+    const service = new EmailOrganizationStartupService();
+    await service.ensureLocationBackfill();
+    expect(isLocationBackfillReady()).toBe(true);
+  });
+
+  it("R5-10: mutating tools fail closed with ORGANIZATION_BACKFILL_PENDING until the gate opens", async () => {
+    setLocationBackfillReady(false);
+    const result = await createEmailForwardDraft({
+      message_id: 1,
+      to: ["a@b.test"],
+    });
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("ORGANIZATION_BACKFILL_PENDING");
+    // Restore the gate for any later tests in this file.
+    setLocationBackfillReady(true);
   });
 });

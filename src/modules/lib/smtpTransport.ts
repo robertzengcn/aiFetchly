@@ -168,8 +168,16 @@ export class OutboundSmtpSession {
   private transporter: Transporter;
   /** T16/R4-08: raw MIME captured by the stream plugin of the last send. */
   private lastRawMessage: Buffer | null = null;
+  /** R5-02: test seam — production builds real nodemailer transporters. */
+  private readonly transporterFactory: (mode: SmtpTlsMode) => Transporter;
 
-  constructor(private readonly param: EmailServiceEntitydata) {
+  constructor(
+    private readonly param: EmailServiceEntitydata,
+    options?: { transporterFactory?: (mode: SmtpTlsMode) => Transporter }
+  ) {
+    this.transporterFactory =
+      options?.transporterFactory ??
+      ((mode: SmtpTlsMode) => createOutboundSmtpTransporter(this.param, mode));
     this.transporter = this.createTransporter("configured");
   }
 
@@ -181,21 +189,26 @@ export class OutboundSmtpSession {
    * successful retry attempt would submit bytes nobody captured.
    */
   private createTransporter(mode: SmtpTlsMode): Transporter {
-    const transporter = createOutboundSmtpTransporter(this.param, mode);
-    transporter.use("stream", (mail: { message?: { createReadStream(): NodeJS.ReadableStream } }, callback: () => void) => {
-      const chunks: Buffer[] = [];
-      const stream = mail.message?.createReadStream();
-      if (stream === undefined) {
-        callback();
-        return;
-      }
-      stream.on("data", (chunk: Buffer) => chunks.push(chunk));
-      stream.on("error", () => callback());
-      stream.on("end", () => {
-        this.lastRawMessage = Buffer.concat(chunks);
-        callback();
+    const transporter = this.transporterFactory(mode);
+    // Real nodemailer transporters always expose the plugin stage API; a
+    // legacy/test double may not — sending still works, only the Sent-copy
+    // capture stays empty for such a transporter.
+    if (typeof transporter.use === "function") {
+      transporter.use("stream", (mail: { message?: { createReadStream(): NodeJS.ReadableStream } }, callback: () => void) => {
+        const chunks: Buffer[] = [];
+        const stream = mail.message?.createReadStream();
+        if (stream === undefined) {
+          callback();
+          return;
+        }
+        stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+        stream.on("error", () => callback());
+        stream.on("end", () => {
+          this.lastRawMessage = Buffer.concat(chunks);
+          callback();
+        });
       });
-    });
+    }
     return transporter;
   }
 

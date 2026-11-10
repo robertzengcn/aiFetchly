@@ -378,7 +378,10 @@ export class EmailOrganizationOperationModel extends BaseDb {
     Record<
       number,
       {
+        /** The ORIGINAL folder (the restore destination). */
         folder: string;
+        /** R5-03: the Trash-side folder the operation moved the message INTO. */
+        trashFolder: string | null;
         destinationUid: string | null;
         destinationUidValidity: string | null;
         resultingVersion: number;
@@ -402,6 +405,7 @@ export class EmailOrganizationOperationModel extends BaseDb {
       number,
       {
         folder: string;
+        trashFolder: string | null;
         destinationUid: string | null;
         destinationUidValidity: string | null;
         resultingVersion: number;
@@ -438,6 +442,7 @@ export class EmailOrganizationOperationModel extends BaseDb {
       }
       destinations[item.messageId] = {
         folder: item.beforeFolderPath,
+        trashFolder: item.destinationFolderPath,
         destinationUid,
         destinationUidValidity,
         resultingVersion: (item.beforeLocationVersion ?? 0) + 1,
@@ -465,7 +470,7 @@ export class EmailOrganizationOperationModel extends BaseDb {
     await this.attemptRepository
       .createQueryBuilder()
       .update(EmailOrganizationAttemptEntity)
-      .set({ phase: "dispatched" })
+      .set({ phase: "dispatched", dispatchedAt: new Date() })
       .where("id = :attemptId AND phase = :claimed", {
         attemptId,
         claimed: "claimed",

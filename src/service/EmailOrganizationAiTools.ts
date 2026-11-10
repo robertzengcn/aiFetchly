@@ -279,10 +279,10 @@ export async function createEmailForwardDraft(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ draft: ForwardDraftPreview }>> {
-  const gate = await gateAiEntitlement();
-    if (gate !== null) return gate;
   const readinessGate = gateOrganizationReadiness();
   if (readinessGate !== null) return readinessGate;
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
     try {
     const input = createForwardDraftSchema.parse(args);
     const service = new EmailForwardDraftService();
@@ -309,10 +309,10 @@ export async function createEmailForwardDraft(
 export async function updateEmailForwardDraft(
   args: unknown
 ): Promise<EmailOrganizationToolResult<{ draft: ForwardDraftPreview }>> {
-  const gate = await gateAiEntitlement();
-    if (gate !== null) return gate;
   const readinessGate = gateOrganizationReadiness();
   if (readinessGate !== null) return readinessGate;
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
     try {
     const input = updateForwardDraftSchema.parse(args);
     const service = new EmailForwardDraftService();
@@ -340,10 +340,10 @@ export async function sendEmailForward(
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
   const scheduledGuard = assertInteractive(context);
     if (scheduledGuard !== null) return scheduledGuard;
-    const gate = await gateAiEntitlement();
-    if (gate !== null) return gate;
-  const readinessGate = gateOrganizationReadiness();
+    const readinessGate = gateOrganizationReadiness();
   if (readinessGate !== null) return readinessGate;
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
     try {
     const input = sendForwardSchema.parse(args);
     const draftModule = new EmailForwardDraftModule();
@@ -413,10 +413,10 @@ export async function moveEmailToTrash(
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
   const scheduledGuard = assertInteractive(context);
     if (scheduledGuard !== null) return scheduledGuard;
-    const gate = await gateAiEntitlement();
-    if (gate !== null) return gate;
-  const readinessGate = gateOrganizationReadiness();
+    const readinessGate = gateOrganizationReadiness();
   if (readinessGate !== null) return readinessGate;
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
     try {
     const input = moveToTrashSchema.parse(args);
     const actionService = new EmailMailboxActionService();
@@ -455,10 +455,10 @@ export async function restoreEmail(
 ): Promise<EmailOrganizationToolResult<{ result: Record<string, unknown> }>> {
   const scheduledGuard = assertInteractive(context);
     if (scheduledGuard !== null) return scheduledGuard;
-    const gate = await gateAiEntitlement();
-    if (gate !== null) return gate;
-  const readinessGate = gateOrganizationReadiness();
+    const readinessGate = gateOrganizationReadiness();
   if (readinessGate !== null) return readinessGate;
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
     try {
     const input = restoreEmailSchema.parse(args);
     const actionService = new EmailMailboxActionService();
@@ -546,10 +546,10 @@ export async function prepareEmailSelection(
   args: unknown,
   context?: SkillExecutionContext
 ): Promise<EmailOrganizationToolResult<{ selection: Record<string, unknown> }>> {
-  const gate = await gateAiEntitlement();
-    if (gate !== null) return gate;
   const readinessGate = gateOrganizationReadiness();
   if (readinessGate !== null) return readinessGate;
+  const gate = await gateAiEntitlement();
+    if (gate !== null) return gate;
     try {
     const input = prepareSelectionSchema.parse(args);
     const service = new EmailOrganizationSelectionService();

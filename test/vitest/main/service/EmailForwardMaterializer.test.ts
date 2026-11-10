@@ -286,8 +286,11 @@ describe("R01 — original content and headers preserved in composed output", ()
     expect(result.bodyHtml).toContain("cid:logo1");
   });
 
-  it("relinks identical-byte inline parts to the SELECTED cid without dropping references (review T10)", async () => {
+  it("binds each reference to its OWN part even when bytes are identical (R5-06)", async () => {
     // Two inline parts, identical bytes, distinct CIDs (logo1/logo2).
+    // Selection is per part, never per byte equality: the selected part
+    // keeps its own reference; the unselected part's reference is removed
+    // and disclosed — no modulo assignment by HTML occurrence order.
     const identicalB64 = "aGVsbG8gaW5saW5l";
     const source = [
       "From: a@b.test",
@@ -322,16 +325,26 @@ describe("R01 — original content and headers preserved in composed output", ()
     ].join("\r\n");
     adapter.setSource({ status: "fetched", source: Buffer.from(source, "utf8"), uidValidity: "4242" });
 
-    // Select only the FIRST part: both references must render (identical
-    // bytes), pointing at the SELECTED part's content-id — never empty.
+    // Only the FIRST part selected: logo1's own reference survives; logo2's
+    // reference is removed (the part does not travel) and disclosed.
     const onlyFirst = await materializer.materialize({
       ...baseInput,
       attachmentSelection: { mode: "parts", partIds: ["part-1"] },
     });
     expect(onlyFirst.bodyHtml).toContain('src="cid:logo1"');
-    expect(onlyFirst.bodyHtml).not.toContain('src=""');
+    expect(onlyFirst.bodyHtml).not.toContain("cid:logo2");
+    expect(onlyFirst.validationFindings).toContain("unselected_inline_image_removed");
 
-    // Select BOTH: both references stay, each part travels.
+    // Only the SECOND part selected: logo2's reference survives — part
+    // identity is independent of HTML order.
+    const onlySecond = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "parts", partIds: ["part-2"] },
+    });
+    expect(onlySecond.bodyHtml).toContain('src="cid:logo2"');
+    expect(onlySecond.bodyHtml).not.toContain("cid:logo1");
+
+    // Both: both references stay, each part travels.
     const both = await materializer.materialize({
       ...baseInput,
       attachmentSelection: { mode: "all" },
@@ -339,6 +352,63 @@ describe("R01 — original content and headers preserved in composed output", ()
     expect(both.bodyHtml).toContain("cid:logo1");
     expect(both.bodyHtml).toContain("cid:logo2");
     expect(both.selectedAttachmentCount).toBe(2);
+
+    // Neither: both references removed.
+    const neither = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "none" },
+    });
+    expect(neither.bodyHtml).not.toContain("cid:logo1");
+    expect(neither.bodyHtml).not.toContain("cid:logo2");
+  });
+
+  it("repeated references to one selected part all survive; reversed document order keeps identity (R5-06)", async () => {
+    const b64 = "aGVsbG8gaW5saW5l";
+    const source = [
+      "From: a@b.test",
+      "To: c@d.test",
+      "Subject: repeat",
+      'Content-Type: multipart/mixed; boundary="OUTER"',
+      "",
+      "--OUTER",
+      'Content-Type: multipart/alternative; boundary="INNER"',
+      "",
+      "--INNER",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      // REVERSED order: logo2 appears first in the document. A repeated
+      // reference to logo1 exists too.
+      '<p>a <img src="cid:logo2"> b <img src="cid:logo1"> c <img src="cid:logo1"></p>',
+      "--INNER--",
+      "--OUTER",
+      'Content-Type: image/png; name="one.png"',
+      'Content-Disposition: inline; filename="one.png"',
+      "Content-Transfer-Encoding: base64",
+      "Content-ID: <logo1>",
+      "",
+      b64,
+      "--OUTER",
+      'Content-Type: image/png; name="two.png"',
+      'Content-Disposition: inline; filename="two.png"',
+      "Content-Transfer-Encoding: base64",
+      "Content-ID: <logo2>",
+      "",
+      b64,
+      "--OUTER--",
+      "",
+    ].join("\r\n");
+    adapter.setSource({ status: "fetched", source: Buffer.from(source, "utf8"), uidValidity: "4242" });
+
+    // Only logo1 selected: BOTH of its references survive regardless of
+    // occurrence order; the unselected logo2's single reference is removed.
+    const result = await materializer.materialize({
+      ...baseInput,
+      attachmentSelection: { mode: "parts", partIds: ["part-1"] },
+    });
+    const matches = result.bodyHtml.match(/src="cid:logo1"/g) ?? [];
+    expect(matches.length).toBe(2);
+    expect(result.bodyHtml).not.toContain("cid:logo2");
+    expect(result.attachments.find((entry) => entry.contentId === "logo1")?.selected).toBe(true);
   });
 
   it("remote tracking images are stripped while cid references survive sanitization", async () => {

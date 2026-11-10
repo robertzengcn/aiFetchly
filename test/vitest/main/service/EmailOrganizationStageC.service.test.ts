@@ -49,13 +49,21 @@ class BulkFakeAdapter implements EmailMailboxAdapter {
   async listFolders(): Promise<FolderListResult> {
     return {
       status: "listed",
-      folders: [{ path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true }],
+      folders: [
+        { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", writable: true },
+        { path: "Archive", name: "Archive", specialUse: null, writable: true },
+        { path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true },
+      ],
     };
   }
   async probeCapabilities(): Promise<MailboxCapabilityProbe> {
     return {
       moveCapability: true,
-      folders: [{ path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true }],
+      folders: [
+        { path: "INBOX", name: "Inbox", specialUse: "\\Inbox", writable: true },
+        { path: "Archive", name: "Archive", specialUse: null, writable: true },
+        { path: "Trash", name: "Trash", specialUse: "\\Trash", writable: true },
+      ],
       reasonCode: null,
       sanitizedError: null,
     };
@@ -554,4 +562,214 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     ]);
     expect(result.limitation).toContain("could not be searched");
   });
+
+  // ---- R5-09: cursor binding, precise advancement, filter honesty ----
+
+  it("R5-09: local search paginates three pages via keyset without repeats", async () => {
+    for (let i = 0; i < 7; i += 1) {
+      await seedVerifiedMessage(6000 + i, `cursor page test ${i}`);
+    }
+    const collected: Array<number | null> = [];
+    let cursor: string | undefined = undefined;
+    for (let page = 0; page < 3; page += 1) {
+      const result = await searchService.search({
+        emailServiceId: ACCOUNT_ID,
+        source: "local",
+        subject: "cursor page test",
+        pageSize: 2,
+        folderPaths: ["INBOX"],
+        cursor,
+      });
+      collected.push(...result.rows.map((row) => row.messageId));
+      if (page < 2) {
+        expect(result.nextCursor).not.toBeNull();
+        cursor = result.nextCursor ?? undefined;
+      }
+    }
+    expect(collected).toHaveLength(6);
+    expect(new Set(collected).size).toBe(6);
+    // Keyset order: strictly descending receivedAt/id — no page repeats.
+    const ids = collected.filter((id): id is number => id !== null);
+    expect([...ids].sort((a, b) => b - a)).toEqual(ids);
+  });
+
+  it("R5-09: a cursor from a different query is refused, not replayed", async () => {
+    const page1 = await searchService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "local",
+      subject: "cursor page test",
+      pageSize: 2,
+      folderPaths: ["INBOX"],
+    });
+    expect(page1.nextCursor).not.toBeNull();
+    await expect(
+      searchService.search({
+        emailServiceId: ACCOUNT_ID,
+        source: "local",
+        subject: "a DIFFERENT query",
+        pageSize: 2,
+        folderPaths: ["INBOX"],
+        cursor: page1.nextCursor ?? undefined,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("R5-09: server pagination resumes inside the RIGHT folder across a folder boundary", async () => {
+    const adapter = new BulkFakeAdapter();
+    // INBOX has 2 matches, Archive has 2; page size 3 must cross the
+    // boundary and the cursor must resume in Archive (never re-emit it).
+    adapter.searchUids = async (_c, folder, input) => {
+      const all =
+        folder === "INBOX"
+          ? [
+              { uid: "1", fromAddress: "a@b.test", subject: "cross 1", date: "2026-09-15T10:00:00Z", seen: false },
+              { uid: "2", fromAddress: "a@b.test", subject: "cross 2", date: "2026-09-16T10:00:00Z", seen: false },
+            ]
+          : [
+              { uid: "1", fromAddress: "a@b.test", subject: "cross 3", date: "2026-09-17T10:00:00Z", seen: false },
+              { uid: "2", fromAddress: "a@b.test", subject: "cross 4", date: "2026-09-18T10:00:00Z", seen: false },
+            ];
+      const offset = input.uidOffset ?? 0;
+      return { status: "listed" as const, candidates: all.slice(offset), capped: false };
+    };
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+    const page1 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX", "Archive"],
+      pageSize: 3,
+    });
+    expect(page1.rows.map((row) => row.subject)).toEqual(["cross 1", "cross 2", "cross 3"]);
+    expect(page1.nextCursor).not.toBeNull();
+
+    const page2 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX", "Archive"],
+      pageSize: 3,
+      cursor: page1.nextCursor ?? undefined,
+    });
+    expect(page2.rows.map((row) => row.subject)).toEqual(["cross 4"]);
+    expect(page2.nextCursor).toBeNull();
+    const subjects = [...page1.rows, ...page2.rows].map((row) => row.subject);
+    expect(new Set(subjects).size).toBe(4);
+  });
+
+  it("R5-09: date-filtered candidates are consumed — the next page never repeats them", async () => {
+    const adapter = new BulkFakeAdapter();
+    // The first two candidates fail the exact UTC filter; 3 and 4 match.
+    // The page fills on candidate 3 — candidate 4 must surface on page 2.
+    adapter.searchUids = async (_c, _folder, input) => {
+      const all = [
+        { uid: "1", fromAddress: "a@b.test", subject: "filtered 1", date: "2026-08-01T10:00:00Z", seen: false },
+        { uid: "2", fromAddress: "a@b.test", subject: "filtered 2", date: "2026-08-02T10:00:00Z", seen: false },
+        { uid: "3", fromAddress: "a@b.test", subject: "filtered 3", date: "2026-09-20T10:00:00Z", seen: false },
+        { uid: "4", fromAddress: "a@b.test", subject: "filtered 4", date: "2026-09-21T10:00:00Z", seen: false },
+      ];
+      return { status: "listed" as const, candidates: all.slice(input.uidOffset ?? 0), capped: false };
+    };
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+    const page1 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX"],
+      pageSize: 1,
+      receivedFrom: "2026-09-01T00:00:00Z",
+    });
+    expect(page1.rows.map((row) => row.subject)).toEqual(["filtered 3"]);
+    expect(page1.nextCursor).not.toBeNull();
+    const page2 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX"],
+      pageSize: 1,
+      receivedFrom: "2026-09-01T00:00:00Z",
+      cursor: page1.nextCursor ?? undefined,
+    });
+    // The rejected candidates were CONSUMED: page 2 continues AFTER them and
+    // returns the fourth match exactly once.
+    expect(page2.rows.map((row) => row.subject)).toEqual(["filtered 4"]);
+    expect(page2.nextCursor).toBeNull();
+    const subjects = [...page1.rows, ...page2.rows].map((row) => row.subject);
+    expect(new Set(subjects).size).toBe(2);
+  });
+
+  it("R5-09: negative, out-of-range and foreign server cursors are rejected", async () => {
+    const encode = (payload: Record<string, unknown>): string =>
+      Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+    // Negative uidOffset would slice from the END of the UID list.
+    await expect(
+      serverSearchWith(encode({ v: 1, q: anyQueryHash(), folderIndex: 0, uidOffset: -3 }))
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    // Out-of-range folder index scans zero folders and would report a bogus
+    // empty complete page.
+    await expect(
+      serverSearchWith(encode({ v: 1, q: anyQueryHash(), folderIndex: 999, uidOffset: 0 }))
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    // A foreign query hash is refused outright.
+    await expect(
+      serverSearchWith(encode({ v: 1, q: "deadbeefdeadbeef", folderIndex: 0, uidOffset: 0 }))
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("R5-09: an exact attachment filter is refused on server search instead of silently broadening", async () => {
+    await expect(
+      searchService.search({
+        emailServiceId: ACCOUNT_ID,
+        source: "server",
+        folderPaths: ["INBOX"],
+        hasAttachments: true,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(
+      searchService.search({
+        emailServiceId: ACCOUNT_ID,
+        source: "server",
+        folderPaths: ["INBOX"],
+        hasAttachments: false,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
 });
+
+/** Runs one server search with a raw cursor payload against a stub adapter. */
+async function serverSearchWith(cursor: string): Promise<ReturnType<EmailOrganizationSearchService["search"]>> {
+  const { EmailOrganizationSearchService: Service } = await import(
+    "@/service/emailOrganization/EmailOrganizationSearchService"
+  );
+  const adapter = new BulkFakeAdapter();
+  const service = new Service({
+    adapter,
+    capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+  });
+  return await service.search({
+    emailServiceId: ACCOUNT_ID,
+    source: "server",
+    folderPaths: ["INBOX"],
+    cursor,
+  });
+}
+
+/** The query hash of a canonical default server search (for cursor forging). */
+function anyQueryHash(): string {
+  // The hash binds emailServiceId + folders + normalized filters; a forged
+  // cursor uses THIS search's own hash to isolate the position validation.
+  return Buffer.from(
+    JSON.stringify({
+      emailServiceId: ACCOUNT_ID,
+      folders: ["INBOX"],
+      fromAddress: null,
+      subject: null,
+      receivedFrom: null,
+      receivedTo: null,
+      unreadOnly: false,
+      hasAttachments: null,
+    })
+  ).toString("base64");
+}
