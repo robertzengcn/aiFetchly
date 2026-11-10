@@ -7,14 +7,17 @@ import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 import type { EmailReplySendAttemptStatus } from "@/entityTypes/emailReplyReliabilityTypes";
 
 export class EmailReplySendAttemptModel extends BaseDb {
-  private repository: Repository<EmailReplySendAttemptEntity>;
+  /** Resolved per access — BaseDb rebinds the live singleton before every
+   * guarded async call; a construction-time repository could stay bound to a
+   * replaced DataSource (test describe-scope module construction). */
+  private get repository(): Repository<EmailReplySendAttemptEntity> {
+    return this.sqliteDb.connection.getRepository(EmailReplySendAttemptEntity);
+  }
 
   constructor(filepath: string) {
     super(filepath);
     rejectDatabaseAccessFromWorker("EmailReplySendAttemptModel");
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplySendAttemptEntity
-    );
+
   }
 
   async create(

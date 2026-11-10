@@ -6,19 +6,21 @@ import { assertNotWorker } from "@/model/workerDbGuard";
 import type { CreateOccurrenceRecord } from "@/entityTypes/aiChatScheduledLoopTypes";
 
 export class AiMessageTaskRunModel extends BaseDb {
-  private repository: Repository<AiMessageTaskRunEntity>;
-
-  constructor(filepath: string) {
-    super(filepath);
-    this.repository = this.sqliteDb.connection.getRepository(
+  /**
+   * Resolved per access: BaseDb rebinds `this.sqliteDb` to the live
+   * singleton before every guarded async call, so a repository captured
+   * at construction could stay bound to a replaced (never-initialized or
+   * destroyed) DataSource — the describe-scope module construction pattern
+   * in tests hits exactly that. A getter cannot go stale.
+   */
+  private get repository(): Repository<AiMessageTaskRunEntity> {
+    return this.sqliteDb.connection.getRepository(
       AiMessageTaskRunEntity
     );
   }
 
-  protected override onSqliteDbRebound(): void {
-    this.repository = this.sqliteDb.connection.getRepository(
-      AiMessageTaskRunEntity
-    );
+  constructor(filepath: string) {
+    super(filepath);
   }
 
   async create(entity: Partial<AiMessageTaskRunEntity>): Promise<number> {

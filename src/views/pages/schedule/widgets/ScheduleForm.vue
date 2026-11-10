@@ -87,7 +87,7 @@
       <v-row>
         <v-col cols="12">
           <h3 class="text-h6 mb-4">
-            <v-icon class="mr-2">mdi-trigger</v-icon>
+            <v-icon class="mr-2">mdi-bolt</v-icon>
             {{ t('schedule.trigger_configuration') }}
           </h3>
         </v-col>

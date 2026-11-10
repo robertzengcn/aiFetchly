@@ -14,69 +14,69 @@ import type { OutboundEmailBatchStatus } from "@/entityTypes/outboundEmailDelive
 @Index(["status", "updatedAt"])
 export class OutboundEmailDraftBatchEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("varchar", { length: 100 })
-  conversationId: string;
+  conversationId!: string;
 
   /** User turn that requested the draft work. */
   @Column("varchar", { length: 100 })
-  sourceUserMessageId: string;
+  sourceUserMessageId!: string;
 
   /** The resolved intent decision driving this batch. */
   @Column("int")
-  intentDecisionId: number;
+  intentDecisionId!: number;
 
   @Column("varchar", { length: 40 })
-  status: OutboundEmailBatchStatus;
+  status!: OutboundEmailBatchStatus;
 
   /** Search result, list, explicit, etc. */
   @Column("varchar", { length: 40 })
-  recipientSourceType: string;
+  recipientSourceType!: string;
 
   @Column("int", { nullable: true })
-  recipientSourceId: number | null;
+  recipientSourceId!: number | null;
 
   /** Materialized recipient count. */
   @Column("int")
-  recipientCount: number;
+  recipientCount!: number;
 
   /** Latest preflight-valid recipient count. */
   @Column("int")
-  validRecipientCount: number;
+  validRecipientCount!: number;
 
   /** Requested service IDs (JSON-serialized number[]). */
   @Column("text")
-  emailServiceIdsJson: string;
+  emailServiceIdsJson!: string;
 
   /** Current envelope-set hash. */
   @Column("varchar", { length: 64, nullable: true })
-  batchHash: string | null;
+  batchHash!: string | null;
 
   @Column("varchar", { length: 50, nullable: true })
-  policyVersion: string | null;
+  policyVersion!: string | null;
 
   @Column("varchar", { length: 50, nullable: true })
-  validationVersion: string | null;
+  validationVersion!: string | null;
 
   @Column("int", { nullable: true })
-  authorizationId: number | null;
+  authorizationId!: number | null;
 
   @Column("int", { nullable: true })
-  legacyTaskId: number | null;
+  legacyTaskId!: number | null;
 
   @Column("int", { nullable: true })
-  sendAttemptId: number | null;
+  sendAttemptId!: number | null;
 
   @Column("varchar", { length: 100, nullable: true })
-  lastErrorCode: string | null;
+  lastErrorCode!: string | null;
 
   @Column("datetime", { nullable: true })
-  authorizedAt: Date | null;
+  authorizedAt!: Date | null;
 
   @Column("datetime", { nullable: true })
-  queuedAt: Date | null;
+  queuedAt!: Date | null;
 
   @Column("datetime", { nullable: true })
-  completedAt: Date | null;
+  completedAt!: Date | null;
 }

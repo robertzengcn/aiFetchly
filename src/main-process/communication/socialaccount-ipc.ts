@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow, dialog } from "electron";
+import { log } from "@/modules/Logger";
 import {
   SOCIALPLATFORM_LIST,
   SOCIALACCOUNTlIST,
@@ -13,10 +14,10 @@ import {
   SOCIAL_ACCOUNT_SESSION_METADATA,
 } from "@/config/channellist";
 import { SocialAccount } from "@/modules/socialaccount";
+import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
 import { SocialPlatform } from "@/modules/social_platform";
 import { SocialAccountController } from "@/controller/socialaccount-controller";
 import { AccountSessionService } from "@/modules/AccountSessionService";
-import { log } from "@/modules/Logger";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
 import fs from "fs";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
@@ -244,7 +245,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
         .catch(function (err) {
           if (err instanceof Error) {
             //console log error line
-            console.error(err.stack);
+            log.error(err.stack);
             //console.log(error.message)
             const comMsgs: CommonDialogMsg = {
               status: false,
@@ -301,7 +302,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       });
     } catch (error) {
       if (error instanceof Error) {
-        console.error(error.stack);
+        log.error(error.stack);
         //console.log(error.message)
         const comMsgs: CommonDialogMsg = {
           status: false,
@@ -337,7 +338,16 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     socialAccountByIdInputSchema,
     async (input) => {
       const socialaccount = new SocialAccount();
-      return socialaccount.deleteAccount(input.id);
+      const result = await socialaccount.deleteAccount(input.id);
+      if (result?.status) {
+        // Account removed → queue its managed-browser cache scope for
+        // deletion (FR-CACHE-013). Fire-and-forget: the deletion queue is
+        // crash-recoverable on the next maintenance pass.
+        void getDefaultManagedBrowserCacheModule()
+          .queueAccountRemoval(input.id)
+          .catch(() => undefined);
+      }
+      return result;
     }
   );
   ipcMain.on(SOCIAL_ACCOUNT_LOGIN_UPLOADCOOKIES, async (event, data) => {
@@ -373,7 +383,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       ).sender.send(SOCIAL_ACCOUNT_LOGIN_MESSSAGE, JSON.stringify(cmsg));
     } else {
       if (filePaths) {
-        console.log(filePaths[0]);
+        log.info(filePaths[0]);
         fs.access(filePaths[0], fs.constants.R_OK, async (e) => {
           if (e) {
             if (e instanceof Error) {

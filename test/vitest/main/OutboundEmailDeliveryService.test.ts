@@ -206,6 +206,56 @@ describe("OutboundEmailDeliveryService.claim", () => {
     expect(starts).toBe(1);
   });
 
+  it("rejects claim for an expired authorization and persists nothing", async () => {
+    const seed = await seedAuthorizedBatch();
+    // Expire the authorization IN PLACE: status stays `active` (the recovery
+    // service has not swept it yet), but the TTL window has elapsed. §15.1
+    // step 4 must reject with authorization_expired BEFORE creating anything.
+    const { OutboundEmailAuthorizationEntity } = await import(
+      "@/entity/OutboundEmailAuthorization.entity"
+    );
+    SqliteDb.getInstance(tmpDir);
+    const repo = SqliteDb.getInstance(tmpDir).connection.getRepository(
+      OutboundEmailAuthorizationEntity
+    );
+    await repo.update(seed.authorizationId, {
+      expiresAt: new Date(Date.now() - 60_000), // expired 1 minute ago
+    });
+
+    let starts = 0;
+    const service = new OutboundEmailDeliveryService(tmpDir, {
+      workerStarter: async () => {
+        starts += 1;
+        return { started: true };
+      },
+    });
+
+    await expect(
+      service.claim({
+        batchId: seed.batchId,
+        authorizationId: seed.authorizationId,
+        batchHash: seed.batchHash,
+      })
+    ).rejects.toThrow("authorization_expired");
+
+    // The worker was never started and nothing persisted.
+    expect(starts).toBe(0);
+    const deliveryModel = new OutboundEmailDeliveryModel(tmpDir);
+    expect(await deliveryModel.listOutcomesByBatch(seed.batchId)).toHaveLength(
+      0
+    );
+    const draftModel = new OutboundEmailDraftModel(tmpDir);
+    const batch = await draftModel.readBatch(seed.batchId);
+    expect(batch?.status).toBe("direct_authorized");
+    expect(batch?.sendAttemptId).toBeNull();
+    // The authorization is still active and unconsumed (the transaction
+    // rolled back), so a sweep/re-approval path can clean it up.
+    const authModel = new OutboundEmailAuthorizationModel(tmpDir);
+    const auth = await authModel.read(seed.authorizationId);
+    expect(auth?.status).toBe("active");
+    expect(auth?.consumedAt).toBeNull();
+  });
+
   it("returns already_processed when a concurrent claim inserts the key between the pre-check and the transaction", async () => {
     // Simulate the race: the pre-transaction duplicate check sees no row, but
     // a concurrent claim inserts the idempotency key before this claim's

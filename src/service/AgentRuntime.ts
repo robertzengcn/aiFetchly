@@ -1,12 +1,14 @@
 // src/service/AgentRuntime.ts
 import { randomUUID } from "crypto";
+import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
+import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { SkillExecutor } from "@/service/SkillExecutor";
 import { AIChatQueryLoop } from "@/service/AIChatQueryLoop";
 import { AIChatRequestBudgetService } from "@/service/AIChatRequestBudgetService";
 import type { AIChatQueryLoopDeps } from "@/service/AIChatQueryLoop";
 import type { AIChatQueryEventSink } from "@/service/AIChatQueryEvents";
-import type { OpenAITool } from "@/api/aiChatApi";
+import type { OpenAITool, ToolExecutionResult } from "@/api/aiChatApi";
 import { AiChatApi } from "@/api/aiChatApi";
 import type { OpenAIChatImage } from "@/api/aiChatApi";
 import { AIChatGeneratedImageStorageService } from "@/service/AIChatGeneratedImageStorageService";
@@ -23,10 +25,12 @@ import { AgentPromptBuilder } from "@/service/AgentPromptBuilder";
 import { AgentOutputParser } from "@/service/AgentOutputParser";
 import { AgentTranscriptService } from "@/service/AgentTranscriptService";
 import { AgentToolPolicyService } from "@/service/AgentToolPolicyService";
+import { isClaudeModelAlias } from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
 import {
-  isClaudeModelAlias,
+  getClaudeAgentToolAlias,
   normalizeClaudeAgentToolName,
-} from "@/service/pluginCompat/ClaudeAgentFormatAdapter";
+  translateClaudeAgentToolCall,
+} from "@/service/pluginCompat/claudeAgentTools";
 import {
   resolveToolCatalogMode,
   resolvePositiveIntEnv,
@@ -85,6 +89,53 @@ function normalizeRuntimeDefinition(
   return normalized;
 }
 
+async function executeClaudeCompatibleTool(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: SkillExecutionContext,
+  baseExecute: AIChatQueryLoopDeps["executeTool"]
+): Promise<ToolExecutionResult> {
+  const invocations = translateClaudeAgentToolCall(name, args);
+  if (invocations.length === 0) {
+    return {
+      tool_call_id: ctx.toolCallId,
+      tool_name: name,
+      success: false,
+      result: { error: `Claude tool "${name}" did not contain any edits.` },
+      execution_time_ms: 0,
+    };
+  }
+  if (invocations.length === 1) {
+    const only = invocations[0];
+    const result = await baseExecute(only.name, only.args, ctx);
+    return result.tool_name === name ? result : { ...result, tool_name: name };
+  }
+
+  const edits: Record<string, unknown>[] = [];
+  let executionTime = 0;
+  for (const invocation of invocations) {
+    const result = await baseExecute(invocation.name, invocation.args, ctx);
+    executionTime += result.execution_time_ms;
+    edits.push(result.result);
+    if (!result.success || result.result.needsPermissionPrompt === true) {
+      return {
+        ...result,
+        tool_name: name,
+        success: false,
+        result: { ...result.result, edits },
+        execution_time_ms: executionTime,
+      };
+    }
+  }
+  return {
+    tool_call_id: ctx.toolCallId,
+    tool_name: name,
+    success: true,
+    result: { edits, summary: `Applied ${edits.length} edits.` },
+    execution_time_ms: executionTime,
+  };
+}
+
 export interface AgentRuntimeDeps {
   /** Override the AI transport (used in tests). Defaults to AiChatApi. */
   streamChatCompletion?: AIChatQueryLoopDeps["streamChatCompletion"];
@@ -120,6 +171,21 @@ export interface AgentRuntimeDeps {
   toolResultStorage?: ToolResultStorageService;
 }
 
+/** Turn a loop failure into the text shown on the subagent result. */
+function failureText(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message || error.name || "Agent task failed";
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Agent task failed";
+  }
+}
+
 /**
  * Runs one specialist agent task by wrapping AIChatQueryLoop with an
  * agent-scoped tool policy gate and self-contained task packet prompts.
@@ -127,6 +193,12 @@ export interface AgentRuntimeDeps {
  * prompt assembly, and output parsing.
  */
 export class AgentRuntime {
+  /**
+   * T5 (audit FR-INT-004): live per-task abort controllers so a user cancel
+   * can target EXACTLY one agent task — never the parent conversation run
+   * and never a sibling task. Registered at loop start, removed at settle.
+   */
+  private readonly liveTaskAborts = new Map<string, AbortController>();
   private readonly policy = new AgentToolPolicyService();
   private readonly promptBuilder = new AgentPromptBuilder();
   private readonly outputParser = new AgentOutputParser();
@@ -172,15 +244,20 @@ export class AgentRuntime {
       taskPacket: request.taskPacket,
     });
 
-    const { systemMessage, userMessage } = this.promptBuilder.build({
-      definition,
-      packet: request.taskPacket,
-    });
+    const { systemMessage, userMessage, userMessageText } =
+      this.promptBuilder.build({
+        definition,
+        packet: request.taskPacket,
+        // Trusted runtime-only channel: artifacts ride into the prompt here
+        // and nowhere else. createTask above persists the packet only, and
+        // the transcript below records the text projection (no bytes).
+        initialImageArtifacts: request.initialImageArtifacts,
+      });
     await transcript.appendSystemText(agentTaskId, systemMessage.content);
     await this.taskModule.appendMessage({
       agentTaskId,
       role: "user",
-      content: userMessage.content,
+      content: userMessageText,
     });
 
     await this.taskModule.setStatus(agentTaskId, "running", {
@@ -195,8 +272,16 @@ export class AgentRuntime {
         .filter((t) => t.type === "function" && typeof t.name === "string")
         .map((t) => t.name),
       blockedTools: constraints.blockedTools,
+      source: definition.source,
     });
     const exposedTools: OpenAITool[] = exposedNames.map((name) => {
+      const alias = getClaudeAgentToolAlias(name);
+      if (alias) {
+        return toOpenAITool(alias.claudeName, {
+          description: alias.description,
+          parameters: alias.parameters,
+        });
+      }
       const def = allTools.find((t) => t.name === name);
       return toOpenAITool(name, {
         description: def?.description,
@@ -225,7 +310,11 @@ export class AgentRuntime {
       ((name: string, args, ctx) => SkillExecutor.execute(name, args, ctx));
     const getSkill =
       deps?.getSkillDefinition ??
-      ((name: string) => SkillRegistry.getSkill(name) ?? undefined);
+      ((name: string) => {
+        const alias = getClaudeAgentToolAlias(name);
+        const resolved = alias?.aifetchlyName ?? name;
+        return SkillRegistry.getSkill(resolved) ?? undefined;
+      });
 
     let executedToolCalls = 0;
     const policyCheckedExecute: AIChatQueryLoopDeps["executeTool"] = async (
@@ -234,8 +323,13 @@ export class AgentRuntime {
       ctx
     ) => {
       const startedAt = Date.now();
-      if (executedToolCalls >= definition.maxToolCalls) {
-        const message = `Agent ${definition.id} exceeded max tool calls (${definition.maxToolCalls}).`;
+      const toolCallCap = definition.maxToolCalls;
+      if (
+        typeof toolCallCap === "number" &&
+        toolCallCap > 0 &&
+        executedToolCalls >= toolCallCap
+      ) {
+        const message = `Agent ${definition.id} exceeded max tool calls (${toolCallCap}).`;
         await transcript.recordToolCall({
           agentTaskId,
           toolCallId: ctx.toolCallId,
@@ -275,7 +369,12 @@ export class AgentRuntime {
         };
       }
       executedToolCalls += 1;
-      const res = await baseExecute(name, args, ctx);
+      const res = await executeClaudeCompatibleTool(
+        name,
+        args,
+        ctx,
+        baseExecute
+      );
 
       // Headless agents have no UI to surface SkillExecutor's interactive
       // permission prompt, and the v1 runtime has no pause/resume path for
@@ -359,6 +458,21 @@ export class AgentRuntime {
 
     const loop = new AIChatQueryLoop({
       streamChatCompletion: streamChat,
+      // Stage B §5.1: native provider iteration when the runtime did not
+      // inject a custom callback seam.
+      ...(deps?.streamChatCompletion
+        ? {}
+        : {
+            streamEvents: (req: unknown, options: unknown) =>
+              this.api.openAIChatCompletionStreamEvents(
+                req as Parameters<
+                  AiChatApi["openAIChatCompletionStreamEvents"]
+                >[0],
+                options as Parameters<
+                  AiChatApi["openAIChatCompletionStreamEvents"]
+                >[1]
+              ),
+          }),
       executeTool: policyCheckedExecute,
       getSkillDefinition: getSkill,
       // §8.5 mandatory preflight for isolated subagent consumers (FR-04/FR-08).
@@ -397,6 +511,7 @@ export class AgentRuntime {
 
     // 5. Run with abort controller + runtime timeout.
     const abortController = new AbortController();
+    this.liveTaskAborts.set(agentTaskId, abortController);
     const abortFromParent = (): void => abortController.abort();
     if (deps?.signal?.aborted) {
       abortController.abort();
@@ -458,16 +573,17 @@ export class AgentRuntime {
         );
       } else if (result.type === "failed") {
         finalText = result.partialContent;
+        const failedMessage = failureText(result.error);
         await this.taskModule.setStatus(agentTaskId, "failed", {
           finishedAt: new Date(),
-          errorMessage: String(result.error),
+          errorMessage: failedMessage,
         });
         return this.buildResult(
           agentTaskId,
           definition,
           "failed",
           finalText,
-          String(result.error)
+          failedMessage
         );
       } else {
         // paused_for_permission / paused_for_plan_question fallback. The
@@ -507,6 +623,10 @@ export class AgentRuntime {
     } finally {
       clearTimeout(timer);
       deps?.signal?.removeEventListener("abort", abortFromParent);
+      // Review fix: release the live-controller registration on EVERY exit
+      // path (a thrown loop.run previously leaked the entry, and a later
+      // cancelTask would abort the dead controller and report success).
+      this.liveTaskAborts.delete(agentTaskId);
     }
 
     // 6. Parse output.
@@ -676,7 +796,7 @@ export class AgentRuntime {
           model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
-          console.error("[ai-auto-dream] agent trigger failed:", err)
+          log.error("[ai-auto-dream] agent trigger failed:", err)
         );
     }
     if (deps?.workspaceAutoDreamService) {
@@ -687,7 +807,7 @@ export class AgentRuntime {
           model: request.model ?? definition.defaultModel,
         })
         .catch((err) =>
-          console.error("[workspace-auto-dream] agent trigger failed:", err)
+          log.error("[workspace-auto-dream] agent trigger failed:", err)
         );
     }
     return result;
@@ -770,6 +890,41 @@ export class AgentRuntime {
       sourceUrls: [],
       errorMessage: message,
     };
+  }
+
+  /**
+   * T5 (audit FR-INT-004): cancel exactly one agent task. A live task is
+   * aborted through its own controller (the loop then reports `cancelled`,
+   * which the run flow persists with its partial transcript). A task that is
+   * not live (queued/recovering rows, restart leftovers) transitions to
+   * cancelled directly when non-terminal. Returns false for unknown or
+   * already-terminal tasks.
+   */
+  async cancelTask(agentTaskId: string): Promise<boolean> {
+    if (!agentTaskId) return false;
+    const live = this.liveTaskAborts.get(agentTaskId);
+    if (live) {
+      live.abort();
+      return true;
+    }
+    try {
+      const snapshot = await this.taskModule.getSnapshot(agentTaskId);
+      if (!snapshot) return false;
+      if (
+        snapshot.status === "completed" ||
+        snapshot.status === "failed" ||
+        snapshot.status === "cancelled" ||
+        snapshot.status === "timeout"
+      ) {
+        return false;
+      }
+      await this.taskModule.setStatus(agentTaskId, "cancelled", {
+        finishedAt: new Date(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private buildResult(

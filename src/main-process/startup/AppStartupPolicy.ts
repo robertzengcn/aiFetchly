@@ -4,8 +4,8 @@
  * Normal startup performs several side effects that are undesirable or
  * non-deterministic in Electron E2E tests: registering an OS protocol handler,
  * acquiring the production single-instance lock, initializing the auto-updater,
- * installing Vue DevTools, starting cron schedulers, inspecting orphaned scraper
- * processes, connecting the marketing WebSocket, refreshing auth tokens, starting
+ * installing Vue DevTools, starting cron schedulers, connecting the marketing
+ * WebSocket, refreshing auth tokens, starting
  * the dev browser bridge, and scanning the global ~/.aifetchly config tree.
  *
  * This module turns those side effects on/off based on the environment WITHOUT
@@ -19,7 +19,7 @@
  */
 
 export interface AppStartupPolicy {
-  /** Register the custom protocol scheme with the OS / ProtocolRegistry. */
+  /** Register the custom protocol scheme with the OS (Electron setAsDefaultProtocolClient). */
   readonly registerProtocol: boolean;
   /** Acquire the production single-instance lock and listen for second-instance. */
   readonly acquireSingleInstanceLock: boolean;
@@ -29,8 +29,6 @@ export interface AppStartupPolicy {
   readonly installDevTools: boolean;
   /** Start cron schedulers and the interval-based Chat V2 scheduler. */
   readonly startSchedulers: boolean;
-  /** Inspect orphaned Yellow Pages / scraper processes from a previous session. */
-  readonly inspectOrphanedTasks: boolean;
   /** Connect the marketing WebSocket. */
   readonly connectMarketingWebSocket: boolean;
   /** Start background auth-token auto-refresh. */
@@ -56,7 +54,6 @@ const PRODUCTION_POLICY: AppStartupPolicy = {
   initializeUpdates: true,
   installDevTools: true,
   startSchedulers: true,
-  inspectOrphanedTasks: true,
   connectMarketingWebSocket: true,
   startTokenRefresh: true,
   startDevBrowserBridge: true,
@@ -71,7 +68,6 @@ const E2E_POLICY: AppStartupPolicy = {
   initializeUpdates: false,
   installDevTools: false,
   startSchedulers: false,
-  inspectOrphanedTasks: false,
   connectMarketingWebSocket: false,
   startTokenRefresh: false,
   startDevBrowserBridge: false,

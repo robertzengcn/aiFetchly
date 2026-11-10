@@ -26,12 +26,15 @@ const mockAcquire = vi.hoisted(() => vi.fn());
 const mockBroadcastEmit = vi.hoisted(() => vi.fn());
 const mockBroadcastStream = vi.hoisted(() => vi.fn());
 const mockSubmit = vi.hoisted(() => vi.fn());
+const mockRunTurn = vi.hoisted(() => vi.fn());
 const mockCreateConversationIfNeeded = vi.hoisted(() =>
   vi.fn((id?: string) => (id && id.startsWith("v2-") ? id : "v2-minted"))
 );
 
 interface MockEngine {
   submitMessage: typeof mockSubmit;
+  /** TODO-11: the runner consumes the typed outcome via runTurn. */
+  runTurn: typeof mockRunTurn;
 }
 
 type MockConstructor<T> = new (...args: never[]) => T;
@@ -45,10 +48,22 @@ function createMockClass<T extends object>(
   return cls;
 }
 
+const testDbDir = vi.hoisted(() => () => {
+  // Pool-namespaced test DB (resolveTestDbPath pattern): a fixed
+  // /tmp/test-db made two workers' DataSource.synchronize collide
+  // on the same SQLite file ("database is locked") in shared runs.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("os") as typeof import("os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("path") as typeof import("path");
+  const poolId = process.env.VITEST_POOL_ID ?? "0";
+  return path.join(os.tmpdir(), "aifetchly-test", poolId, "scraper.db");
+});
+
 vi.mock("@/modules/token", () => ({
   Token: createMockClass(() => ({
     getValue: vi.fn((key: string) =>
-      key === "user_ai_enabled" ? aiEnabled.value : "/tmp/test-db"
+      key === "user_ai_enabled" ? aiEnabled.value : testDbDir()
     ),
   })),
 }));
@@ -83,6 +98,12 @@ vi.mock("@/modules/AiMessageTaskRunModule", () => ({
     failRun = mockFailRun;
   },
 }));
+const mockRecordMessagePersisted = vi.hoisted(() => vi.fn());
+vi.mock("@/modules/AIChatConversationModule", () => ({
+  AIChatConversationModule: class {
+    recordMessagePersisted = mockRecordMessagePersisted;
+  },
+}));
 vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: class {
     createConversationIfNeeded = mockCreateConversationIfNeeded;
@@ -98,7 +119,7 @@ vi.mock("@/model/ScheduleTask.model", () => ({
 vi.mock("@/service/AIChatQueryEngineFactory", () => ({
   AIChatQueryEngineFactory: class {
     createScheduled(): MockEngine {
-      return { submitMessage: mockSubmit };
+      return { submitMessage: mockSubmit, runTurn: mockRunTurn };
     }
   },
 }));
@@ -215,6 +236,42 @@ beforeEach(() => {
       driveSink(input.eventSink);
     }
   );
+  // TODO-11: the runner consumes the typed outcome via runTurn; mirror the
+  // sink-driving behavior and classify the segment to match engineOutcome.
+  mockRunTurn.mockImplementation(
+    async (input: {
+      eventSink: { emit: (e: unknown) => void };
+      request: { conversationId: string };
+    }) => {
+      if (engineOutcome.value?.type === "throw") {
+        return {
+          type: "failed",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      driveSink(input.eventSink);
+      if (engineOutcome.value?.type === "error") {
+        return {
+          type: "failed",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      if (engineOutcome.value?.type === "blocked") {
+        return {
+          type: "paused_for_plan_question",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      return {
+        type: "completed",
+        conversationId: input.request.conversationId,
+        assistantMessageId: "scheduled-assistant-2-1",
+      };
+    }
+  );
   // Default: no workspace_path on TASK → bindTaskWorkspace returns early.
   // Tests that exercise the canonicalization path override both the stored
   // path and this mock's return value.
@@ -253,7 +310,44 @@ describe("ScheduledAiMessageRunner.runChatScheduledLoop", () => {
     engineOutcome.value = { type: "complete", content: "local ok" };
     const r = await call();
     expect(r.status).toBe("completed");
-    expect(mockSubmit).toHaveBeenCalled();
+    expect(mockRunTurn).toHaveBeenCalled();
+  });
+
+  it("bumps the conversation projection for the scheduled user turn and result", async () => {
+    // Scheduled turns bypass AIChatCoordinator, so without an explicit bump
+    // the sidebar projection (preview/lastMessageAt/messageCount) never
+    // advances and a loop conversation created from a fresh composer stays
+    // an unreachable phantom (no ai_chat_conversations row at all).
+    engineOutcome.value = { type: "complete", content: "deployment ok" };
+    await call();
+    expect(mockRecordMessagePersisted).toHaveBeenCalledTimes(2);
+    expect(mockRecordMessagePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "v2-conv", isResult: false })
+    );
+    expect(mockRecordMessagePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "v2-conv",
+        isResult: true,
+        previewText: "deployment ok",
+      })
+    );
+  });
+
+  it("does not bump the projection when the conversation is busy (deferred)", async () => {
+    mockAcquire.mockRejectedValue(new Error("busy"));
+    engineOutcome.value = { type: "complete", content: "should not run" };
+    const r = await call();
+    expect(r.status).toBe("blocked_by_policy");
+    expect(mockRecordMessagePersisted).not.toHaveBeenCalled();
+  });
+
+  it("bumps only the user-turn projection when the turn fails", async () => {
+    engineOutcome.value = { type: "error", message: "boom" };
+    await call();
+    expect(mockRecordMessagePersisted).toHaveBeenCalledTimes(1);
+    expect(mockRecordMessagePersisted).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: "v2-conv", isResult: false })
+    );
   });
 
   it("rejects a task that is not chat_scheduled_loop", async () => {
@@ -378,8 +472,8 @@ describe("ScheduledAiMessageRunner.run (schedule-page cron)", () => {
     engineOutcome.value = { type: "complete", content: "hello from schedule" };
     const r = await new ScheduledAiMessageRunner().run(1, 2);
     expect(r.status).toBe("completed");
-    expect(mockSubmit).toHaveBeenCalled();
-    const submitArg = mockSubmit.mock.calls[0][0] as {
+    expect(mockRunTurn).toHaveBeenCalled();
+    const submitArg = mockRunTurn.mock.calls[0][0] as {
       request: { conversationId: string; message: string };
     };
     expect(submitArg.request.conversationId).toBe("v2-schedule-conv");
@@ -399,7 +493,7 @@ describe("ScheduledAiMessageRunner.run (schedule-page cron)", () => {
         conversationId: "v2-minted",
       })
     );
-    const submitArg = mockSubmit.mock.calls[0][0] as {
+    const submitArg = mockRunTurn.mock.calls[0][0] as {
       request: { conversationId: string };
     };
     expect(submitArg.request.conversationId).toBe("v2-minted");

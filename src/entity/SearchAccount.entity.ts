@@ -6,12 +6,12 @@ import { SearchTaskEntity } from "./SearchTask.entity";
 @Entity("search_account")
 export class SearchAccountEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Column("integer")
-    task_id: number;
+    task_id!: number;
     @Column("integer")
-    account_id: number;
+    account_id!: number;
 
     // @ManyToOne(() => SearchTaskEntity)
     // @JoinColumn({ name: "id" })

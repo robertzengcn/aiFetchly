@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { ScheduleExecutionLogModel } from "@/model/ScheduleExecutionLog.model";
 import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity";
 import { ExecutionStatus, TriggerType } from "@/entity/ScheduleExecutionLog.entity";
@@ -33,7 +34,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
                 taskOutputId
             );
         } catch (error) {
-            console.error('Error logging execution:', error);
+            log.error('Error logging execution:', error);
             throw error;
         }
     }
@@ -52,7 +53,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
                 duration
             );
         } catch (error) {
-            console.error('Error updating execution status:', error);
+            log.error('Error updating execution status:', error);
             throw error;
         }
     }
@@ -61,7 +62,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionById(executionId);
         } catch (error) {
-            console.error('Error getting execution by ID:', error);
+            log.error('Error getting execution by ID:', error);
             throw error;
         }
     }
@@ -72,7 +73,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
             const num = await this.scheduleExecutionLogModel.getExecutionHistoryTotal(scheduleId);
             return { records, num };
         } catch (error) {
-            console.error('Error getting execution history:', error);
+            log.error('Error getting execution history:', error);
             throw error;
         }
     }
@@ -81,7 +82,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionHistoryTotal(scheduleId);
         } catch (error) {
-            console.error('Error getting execution history total:', error);
+            log.error('Error getting execution history total:', error);
             throw error;
         }
     }
@@ -90,7 +91,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getRecentExecutions(limit);
         } catch (error) {
-            console.error('Error getting recent executions:', error);
+            log.error('Error getting recent executions:', error);
             throw error;
         }
     }
@@ -99,7 +100,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getFailedExecutions(scheduleId, limit);
         } catch (error) {
-            console.error('Error getting failed executions:', error);
+            log.error('Error getting failed executions:', error);
             throw error;
         }
     }
@@ -108,7 +109,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getChildExecutions(parentExecutionId);
         } catch (error) {
-            console.error('Error getting child executions:', error);
+            log.error('Error getting child executions:', error);
             throw error;
         }
     }
@@ -117,7 +118,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionChain(executionId);
         } catch (error) {
-            console.error('Error getting execution chain:', error);
+            log.error('Error getting execution chain:', error);
             throw error;
         }
     }
@@ -126,7 +127,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionsByStatus(status, limit);
         } catch (error) {
-            console.error('Error getting executions by status:', error);
+            log.error('Error getting executions by status:', error);
             throw error;
         }
     }
@@ -135,7 +136,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionsByTriggerType(triggeredBy, limit);
         } catch (error) {
-            console.error('Error getting executions by trigger type:', error);
+            log.error('Error getting executions by trigger type:', error);
             throw error;
         }
     }
@@ -144,7 +145,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionStatistics(scheduleId);
         } catch (error) {
-            console.error('Error getting execution statistics:', error);
+            log.error('Error getting execution statistics:', error);
             throw error;
         }
     }
@@ -153,7 +154,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getRunningExecutions();
         } catch (error) {
-            console.error('Error getting running executions:', error);
+            log.error('Error getting running executions:', error);
             throw error;
         }
     }
@@ -162,7 +163,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.cleanupOldExecutions(daysToKeep);
         } catch (error) {
-            console.error('Error cleaning up old executions:', error);
+            log.error('Error cleaning up old executions:', error);
             throw error;
         }
     }
@@ -175,7 +176,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             return await this.scheduleExecutionLogModel.getExecutionsInDateRange(startDate, endDate, scheduleId);
         } catch (error) {
-            console.error('Error getting executions in date range:', error);
+            log.error('Error getting executions in date range:', error);
             throw error;
         }
     }
@@ -234,7 +235,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
                 num: total
             };
         } catch (error) {
-            console.error('Error listing executions:', error);
+            log.error('Error listing executions:', error);
             throw error;
         }
     }
@@ -263,7 +264,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
             
             return filtered.length;
         } catch (error) {
-            console.error('Error getting executions total:', error);
+            log.error('Error getting executions total:', error);
             throw error;
         }
     }
@@ -274,7 +275,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
             // For now, we'll throw an error indicating it's not implemented
             throw new Error('Delete execution method not implemented in model yet');
         } catch (error) {
-            console.error('Error deleting execution:', error);
+            log.error('Error deleting execution:', error);
             throw error;
         }
     }
@@ -285,7 +286,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
             // For now, we'll throw an error indicating it's not implemented
             throw new Error('Delete executions by schedule method not implemented in model yet');
         } catch (error) {
-            console.error('Error deleting executions by schedule:', error);
+            log.error('Error deleting executions by schedule:', error);
             throw error;
         }
     }
@@ -294,7 +295,7 @@ export class ScheduleExecutionLogModule extends BaseModule implements ScheduleEx
         try {
             await this.scheduleExecutionLogModel.truncatedb();
         } catch (error) {
-            console.error('Error truncating database:', error);
+            log.error('Error truncating database:', error);
             throw error;
         }
     }

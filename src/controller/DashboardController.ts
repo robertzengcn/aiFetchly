@@ -10,8 +10,8 @@ import {
   EngineMetric
 } from '@/entityTypes/dashboardType';
 import { SearchResultModule } from '@/modules/SearchResultModule';
+import { log } from "@/modules/Logger";
 import { EmailSearchTaskModule } from '@/modules/EmailSearchTaskModule';
-import { YellowPagesResultModule } from '@/modules/YellowPagesResultModule';
 import { EmailMarketingSendLogModule } from '@/modules/emailMarketingSendLogModule';
 import { SearhEnginer } from '@/config/searchSetting';
 import { getEnumValueByNumber } from '@/modules/lib/function';
@@ -19,13 +19,11 @@ import { getEnumValueByNumber } from '@/modules/lib/function';
 export class DashboardController {
   private readonly searchResultModule: SearchResultModule;
   private readonly emailSearchTaskModule: EmailSearchTaskModule;
-  private readonly yellowPagesResultModule: YellowPagesResultModule;
   private readonly emailMarketingSendLogModule: EmailMarketingSendLogModule;
 
   constructor() {
     this.searchResultModule = new SearchResultModule();
     this.emailSearchTaskModule = new EmailSearchTaskModule();
-    this.yellowPagesResultModule = new YellowPagesResultModule();
     this.emailMarketingSendLogModule = new EmailMarketingSendLogModule();
   }
 
@@ -36,7 +34,6 @@ export class DashboardController {
     // Ensure all modules have their database connections initialized
     await this.searchResultModule.ensureConnection();
     await this.emailSearchTaskModule.ensureConnection();
-    await this.yellowPagesResultModule.ensureConnection();
     await this.emailMarketingSendLogModule.ensureConnection();
   }
   /**
@@ -49,19 +46,16 @@ export class DashboardController {
     const [
       searchResults,
       emailsExtracted,
-      yellowPagesResults,
       emailsSent
     ] = await Promise.all([
       this.getSearchResultsSummary(startDate, endDate, previousPeriod.start, previousPeriod.end),
       this.getEmailsExtractedSummary(startDate, endDate, previousPeriod.start, previousPeriod.end),
-      this.getYellowPagesSummary(startDate, endDate, previousPeriod.start, previousPeriod.end),
       this.getEmailsSentSummary(startDate, endDate, previousPeriod.start, previousPeriod.end)
     ]);
 
     return {
       searchResults,
       emailsExtracted,
-      yellowPagesResults,
       emailsSent
     };
   }
@@ -76,12 +70,10 @@ export class DashboardController {
     const [
       searchResults,
       emailsExtracted,
-      yellowPagesResults,
       emailsSent
     ] = await Promise.all([
       this.getSearchResultsTrend(startDate, endDate, granularity),
       this.getEmailsExtractedTrend(startDate, endDate, granularity),
-      this.getYellowPagesTrend(startDate, endDate, granularity),
       this.getEmailsSentTrend(startDate, endDate, granularity)
     ]);
 
@@ -92,7 +84,6 @@ export class DashboardController {
       dates: allDates,
       searchResults: this.fillMissingData(allDates, searchResults),
       emailsExtracted: this.fillMissingData(allDates, emailsExtracted),
-      yellowPagesResults: this.fillMissingData(allDates, yellowPagesResults),
       emailsSent: this.fillMissingData(allDates, emailsSent)
     };
   }
@@ -119,7 +110,7 @@ export class DashboardController {
 
       return { engines };
     } catch (error) {
-      console.error('Error fetching search engine breakdown:', error);
+      log.error('Error fetching search engine breakdown:', error);
       return { engines: [] };
     }
   }
@@ -144,7 +135,7 @@ export class DashboardController {
 
       return breakdown;
     } catch (error) {
-      console.error('Error fetching email status breakdown:', error);
+      log.error('Error fetching email status breakdown:', error);
       return { successful: 0, failed: 0, pending: 0 };
     }
   }
@@ -185,22 +176,6 @@ export class DashboardController {
     return { total, periodCount, trend, trendDirection };
   }
 
-  private async getYellowPagesSummary(
-    startDate: Date,
-    endDate: Date,
-    prevStartDate: Date,
-    prevEndDate: Date
-  ): Promise<MetricSummary> {
-    const [total, periodCount, previousCount] = await Promise.all([
-      this.yellowPagesResultModule.countResults(),
-      this.yellowPagesResultModule.countResultsByDateRange(startDate, endDate),
-      this.yellowPagesResultModule.countResultsByDateRange(prevStartDate, prevEndDate)
-    ]);
-
-    const { trend, trendDirection } = this.calculateTrend(periodCount, previousCount);
-
-    return { total, periodCount, trend, trendDirection };
-  }
 
   private async getEmailsSentSummary(
     startDate: Date,
@@ -247,7 +222,7 @@ export class DashboardController {
     try {
       return await this.searchResultModule.aggregateByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching search results trend:', error);
+      log.error('Error fetching search results trend:', error);
       return [];
     }
   }
@@ -256,25 +231,17 @@ export class DashboardController {
     try {
       return await this.emailSearchTaskModule.aggregateResultsByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching emails extracted trend:', error);
+      log.error('Error fetching emails extracted trend:', error);
       return [];
     }
   }
 
-  private async getYellowPagesTrend(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
-    try {
-      return await this.yellowPagesResultModule.aggregateResultsByDateRange(startDate, endDate, granularity);
-    } catch (error) {
-      console.error('Error fetching yellow pages trend:', error);
-      return [];
-    }
-  }
 
   private async getEmailsSentTrend(startDate: Date, endDate: Date, granularity: 'day' | 'week' | 'month'): Promise<AggregatedCount[]> {
     try {
       return await this.emailMarketingSendLogModule.aggregateByDateRange(startDate, endDate, granularity);
     } catch (error) {
-      console.error('Error fetching emails sent trend:', error);
+      log.error('Error fetching emails sent trend:', error);
       return [];
     }
   }

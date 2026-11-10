@@ -23,45 +23,45 @@ import type {
 @Index(["batchId"])
 export class OutboundEmailAuthorizationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("int")
-  batchId: number;
+  batchId!: number;
 
   /** Instruction or review approval. */
   @Column("varchar", { length: 40 })
-  type: OutboundEmailAuthorizationType;
+  type!: OutboundEmailAuthorizationType;
 
   /** Authorization source (the user message that authorized it). */
   @Column("varchar", { length: 100 })
-  sourceUserMessageId: string;
+  sourceUserMessageId!: string;
 
   /** Required for direct send. */
   @Column("int", { nullable: true })
-  intentDecisionId: number | null;
+  intentDecisionId!: number | null;
 
   /** Exact authorized envelope set hash. */
   @Column("varchar", { length: 64 })
-  batchHash: string;
+  batchHash!: string;
 
   /** Review approval only; SHA-256 of the one-time token. */
   @Column("varchar", { length: 64, nullable: true })
-  tokenHash: string | null;
+  tokenHash!: string | null;
 
   @Column("varchar", { length: 20 })
-  status: OutboundEmailAuthorizationStatus;
+  status!: OutboundEmailAuthorizationStatus;
 
   @Column("datetime")
-  expiresAt: Date;
+  expiresAt!: Date;
 
   /** Atomic claim time. */
   @Column("datetime", { nullable: true })
-  consumedAt: Date | null;
+  consumedAt!: Date | null;
 
   /** Edit/policy change time. */
   @Column("datetime", { nullable: true })
-  invalidatedAt: Date | null;
+  invalidatedAt!: Date | null;
 
   @Column("varchar", { length: 100, nullable: true })
-  invalidationReason: string | null;
+  invalidationReason!: string | null;
 }

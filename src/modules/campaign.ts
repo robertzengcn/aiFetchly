@@ -14,7 +14,7 @@ export class Campaign {
     /**
     * get campaign from remote servive
     */
-    async getCampaignlist(queryParams): Promise<CommonResponse<campaignEntity> | null> {
+    async getCampaignlist(queryParams: Record<string, string>): Promise<CommonResponse<campaignEntity> | null> {
         const params = new url.URLSearchParams(queryParams);
         const paramstring=params.toString();
         const finalurl='/api/campaign?'+paramstring;

@@ -7,6 +7,9 @@ import { InstalledSkillEntity } from "@/entity/InstalledSkill.entity";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
 import { PluginManifestService } from "@/service/PluginManifestService";
 import {
+  readRuntimeDescriptorFromMetadata,
+} from "@/entityTypes/pluginExecutionTypes";
+import {
   ClaudeHooksAdapter,
   type AdaptedPluginHookMatcher,
 } from "@/service/pluginCompat/ClaudeHooksAdapter";
@@ -37,6 +40,40 @@ export interface LoadedPluginSkill {
   readonly skillDir: string;
   readonly health: "healthy" | "missing_files";
   readonly error?: string;
+}
+
+/**
+ * B11/HOST-15: per-row MCP health predicate. stdio rows are healthy with an
+ * explicit command OR a validated host-runtime descriptor in the host-owned
+ * metadata (host runtime servers intentionally have no command — the host
+ * injects process.execPath + entry at launch). sse/websocket rows need a
+ * host or url.
+ */
+export function evaluateMcpRowHealth(row: {
+  transport: "stdio" | "sse" | "websocket";
+  command?: string | null;
+  host?: string | null;
+  url?: string | null;
+  metadata?: string | null;
+}): { healthy: boolean; viaRuntimeDescriptor: boolean } {
+  let hasRuntimeDescriptor = false;
+  if (row.transport === "stdio") {
+    try {
+      const metadata = row.metadata
+        ? (JSON.parse(row.metadata) as Record<string, unknown>)
+        : null;
+      hasRuntimeDescriptor =
+        readRuntimeDescriptorFromMetadata(metadata) !== null;
+    } catch {
+      hasRuntimeDescriptor = false;
+    }
+  }
+  const healthy =
+    (row.transport === "stdio" &&
+      (!!row.command || hasRuntimeDescriptor)) ||
+    ((row.transport === "sse" || row.transport === "websocket") &&
+      (!!row.host || !!row.url));
+  return { healthy, viaRuntimeDescriptor: hasRuntimeDescriptor };
 }
 
 export interface LoadedPluginMcpServer {
@@ -194,16 +231,21 @@ export class PluginLoaderService {
       // Resolve owned MCP servers.
       const ownedMcp = mcpByPlugin.get(plugin.name) ?? [];
       const loadedMcp: LoadedPluginMcpServer[] = ownedMcp.map((m) => {
-        const hasConfig =
-          (m.transport === "stdio" && !!m.command) ||
-          ((m.transport === "sse" || m.transport === "websocket") &&
-            (!!m.host || !!m.url));
+        // B11: a host-runtime plugin server intentionally has NO command —
+        // its trusted descriptor is stored in host-owned metadata, and the
+        // host injects process.execPath + entry at launch. stdio health
+        // therefore accepts either an explicit command or a validated
+        // runtime descriptor instead of reporting valid runtime servers as
+        // needs_configuration.
+        const health = evaluateMcpRowHealth(m);
         return {
           serverName: m.serverName,
           enabled: m.enabled,
           transport: m.transport,
-          health: hasConfig ? "healthy" : "needs_configuration",
-          error: hasConfig
+          health: health.healthy
+            ? "healthy"
+            : "needs_configuration",
+          error: health.healthy
             ? undefined
             : `MCP server "${m.serverName}" is missing required configuration.`,
         };

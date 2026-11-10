@@ -1,4 +1,4 @@
-import { Entity, Column, PrimaryGeneratedColumn, OneToMany } from "typeorm";
+import { Entity, Column, PrimaryGeneratedColumn, OneToMany, Index } from "typeorm";
 import AuditableEntity from "@/entity/Auditable.entity";
 import { EmailSearchTaskUrlEntity } from "@/entity/EmailSearchTaskUrl.entity";
 import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity";
@@ -6,57 +6,58 @@ import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity
 @Entity("emailsearch_task")
 export class EmailSearchTaskEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("text", { nullable: true })
-  task_name: string;
+  task_name!: string;
   @Column("integer", { default: 0 })
-  search_result_id: number;
+  search_result_id!: number;
 
   @Column("integer", { nullable: true })
-  type_id: number;
+  type_id!: number;
 
   @Column("integer", { nullable: true })
-  concurrency: number;
+  concurrency!: number;
 
   @Column("integer", { nullable: true })
-  pagelength: number;
+  pagelength!: number;
 
   @Column("boolean", { nullable: true })
-  notShowBrowser: boolean;
+  notShowBrowser!: boolean;
   @Column("integer", { nullable: true })
-  processTimeout: number;
+  processTimeout!: number;
 
   @Column("integer", { nullable: true })
-  maxPageNumber: number;
+  maxPageNumber!: number;
 
   @Column("integer", { nullable: true })
-  page_length: number;
+  page_length!: number;
 
   @Column("boolean", { nullable: true })
-  is_active: boolean;
+  is_active!: boolean;
 
   @Column("text", { nullable: true })
-  record_time: string;
+  record_time!: string;
 
   @Column("text", { nullable: true })
-  runtime_log: string;
+  runtime_log!: string;
 
   @Column("text", { nullable: true })
-  error_log: string;
+  error_log!: string;
 
   @Column("integer", { nullable: true })
-  status: number;
+  @Index()
+  status!: number;
 
   @Column("boolean", { default: false })
-  aiSupportEnabled: boolean;
+  aiSupportEnabled!: boolean;
 
   @OneToMany(() => EmailSearchTaskUrlEntity, (url) => url.emailSearchTask)
-  urls: EmailSearchTaskUrlEntity[];
+  urls!: EmailSearchTaskUrlEntity[];
 
   @OneToMany(
     () => EmailSearchTaskProxyEntity,
     (taskProxy) => taskProxy.emailSearchTask
   )
-  taskProxies: EmailSearchTaskProxyEntity[];
+  taskProxies!: EmailSearchTaskProxyEntity[];
 }

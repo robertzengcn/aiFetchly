@@ -18,36 +18,36 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index(["contentHash"])
 export class EmailReplyDraftRevisionEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  draftId: number;
+  draftId!: number;
 
   @Column("integer")
-  revisionNumber: number;
+  revisionNumber!: number;
 
   /** Who produced this revision: the model or a human editor. */
   @Column("varchar", { length: 20 })
-  actor: "ai" | "user";
+  actor!: "ai" | "user";
 
   @Column("varchar", { length: 998 })
-  subject: string;
+  subject!: string;
 
   @Column("text")
-  bodyText: string;
+  bodyText!: string;
 
   @Column("text", { nullable: true })
-  bodyHtml: string | null;
+  bodyHtml!: string | null;
 
   @Column("varchar", { length: 320 })
-  senderAddress: string;
+  senderAddress!: string;
 
   @Column("varchar", { length: 320 })
-  recipientAddress: string;
+  recipientAddress!: string;
 
   /** SHA-256 over the canonical approval envelope (see EmailReplyRevisionHasher). */
   @Column("varchar", { length: 64 })
-  contentHash: string;
+  contentHash!: string;
 
   /**
    * Envelope schema version bound to this revision (1 = legacy, 2 = identity-bound).
@@ -55,27 +55,27 @@ export class EmailReplyDraftRevisionEntity extends AuditableEntity {
    * hash path (additive, no data loss under TypeORM synchronize).
    */
   @Column("integer", { default: 1 })
-  envelopeVersion: 1 | 2;
+  envelopeVersion!: 1 | 2;
 
   /**
    * Effective SMTP login username frozen on this revision (§18.1). Null for v1
    * revisions; populated for v2 revisions by the materializer.
    */
   @Column({ type: "varchar", length: 255, nullable: true })
-  smtpUsername: string | null;
+  smtpUsername!: string | null;
 
   /**
    * Effective Reply-To frozen on this revision (§18.1). Null for v1 revisions
    * and for v2 revisions where the service has no configured Reply-To.
    */
   @Column({ type: "varchar", length: 320, nullable: true })
-  replyToAddress: string | null;
+  replyToAddress!: string | null;
 
   /** Sanitized generation metadata (versions, truncation/summary flags). No prompts. */
   @Column("text", { nullable: true })
-  generationMetadataJson: string | null;
+  generationMetadataJson!: string | null;
 
   /** Serialized deterministic validation findings. No raw model prose. */
   @Column("text", { nullable: true })
-  validationFindingsJson: string | null;
+  validationFindingsJson!: string | null;
 }

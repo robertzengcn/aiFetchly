@@ -144,9 +144,9 @@ const form = ref<FormState>(
         mode: props.agent.mode,
         systemPrompt: props.agent.systemPrompt,
         defaultModel: props.agent.defaultModel ?? "",
-        maxToolCalls: props.agent.maxToolCalls,
+        maxToolCalls: props.agent.maxToolCalls ?? 8,
         maxRuntimeSeconds: Math.round(props.agent.maxRuntimeMs / 1000),
-        maxContinueCalls: props.agent.maxContinueCalls,
+        maxContinueCalls: props.agent.maxContinueCalls ?? 8,
         enabled: props.agent.status === "active",
       }
     : {

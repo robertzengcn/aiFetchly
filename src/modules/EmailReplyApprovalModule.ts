@@ -87,4 +87,29 @@ export class EmailReplyApprovalModule extends BaseModule {
       throw error;
     }
   }
+
+  /**
+   * Retire EVERY active approval for the draft in one UPDATE (model:
+   * EmailReplyApprovalModel.invalidateAllForDraft). Returns the number of
+   * approvals retired. Preferred over looping findActiveByDraft + invalidate —
+   * a bounded loop can exit with rows still active (CAS loss, >N rows) and
+   * silently proceed with stale approvals live.
+   */
+  async invalidateAllForDraft(
+    draftId: number,
+    reason: string,
+    at: Date
+  ): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.approvalModel.invalidateAllForDraft(
+        draftId,
+        reason,
+        at
+      );
+    } catch (error) {
+      console.error("Error bulk-invalidating reply approvals:", error);
+      throw error;
+    }
+  }
 }

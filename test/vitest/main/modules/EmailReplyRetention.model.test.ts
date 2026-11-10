@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -13,6 +13,20 @@ import { EmailConversationModel } from "@/model/EmailConversation.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
+
+// The service resolves Token USERSDBPATH when no dbpath is passed; mock it
+// (same pattern as the portable-memory tests) to the isolated temp dir set
+// in beforeAll via AIFETCHLY_TEST_DBPATH.
+vi.mock("@/modules/token", () => ({
+  Token: class {
+    getValue() {
+      return (
+        process.env.AIFETCHLY_TEST_DBPATH ??
+        path.join(os.tmpdir(), "aifetchly-retention-test")
+      );
+    }
+  },
+}));
 
 /**
  * P4.4: mailbox deletion purges ALL reply-reliability data for that mailbox
@@ -37,6 +51,34 @@ describe("EmailReplyRetentionService (P4.4)", () => {
   let conversationModel: EmailConversationModel;
 
   beforeAll(async () => {
+    // Stand up an isolated temp DB (not the shared os.tmpdir()/aifetchly-test)
+    // before constructing models. Under vitest's thread pool, files sharing
+    // the fallback singleton race during DataSource.synchronize and throw
+    // SQLITE_BUSY_SNAPSHOT. resetInstance makes `dbpath` authoritative, so the
+    // retention service (which resolves Token USERSDBPATH -> getInstance)
+    // lands on this same isolated connection.
+    dbpath = path.join(os.tmpdir(), `aifetchly-retention-test-${Date.now()}`);
+    fs.mkdirSync(dbpath, { recursive: true });
+    process.env.AIFETCHLY_TEST_DBPATH = dbpath;
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    // Models pass dbpath directly to BaseDb (an authoritative singleton now).
+    draftModel = new EmailReplyDraftModel(dbpath);
+    revisionModel = new EmailReplyDraftRevisionModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+    attemptModel = new EmailReplySendAttemptModel(dbpath);
+    messageModel = new EmailReceivedMessageModel(dbpath);
+    conversationModel = new EmailConversationModel(dbpath);
+  });
+
+  afterAll(async () => {
+    delete process.env.AIFETCHLY_TEST_DBPATH;
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
     dbpath = path.join(os.tmpdir(), `aifetchly-reply-retention-${Date.now()}`);
     fs.mkdirSync(dbpath, { recursive: true });
     await SqliteDb.resetInstance(dbpath);
@@ -136,6 +178,10 @@ describe("EmailReplyRetentionService (P4.4)", () => {
     const targetDraft = await seedMailbox(71);
     const otherDraft = await seedMailbox(72);
 
+    // No explicit dbpath: the service resolves Token USERSDBPATH ->
+    // getInstance, which lands on the authoritative isolated connection
+    // resetInstance installed in beforeAll (passing the shared fallback
+    // path would purge the WRONG database).
     // Same isolated dbpath the seed models use.
     const counts = await new EmailReplyRetentionService().purgeMailboxData(
       71,

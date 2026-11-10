@@ -28,16 +28,34 @@ export const pluginValidatePackageInputSchema = lazySchema(() =>
 );
 
 /**
- * PLUGIN_INSTALL_FROM_SOURCE: complex multi-source install config.
- * Passthrough — the handler validates the `kind` field and string
- * sanitization (CRLF rejection) internally.
+ * PLUGIN_INSTALL_FROM_SOURCE (design §12.2): STRICT schema — no passthrough,
+ * no signal/callbacks/arbitrary sourceMeta from the renderer. operationId
+ * keys the main-process AbortController; kind-specific required fields are
+ * checked by the handler (the unions differ per kind).
  */
+const boundedSafeString = z.string().min(1).max(2000);
 export const pluginInstallFromSourceInputSchema = lazySchema(() =>
-  z
-    .object({
-      kind: z.string().min(1, "kind is required"),
-    })
-    .passthrough()
+  z.strictObject({
+    operationId: z.string().uuid(),
+    kind: z.enum(["local-zip", "local-folder", "git", "github", "npm", "url"]),
+    overwrite: z.boolean().optional(),
+    zipPath: boundedSafeString.optional(),
+    folderPath: boundedSafeString.optional(),
+    uri: boundedSafeString.optional(),
+    ref: boundedSafeString.optional(),
+    npmPackage: boundedSafeString.optional(),
+    npmVersion: boundedSafeString.optional(),
+    npmRegistry: boundedSafeString.optional(),
+    npmAuthScope: boundedSafeString.optional(),
+    npmAuthToken: boundedSafeString.optional(),
+  })
+);
+
+/** PLUGIN_CANCEL_INSTALL (design §12.4): abort one active install. */
+export const pluginCancelInstallInputSchema = lazySchema(() =>
+  z.strictObject({
+    operationId: z.string().uuid(),
+  })
 );
 
 /** PLUGIN_TOGGLE: name + enabled */

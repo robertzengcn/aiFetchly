@@ -5,14 +5,14 @@ import AuditableEntity from "@/entity/Auditable.entity";
 export class ProxyCheckEntity extends AuditableEntity {
 
     @PrimaryColumn("integer")
-    proxy_id: number;
+    proxy_id!: number;
     
     @Column("text", { nullable: true })
-    check_time: string;
+    check_time!: string;
     
     @Column("integer", { nullable: true })
-    status: number;
+    status!: number;
     
     @Column("integer", { nullable: true })
-    google_pass: number | null;
+    google_pass!: number | null;
 }

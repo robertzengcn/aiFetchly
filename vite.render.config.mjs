@@ -1,12 +1,29 @@
 import { defineConfig } from 'vite';
 import alias from "@rollup/plugin-alias";
 import * as path from 'path';
+import * as fs from 'fs';
 import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 import ClosePlugin from './vite-plugin-close.ts'
+import rendererNodeGuard from './vite-plugin-renderer-node-guard.ts'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
 // import { nodePolyfills } from 'vite-plugin-node-polyfills'
+
+// Follow the actual on-disk target of the hoisted @mdi/font install so the
+// serving permission matches the location Vite really serves webfonts from.
+const mdiFontFontsDir = (() => {
+  try {
+    const candidate = path.resolve(__dirname, 'node_modules/@mdi/font/fonts');
+    if (fs.existsSync(candidate)) {
+      return fs.realpathSync(candidate);
+    }
+  } catch {
+    // Fall through: serving stays root-only; the icon-font warning would
+    // reappear if the dependency is otherwise located.
+  }
+  return null;
+})();
 
 export default defineConfig({
   build: {
@@ -22,9 +39,19 @@ export default defineConfig({
   // Stable dev-server port so the dev browser bridge origin and the Chrome
   // launch config (http://localhost:5173) line up. strictPort fails fast if
   // 5173 is taken rather than silently picking another port (PRD FR-7.2).
+  // Audit V04: in git worktrees node_modules is a symlink into the primary
+  // checkout, so Vite serves the @mdi/font webfonts from their REAL path —
+  // which the default workspace-root allow list does not include, logging
+  // repeated "outside of Vite serving allow list" warnings and leaving icon
+  // tiles tofu. Allow exactly the resolved @mdi/font/fonts directory (plus
+  // the project root) so the font requests succeed; strict serving stays on
+  // and every other outside-root location stays blocked.
   server: {
     port: 5173,
     strictPort: true,
+    fs: {
+      allow: mdiFontFontsDir ? [__dirname, mdiFontFontsDir] : [__dirname],
+    },
   },
   plugins: [
     // nodePolyfills({
@@ -45,6 +72,11 @@ export default defineConfig({
     vuetify({
       autoImport: true,
     }),
+    // Fail fast + loudly (dev AND build) if a Node-only / main-process-only
+    // module would enter the renderer graph — prevents the recurring
+    // ERR_ABORTED / "Cannot access node:module.createRequire" launch crash.
+    // Bypass (NOT for committed code): AIFETCHLY_DISABLE_RENDERER_NODE_GUARD=1
+    rendererNodeGuard(),
     ClosePlugin(),
     ...optionalChecker(() => checker({
       // e.g. use TypeScript check

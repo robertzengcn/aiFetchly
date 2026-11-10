@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DIRECT_EMAIL_SOURCE } from "@/entityTypes/emailMarketingAiTypes";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 
 const moduleMocks = vi.hoisted(() => ({
   ensureConnection: vi.fn<() => Promise<void>>(),

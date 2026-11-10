@@ -234,21 +234,6 @@ export interface ScrapingCaptchaDetectedMessage extends BaseBackgroundMessage {
 }
 
 /**
- * Message sent from background process when Cloudflare protection is detected
- */
-export interface ScrapingCloudflareDetectedMessage
-  extends BaseBackgroundMessage {
-  type: "SCRAPING_CLOUDFLARE_DETECTED";
-  details: {
-    url: string;
-    timestamp: string;
-    userAgent?: string;
-    ipAddress?: string;
-    additionalInfo?: string;
-  };
-}
-
-/**
  * Message sent from main process to pause a task
  */
 export interface PauseTaskMessage extends BaseBackgroundMessage {
@@ -276,20 +261,6 @@ export interface TaskPausedMessage extends BaseBackgroundMessage {
  */
 export interface TaskResumedMessage extends BaseBackgroundMessage {
   type: "TASK_RESUMED";
-}
-
-/**
- * Message sent from background process when scraping is paused due to Cloudflare
- */
-export interface ScrapingPausedCloudflareMessage extends BaseBackgroundMessage {
-  type: "SCRAPING_PAUSED_CLOUDFLARE";
-  details: {
-    url: string;
-    timestamp: string;
-    userAgent?: string;
-    ipAddress?: string;
-    additionalInfo?: string;
-  };
 }
 
 /**
@@ -437,8 +408,6 @@ export type BackgroundProcessMessage =
   | ScrapingResultFoundMessage
   | ScrapingRateLimitedMessage
   | ScrapingCaptchaDetectedMessage
-  | ScrapingCloudflareDetectedMessage
-  | ScrapingPausedCloudflareMessage
   | ScrapingRobotVerificationDetectedMessage
   | PauseTaskMessage
   | ResumeTaskMessage
@@ -479,30 +448,6 @@ export function isCompletedMessage(message: any): message is CompletedMessage {
  */
 export function isErrorMessage(message: any): message is ErrorMessage {
   return message && message.type === "ERROR" && message.error;
-}
-
-/**
- * Type guard to check if a message is a ScrapingCloudflareDetectedMessage
- */
-export function isScrapingCloudflareDetectedMessage(
-  message: any
-): message is ScrapingCloudflareDetectedMessage {
-  return (
-    message &&
-    message.type === "SCRAPING_CLOUDFLARE_DETECTED" &&
-    message.details
-  );
-}
-
-/**
- * Type guard to check if a message is a ScrapingPausedCloudflareMessage
- */
-export function isScrapingPausedCloudflareMessage(
-  message: any
-): message is ScrapingPausedCloudflareMessage {
-  return (
-    message && message.type === "SCRAPING_PAUSED_CLOUDFLARE" && message.details
-  );
 }
 
 /**

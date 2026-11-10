@@ -41,6 +41,47 @@ export interface AiNavigationRouteManifestEntry {
 export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[] =
   [
     {
+      routeName: "AI_Chat_Workspace",
+      path: "/aiworkspace",
+      titleKey: "route.ai_chat_workspace",
+      visible: true,
+      aiNavigable: true,
+      aiAliases: [
+        "chat workspace",
+        "ai workspace",
+        "workspace chat",
+        "chat home",
+        "full chat",
+      ],
+      aiDescription:
+        "Open the redesigned AI chat workspace with workspaces, conversations, and the inspector",
+    },
+    {
+      // Unified Plugin page (community discovery + installed + sources +
+      // issues). Replaces the deprecated CommunityPluginsList manifest
+      // entry — the legacy route name still resolves via an invisible
+      // redirect, but AI navigation now targets the canonical route
+      // (unified plugin page tech design §12.4).
+      routeName: "PluginsManagement",
+      path: "/plugins/management",
+      titleKey: "route.plugins",
+      visible: true,
+      aiNavigable: true,
+      aiAliases: [
+        "plugins",
+        "plugin management",
+        "community plugins",
+        "plugin store",
+        "plugin hub",
+        "community plugin page",
+        "browse plugins",
+        "discover plugins",
+        "plugin marketplace page",
+      ],
+      aiDescription:
+        "Discover community plugins and manage installed plugins and sources",
+    },
+    {
       routeName: "Email_Marketing_Service_LIST",
       path: "/emailmarketing/emailservice/list",
       titleKey: "route.email_service",
@@ -203,6 +244,22 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
       aiDescription: "Configure application-wide system settings",
     },
     {
+      routeName: "system_setting_managed_browser",
+      path: "/systemsetting/managed-browser",
+      titleKey: "route.managed_browser",
+      visible: false,
+      aiNavigable: true,
+      aiAliases: [
+        "managed browser settings",
+        "browser settings",
+        "browser cache settings",
+        "clear browser cache",
+        "social browser settings",
+      ],
+      aiDescription:
+        "Configure the managed social browser enablement and cache; clear the browser cache",
+    },
+    {
       routeName: "Searchform",
       path: "/search/form",
       titleKey: "route.search_scraper",
@@ -230,15 +287,6 @@ export const aiNavigationRouteManifest: readonly AiNavigationRouteManifestEntry[
         "email extraction form",
       ],
       aiDescription: "Extract email addresses from websites and search results",
-    },
-    {
-      routeName: "YellowPagesList",
-      path: "/yellowpages/list",
-      titleKey: "route.yellow_pages_list",
-      visible: true,
-      aiNavigable: true,
-      aiAliases: ["yellow pages", "yellow pages list", "business directory"],
-      aiDescription: "Scrape business listings from yellow pages directories",
     },
     {
       routeName: "MapScraper",

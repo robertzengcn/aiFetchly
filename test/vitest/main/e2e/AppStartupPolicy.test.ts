@@ -9,7 +9,6 @@ describe("AppStartupPolicy", () => {
     expect(policy.initializeUpdates).toBe(true);
     expect(policy.installDevTools).toBe(true);
     expect(policy.startSchedulers).toBe(true);
-    expect(policy.inspectOrphanedTasks).toBe(true);
     expect(policy.connectMarketingWebSocket).toBe(true);
     expect(policy.startTokenRefresh).toBe(true);
     expect(policy.startDevBrowserBridge).toBe(true);
@@ -23,7 +22,6 @@ describe("AppStartupPolicy", () => {
     expect(policy.initializeUpdates).toBe(false);
     expect(policy.installDevTools).toBe(false);
     expect(policy.startSchedulers).toBe(false);
-    expect(policy.inspectOrphanedTasks).toBe(false);
     expect(policy.connectMarketingWebSocket).toBe(false);
     expect(policy.startTokenRefresh).toBe(false);
     expect(policy.startDevBrowserBridge).toBe(false);

@@ -24,9 +24,41 @@ describe("AIChatCompactAgentService bounded routing", () => {
       ],
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     });
-    vi.spyOn(AIChatV2Module.prototype, "getRecentMessages").mockResolvedValueOnce([
-      { role: "user", content: "hi", messageId: "m1" },
-      { role: "assistant", content: "hello", messageId: "m2" },
+    vi.spyOn(AIChatV2Module.prototype, "getRecentMessages").mockResolvedValue([
+      {
+        role: "user",
+        content: "hi",
+        messageId: "m1",
+        messageType: "message",
+        timestamp: new Date(1),
+        id: 1,
+      },
+      {
+        role: "assistant",
+        content: "hello",
+        messageId: "m2",
+        messageType: "message",
+        timestamp: new Date(2),
+        id: 2,
+      },
+    ] as never);
+    vi.spyOn(AIChatV2Module.prototype, "getConversationMessages").mockResolvedValue([
+      {
+        role: "user",
+        content: "hi",
+        messageId: "m1",
+        messageType: "message",
+        timestamp: new Date(1),
+        id: 1,
+      },
+      {
+        role: "assistant",
+        content: "hello",
+        messageId: "m2",
+        messageType: "message",
+        timestamp: new Date(2),
+        id: 2,
+      },
     ] as never);
     const svc = new AIChatCompactAgentService({} as never, {
       completeChat,

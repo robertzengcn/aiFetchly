@@ -8,7 +8,7 @@
 //
 // This component test drives the real AiChatV2 template + the real
 // `applyPlanState` transition rule by capturing the stream chunk handler
-// that `onSend` registers with `streamChatV2Message`, then synthesizing the
+// that `onSend` registers with `awaitChatV2Turn`, then synthesizing the
 // same `plan_submitted` and `plan_state` chunks the main process emits in
 // production. That exercises the actual integration (chunk → applyPlanState
 // → mode ref → AiChatV2ModeSelector modelValue) without reaching into private
@@ -18,7 +18,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
-import { approveChatV2Plan, streamChatV2Message } from "@/views/api/aiChatV2";
+import {
+  approveChatV2Plan,
+  awaitChatV2Turn,
+  createChatV2PendingMessage,
+} from "@/views/api/aiChatV2";
 import type {
   AIChatPlanStateView,
   ChatV2Mode,
@@ -35,9 +39,23 @@ let capturedChunkHandler: ChunkHandler | null = null;
 let capturedCompleteHandler: CompleteHandler | null = null;
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   detachChatV2ConversationStreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
+  awaitChatV2Turn: vi.fn().mockImplementation(
+    (
+      _conversationId: string,
+      handler: ChunkHandler,
+      onComplete: CompleteHandler
+    ) => {
+      capturedChunkHandler = handler;
+      capturedCompleteHandler = onComplete;
+      return { promise: Promise.resolve(), detach: vi.fn() };
+    }
+  ),
   subscribeAutoCompacted: vi.fn(),
   unsubscribeAutoCompacted: vi.fn(),
   getCompactionStatus: vi.fn().mockResolvedValue(null),
@@ -45,18 +63,28 @@ vi.mock("@/views/api/aiChatV2", () => ({
   unsubscribeCompactionProgress: vi.fn(),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
-  streamChatV2Message: vi
-    .fn()
-    .mockImplementation(
-      async (
-        _req: unknown,
-        handler: ChunkHandler,
-        onComplete: CompleteHandler
-      ) => {
-        capturedChunkHandler = handler;
-        capturedCompleteHandler = onComplete;
-      }
-    ),
+  streamChatV2Message: vi.fn().mockResolvedValue(undefined),
+  createChatV2PendingMessage: vi.fn().mockImplementation(
+    async (_clientRequestId: string, request: { conversationId: string }) => ({
+      conversationId: request.conversationId,
+      disposition: "dispatch_scheduled",
+      pendingMessage: {
+        id: "pending-1",
+        conversationId: request.conversationId,
+        clientRequestId: "client-1",
+        sequence: 1,
+        content: "plan my campaign",
+        status: "dispatching",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        canSteer: false,
+      },
+    })
+  ),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
   startCompaction: vi.fn().mockResolvedValue({ started: true }),
@@ -71,6 +99,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
   }),
   getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
   setChatV2ToolApprovalMode: vi.fn(),
+  exportGeneratedImage: vi.fn(),
 }));
 
 vi.mock("@/views/api/workspace", () => ({
@@ -213,7 +242,7 @@ const MSG_ID = "assistant-1";
 function emitChunk(chunk: Partial<ChatV2StreamChunk>): void {
   if (!capturedChunkHandler) {
     throw new Error(
-      "streamChatV2Message was never called — no handler captured"
+      "awaitChatV2Turn was never called — no handler captured"
     );
   }
   capturedChunkHandler(chunk as ChatV2StreamChunk);
@@ -227,7 +256,7 @@ function emitChunk(chunk: Partial<ChatV2StreamChunk>): void {
 function completeStream(): void {
   if (!capturedCompleteHandler) {
     throw new Error(
-      "streamChatV2Message was never called — no handler captured"
+      "awaitChatV2Turn was never called — no handler captured"
     );
   }
   capturedCompleteHandler({
@@ -260,7 +289,7 @@ describe("AiChatV2 plan mode exit after approval", () => {
     // Start a stream so the component registers its chunk handler.
     await wrapper.find('[data-testid="send"]').trigger("click");
     await flushPromises();
-    expect(streamChatV2Message).toHaveBeenCalledOnce();
+    expect(awaitChatV2Turn).toHaveBeenCalledOnce();
 
     // Simulate the main process emitting the start + plan_submitted chunks.
     // Omit conversationId on chunks so isCurrentStreamChunk passes (it accepts
@@ -319,17 +348,6 @@ describe("AiChatV2 plan mode exit after approval", () => {
       approvedAt: new Date().toISOString(),
     };
     vi.mocked(approveChatV2Plan).mockResolvedValue(approved);
-    vi.mocked(streamChatV2Message).mockImplementation(
-      async (
-        _req: unknown,
-        handler: ChunkHandler,
-        onComplete: CompleteHandler
-      ) => {
-        capturedChunkHandler = handler;
-        capturedCompleteHandler = onComplete;
-      }
-    );
-
     const wrapper = mountChat();
     await flushPromises();
 
@@ -370,7 +388,7 @@ describe("AiChatV2 plan mode exit after approval", () => {
       wrapper.find('[data-testid="mode-selector"]').attributes("data-mode")
     ).toBe("chat");
     // The execution round was kicked off (continue message).
-    expect(streamChatV2Message).toHaveBeenCalled();
+    expect(createChatV2PendingMessage).toHaveBeenCalledTimes(2);
   });
 
   it("does not send the execution message when approval returns no updated state", async () => {
@@ -380,17 +398,6 @@ describe("AiChatV2 plan mode exit after approval", () => {
     // out with an error and leave the card pinned for a retry.
     const awaiting = makePlanState("awaiting_approval");
     vi.mocked(approveChatV2Plan).mockResolvedValue(null);
-    vi.mocked(streamChatV2Message).mockImplementation(
-      async (
-        _req: unknown,
-        handler: ChunkHandler,
-        onComplete: CompleteHandler
-      ) => {
-        capturedChunkHandler = handler;
-        capturedCompleteHandler = onComplete;
-      }
-    );
-
     const wrapper = mountChat();
     await flushPromises();
 
@@ -402,14 +409,16 @@ describe("AiChatV2 plan mode exit after approval", () => {
     completeStream();
     await flushPromises();
 
-    const callsBefore = vi.mocked(streamChatV2Message).mock.calls.length;
+    const callsBefore = vi.mocked(createChatV2PendingMessage).mock.calls.length;
     await wrapper.find('[data-testid="approve-plan"]').trigger("click");
     await flushPromises();
 
     // The approval IPC was attempted…
     expect(approveChatV2Plan).toHaveBeenCalledOnce();
     // …but no new stream round was kicked off.
-    expect(vi.mocked(streamChatV2Message).mock.calls.length).toBe(callsBefore);
+    expect(vi.mocked(createChatV2PendingMessage).mock.calls.length).toBe(
+      callsBefore
+    );
     // The plan stays pinned (retry is possible) and plan mode stays on.
     expect(wrapper.find('[data-testid="plan-approval-card"]').exists()).toBe(
       true

@@ -9,6 +9,12 @@ import {
 } from "@/views/api/aiChatV2";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),
@@ -38,8 +44,30 @@ vi.mock("@/views/api/aiChatV2", () => ({
       })
   ),
   stopChatV2Stream: vi.fn(),
+  awaitChatV2Turn: vi.fn(
+    () =>
+      new Promise(() => {
+        /* intentionally never resolves (keeps chatIsRunning true) */
+      })
+  ),
+  createChatV2PendingMessage: vi.fn().mockImplementation(
+    async (_clientRequestId: string, request: { conversationId: string }) => ({
+      conversationId: request.conversationId,
+      disposition: "dispatch_scheduled",
+      pendingMessage: {
+        id: "pending-1",
+        conversationId: request.conversationId,
+        clientRequestId: "client-1",
+        sequence: 1,
+        content: "hello",
+        status: "dispatching",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        canSteer: false,
+      },
+    })
+  ),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -280,7 +308,7 @@ describe("AiChatV2 switch model & permission during chat", () => {
     await wrapper.find('[data-testid="send-first"]').trigger("click");
     await flushPromises();
 
-    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    expect(streamChatV2Message).toHaveBeenCalledTimes(0);
 
     // The model selector stays enabled mid-stream: a model switch only
     // affects the next send (resolveModelForRequest() reads fresh on send
@@ -317,7 +345,7 @@ describe("AiChatV2 switch model & permission during chat", () => {
     await wrapper.find('[data-testid="send-first"]').trigger("click");
     await flushPromises();
 
-    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
+    expect(streamChatV2Message).toHaveBeenCalledTimes(0);
 
     // The selector is enabled mid-stream (previous test), so the user can
     // switch the mode through the UI. Drive the real

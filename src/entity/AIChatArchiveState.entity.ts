@@ -17,23 +17,23 @@ import { Order } from "./order.decorator";
 export class AIChatArchiveStateEntity extends AuditableEntity {
   @PrimaryColumn("varchar", { length: 100 })
   @Order(1)
-  conversationId: string;
+  conversationId!: string;
 
   @Order(2)
   @Column("varchar", { length: 64, nullable: false })
-  epoch: string;
+  epoch!: string;
 
   @Order(3)
   @Column("int", { nullable: false, default: 0 })
-  sourceRevision: number;
+  sourceRevision!: number;
 
   @Order(4)
   @Column("bigint", { nullable: false, default: 0 })
-  highWaterTimestampMs: number;
+  highWaterTimestampMs!: number;
 
   @Order(5)
   @Column("int", { nullable: false, default: 0 })
-  highWaterRowId: number;
+  highWaterRowId!: number;
 
   @Order(6)
   @Column("varchar", { length: 100, nullable: true })
@@ -53,7 +53,7 @@ export class AIChatArchiveStateEntity extends AuditableEntity {
 
   @Order(10)
   @Column("int", { nullable: false, default: 0 })
-  fence: number;
+  fence!: number;
 
   @Order(11)
   @Column("text", { nullable: true })
@@ -61,11 +61,11 @@ export class AIChatArchiveStateEntity extends AuditableEntity {
 
   @Order(12)
   @Column("varchar", { length: 20, nullable: false, default: "absent" })
-  indexState: string;
+  indexState!: string;
 
   @Order(13)
   @Column("int", { nullable: false, default: 1 })
-  schemaVersion: number;
+  schemaVersion!: number;
 
   @Order(14)
   @Column("datetime", { nullable: true })

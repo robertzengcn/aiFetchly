@@ -1,3 +1,5 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 "use strict";
 import { utilityProcess } from "electron";
 import * as fs from "fs";
@@ -193,14 +195,18 @@ export function resolveAiChatVoiceWorkerPath(
 }
 
 const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
-  const proc = utilityProcess.fork(workerPath, [], {
+  const proc = spawnOwned(
+    "voice-worker",
+    () =>
+      utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv({
       extraEnv: {
         WORKER_TYPE: "ai-chat-voice",
       },
     }),
-  });
+  })
+  );
   return proc as unknown as UtilityProcessLike;
 };
 

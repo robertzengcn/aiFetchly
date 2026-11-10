@@ -15,9 +15,15 @@
  * @see docs/prd/ai-app-navigation-tool-technical-design.md §4.1
  */
 import "vue-router";
+import type { InnerPageRouteUiMeta } from "@/views/types/uiConvergenceTypes";
 
 declare module "vue-router" {
   interface RouteMeta {
+    /**
+     * Inner-page convergence presentation contract (design §8.1).
+     * Presentation-only: never authorization, database access, or safety.
+     */
+    ui?: InnerPageRouteUiMeta;
     /** Explicitly include (`true`) or exclude (`false`) this route from AI navigation. */
     aiNavigable?: boolean;
     /** Natural-language phrases that should match this page. */

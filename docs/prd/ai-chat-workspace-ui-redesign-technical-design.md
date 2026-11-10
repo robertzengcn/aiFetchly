@@ -10,6 +10,7 @@
 - **Product**: AiFetchly Electron desktop application
 - **Source requirements**: [`ai-chat-workspace-ui-redesign-prd.md`](./ai-chat-workspace-ui-redesign-prd.md)
 - **Related designs**:
+  - [`ai-chat-first-application-shell-technical-design.md`](./ai-chat-first-application-shell-technical-design.md) — follow-on authority for authenticated route topology, chat center extraction, composer refinement, voice parity, and desktop window geometry
   - [`inner-page-ui-convergence-technical-design.md`](./inner-page-ui-convergence-technical-design.md) — downstream adoption of the shared shell and visual system by non-chat routes
   - [`ai-html-artifacts-technical-design.md`](./ai-html-artifacts-technical-design.md)
   - [`ai-chat-scheduled-loop-technical-design.md`](./ai-chat-scheduled-loop-technical-design.md)

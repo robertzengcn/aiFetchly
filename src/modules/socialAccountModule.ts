@@ -1,4 +1,5 @@
 import { SocialAccountModel } from "@/model/SocialAccount.model";
+import { log } from "@/modules/Logger";
 import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
 import { ProxyEntity } from "@/entity/Proxy.entity";
 import { BaseModule } from "@/modules/baseModule";
@@ -67,12 +68,12 @@ export class SocialAccountModule extends BaseModule {
       return FieldCipher.decrypt(stored, key);
     } catch (error) {
       if (error instanceof SecretKeyUnavailableError) {
-        console.warn(
+        log.warn(
           "[SocialAccountModule] decryptPass: secret key unavailable",
           error.message
         );
       } else {
-        console.error(
+        log.error(
           "[SocialAccountModule] decryptPass: failed for account",
           accountId,
           error

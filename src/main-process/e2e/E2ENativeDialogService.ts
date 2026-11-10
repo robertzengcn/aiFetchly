@@ -36,6 +36,8 @@ export class E2ENativeDialogService implements NativeDialogService {
     string,
     { action: string; paths?: string[] }
   > | null;
+  /** Per-kind FIFO cursors — consumed pick counts (see resolve()). */
+  private readonly picks = new Map<E2EDialogKind, number>();
 
   constructor(
     private readonly environment: E2EEnvironment,
@@ -66,6 +68,15 @@ export class E2ENativeDialogService implements NativeDialogService {
     const paths = (entry.paths ?? []).filter((p) =>
       isContainedBy(this.environment.rootPath, p)
     );
+    // FIFO mode: when an "open" manifest entry lists several in-root folders,
+    // successive dialogs pick them in order and the LAST one repeats once the
+    // list is exhausted (lets a journey pick folder A, then change to B).
+    // Single-path entries keep the previous always-same-folder behavior.
+    if (kind !== "message" && paths.length > 1) {
+      const index = Math.min(this.picks.get(kind) ?? 0, paths.length - 1);
+      this.picks.set(kind, (this.picks.get(kind) ?? 0) + 1);
+      return { action, paths: [paths[index] ?? ""] };
+    }
     return { action, paths };
   }
 

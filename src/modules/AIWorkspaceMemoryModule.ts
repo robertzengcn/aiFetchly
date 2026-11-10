@@ -1,8 +1,13 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   AIWorkspaceMemoryModel,
   AIWorkspaceMemoryCreateFields,
 } from "@/model/AIWorkspaceMemory.model";
+import { AIWorkspaceMemoryEntity } from "@/entity/AIWorkspaceMemory.entity";
+import { AIWorkspaceMemoryConsolidationRunEntity } from "@/entity/AIWorkspaceMemoryConsolidationRun.entity";
+import { applyConsolidationPlanInTransaction } from "@/modules/lib/consolidationPlanApply";
+import type { WorkspaceAutoDreamParseResult } from "@/service/AIWorkspaceAutoDreamPromptBuilder";
 import { randomUUID } from "node:crypto";
 import { looksSecretlike } from "@/service/MemorySecretFilter";
 import type {
@@ -27,12 +32,18 @@ const MAX_SOURCE_MESSAGE_IDS = 100;
  * Trusted, main-process-resolved workspace scope.
  *
  * The module never resolves a conversation into a workspace itself — it accepts
- * a scope that the service layer (WorkspaceMemoryContextResolver) has already
- * authenticated against an approved workspace.
+ * a scope that the service layer (WorkspaceMemoryScopeResolver /
+ * WorkspaceMemoryContextResolver) has already authenticated against an
+ * approved workspace.
+ *
+ * `scopeId` (portable-memory Phase A) is the internal retrieval boundary.
+ * When present every operation dispatches to the scope-based model methods;
+ * the legacy `workspaceKey` path remains for pre-portable callers.
  */
 export interface WorkspaceMemoryScope {
   readonly workspaceKey: string;
   readonly workspaceRoot: string;
+  readonly scopeId?: string;
 }
 
 export class AIWorkspaceMemoryModule extends BaseModule {
@@ -54,6 +65,7 @@ export class AIWorkspaceMemoryModule extends BaseModule {
       memoryId: `wmem-${randomUUID()}`,
       workspaceKey: scope.workspaceKey,
       workspaceRoot: scope.workspaceRoot,
+      ...(scope.scopeId ? { scopeId: scope.scopeId } : {}),
       type: input.type,
       title: input.title.trim(),
       content: input.content.trim(),
@@ -118,11 +130,17 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     }
     if (input.metadata !== undefined) patch.metadata = input.metadata;
 
-    const e = await this.memoryModel.updateByWorkspaceAndMemoryId(
-      scope.workspaceKey,
-      input.memoryId,
-      patch
-    );
+    const e = scope.scopeId
+      ? await this.memoryModel.updateByScopeAndMemoryId(
+          scope.scopeId,
+          input.memoryId,
+          patch
+        )
+      : await this.memoryModel.updateByWorkspaceAndMemoryId(
+          scope.workspaceKey,
+          input.memoryId,
+          patch
+        );
     return this.toView(e);
   }
 
@@ -130,6 +148,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     memoryId: string
   ): Promise<void> {
+    if (scope.scopeId) {
+      await this.memoryModel.updateByScopeAndMemoryId(scope.scopeId, memoryId, {
+        status: "archived",
+      });
+      return;
+    }
     await this.memoryModel.archive(scope.workspaceKey, memoryId);
   }
 
@@ -137,6 +161,9 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     memoryId: string
   ): Promise<number> {
+    if (scope.scopeId) {
+      return this.memoryModel.deleteByScopeAndMemoryId(scope.scopeId, memoryId);
+    }
     return this.memoryModel.deleteByWorkspaceAndMemoryId(
       scope.workspaceKey,
       memoryId
@@ -147,10 +174,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     memoryId: string
   ): Promise<AIWorkspaceMemoryView | null> {
-    const e = await this.memoryModel.getByWorkspaceAndMemoryId(
-      scope.workspaceKey,
-      memoryId
-    );
+    const e = scope.scopeId
+      ? await this.memoryModel.getByScopeAndMemoryId(scope.scopeId, memoryId)
+      : await this.memoryModel.getByWorkspaceAndMemoryId(
+          scope.workspaceKey,
+          memoryId
+        );
     return e ? this.toView(e) : null;
   }
 
@@ -159,15 +188,25 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     input: Omit<AIWorkspaceMemorySearchInput, "conversationId">
   ): Promise<AIWorkspaceMemoryView[]> {
     const status = resolveListStatus(input.status);
-    const rows = await this.memoryModel.list({
-      workspaceKey: scope.workspaceKey,
-      query: input.query,
-      type: input.type,
-      status,
-      sourceKind: input.sourceKind,
-      limit: input.limit,
-      offset: input.offset,
-    });
+    const rows = scope.scopeId
+      ? await this.memoryModel.listByScope({
+          scopeId: scope.scopeId,
+          query: input.query,
+          type: input.type,
+          status,
+          sourceKind: input.sourceKind,
+          limit: input.limit,
+          offset: input.offset,
+        })
+      : await this.memoryModel.list({
+          workspaceKey: scope.workspaceKey,
+          query: input.query,
+          type: input.type,
+          status,
+          sourceKind: input.sourceKind,
+          limit: input.limit,
+          offset: input.offset,
+        });
     return rows.map((e) => this.toView(e));
   }
 
@@ -175,10 +214,12 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     scope: WorkspaceMemoryScope,
     limit = 50
   ): Promise<AIWorkspaceMemoryView[]> {
-    const rows = await this.memoryModel.listActiveForRetrieval(
-      scope.workspaceKey,
-      limit
-    );
+    const rows = scope.scopeId
+      ? await this.memoryModel.listActiveForScopeRetrieval(scope.scopeId, limit)
+      : await this.memoryModel.listActiveForRetrieval(
+          scope.workspaceKey,
+          limit
+        );
     return rows.map((e) => this.toView(e));
   }
 
@@ -188,14 +229,81 @@ export class AIWorkspaceMemoryModule extends BaseModule {
     usedAt: Date = new Date()
   ): Promise<void> {
     try {
-      await this.memoryModel.markUsed(
-        scope.workspaceKey,
-        memoryIds,
-        usedAt
-      );
+      if (scope.scopeId) {
+        await this.memoryModel.markUsedByScope(
+          scope.scopeId,
+          memoryIds,
+          usedAt
+        );
+      } else {
+        await this.memoryModel.markUsed(scope.workspaceKey, memoryIds, usedAt);
+      }
     } catch (err) {
-      console.error("[workspace-memory] markMemoriesUsed failed:", err);
+      log.error("[workspace-memory] markMemoriesUsed failed:", err);
     }
+  }
+
+  /**
+   * Apply a parsed workspace consolidation plan AND mark the run completed in
+   * ONE TypeORM transaction. Archive/update/create run through transaction-
+   * bound repositories scoped to the workspace; the run is marked completed
+   * with counts, resolved model, and source-derived reviewedThrough in the
+   * same transaction. Returns counts only AFTER commit. A failure rolls back
+   * all mutations (tech-design §14.4, §14.5).
+   */
+  async applyPlanAndCompleteRun(input: {
+    scope: WorkspaceMemoryScope;
+    runId: string;
+    plan: WorkspaceAutoDreamParseResult;
+    chatConversationsReviewed: number;
+    agentTasksReviewed: number;
+    model?: string;
+    reviewedThrough?: Date | null;
+    extraMemoriesCreated?: number;
+    extraMemoriesUpdated?: number;
+    extraMemoriesArchived?: number;
+  }): Promise<void> {
+    await this.ensureConnection();
+    const { workspaceKey, workspaceRoot } = input.scope;
+    await this.sqliteDb.connection.transaction(async (manager) => {
+      await applyConsolidationPlanInTransaction({
+        manager,
+        memoryEntity: AIWorkspaceMemoryEntity,
+        runEntity: AIWorkspaceMemoryConsolidationRunEntity,
+        plan: input.plan,
+        runId: input.runId,
+        completion: {
+          chatConversationsReviewed: input.chatConversationsReviewed,
+          agentTasksReviewed: input.agentTasksReviewed,
+          model: input.model,
+          reviewedThrough: input.reviewedThrough,
+        },
+        buildCreateEntity: (c) => {
+          const e = new AIWorkspaceMemoryEntity();
+          e.memoryId = `wmem-${randomUUID()}`;
+          e.workspaceKey = workspaceKey;
+          e.workspaceRoot = workspaceRoot;
+          if (input.scope.scopeId) e.scopeId = input.scope.scopeId;
+          e.type = c.type;
+          e.title = c.title;
+          e.content = c.content;
+          e.status = "active";
+          e.confidence = clampConfidence(c.confidence ?? 100);
+          e.sourceKind = "auto_dream";
+          e.sourceConversationId =
+            c.sourceKind === "chat_v2" ? c.sourceId ?? null : null;
+          e.sourceAgentTaskId =
+            c.sourceKind === "agent_task" ? c.sourceId ?? null : null;
+          e.sourceMessageIds = (c.sourceMessageIds as string[] | null) ?? null;
+          return e;
+        },
+        archiveWhere: (memoryId) => ({ workspaceKey, memoryId }),
+        updateWhere: (memoryId) => ({ workspaceKey, memoryId }),
+        extraMemoriesCreated: input.extraMemoriesCreated,
+        extraMemoriesUpdated: input.extraMemoriesUpdated,
+        extraMemoriesArchived: input.extraMemoriesArchived,
+      });
+    });
   }
 
   private toView(e: {
@@ -227,7 +335,8 @@ export class AIWorkspaceMemoryModule extends BaseModule {
       content: e.content,
       status: e.status as AIWorkspaceMemoryView["status"],
       confidence: e.confidence,
-      sourceKind: (e.sourceKind ?? undefined) as AIWorkspaceMemoryView["sourceKind"],
+      sourceKind: (e.sourceKind ??
+        undefined) as AIWorkspaceMemoryView["sourceKind"],
       sourceConversationId: e.sourceConversationId ?? undefined,
       sourceAgentTaskId: e.sourceAgentTaskId ?? undefined,
       sourceMessageIds: e.sourceMessageIds ?? undefined,

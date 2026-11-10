@@ -114,7 +114,7 @@ const search = ref('');
 //const showDeleteModal = ref(false);
 //const deleteId = ref(0);
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     // console.log(page);
     const fetchitem: Fetchparam = {

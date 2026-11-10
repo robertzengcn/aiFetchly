@@ -14,6 +14,7 @@
  */
 
 import type { ToolExecutionResult } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import { ToolExecutor } from "@/service/ToolExecutor";
@@ -112,10 +113,44 @@ function validateArgs(
 const SENSITIVE_KEY_RE =
   /^(pass|password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|private[_-]?key|client[_-]?secret)$/i;
 
+/**
+ * Contact-sensitive keys (verify_contact_info + extract_contact_info). Their
+ * values are redacted to COUNTS, never logged raw — phone numbers and email
+ * addresses are low-entropy PII vulnerable to guessing (design §17.1). Matched
+ * case-insensitively, ignoring separators (_, -) so `nearby_text` ==
+ * `nearbytext`.
+ */
+const CONTACT_KEY_RE =
+  /^(email|emails|phone|phones|nearbytext|nearby_text|address|countryevidence|country_evidence|evidencetext|evidence_text|contacts)$/i;
+
 function sanitizeValue(key: string, value: unknown): unknown {
+  // Contact-sensitive keys: redact to counts, never log raw values.
+  if (CONTACT_KEY_RE.test(key)) {
+    if (Array.isArray(value)) {
+      return `[REDACTED_CONTACTS count=${value.length}]`;
+    }
+    if (value !== null && typeof value === "object") {
+      // A contact group / evidence object — count enumerable keys.
+      const entries = Object.keys(value as Record<string, unknown>);
+      return `[REDACTED_CONTACT_GROUPS count=${entries.length}]`;
+    }
+    return "[REDACTED_CONTACT]";
+  }
   if (typeof value === "string") {
     if (SENSITIVE_KEY_RE.test(key)) {
       return "[REDACTED]";
+    }
+    // Strip query/fragment from source URLs before logging — contact values
+    // (e.g. ?email=alice@x.com) can leak through the query string (PRD §17.2).
+    if (/^source_?url$/i.test(key)) {
+      try {
+        const u = new URL(value);
+        u.search = "";
+        u.hash = "";
+        return u.toString();
+      } catch {
+        // not a valid URL — fall through to truncation
+      }
     }
     return value.length > 100
       ? `${value.substring(0, 50)}...[truncated, ${value.length} chars]`
@@ -132,6 +167,38 @@ function sanitizeValue(key: string, value: unknown): unknown {
     return nested;
   }
   return value;
+}
+
+const AUDIT_ERROR_MAX_CHARS = 300;
+
+function readAuditErrorField(body: Record<string, unknown>): string | undefined {
+  for (const key of ["error", "errorMessage", "message"] as const) {
+    const value = body[key];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    return trimmed.length > AUDIT_ERROR_MAX_CHARS
+      ? `${trimmed.slice(0, AUDIT_ERROR_MAX_CHARS)}…`
+      : trimmed;
+  }
+  return undefined;
+}
+
+/**
+ * Failure text from a skill body that returned `success: false` without
+ * throwing. `run_subagent` puts the agent error on `result.error`.
+ */
+export function toolBodyErrorText(
+  body: Record<string, unknown> | undefined
+): string | undefined {
+  if (!body) return undefined;
+  const direct = readAuditErrorField(body);
+  if (direct) return direct;
+  const nested = body.result;
+  if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+    return readAuditErrorField(nested as Record<string, unknown>);
+  }
+  return undefined;
 }
 
 /** Sanitize args for logging — redacts sensitive keys and truncates long strings. */
@@ -161,7 +228,7 @@ function auditLog(
     ...(error ? { error } : {}),
     timestamp: new Date().toISOString(),
   };
-  console.log(`[SkillAudit] ${JSON.stringify(logEntry)}`);
+  log.info(`[SkillAudit] ${JSON.stringify(logEntry)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +749,12 @@ async function execute(
       ...(execResult.modelArtifacts
         ? { modelArtifacts: execResult.modelArtifacts }
         : {}),
+      // Thread the transient prompt-skill instruction block the same way as
+      // modelArtifacts: sibling of `result`, hooks never see it, the query
+      // loop builds a model-only handoff message from it.
+      ...(execResult.promptSkillContext
+        ? { promptSkillContext: execResult.promptSkillContext }
+        : {}),
     };
 
     // 7. PostToolUse / PostToolUseFailure hooks
@@ -728,7 +801,13 @@ async function execute(
       );
     }
 
-    auditLog(name, hookFinalArgs, result.success, result.execution_time_ms);
+    auditLog(
+      name,
+      hookFinalArgs,
+      result.success,
+      result.execution_time_ms,
+      result.success ? undefined : toolBodyErrorText(result.result)
+    );
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -826,12 +905,22 @@ async function executeViaToolExecutor(
         skipPermissionCheck: context.skipPermissionCheck,
         emitProgress: context.emitProgress,
         signal: context.signal,
+        deadlineEpochMs: context.deadlineEpochMs,
+        deadlinePerfMs: context.deadlinePerfMs,
       }
     );
+    // Preserve a plugin domain envelope's `success: false` instead of
+    // wrapping every returned record in an outer success (PRD §14.2/§21.7):
+    // only an explicit boolean false flips the verdict — legacy records
+    // without a `success` field keep the historical success behavior.
+    const executorReportedFailure =
+      typeof result === "object" &&
+      result !== null &&
+      (result as Record<string, unknown>).success === false;
     const execResult: ToolExecutionResult = {
       tool_call_id: context.toolCallId,
       tool_name: name,
-      success: true,
+      success: executorReportedFailure ? false : true,
       result,
       execution_time_ms: Date.now() - startTime,
     };

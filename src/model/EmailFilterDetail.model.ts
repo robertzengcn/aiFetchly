@@ -1,13 +1,20 @@
 import { Repository } from "typeorm";
-import { SqliteDb } from "@/config/SqliteDb";
+import { BaseDb } from "@/model/Basedb";
 import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 
-export class EmailFilterDetailModel {
-  private repository: Repository<EmailFilterDetailEntity>;
+export class EmailFilterDetailModel extends BaseDb {
+  private readonly repository: Repository<EmailFilterDetailEntity>;
 
   constructor(filepath: string) {
-    const db = SqliteDb.getInstance(filepath);
-    this.repository = db.connection.getRepository(EmailFilterDetailEntity);
+    // BaseDb resolves an empty filepath to a temp dir (test/dev envs where
+    // USERSDBPATH is not set) and sets this.sqliteDb. Previously this model
+    // called SqliteDb.getInstance(filepath) directly and threw "Cannot create
+    // SqliteDb instance with empty filepath" when constructed before the DB
+    // path was established (e.g. in emailMarketingController.test.ts).
+    super(filepath);
+    this.repository = this.sqliteDb.connection.getRepository(
+      EmailFilterDetailEntity
+    );
   }
 
   async create(detail: EmailFilterDetailEntity): Promise<number> {

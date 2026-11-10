@@ -3,6 +3,7 @@ export { };
 //import request from "@/modules/lib/request"
 import { HttpClient } from "@/modules/lib/httpclient"
 import jwt_decode from "jwt-decode";
+import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token"
 // import { decode } from "punycode";
 // const debug = require('debug')('RemoteSource');
@@ -137,7 +138,7 @@ export class RemoteSource {
    * get response from remote servive
    * @return object
    */
-  async getRemoteConfig(campaignId): Promise<sosetting | void> {
+  async getRemoteConfig(campaignId: string | number): Promise<sosetting | void> {
     // let envconfig = await readenv();
 
     const sosetvar = this._httpClient.get(
@@ -167,7 +168,7 @@ export class RemoteSource {
         return sosetting;
       })
       .catch(function (error) {
-        console.error(error);
+        log.error(error);
       });
 
     return sosetvar;
@@ -337,8 +338,8 @@ export class RemoteSource {
      "/api/user/info",
    ).then(function (res) {
       // console.log(res);
-      console.log("get user info response")
-      console.log(res)
+      log.info("get user info response")
+      log.info(res)
       if (res.status == false) {
         if(res.code==403){
         //remove token
@@ -377,12 +378,12 @@ export class RemoteSource {
     try {
       const res = await this._httpClient.get("/api/user/signout");
       if (res.status === false) {
-        console.warn("Remote signout returned failure:", res.msg);
+        log.warn("Remote signout returned failure:", res.msg);
       }
     } catch (error) {
       // Backend may be unreachable (fetch failed, network error, etc.). Log and continue so local signout still completes.
       const message = error instanceof Error ? error.message : String(error);
-      console.warn("Could not remove remote token (backend may be unreachable):", message);
+      log.warn("Could not remove remote token (backend may be unreachable):", message);
     }
   }
 }

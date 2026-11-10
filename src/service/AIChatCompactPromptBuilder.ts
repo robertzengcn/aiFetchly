@@ -76,3 +76,49 @@ export function normalizeSessionMemorySummary(
 ): { summary: string; ok: boolean } {
   return ensureHeadings(raw, SESSION_MEMORY_HEADINGS);
 }
+
+
+/* eslint-disable no-ex-assign */
+
+export const FULL_COMPACT_HEADINGS = [
+  "## Summary",
+  "## Key Decisions",
+  "## Open Threads",
+] as const;
+
+/**
+ * Full-compact prompt helpers (restored from the merge base): the bounded
+ * coordinator's legacy-summary rollback (M-5 §15/§18) and the flag-off SMBW
+ * pipeline both build on them.
+ */
+export function buildFullCompactSystemPrompt(): string {
+  return [
+    "You create compact continuation summaries for an AI chat application.",
+    "Summarize the provided conversation so another assistant can continue accurately.",
+    "Keep facts, decisions, constraints, pending tasks, tool outcomes, and current state.",
+    SECRET_RULE,
+    "Use the required markdown headings exactly.",
+  ].join(" ");
+}
+
+export function buildFullCompactUserPrompt(
+  messages: readonly OpenAIChatMessage[]
+): string {
+  const msgs = messages
+    .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : ""}`)
+    .join("\n");
+  return [
+    "Conversation messages to compact:",
+    msgs,
+    "",
+    "Return a compact summary with:",
+    ...FULL_COMPACT_HEADINGS,
+  ].join("\n");
+}
+
+
+export function normalizeFullCompactSummary(
+  raw: string
+): { summary: string; ok: boolean } {
+  return ensureHeadings(raw, FULL_COMPACT_HEADINGS);
+}

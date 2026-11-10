@@ -310,3 +310,11 @@ describe("history tool rollout-flag gating", () => {
     expect(readResult.success).toBe(false);
   });
 });
+
+test('email reply tool cannot bypass the review card approval action', async () => {
+  const tool = SkillRegistry.getSkill('send_email_reply');
+  expect(tool).toBeDefined();
+  const result = await tool!.execute({ draft_id: 42 }, { conversationId: 'review-test', toolCallId: 'send-test' });
+  expect(result.success).toBe(false);
+  expect(result.result.code).toBe('email_reply_card_approval_required');
+});

@@ -5,7 +5,7 @@
         <div class="d-flex align-center justify-space-between">
           <div>
             <h2 class="text-h4 font-weight-bold">
-              <v-icon class="mr-2">mdi-tasks</v-icon>
+              <v-icon class="mr-2">mdi-list-status</v-icon>
               Task Management
             </h2>
             <p class="text-subtitle-1 text-medium-emphasis">

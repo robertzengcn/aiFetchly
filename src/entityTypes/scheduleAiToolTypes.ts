@@ -50,7 +50,7 @@ export interface SafeSchedulePayload {
   description: string | null;
   task_type: string;
   task_id: number;
-  cron_expression: string;
+  cron_expression: string | null;
   is_active: boolean;
   status: string;
   trigger_type: string;

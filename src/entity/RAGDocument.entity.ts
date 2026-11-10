@@ -19,31 +19,31 @@ import { RAGChunkEntity } from "./RAGChunk.entity";
 @Index(["sourceUrlSha256"])
 @Index(["canonicalUrlSha256"])
 export class RAGDocumentEntity extends AuditableEntity {
-  @PrimaryGeneratedColumn()
-  id: number;
-  @Order(1)
-  @Column("varchar", { length: 255, nullable: false })
-  name: string;
+    @PrimaryGeneratedColumn()
+    id!: number;
+    @Order(1)
+    @Column('varchar', { length: 255, nullable: false })
+    name!: string;
 
-  @Order(2)
-  @Column("varchar", { length: 500, nullable: false })
-  filePath: string;
+    @Order(2)
+    @Column('varchar', { length: 500, nullable: false })
+    filePath!: string;
 
-  @Order(3)
-  @Column("varchar", { length: 50, nullable: false })
-  fileType: string;
+    @Order(3)
+    @Column('varchar', { length: 50, nullable: false })
+    fileType!: string;
 
-  @Order(4)
-  @Column("bigint", { nullable: false })
-  fileSize: number;
+    @Order(4)
+    @Column('bigint', { nullable: false })
+    fileSize!: number;
 
-  @Order(5)
-  @Column("varchar", { length: 20, default: "active", nullable: false })
-  status: string; // 'active', 'archived', 'deleted'
+    @Order(5)
+    @Column('varchar', { length: 20, default: 'active', nullable: false })
+    status!: string; // 'active', 'archived', 'deleted'
 
-  @Order(6)
-  @Column("varchar", { length: 20, default: "pending", nullable: false })
-  processingStatus: string; // 'pending', 'processing', 'completed', 'failed'
+    @Order(6)
+    @Column('varchar', { length: 20, default: 'pending', nullable: false })
+    processingStatus!: string; // 'pending', 'processing', 'completed', 'failed'
 
   // Metadata fields
   @Order(7)

@@ -20,7 +20,7 @@ export default abstract class AuditableEntity extends BaseEntity {
       BaseEntity.useDataSource.call(this, dataSource)
       const meta = dataSource.entityMetadatasMap.get(this)
      
-      const getOrderSafely = (column) => {
+      const getOrderSafely = (column: { target: unknown; propertyName: string }) => {
         const target = column.target as any;
   
         // Check if the target and its prototype exist

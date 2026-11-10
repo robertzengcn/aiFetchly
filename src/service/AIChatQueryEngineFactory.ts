@@ -141,6 +141,11 @@ export class AIChatQueryEngineFactory {
     approvalMode: ChatToolApprovalMode | null
   ): AIChatQueryLoop {
     const deps: AIChatQueryLoopDeps = {
+      // Stage B §5.1: native provider iteration (callback form = facade).
+      streamEvents: (request, options) => {
+        const api = new AiChatApi();
+        return api.openAIChatCompletionStreamEvents(request, options);
+      },
       streamChatCompletion: (request, onChunk, options) => {
         const api = new AiChatApi();
         return api.openAIChatCompletionStream(request, onChunk, options);

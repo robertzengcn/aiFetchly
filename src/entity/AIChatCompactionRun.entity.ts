@@ -27,47 +27,47 @@ import { Order } from "./order.decorator";
 ])
 export class AIChatCompactionRunEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  runId: string;
+  runId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("varchar", { length: 64, nullable: false })
-  epoch: string;
+  epoch!: string;
 
   @Order(4)
   @Column("int", { nullable: false })
-  revision: number;
+  revision!: number;
 
   @Order(5)
   @Column("varchar", { length: 30, nullable: false })
-  trigger: string;
+  trigger!: string;
 
   @Order(6)
   @Column("varchar", { length: 20, nullable: false, default: "queued" })
-  state: string;
+  state!: string;
 
   @Order(7)
   @Column("bigint", { nullable: false, default: 0 })
-  snapshotEndTimestampMs: number;
+  snapshotEndTimestampMs!: number;
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  snapshotEndRowId: number;
+  snapshotEndRowId!: number;
 
   @Order(9)
   @Column("bigint", { nullable: false, default: 0 })
-  retainedStartTimestampMs: number;
+  retainedStartTimestampMs!: number;
 
   @Order(10)
   @Column("int", { nullable: false, default: 0 })
-  retainedStartRowId: number;
+  retainedStartRowId!: number;
 
   @Order(11)
   @Column("varchar", { length: 100, nullable: true })
@@ -91,11 +91,11 @@ export class AIChatCompactionRunEntity extends AuditableEntity {
 
   @Order(16)
   @Column("int", { nullable: false, default: 0 })
-  mergedThroughOrdinal: number;
+  mergedThroughOrdinal!: number;
 
   @Order(17)
   @Column("int", { nullable: false, default: 0 })
-  fence: number;
+  fence!: number;
 
   @Order(18)
   @Column("varchar", { length: 100, nullable: true })
@@ -111,11 +111,11 @@ export class AIChatCompactionRunEntity extends AuditableEntity {
 
   @Order(21)
   @Column("int", { nullable: false, default: 0 })
-  attemptCount: number;
+  attemptCount!: number;
 
   @Order(22)
   @Column("int", { nullable: false, default: 0 })
-  contextReductionCount: number;
+  contextReductionCount!: number;
 
   @Order(23)
   @Column("varchar", { length: 50, nullable: true })
@@ -123,5 +123,5 @@ export class AIChatCompactionRunEntity extends AuditableEntity {
 
   @Order(24)
   @Column("int", { nullable: false, default: 1 })
-  schemaVersion: number;
+  schemaVersion!: number;
 }

@@ -16,10 +16,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ChildProcess } from "child_process";
-import type {
-  CommandHookDefinition,
-  HookInput,
-} from "@/entityTypes/hookTypes";
+import type { CommandHookDefinition, HookInput } from "@/entityTypes/hookTypes";
 import { runCommandCore } from "@/childprocess/hook-execution/HookExecutionWorker";
 import {
   executeHookCommandSchema,
@@ -31,7 +28,9 @@ import {
   type ForkFn,
 } from "@/service/hooks/hookExecutionClient";
 
-function cmd(overrides: Partial<CommandHookDefinition> = {}): CommandHookDefinition {
+function cmd(
+  overrides: Partial<CommandHookDefinition> = {}
+): CommandHookDefinition {
   return {
     id: "user:hook:0",
     eventName: "PreToolUse",
@@ -133,26 +132,27 @@ describe("workerProtocol strict()", () => {
 });
 
 /** A mock fork: returns a fake ChildProcess whose `message` listener the test drives. */
-function mockFork(): { fork: ForkFn; emit: (msg: unknown) => void; sent: unknown[] } {
+function mockFork(): {
+  fork: ForkFn;
+  emit: (msg: unknown) => void;
+  sent: unknown[];
+} {
   const sent: unknown[] = [];
   let messageHandler: ((msg: unknown) => void) | null = null;
   const child = {
-    on(event: string, listener: (...args: never[]) => void): typeof child {
+    on(event: string, listener: (...args: never[]) => void): void {
       if (event === "message") {
         messageHandler = listener as unknown as (msg: unknown) => void;
       }
-      return child;
     },
-    send(msg: unknown): boolean {
+    postMessage(msg: unknown): void {
       sent.push(msg);
-      return true;
     },
-    kill(): boolean {
-      return true;
-    },
+    kill(): void {},
+    pid: 12345,
   };
   return {
-    fork: (() => child as unknown as ChildProcess) as ForkFn,
+    fork: (() => child) as unknown as ForkFn,
     emit: (msg: unknown) => messageHandler?.(msg),
     sent,
   };

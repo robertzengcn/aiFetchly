@@ -1,4 +1,5 @@
 import { SearchResult } from '@/service/VectorSearchService';
+import { log } from "@/modules/Logger";
 import { ProcessedQuery } from '@/service/QueryProcessor';
 import { LlmCongfig } from '@/entityTypes/commonType';
 
@@ -43,7 +44,7 @@ export class ResponseGenerator {
 
     constructor() {
         // No longer using LlmFactory - now relies on remote APIs
-        console.warn('ResponseGenerator is deprecated. Use remote API-based response generation instead.');
+        log.warn('ResponseGenerator is deprecated. Use remote API-based response generation instead.');
     }
 
     /**
@@ -52,7 +53,7 @@ export class ResponseGenerator {
      * @param llmConfig - LLM configuration
      */
     async initialize(llmConfig: LlmCongfig): Promise<void> {
-        console.warn('ResponseGenerator.initialize() is deprecated and no longer functional');
+        log.warn('ResponseGenerator.initialize() is deprecated and no longer functional');
         // No-op - this class is deprecated
     }
 
@@ -291,7 +292,7 @@ export class ResponseGenerator {
      * @returns Empty array
      */
     getAvailableModels(): string[] {
-        console.warn('getAvailableModels() is deprecated. LlmFactory has been removed.');
+        log.warn('getAvailableModels() is deprecated. LlmFactory has been removed.');
         return [];
     }
 

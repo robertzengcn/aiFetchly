@@ -4,9 +4,7 @@ import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
 import { ExampleHybridAdapter } from "./ExampleHybridAdapter";
 import { ComAdapter192 } from "./192ComAdapter";
 // import { YellComAdapter } from './YellComAdapter';
-import { YellowPagesComAdapter } from "./YellowPagesComAdapter";
 // import { YelpComAdapter } from './YelpComAdapter';
-import { YellowPagesCaAdapter } from "./YellowPagesCaAdapter";
 import { ExampleClassBasedAdapter } from "./ExampleClassBasedAdapter";
 import { Adapter11880 } from "./11880Adapter";
 import { AdapterGelbeseiten } from "./GelbeseitenAdapter";
@@ -16,7 +14,6 @@ import { YelpComAdapter } from "./YelpComAdapter";
 import { ITownPageAdapter } from "./ITownPageAdapter";
 import { USonarYellowPageAdapter } from "./USonarYellowPageAdapter";
 import { KoreaLocalPagesAdapter } from "./KoreaLocalPagesAdapter";
-import { YellowPagesComSgAdapter } from "./YellowPagesComSgAdapter";
 
 const PLATFORM_ADAPTER_CLASS_NAMES: Record<string, string> = {
   "192-com": "ComAdapter192",
@@ -27,8 +24,6 @@ const PLATFORM_ADAPTER_CLASS_NAMES: Record<string, string> = {
   "pagesjaunes-fr": "PagesJaunesAdapter",
   "paginegialle-it": "PagineGialleItAdapter",
   "usonar-yellowpage-jp": "USonarYellowPageAdapter",
-  "yellowpages-com": "YellowPagesComAdapter",
-  "yellowpages-com-sg": "YellowPagesComSgAdapter",
   "yelp-com": "YelpComAdapter",
 };
 
@@ -43,9 +38,6 @@ const ADAPTER_MODULE_PATHS: Record<string, string> = {
   PagesJaunesAdapter: "@/modules/platforms/PagesJaunesAdapter",
   PagineGialleItAdapter: "@/modules/platforms/PagineGialleItAdapter",
   USonarYellowPageAdapter: "@/modules/platforms/USonarYellowPageAdapter",
-  YellowPagesCaAdapter: "@/modules/platforms/YellowPagesCaAdapter",
-  YellowPagesComAdapter: "@/modules/platforms/YellowPagesComAdapter",
-  YellowPagesComSgAdapter: "@/modules/platforms/YellowPagesComSgAdapter",
   YelpComAdapter: "@/modules/platforms/YelpComAdapter",
 };
 
@@ -104,14 +96,8 @@ export class PlatformAdapterFactory {
       // case 'YellComAdapter':
       //     return new YellComAdapter(platformConfig);
 
-      case "YellowPagesComAdapter":
-        return new YellowPagesComAdapter(platformConfig);
-
       case "YelpComAdapter":
         return new YelpComAdapter(platformConfig);
-
-      case "YellowPagesCaAdapter":
-        return new YellowPagesCaAdapter(platformConfig);
 
       case "ExampleClassBasedAdapter":
         return new ExampleClassBasedAdapter(
@@ -139,9 +125,6 @@ export class PlatformAdapterFactory {
       case "KoreaLocalPagesAdapter":
         return new KoreaLocalPagesAdapter(platformConfig);
 
-      case "YellowPagesComSgAdapter":
-        return new YellowPagesComSgAdapter(platformConfig);
-
       default:
         throw new Error(
           `Unknown adapter class: ${className}. Available classes: ${PlatformAdapterFactory.getAvailableAdapters().join(
@@ -161,9 +144,7 @@ export class PlatformAdapterFactory {
       "ExampleHybridAdapter",
       "ComAdapter192",
       // 'YellComAdapter',
-      "YellowPagesComAdapter",
       "YelpComAdapter",
-      "YellowPagesCaAdapter",
       "ExampleClassBasedAdapter",
       "Adapter11880",
       "AdapterGelbeseiten",
@@ -172,7 +153,6 @@ export class PlatformAdapterFactory {
       "ITownPageAdapter",
       "USonarYellowPageAdapter",
       "KoreaLocalPagesAdapter",
-      "YellowPagesComSgAdapter",
     ];
     return availableClasses.includes(className);
   }
@@ -186,9 +166,7 @@ export class PlatformAdapterFactory {
       "ExampleHybridAdapter",
       "ComAdapter192",
       // 'YellComAdapter',
-      "YellowPagesComAdapter",
       "YelpComAdapter",
-      "YellowPagesCaAdapter",
       "ExampleClassBasedAdapter",
       "Adapter11880",
       "AdapterGelbeseiten",
@@ -197,7 +175,6 @@ export class PlatformAdapterFactory {
       "ITownPageAdapter",
       "USonarYellowPageAdapter",
       "KoreaLocalPagesAdapter",
-      "YellowPagesComSgAdapter",
     ];
   }
 
@@ -221,14 +198,8 @@ export class PlatformAdapterFactory {
       // case 'YellComAdapter':
       //     return YellComAdapter;
 
-      case "YellowPagesComAdapter":
-        return YellowPagesComAdapter;
-
       case "YelpComAdapter":
         return YelpComAdapter;
-
-      case "YellowPagesCaAdapter":
-        return YellowPagesCaAdapter;
 
       case "ExampleClassBasedAdapter":
         return ExampleClassBasedAdapter as unknown as new (
@@ -255,9 +226,6 @@ export class PlatformAdapterFactory {
 
       case "KoreaLocalPagesAdapter":
         return KoreaLocalPagesAdapter;
-
-      case "YellowPagesComSgAdapter":
-        return YellowPagesComSgAdapter;
 
       default:
         throw new Error(

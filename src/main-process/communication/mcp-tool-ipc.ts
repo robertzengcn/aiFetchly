@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog } from "electron";
+import { log } from "@/modules/Logger";
 import { MCPToolService, MCPServerConfig } from "@/service/MCPToolService";
 import { isAppTrustedOrigin } from "@/service/OriginTrust";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
@@ -31,7 +32,7 @@ import {
  * LIST returns formatted server array (with parsed JSON fields) as data.
  */
 export function registerMCPToolIpcHandlers(): void {
-  console.log("MCP Tool IPC handlers registered");
+  log.info("MCP Tool IPC handlers registered");
 
   registerValidatedHandler(MCP_TOOL_LIST, mcpToolListInputSchema, async () => {
     const service = new MCPToolService();

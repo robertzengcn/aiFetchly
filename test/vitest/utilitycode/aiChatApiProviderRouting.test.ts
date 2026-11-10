@@ -59,6 +59,15 @@ vi.mock("@/modules/lib/httpclient", () => ({
   HttpResponseError: MockHttpResponseError,
 }));
 
+// Production imports HttpResponseError from "@/modules/lib/httpResponseError"
+// (not via httpclient), so mirror the mock there too — otherwise
+// `instanceof` in isHttpNotFoundError never matches the test double.
+vi.mock("@/modules/lib/httpResponseError", () => ({
+  HttpResponseError: MockHttpResponseError,
+  MAX_RESPONSE_BODY_BYTES: 16 * 1024,
+  MAX_RETRY_AFTER_MS: 60_000,
+}));
+
 import { AIProviderSettingsService } from "@/service/aiProvider/AIProviderSettingsService";
 
 /** Read the first argument of the first call to a mocked fetch. */
@@ -94,7 +103,11 @@ describe("AiChatApi provider routing", () => {
 
   beforeEach(() => {
     tokenStore.clear();
-    vi.clearAllMocks();
+    // Reset (not just clear) so mockRejectedValueOnce/mockResolvedValueOnce
+    // queues from a prior test cannot leak into the next one.
+    mockGet.mockReset();
+    mockPostJson.mockReset();
+    mockPostStream.mockReset();
     api = new AiChatApi();
   });
 
@@ -237,57 +250,13 @@ describe("AiChatApi provider routing", () => {
     }
   });
 
-  it("listOpenAIModels returns hosted models even without AI entitlement", async () => {
-    // No hosted entitlement and no local config — model listing is ungated.
-    mockGet.mockResolvedValue({
-      object: "list",
-      data: [{ id: "gpt-4", object: "model" }],
-    });
-    const res = await api.listOpenAIModels();
-    expect(res.data).toHaveLength(1);
-    expect(res.data[0].id).toBe("gpt-4");
-  });
-
-  it("openAIChatCompletion throws when hosted AI is disabled and no local provider", async () => {
-    // No hosted entitlement and no local config — chat is gated.
-    await expect(
-      api.openAIChatCompletion({
-        messages: [{ role: "user", content: "hi" }],
-      })
-    ).rejects.toThrow(/subscription|local AI provider/i);
-  });
-
-  it("openAIChatCompletionStream throws when hosted AI is disabled and no local provider", async () => {
-    // No hosted entitlement and no local config — streaming chat is gated.
-    const onChunk = vi.fn();
-    await expect(
-      api.openAIChatCompletionStream(
-        { messages: [{ role: "user", content: "hi" }] },
-        onChunk
-      )
-    ).rejects.toThrow(/subscription|local AI provider/i);
-  });
-
-  it("openAIChatCompletion succeeds when hosted AI is enabled", async () => {
-    enableHosted();
-    mockPostJson.mockResolvedValue({
-      id: "x",
-      object: "chat.completion",
-      created: 0,
-      model: "gpt-x",
-      choices: [
-        {
-          index: 0,
-          message: { role: "assistant", content: "hello" },
-          finish_reason: "stop",
-        },
-      ],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    });
-    const res = await api.openAIChatCompletion({
-      messages: [{ role: "user", content: "hi" }],
-    });
-    expect(res.choices[0].message.content).toBe("hello");
+  it("falls back to the hosted model list when the resolver denies", async () => {
+    // 821509d8 deliberately removed the AI-enable gate from model listing:
+    // a denial (no hosted entitlement AND no local config) now falls back to
+    // the hosted list instead of throwing; execution gates live elsewhere.
+    const models = await api.listOpenAIModels();
+    expect(models.object).toBe("list");
+    expect(Array.isArray(models.data)).toBe(true);
   });
 
   it("hosted sends the small alias on the wire without the internal fallback", async () => {
@@ -391,6 +360,107 @@ describe("AiChatApi provider routing", () => {
       })
     ).rejects.toThrow();
     expect(mockPostJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("B04: the hosted-pinned entry never re-resolves the global provider (local mode cannot reroute it)", async () => {
+    // Local provider configured AND hosted entitlement on: the pinned entry
+    // must still go to the HOSTED transport, not the local fetch path.
+    enableLocalProvider();
+    tokenStore.set(USER_AI_ENABLED, "true");
+    mockPostJson.mockResolvedValue({
+      id: "x",
+      object: "chat.completion",
+      created: 0,
+      model: "cheap",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "ok" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const api = new AiChatApi();
+    const res = await api.openAIChatCompletionHostedPinned({
+      messages: [{ role: "user", content: "name this chat" }],
+      model: "small",
+      requestPurpose: "chat_title",
+      smallModelFallbackPolicy: "forbid",
+    });
+    expect(res.choices[0].message.content).toBe("ok");
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    expect(mockPostJson.mock.calls[0]?.[0]).toBe("/api/ai/v1/chat/completions");
+  });
+
+  it("hosted with smallModelFallbackPolicy=forbid makes exactly one request on a small-alias 404 (chat titles)", async () => {
+    enableHosted();
+    mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "name this chat" }],
+        model: "small",
+        smallModelFallbackPolicy: "forbid",
+      })
+    ).rejects.toThrow();
+    // AC-04: one request, zero default-model fallback dispatches.
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    const wire = mockPostJson.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(wire.model).toBe("small");
+    expect(wire).not.toHaveProperty("smallModelFallbackPolicy");
+    expect(wire).not.toHaveProperty("requestPurpose");
+    expect(wire).not.toHaveProperty("fallbackModel");
+  });
+
+  it("hosted forbid policy leaves literal-model 404 behavior unchanged", async () => {
+    enableHosted();
+    mockPostJson.mockRejectedValue(new MockHttpResponseError(404, "Not Found"));
+    await expect(
+      api.openAIChatCompletion({
+        messages: [{ role: "user", content: "hi" }],
+        model: "gpt-x",
+        smallModelFallbackPolicy: "forbid",
+      })
+    ).rejects.toThrow();
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("chat_title requestPurpose suppresses content in debug request logging", async () => {
+    enableHosted();
+    const previous = process.env.AICHAT_DEBUG_REQUEST;
+    process.env.AICHAT_DEBUG_REQUEST = "1";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      mockPostJson.mockResolvedValue({
+        id: "x",
+        object: "chat.completion",
+        created: 0,
+        model: "cheap",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "ok" },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+      await api.openAIChatCompletion({
+        messages: [{ role: "user", content: "SECRET-EXCERPT-VALUE" }],
+        model: "small",
+        requestPurpose: "chat_title",
+      });
+      const logged = logSpy.mock.calls.map((c) => String(c.join(" "))).join("\n");
+      expect(logged).not.toContain("SECRET-EXCERPT-VALUE");
+      expect(logged).toContain("chat_title");
+    } finally {
+      logSpy.mockRestore();
+      if (previous === undefined) {
+        delete process.env.AICHAT_DEBUG_REQUEST;
+      } else {
+        process.env.AICHAT_DEBUG_REQUEST = previous;
+      }
+    }
   });
 
   it("hosted does not retry a 404 for a literal (non-alias) model", async () => {

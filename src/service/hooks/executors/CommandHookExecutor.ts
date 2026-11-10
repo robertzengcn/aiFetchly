@@ -1,3 +1,4 @@
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { spawn } from "node:child_process";
 import {
   CommandHookDefinition,
@@ -135,6 +136,26 @@ export async function executeCommand(
   const env = buildEnv(hook.envAllowlist);
   const stdinPayload = JSON.stringify(input);
 
+  if (!ownedSpawnAllowed("hooks-command")) {
+    const durationMs = 0;
+    return {
+      stdout: "",
+      stderr: "Application is shutting down; hook execution refused",
+      durationMs,
+      result: {
+        hook,
+        durationMs,
+        error: {
+          hookId: hook.id,
+          source: hook.source,
+          message: "Application is shutting down; hook execution refused",
+          timedOut: false,
+          durationMs,
+        },
+      },
+    };
+  }
+
   return await new Promise<CommandHookExecutionResult>((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -144,6 +165,7 @@ export async function executeCommand(
         stdio: ["pipe", "pipe", "pipe"],
         shell: false,
       });
+      registerOwnedProcess("hooks-command", child);
     } catch (err) {
       resolve({
         stdout: "",

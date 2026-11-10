@@ -10,7 +10,12 @@ import type {
   PluginUninstallResult,
   PluginError,
   PluginComponentState,
+  PluginHealth,
 } from "@/entityTypes/pluginTypes";
+import {
+  isPluginHealth,
+  pluginHealthForLoadErrors,
+} from "@/service/pluginCompat/pluginLoadHealth";
 
 /**
  * Business logic for installed plugins.
@@ -96,9 +101,11 @@ export class PluginManagementModule extends BaseModule {
     name: string,
     errors: readonly PluginError[]
   ): Promise<boolean> {
+    const current = await this.pluginModel.findByName(name);
+    const currentHealth = current ? asStoredPluginHealth(current.health) : undefined;
     return this.pluginModel.updateByName(name, {
       lastLoadErrorsJson: JSON.stringify(errors),
-      health: errors.length === 0 ? "healthy" : "partial_load",
+      health: pluginHealthForLoadErrors(errors, currentHealth),
     });
   }
 
@@ -195,4 +202,8 @@ export class PluginManagementModule extends BaseModule {
       errors,
     };
   }
+}
+
+function asStoredPluginHealth(value: string): PluginHealth | undefined {
+  return isPluginHealth(value) ? value : undefined;
 }

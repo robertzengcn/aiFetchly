@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 /**
  * AiChatV2 local voice worker entry.
@@ -192,6 +193,13 @@ export async function dispatchVoiceMessage(
 
 const parentPort = (process as unknown as { parentPort?: WorkerParentPort })
   .parentPort;
+// §7 graceful shutdown (design §7): ack, close, exit within the
+// parent's remaining budget. The parent still observes exit and
+// force-verifies — the ack is never treated as exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 
 if (parentPort) {
   const services = createVoiceServices();
@@ -208,7 +216,18 @@ if (parentPort) {
     exit: (code) => process.exit(code),
   };
 
-  parentPort.on("message", async (event: ParentPortMessageEvent) => {
+  parentPort.on("message", async (event: ParentPortMessageEvent) => {  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    let raw: unknown = event.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return; // non-JSON is not a shutdown request
+      }
+    }
+    shutdownResponder.handle(raw);
+  });
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(event.data);

@@ -18,7 +18,7 @@ import { EmailFilterEntity } from "@/entity/EmailFilter.entity";
 import { EmailFilterModel } from "@/model/EmailFilter.model";
 import { EmailFilterDetailEntity } from "@/entity/EmailFilterDetail.entity";
 import { EmailFilterDetailModel } from "@/model/EmailFilterDetail.model";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import type { Buckemailstruct } from "@/entityTypes/emailmarketingType";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-buckemail-prepare-data");

@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { log } from "@/modules/Logger";
 import { ExtractionJob, ExtractionProgress } from '@/entityTypes/contactExtractionTypes';
 import { discoverAndExtractContactInfo } from './ContactDiscovery';
 
@@ -69,7 +70,7 @@ export class ContactExtractionQueue {
             this.processJob(job)
                 .catch((error: unknown) => {
                     const errorMessage = error instanceof Error ? error.message : String(error);
-                    console.error(`Job failed for result ${job.resultId}:`, errorMessage);
+                    log.error(`Job failed for result ${job.resultId}:`, errorMessage);
 
                     // Retry logic
                     if (job.retryCount < this.maxRetries) {
@@ -101,7 +102,7 @@ export class ContactExtractionQueue {
      * Process a single job
      */
     private async processJob(job: ExtractionJob): Promise<void> {
-        console.log(`Processing job for result ${job.resultId}: ${job.url}`);
+        log.info(`Processing job for result ${job.resultId}: ${job.url}`);
 
         // Send status update to main process (will save to database)
         this.sendProgressUpdate({
@@ -143,7 +144,7 @@ export class ContactExtractionQueue {
                     method: result.method
                 });
 
-                console.log(`Successfully extracted contact info for result ${job.resultId}`);
+                log.info(`Successfully extracted contact info for result ${job.resultId}`);
             } else {
                 // No valid data found after validation
                 this.sendProgressUpdate({

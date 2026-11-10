@@ -37,8 +37,15 @@
               size="small"
               :color="isSelected(qi, oi) ? 'primary' : undefined"
             >
-              {{ q.multiSelect ? "mdi-checkbox" : "mdi-radiobox" }}
-              {{ isSelected(qi, oi) ? "-marked" : "" }}
+              {{
+                q.multiSelect
+                  ? isSelected(qi, oi)
+                    ? "mdi-checkbox-marked"
+                    : "mdi-checkbox-blank"
+                  : isSelected(qi, oi)
+                    ? "mdi-radiobox-marked"
+                    : "mdi-radiobox-blank"
+              }}
             </v-icon>
             <div class="v2-question-card__option-text">
               <span class="text-body-2 font-weight-medium">{{ opt.label }}</span>
@@ -59,8 +66,15 @@
             @click="toggleCustom(qi)"
           >
             <v-icon size="small" :color="isCustom(qi) ? 'primary' : undefined">
-              {{ q.multiSelect ? "mdi-checkbox" : "mdi-radiobox" }}
-              {{ isCustom(qi) ? "-marked" : "" }}
+              {{
+                q.multiSelect
+                  ? isCustom(qi)
+                    ? "mdi-checkbox-marked"
+                    : "mdi-checkbox-blank"
+                  : isCustom(qi)
+                    ? "mdi-radiobox-marked"
+                    : "mdi-radiobox-blank"
+              }}
             </v-icon>
             <div class="v2-question-card__option-text">
               <span class="text-body-2 font-weight-medium">{{

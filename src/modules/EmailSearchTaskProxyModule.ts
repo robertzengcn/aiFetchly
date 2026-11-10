@@ -1,4 +1,5 @@
 import { EmailSearchTaskProxyModel } from "@/model/EmailSearchTaskProxy.model";
+import { log } from "@/modules/Logger";
 import { IEmailSearchTaskProxyModuleInterface } from "@/modules/interface/IEmailSearchTaskProxyModuleInterface";
 import { EmailSearchTaskProxyEntity } from "@/entity/EmailSearchTaskProxy.entity";
 import { BaseModule } from "@/modules/baseModule";
@@ -93,7 +94,7 @@ export class EmailSearchTaskProxyModule extends BaseModule implements IEmailSear
                 const result = await this.createEmailSearchTaskProxy(taskId, proxyId, notes);
                 results.push(result);
             } catch (error) {
-                console.warn(`Failed to create proxy relationship for task ${taskId} and proxy ${proxyId}:`, error);
+                log.warn(`Failed to create proxy relationship for task ${taskId} and proxy ${proxyId}:`, error);
             }
         }
         

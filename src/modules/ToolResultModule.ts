@@ -126,7 +126,17 @@ export class ToolResultModule extends BaseModule {
 
   constructor(dbpath?: string, env: ToolResultEnvironment = {}) {
     super();
-    this.model = new ToolResultModel(dbpath ?? this.dbpath);
+    // Keep BaseModule's deferred connection on the SAME database the model
+    // uses. BaseModule's constructor resolves the path from Token (empty in
+    // tests); without this sync, a later ensureConnection() would resolve the
+    // empty-path test fallback and getInstance() would reset the process-wide
+    // singleton to it — fire-and-forget destroying the DataSource this
+    // module's repositories are bound to (EntityMetadataNotFoundError on the
+    // next repository call).
+    if (dbpath) {
+      this.dbpath = dbpath;
+    }
+    this.model = new ToolResultModel(this.dbpath);
     this.now = env.now ?? (() => new Date());
     this.freeSpaceBytes = env.freeSpaceBytes;
   }
@@ -853,7 +863,13 @@ export class ToolResultModule extends BaseModule {
    */
   asLegacyProjectionLookup(): LegacyProjectionLookup {
     return {
-      lookup: (input) => this.findLegacyProjections(input),
+      // Arrow property so `this` binds lexically to the Module (no this-alias).
+      lookup: async (input: {
+        profileId: string;
+        sourceRowKeys: readonly string[];
+        outputEpoch?: string;
+      }): Promise<ReadonlyMap<string, LegacyProjection>> =>
+        this.findLegacyProjections(input),
     };
   }
 }

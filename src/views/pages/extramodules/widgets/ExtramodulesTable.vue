@@ -135,13 +135,13 @@ const options = reactive({
   itemsPerPage: 10, // Items per page
 });
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     // console.log(page);
     const fetchitem: Fetchparam = {
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0]?.key ?? '',
         // search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -185,7 +185,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
             console.error(error);
         })
 }
-const openDialog = (item, install: boolean) => {
+const openDialog = (item: ExtraModuleItem, install: boolean) => {
     currentItem.value = item;
     dialog.value = true;
     const packagename = item.packagename
@@ -198,7 +198,7 @@ const openDialog = (item, install: boolean) => {
         dialogAction.value = "uninstall"
     }
 }
-const openUpgradeDialog = (item) => {
+const openUpgradeDialog = (item: ExtraModuleItem) => {
     currentItem.value = item;
     dialog.value = true;
     const packagename = item.packagename
@@ -267,7 +267,7 @@ onMounted(() => {
         const obj = JSON.parse(strobj)
         console.log(obj)
         if (obj.status) {
-            loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
+            loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: [] });
             // for (let i = 0; i < serverItems.value.length; i++) {
             //     if (serverItems.value[i].packagename == obj.data.name) {
             //         serverItems.value[i].loading = false

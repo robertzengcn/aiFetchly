@@ -49,6 +49,12 @@ export const emailReplyDraftCreateInputSchema = lazySchema(() =>
     goal: z.string().max(1000).optional(),
     extraInstructions: z.string().max(2000).optional(),
     useKnowledgeLibrary: z.boolean().optional(),
+    /**
+     * Reviewed flag (spec docs/superpowers/specs/2026-10-29-email-reply-reviewed-flag-design.md):
+     * true ONLY when the mailbox owner reviewed the message and explicitly
+     * asked for the draft. Same semantics as the AI tool's `reviewed`.
+     */
+    humanReviewed: z.boolean().optional(),
   })
 );
 

@@ -35,7 +35,15 @@ vi.mock("@/modules/AIChatModule", () => ({
       return (chatClear as (...a: unknown[]) => Promise<unknown>)(...args);
     }
     getConversationsWithMetadata(): Promise<unknown[]> {
-      return Promise.resolve([]);
+      return Promise.resolve([
+        {
+          conversationId: "v2-bulk",
+          lastMessage: "hello",
+          lastMessageTimestamp: new Date(0),
+          createdAt: new Date(0),
+          messageCount: 1,
+        },
+      ]);
     }
   },
 }));
@@ -67,6 +75,25 @@ vi.mock("@/modules/AIArtifactModule", () => ({
     }
   },
 }));
+// B12 clearAll: the preserved-output scope invalidate must stay DB-free.
+vi.mock("@/modules/ToolResultModule", () => ({
+  ToolResultModule: class {
+    invalidateScope(): Promise<void> {
+      return Promise.resolve();
+    }
+  },
+}));
+// B12: plugin-owned file artifacts are removed by the same cascade.
+const pluginArtifactRemove = vi.fn().mockResolvedValue(2);
+vi.mock("@/modules/PluginFileArtifactModule", () => ({
+  PluginFileArtifactModule: class {
+    removeForConversation(...args: unknown[]): Promise<unknown> {
+      return (
+        pluginArtifactRemove as (...a: unknown[]) => Promise<unknown>
+      )(...args);
+    }
+  },
+}));
 vi.mock("@/modules/token", () => ({
   Token: class {
     getValue(): undefined {
@@ -90,6 +117,7 @@ describe("AIChatV2Module compact clear cascade", () => {
       chatClear,
       tombstoneMock,
       invalidateMock,
+      pluginArtifactRemove,
     ]) {
       m.mockClear();
     }
@@ -109,6 +137,8 @@ describe("AIChatV2Module compact clear cascade", () => {
     expect(chatClear).toHaveBeenCalledWith("v2-x");
     expect(memDelete).toHaveBeenCalledWith("v2-x");
     expect(compactDelete).toHaveBeenCalledWith("v2-x");
+    // B12: plugin-owned artifacts follow the conversation clear.
+    expect(pluginArtifactRemove).toHaveBeenCalledWith("v2-x");
   });
 
   it("clearAllV2History also clears all compact + session memory", async () => {
@@ -116,6 +146,8 @@ describe("AIChatV2Module compact clear cascade", () => {
     await m.clearAllV2History();
     expect(memDeleteAll).toHaveBeenCalled();
     expect(compactDeleteAll).toHaveBeenCalled();
+    // B12: plugin-owned artifacts follow the bulk clear.
+    expect(pluginArtifactRemove).toHaveBeenCalled();
   });
 
   it("aborts the clear when the archive tombstone fails (C-3/AC-13)", async () => {

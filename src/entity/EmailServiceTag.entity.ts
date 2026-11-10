@@ -4,11 +4,11 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("email_service_tag")
 export class EmailServiceTagEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: "varchar", length: 64 })
-  name: string;
+  name!: string;
 
   @Column({ type: "varchar", length: 64, unique: true })
-  normalizedName: string;
+  normalizedName!: string;
 }

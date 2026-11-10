@@ -31,39 +31,39 @@ import { Order } from "./order.decorator";
 ])
 export class AIChatArchiveTurnEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(2)
   @Column("varchar", { length: 64, nullable: false })
-  epoch: string;
+  epoch!: string;
 
   @Order(3)
   @Column("varchar", { length: 100, nullable: false })
-  turnId: string;
+  turnId!: string;
 
   @Order(4)
   @Column("bigint", { nullable: false, default: 0 })
-  firstTimestampMs: number;
+  firstTimestampMs!: number;
 
   @Order(5)
   @Column("int", { nullable: false, default: 0 })
-  firstRowId: number;
+  firstRowId!: number;
 
   @Order(6)
   @Column("bigint", { nullable: false, default: 0 })
-  lastTimestampMs: number;
+  lastTimestampMs!: number;
 
   @Order(7)
   @Column("int", { nullable: false, default: 0 })
-  lastRowId: number;
+  lastRowId!: number;
 
   @Order(8)
   @Column("varchar", { length: 20, nullable: false, default: "open" })
-  status: string;
+  status!: string;
 
   @Order(9)
   @Column("datetime", { nullable: true })
@@ -71,5 +71,5 @@ export class AIChatArchiveTurnEntity extends AuditableEntity {
 
   @Order(10)
   @Column("varchar", { length: 20, nullable: false, default: "native" })
-  confidence: string;
+  confidence!: string;
 }

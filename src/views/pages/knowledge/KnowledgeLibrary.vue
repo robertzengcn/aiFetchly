@@ -1,36 +1,47 @@
 <template>
-  <div class="knowledge-library">
-    <!-- Header -->
-    <div class="knowledge-header">
-      <h1 class="knowledge-title">
-        <v-icon class="mr-2">mdi-book-open-variant</v-icon>
-        {{ t('route.knowledge_library') }}
-      </h1>
-      <div class="knowledge-actions">
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-upload"
-          @click="showUploadDialog = true"
-        >
-          {{ t('knowledge.upload_document') }}
-        </v-btn>
-        <v-btn
-          color="success"
-          prepend-icon="mdi-web"
-          :loading="checkingEmbeddingRuntime"
-          @click="openWebsiteImportDialog"
-        >
-          {{ t('knowledge.import_website') }}
-        </v-btn>
-        <v-btn
-          color="info"
-          prepend-icon="mdi-cog"
-          @click="openSettingsDialog"
-        >
-          {{ t('knowledge.settings') }}
-        </v-btn>
-      </div>
-    </div>
+  <AppPageShell
+    page-id="knowledge-library"
+    title-key="route.knowledge_library"
+    content-width="full"
+  >
+    <!-- One primary action; website import and settings are infrequent →
+         overflow (IPR-004/006). -->
+    <template #primary-action>
+      <v-btn
+        color="primary"
+        prepend-icon="mdi-upload"
+        data-testid="knowledge-upload-primary"
+        @click="showUploadDialog = true"
+      >
+        {{ t('knowledge.upload_document') }}
+      </v-btn>
+    </template>
+    <template #overflow>
+      <v-menu location="bottom end">
+        <template #activator="{ props: menuProps }">
+          <v-btn icon v-bind="menuProps" variant="text" data-testid="knowledge-overflow">
+            <v-icon>mdi-dots-horizontal</v-icon>
+          </v-btn>
+        </template>
+        <v-list density="compact" role="menu">
+          <v-list-item
+            role="menuitem"
+            :title="t('knowledge.import_website')"
+            prepend-icon="mdi-web"
+            :disabled="checkingEmbeddingRuntime"
+            data-testid="knowledge-overflow-import-website"
+            @click="openWebsiteImportDialog"
+          />
+          <v-list-item
+            role="menuitem"
+            :title="t('knowledge.settings')"
+            prepend-icon="mdi-cog"
+            data-testid="knowledge-overflow-settings"
+            @click="openSettingsDialog"
+          />
+        </v-list>
+      </v-menu>
+    </template>
 
     <!-- Status Snackbar (floating, non-intrusive) -->
     <v-snackbar
@@ -503,8 +514,8 @@
             </v-btn>
             <v-btn
               color="primary"
-              :disabled="!runtimeInstallOffer"
-              :loading="preparingRuntime"
+              :disabled="preparingRuntime || runtimeDownloading"
+              :loading="preparingRuntime || runtimeDownloading"
               @click="onDownloadRuntime"
             >
               {{ t('knowledge.local_runtime_download') }}
@@ -544,12 +555,13 @@
       </v-card>
     </v-dialog>
 
-  </div>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue';
 
 // Expose t function to template
 const { t } = useI18n();
@@ -759,27 +771,6 @@ async function initializeRAGSystem() {
   }
 }
 
-// async function initializeWithDefaultConfig() {
-//   const embeddingConfig = {
-//     provider: 'openai',
-//     model: 'text-embedding-ada-002',
-//     apiKey: process.env.OPENAI_API_KEY || '',
-//   };
-
-//   const llmConfig = {
-//     model: 'gpt-3.5-turbo',
-//     apiKey: process.env.OPENAI_API_KEY || '',
-//   };
-
-//   const response = await initializeRAG({
-//     embedding: embeddingConfig,
-//     llm: llmConfig,
-//   });
-
-//   if (!response.success) {
-//     throw new Error(response.message);
-//   }
-// }
 
 function showStatus(message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') {
   statusMessage.value = message;
@@ -847,47 +838,6 @@ async function handleUploadSuccess(document: UploadedDocument) {
   
   console.log('📄 Document processed:', document);
   
-  // Automatically start chunking and embedding process
-  // if (document.id) {
-  //   try {
-  //     setLoading(true, t('knowledge.processing_document'), t('knowledge.chunking_and_embedding_document'));
-      
-  //     const chunkEmbedResult = await chunkAndEmbedDocument(document.id);
-      
-  //     if (chunkEmbedResult.success && chunkEmbedResult.data) {
-  //       const { chunksCreated, embeddingsGenerated, processingTime } = chunkEmbedResult.data;
-  //       showStatus(
-  //         t('knowledge.document_processed_successfully', { 
-  //           name: document.name, 
-  //           chunks: chunksCreated, 
-  //           embeddings: embeddingsGenerated 
-  //         }), 
-  //         'success'
-  //       );
-  //       console.log(`✅ Document ${document.name} processed: ${chunksCreated} chunks, ${embeddingsGenerated} embeddings in ${processingTime}ms`);
-  //     } else {
-  //       showStatus(
-  //         t('knowledge.document_processing_failed', { 
-  //           name: document.name, 
-  //           error: chunkEmbedResult.message 
-  //         }), 
-  //         'warning'
-  //       );
-  //       console.warn(`⚠️ Document ${document.name} processing failed:`, chunkEmbedResult.message);
-  //     }
-  //   } catch (error) {
-  //     console.error(`❌ Error processing document ${document.name}:`, error);
-  //     showStatus(
-  //       t('knowledge.document_processing_error', { 
-  //         name: document.name, 
-  //         error: error instanceof Error ? error.message : 'Unknown error' 
-  //       }), 
-  //       'error'
-  //     );
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // }
   
   // Refresh document management if available
   if (documentManagement.value) {
@@ -1065,20 +1015,28 @@ async function ensureLocalEmbeddingRuntime(
 }
 
 async function onDownloadRuntime() {
-  if (!runtimeInstallOffer.value || runtimeDownloading.value) return;
+  if (runtimeDownloading.value) return;
   runtimeDownloading.value = true;
   runtimeDownloadError.value = '';
   try {
+    // Issue a fresh consent grant on every attempt so a prior failed install
+    // (or stale dialog state) cannot reuse a consumed offer token.
+    const offer = await prepareLocalAiRuntimeInstall(LOCAL_EMBEDDING_RUNTIME_ID);
+    runtimeInstallOffer.value = offer;
     await installLocalAiRuntime({
-      operationId: runtimeInstallOffer.value.operationId,
-      runtimeId: runtimeInstallOffer.value.runtimeId,
-      expectedRuntimeVersion: runtimeInstallOffer.value.runtimeVersion,
-      consentToken: runtimeInstallOffer.value.consentToken,
+      operationId: offer.operationId,
+      runtimeId: offer.runtimeId,
+      expectedRuntimeVersion: offer.runtimeVersion,
+      consentToken: offer.consentToken,
     });
-    runtimeInstallOffer.value = null;
     const runtimeStatus = await getLocalAiRuntimeStatus(LOCAL_EMBEDDING_RUNTIME_ID);
     if (runtimeStatus.state === 'ready') {
       showRuntimeDownloadDialog.value = false;
+      // Clear the consumed offer token so a later attempt must obtain a fresh
+      // consent grant (matches the "fresh consent grant on every attempt"
+      // contract above), then dispatch the deferred action that triggered the
+      // install.
+      runtimeInstallOffer.value = null;
       const action = pendingRuntimeAction.value;
       pendingRuntimeAction.value = null;
       if (action === 'update-model') {
@@ -1561,45 +1519,13 @@ defineExpose({
 </script>
 
 <style scoped>
-.knowledge-library {
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  
-}
-
-.knowledge-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  
-  border-bottom: 1px solid #e0e0e0;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.knowledge-title {
-  display: flex;
-  align-items: center;
-  margin: 0;
-  color: #1976d2;
-  font-size: 1.5rem;
-  font-weight: 500;
-}
-
-.knowledge-actions {
-  display: flex;
-  gap: 12px;
-}
-
 .knowledge-content {
   flex: 1;
-  margin: 16px;
   overflow: hidden;
 }
 
 .knowledge-tabs {
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .knowledge-tabs .v-tab {
@@ -1608,24 +1534,7 @@ defineExpose({
 }
 
 .knowledge-tabs .v-tab--selected {
-  color: #1976d2;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-  .knowledge-header {
-    flex-direction: column;
-    gap: 16px;
-    align-items: stretch;
-  }
-
-  .knowledge-actions {
-    justify-content: center;
-  }
-
-  .knowledge-content {
-    margin: 8px;
-  }
+  color: var(--app-accent);
 }
 
 /* Status snackbar styles */
@@ -1655,28 +1564,28 @@ defineExpose({
 }
 
 .v-window-item::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--app-surface-variant);
   border-radius: 4px;
 }
 
 .v-window-item::-webkit-scrollbar-thumb {
-  background: #c1c1c1;
+  background: var(--app-border-strong);
   border-radius: 4px;
 }
 
 .v-window-item::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  background: var(--app-text-muted);
 }
 
 /* Upload Dialog Styles */
 .upload-drop-zone {
-  border: 2px dashed #e0e0e0;
+  border: 2px dashed var(--app-border);
   border-radius: 12px;
   padding: 40px 20px;
   text-align: center;
   cursor: pointer;
   transition: all 0.3s ease;
-  background-color: #fafafa;
+  background-color: var(--app-surface);
   min-height: 200px;
   display: flex;
   align-items: center;
@@ -1684,19 +1593,19 @@ defineExpose({
 }
 
 .upload-drop-zone:hover {
-  border-color: #1976d2;
-  background-color: #f5f5f5;
+  border-color: var(--app-accent);
+  background-color: var(--app-surface-variant);
 }
 
 .upload-drop-zone.drag-over {
-  border-color: #1976d2;
-  background-color: #e3f2fd;
+  border-color: var(--app-accent);
+  background-color: var(--app-accent-soft);
   transform: scale(1.02);
 }
 
 .upload-drop-zone.has-files {
-  border-color: #4caf50;
-  background-color: #f1f8e9;
+  border-color: var(--app-success);
+  background-color: var(--app-success-soft);
 }
 
 .drop-zone-content {
@@ -1707,14 +1616,14 @@ defineExpose({
 }
 
 .selected-files {
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   padding: 16px;
-  background-color: #f9f9f9;
+  background-color: var(--app-surface);
 }
 
 .file-item {
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--app-border);
 }
 
 .file-item:last-child {

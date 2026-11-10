@@ -1,6 +1,8 @@
 <template>
   <v-app :theme="mainStore.theme">
       <router-view />
+      <!-- Root-level close-choice dialog + shutdown progress (exit & tray PRD). -->
+      <ApplicationCloseDialog />
 </v-app>
 </template>
 <script setup lang="ts">
@@ -9,11 +11,13 @@ import { useMainStore } from '@/views/store/appMain';
 import { onMounted, onUnmounted } from 'vue';
 import { receiveRedirectevent } from '@/views/api/users';
 import { NATIVATECOMMAND } from '@/config/channellist';
-import { UserModule } from '@/views/store/modules/user';
+import { useUserStore } from '@/views/store/modules/userStore';
 import router from '@/views/router';
 import type { NativateDatatype } from '@/entityTypes/commonType';
+import ApplicationCloseDialog from '@/views/components/application/ApplicationCloseDialog.vue';
 
 const mainStore = useMainStore();
+const userStore = useUserStore();
 
 // Handle logout notification from main process
 const handleLogoutNotification = (data: NativateDatatype) => {
@@ -21,8 +25,8 @@ const handleLogoutNotification = (data: NativateDatatype) => {
   if (data.path === 'login') {
     console.log('Received logout notification - clearing user state');
     
-    // Clear all user state in Vuex store (token, roles, name, email, etc.)
-    UserModule.ResetToken();
+    // Clear all user state in the user store (token, roles, name, email, etc.)
+    userStore.resetToken();
     
     // Navigate to login page if not already there
     if (router.currentRoute.value.path !== '/login') {

@@ -67,6 +67,34 @@ export class AIChatAttachmentModel extends BaseDb {
   }
 
   /**
+   * Load all attachment rows stored under one messageId (message-queue
+   * design §7.6): queued attachment bytes live under the deterministic
+   * pending userMessageId, so dispatch reconstructs uploaded files from
+   * these trusted BLOBs instead of renderer-supplied data.
+   */
+  async getByMessageId(messageId: string): Promise<StoredAttachmentFile[]> {
+    const entities = await this.repository.find({
+      where: { messageId },
+      order: { id: "ASC" },
+    });
+    return entities.map((entity) => ({
+      fileName: entity.fileName,
+      mimeType: entity.mimeType,
+      sizeBytes: entity.sizeBytes,
+      contentBlob: entity.contentBlob,
+    }));
+  }
+
+  /**
+   * Delete attachment rows under one messageId. Used when a pending message
+   * is cancelled so its staged bytes do not linger (PRD §7.8).
+   */
+  async deleteByMessageId(messageId: string): Promise<number> {
+    const result = await this.repository.delete({ messageId });
+    return result.affected || 0;
+  }
+
+  /**
    * Get the most recent uploaded file bytes by conversation + file name.
    */
   async getLatestAttachmentByName(

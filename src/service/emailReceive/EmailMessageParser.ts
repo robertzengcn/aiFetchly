@@ -58,28 +58,6 @@ export function decodeAddresses(json: string | null | undefined): string[] {
 }
 
 /**
- * Whole mailbox local-parts that are automated. Compared after `+tag` is
- * stripped and again with `.` `_` `-` removed (`no.reply` → `noreply`).
- * `mailer` / `notification` / `automated` are whole-local-part only so a
- * human address like `not-automated@` is not blocked.
- */
-const AUTOMATED_LOCAL_PARTS: ReadonlySet<string> = new Set([
-  "no-reply",
-  "noreply",
-  "do-not-reply",
-  "donotreply",
-  "mailer-daemon",
-  "mail-daemon",
-  "postmaster",
-  "auto-reply",
-  "autoresponder",
-  "mailer",
-  "notification",
-  "notifications",
-  "automated",
-]);
-
-/**
  * High-confidence role tokens matched as a segment of the local-part
  * (`forms-receipts-noreply`). Not applied to the domain, display name, or
  * comment, so `person@noreply.example.com` and `techno-reply@` stay human.
@@ -94,6 +72,21 @@ const AUTOMATED_LOCAL_SEGMENTS: ReadonlySet<string> = new Set([
   "postmaster",
   "auto-reply",
   "autoresponder",
+]);
+
+/**
+ * Whole mailbox local-parts that are automated: every segment token above,
+ * plus `mailer` / `notification(s)` / `automated` which stay whole-local-part
+ * ONLY — as segments they would block human addresses like
+ * `not-automated@` or `account-notifications@`. Compared after `+tag` is
+ * stripped and again with `.` `_` `-` removed (`no.reply` → `noreply`).
+ */
+const AUTOMATED_LOCAL_PARTS: ReadonlySet<string> = new Set([
+  ...AUTOMATED_LOCAL_SEGMENTS,
+  "mailer",
+  "notification",
+  "notifications",
+  "automated",
 ]);
 
 const EMAIL_IN_HEADER_RE =

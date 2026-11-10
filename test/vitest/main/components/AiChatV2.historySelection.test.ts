@@ -3,7 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { h } from "vue";
 import { createI18n } from "vue-i18n";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
-import { streamChatV2Message } from "@/views/api/aiChatV2";
+import { createChatV2PendingMessage, streamChatV2Message } from "@/views/api/aiChatV2";
 
 // Drafts are added through the history drawer's `select` event and observed
 // through the composer's `selections` prop (the same prop the real
@@ -17,7 +17,19 @@ const held = vi.hoisted(() => ({
   refreshed: [] as boolean[],
 }));
 
+let lastTurnHandlers: {
+  onChunk: (c: unknown) => void;
+  onComplete: (c: unknown) => void;
+} | null = null;
+
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),
@@ -28,6 +40,33 @@ vi.mock("@/views/api/aiChatV2", () => ({
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   streamChatV2Message: vi.fn(),
+  awaitChatV2Turn: vi.fn().mockImplementation(
+    (
+      _conversationId: string,
+      onChunk: (c: unknown) => void,
+      onComplete: (c: unknown) => void
+    ) => {
+      lastTurnHandlers = { onChunk, onComplete };
+      return { promise: Promise.resolve(), detach: vi.fn() };
+    }
+  ),
+  createChatV2PendingMessage: vi.fn().mockImplementation(
+    async (_clientRequestId: string, request: StreamRequest) => ({
+      conversationId: request.conversationId,
+      disposition: "dispatch_scheduled",
+      pendingMessage: {
+        id: "pending-1",
+        conversationId: request.conversationId,
+        clientRequestId: "client-1",
+        sequence: 1,
+        content: request.message,
+        status: "dispatching",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        canSteer: false,
+      },
+    })
+  ),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
   answerChatV2Question: vi.fn(),
@@ -200,17 +239,14 @@ function lastCall(): {
   onComplete: (c: unknown) => void;
   onError: (e: Error) => void;
 } {
-  const call = vi.mocked(streamChatV2Message).mock.calls.at(-1) as unknown as [
-    StreamRequest,
-    (c: unknown) => void,
-    (c: unknown) => void,
-    (e: Error) => void
-  ];
+  const call = vi.mocked(createChatV2PendingMessage).mock.calls.at(-1) as
+    | [string, StreamRequest]
+    | undefined;
   return {
-    request: call[0],
-    onChunk: call[1],
-    onComplete: call[2],
-    onError: call[3],
+    request: (call?.[1] ?? {}) as StreamRequest,
+    onChunk: lastTurnHandlers?.onChunk ?? (() => undefined),
+    onComplete: lastTurnHandlers?.onComplete ?? (() => undefined),
+    onError: () => undefined,
   };
 }
 

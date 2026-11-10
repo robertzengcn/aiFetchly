@@ -23,6 +23,11 @@ const {
 }));
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),

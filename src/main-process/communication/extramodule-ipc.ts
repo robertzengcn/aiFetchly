@@ -1,4 +1,5 @@
 import { ipcMain } from "electron";
+import { log } from "@/modules/Logger";
 import {
   EXTRAMODULECHANNE_LIST,
   EXTRAMODULECHANNE_INSTALL,
@@ -14,7 +15,7 @@ import { registerValidatedHandler } from "@/main-process/communication/_shared/r
 import { itemSearchParamSchema } from "@/schemas/ipc/_shared/pagination";
 
 export function registerExtraModulesIpcHandlers() {
-  console.log("extramodules list register");
+  log.info("extramodules list register");
 
   // LIST: schema-validated. The other handlers in this file
   // (INSTALL / UNINSTALL / UPGRADE) use ipcMain.on + event.sender.send,

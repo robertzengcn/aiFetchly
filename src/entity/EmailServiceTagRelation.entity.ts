@@ -22,21 +22,21 @@ import { EmailServiceTagEntity } from "./EmailServiceTag.entity";
 ])
 export class EmailServiceTagRelationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Index("idx_email_service_tag_relation_service")
   @Column({ type: "integer" })
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Index("idx_email_service_tag_relation_tag")
   @Column({ type: "integer" })
-  tagId: number;
+  tagId!: number;
 
   @ManyToOne(() => EmailServiceEntity, { onDelete: "CASCADE" })
   @JoinColumn({ name: "emailServiceId" })
-  emailService: EmailServiceEntity;
+  emailService!: EmailServiceEntity;
 
   @ManyToOne(() => EmailServiceTagEntity, { onDelete: "CASCADE" })
   @JoinColumn({ name: "tagId" })
-  tag: EmailServiceTagEntity;
+  tag!: EmailServiceTagEntity;
 }

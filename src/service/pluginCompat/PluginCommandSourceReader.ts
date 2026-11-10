@@ -7,6 +7,9 @@
 //   2. Claude manifest `commands` declarations (string / string[] / object map
 //      with `source` or inline `content`). `true` or a missing declaration
 //      auto-detects the conventional root `commands/` directory.
+//   3. Claude user-invocable skills (`skills/<name>/SKILL.md`). Claude Code
+//      exposes these as slash commands (`/blog` from `name: blog`). Skills
+//      with `user-invocable: false` stay model-only and are not registered.
 //
 // Native files are STRICT: they must declare `type: prompt` and a valid name
 // (buildPromptCommandDefinition rejects otherwise). Claude-sourced commands
@@ -32,11 +35,12 @@ import {
   type PluginManifest,
 } from "@/entityTypes/pluginTypes";
 import { getClaudeCommandDeclaration } from "@/service/pluginCompat/ClaudePluginAdapter";
+import { parseFrontmatter as parseClaudeFrontmatter } from "@/service/pluginCompat/claudeFrontmatterParser";
 import {
   frontmatterRecord,
   parseRestrictedFrontmatter,
 } from "@/service/aifetchlyConfig/AIFetchlyConfigMarkdown";
-import { AIFETCHLY_CONFIG_LIMITS } from "@/service/aifetchlyConfig/AIFetchlyConfigConstants";
+import { AIFETCHLY_CONFIG_LIMITS, COMMAND_NAME_REGEX } from "@/service/aifetchlyConfig/AIFetchlyConfigConstants";
 import {
   buildPromptCommandDefinition,
   type PromptCommandDraft,
@@ -177,6 +181,40 @@ export class PluginCommandSourceReader {
       }
       seenIds.add(result.definition.id);
       definitions.push(result.definition);
+    }
+
+    if (input.manifest.format === "claude") {
+      const skillCommands = await readClaudeSkillSlashCommands(
+        input,
+        sourceMeta,
+        diagnostics
+      );
+      for (const definition of skillCommands) {
+        if (definitions.length >= AIFETCHLY_CONFIG_LIMITS.maxCommandsPerSource) {
+          diagnostics.push(
+            diag(
+              sourceId,
+              "skills",
+              "frontmatter-invalid",
+              `Plugin '${input.pluginName}' reached the ${AIFETCHLY_CONFIG_LIMITS.maxCommandsPerSource}-command cap; remaining skills were not registered as slash commands.`
+            )
+          );
+          break;
+        }
+        if (seenIds.has(definition.id)) {
+          diagnostics.push(
+            diag(
+              sourceId,
+              definition.id,
+              "frontmatter-invalid",
+              `Duplicate command id '${definition.id}' in plugin '${input.pluginName}'; keeping the command file and skipping the skill.`
+            )
+          );
+          continue;
+        }
+        seenIds.add(definition.id);
+        definitions.push(definition);
+      }
     }
 
     return { definitions, diagnostics };
@@ -555,4 +593,307 @@ function normalizeRawDraft(
   }
 
   return { relativePath: raw.relativePath, body, frontmatter };
+}
+
+// --- Claude skills as slash commands ----------------------------------------
+//
+// Claude Code's getPluginSkills() turns every user-invocable SKILL.md into a
+// prompt slash command. The lookup name is the frontmatter `name` (so
+// skills/blog/SKILL.md with `name: blog` is `/blog`). `user-invocable: false`
+// stays hidden. Explicit commands/*.md entries win when the ids collide.
+
+function claudeSkillPaths(manifest: PluginManifest): readonly string[] {
+  if (manifest.skills === undefined) return ["skills/"];
+  return manifest.skills;
+}
+
+function isUserInvocable(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    return !/^(false|no|0)$/i.test(value.trim());
+  }
+  return true;
+}
+
+function clipText(value: string, max: number): string {
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (trimmed.length <= max) return trimmed;
+  if (max <= 1) return trimmed.slice(0, max);
+  return `${trimmed.slice(0, max - 1)}…`;
+}
+
+function clipHint(value: string, max: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  return trimmed.slice(0, max);
+}
+
+function substituteSkillPaths(
+  body: string,
+  pluginRoot: string,
+  skillDir: string
+): string {
+  const normalize = (p: string): string => p.replace(/\\/g, "/");
+  const root = normalize(pluginRoot);
+  const dir = normalize(skillDir);
+  return body
+    .replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, root)
+    .replace(/\$\{CLAUDE_SKILL_DIR\}/g, dir)
+    .replace(/\$\{AIFETCHLY_SKILL_DIR\}/g, dir);
+}
+
+async function readClaudeSkillSlashCommands(
+  input: PluginCommandSourceReadInput,
+  sourceMeta: PromptCommandSourceMeta,
+  diagnostics: AIFetchlyConfigDiagnostic[]
+): Promise<SlashCommandDefinition[]> {
+  const definitions: SlashCommandDefinition[] = [];
+  const files = await collectClaudeSkillFiles(
+    input.installPath,
+    claudeSkillPaths(input.manifest),
+    sourceMeta.sourceId,
+    diagnostics
+  );
+
+  for (const file of files) {
+    const definition = skillFileToCommand(
+      file,
+      input.installPath,
+      sourceMeta,
+      diagnostics
+    );
+    if (!definition) continue;
+    if (definitions.some((existing) => existing.id === definition.id)) {
+      diagnostics.push(
+        diag(
+          sourceMeta.sourceId,
+          file.rel,
+          "frontmatter-invalid",
+          `Duplicate command id '${definition.id}' in plugin '${input.pluginName}'; keeping the first skill and skipping the rest.`
+        )
+      );
+      continue;
+    }
+    definitions.push(definition);
+  }
+  return definitions;
+}
+
+interface SkillMarkdownFile {
+  readonly abs: string;
+  readonly rel: string;
+  readonly skillDir: string;
+  readonly dirName: string;
+}
+
+async function collectClaudeSkillFiles(
+  installPath: string,
+  skillPaths: readonly string[],
+  sourceId: string,
+  diagnostics: AIFetchlyConfigDiagnostic[]
+): Promise<SkillMarkdownFile[]> {
+  const out: SkillMarkdownFile[] = [];
+  const seen = new Set<string>();
+
+  for (const skillPath of skillPaths) {
+    if (typeof skillPath !== "string" || skillPath.length === 0) continue;
+    let abs: string;
+    try {
+      abs = resolvePluginRelativePath(installPath, skillPath);
+    } catch {
+      diagnostics.push(
+        diag(
+          sourceId,
+          skillPath,
+          "path-outside-plugin",
+          `Skill path "${skillPath}" escapes the plugin directory.`
+        )
+      );
+      continue;
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(abs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      diagnostics.push(ioDiag(sourceId, skillPath, err));
+      continue;
+    }
+
+    const found: Array<{ abs: string; rel: string }> = [];
+    if (stat.isDirectory()) {
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(abs, { withFileTypes: true });
+      } catch (err) {
+        diagnostics.push(ioDiag(sourceId, skillPath, err));
+        continue;
+      }
+      const relDir = skillPath.replace(/\/$/, "");
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(abs, entry.name, "SKILL.md");
+        try {
+          const candidateStat = await fs.promises.stat(candidate);
+          if (!candidateStat.isFile()) continue;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+          diagnostics.push(
+            ioDiag(sourceId, `${relDir}/${entry.name}/SKILL.md`, err)
+          );
+          continue;
+        }
+        found.push({
+          abs: candidate,
+          rel: `${relDir}/${entry.name}/SKILL.md`,
+        });
+      }
+      const direct = path.join(abs, "SKILL.md");
+      try {
+        const directStat = await fs.promises.stat(direct);
+        if (directStat.isFile()) {
+          found.push({ abs: direct, rel: `${relDir}/SKILL.md` });
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          diagnostics.push(ioDiag(sourceId, `${relDir}/SKILL.md`, err));
+        }
+      }
+    } else if (stat.isFile()) {
+      found.push({ abs, rel: skillPath });
+    }
+
+    for (const file of found) {
+      if (seen.has(file.abs)) continue;
+      seen.add(file.abs);
+      out.push({
+        abs: file.abs,
+        rel: file.rel,
+        skillDir: path.dirname(file.abs),
+        dirName: path.basename(path.dirname(file.abs)),
+      });
+    }
+  }
+
+  out.sort((a, b) => a.rel.localeCompare(b.rel));
+  return out;
+}
+
+function skillFileToCommand(
+  file: SkillMarkdownFile,
+  pluginRoot: string,
+  sourceMeta: PromptCommandSourceMeta,
+  diagnostics: AIFetchlyConfigDiagnostic[]
+): SlashCommandDefinition | null {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file.abs);
+  } catch (err) {
+    diagnostics.push(ioDiag(sourceMeta.sourceId, file.rel, err));
+    return null;
+  }
+  if (stat.size > AIFETCHLY_CONFIG_LIMITS.agentsMdBytes) {
+    diagnostics.push(
+      diag(
+        sourceMeta.sourceId,
+        file.rel,
+        "file-too-large",
+        `${file.rel} is ${stat.size} bytes which exceeds the ${AIFETCHLY_CONFIG_LIMITS.agentsMdBytes}-byte limit; skipped.`
+      )
+    );
+    return null;
+  }
+
+  let content: string;
+  try {
+    content = fs.readFileSync(file.abs, "utf8");
+  } catch (err) {
+    diagnostics.push(ioDiag(sourceMeta.sourceId, file.rel, err));
+    return null;
+  }
+
+  const parsed = parseClaudeFrontmatter(content);
+  if (!isUserInvocable(parsed.frontmatter["user-invocable"])) {
+    return null;
+  }
+
+  const rawName =
+    typeof parsed.frontmatter.name === "string" &&
+    parsed.frontmatter.name.length > 0
+      ? parsed.frontmatter.name
+      : file.dirName;
+  const name = rawName.trim().toLowerCase();
+  if (!COMMAND_NAME_REGEX.test(name)) {
+    diagnostics.push(
+      diag(
+        sourceMeta.sourceId,
+        file.rel,
+        "command-name-invalid",
+        `Skill '${file.rel}' name '${rawName}' is not a valid slash command name.`
+      )
+    );
+    return null;
+  }
+
+  const rawDescription =
+    typeof parsed.frontmatter.description === "string"
+      ? parsed.frontmatter.description
+      : "";
+  const description = clipText(
+    rawDescription.length > 0 ? rawDescription : `Plugin skill ${name}`,
+    AIFETCHLY_CONFIG_LIMITS.commandDescriptionLength
+  );
+
+  const rawHint = parsed.frontmatter["argument-hint"];
+  const argumentHint =
+    typeof rawHint === "string" && rawHint.trim().length > 0
+      ? clipHint(rawHint, AIFETCHLY_CONFIG_LIMITS.commandArgumentHintLength)
+      : undefined;
+
+  const body = parsed.body.trim();
+  if (body.length === 0) {
+    diagnostics.push(
+      diag(
+        sourceMeta.sourceId,
+        file.rel,
+        "frontmatter-invalid",
+        `Skill '${name}' has an empty body — slash commands require instructions.`
+      )
+    );
+    return null;
+  }
+
+  const aliases: string[] = [];
+  if (
+    file.dirName !== name &&
+    COMMAND_NAME_REGEX.test(file.dirName) &&
+    aliases.length < AIFETCHLY_CONFIG_LIMITS.commandAliases
+  ) {
+    aliases.push(file.dirName);
+  }
+
+  const substituted = substituteSkillPaths(body, pluginRoot, file.skillDir);
+  const promptBody = `Base directory for this skill: ${file.skillDir.replace(/\\/g, "/")}\n\n${substituted}`;
+
+  const built = buildPromptCommandDefinition(
+    {
+      relativePath: file.rel,
+      body: promptBody,
+      frontmatter: {
+        name,
+        description,
+        type: "prompt",
+        ...(argumentHint !== undefined ? { argumentHint } : {}),
+        ...(aliases.length > 0 ? { aliases } : {}),
+      },
+    },
+    sourceMeta
+  );
+  if (!built.ok) {
+    diagnostics.push(built.diagnostic);
+    return null;
+  }
+  return built.definition;
 }

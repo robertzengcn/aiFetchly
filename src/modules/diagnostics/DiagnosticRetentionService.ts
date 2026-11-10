@@ -1,5 +1,6 @@
 'use strict';
 import * as fs from 'fs';
+import { log } from "@/modules/Logger";
 import * as path from 'path';
 import {
   getDiagnosticsDir,
@@ -80,7 +81,7 @@ export class DiagnosticRetentionService {
 
   /**
    * Run a single cleanup pass. Never throws: any filesystem error is caught
-   * and logged to console.warn so the caller (often a timer callback) is safe.
+   * and logged to log.warn so the caller (often a timer callback) is safe.
    */
   runOnce(): void {
     try {
@@ -89,7 +90,7 @@ export class DiagnosticRetentionService {
       this.pruneJsonlByRecordAge(getErrorLogPath(), this.cfg.crashRetentionDays);
       this.enforceBudget();
     } catch (err) {
-      console.warn('[DiagnosticRetentionService] cleanup failed', err);
+      log.warn('[DiagnosticRetentionService] cleanup failed', err);
     }
   }
 

@@ -70,7 +70,8 @@
           v-for="draft in drafts"
           :key="draft.id"
           :draft="draft"
-          :edit-mode="editingDraftId === draft.id"
+          :edit-mode="batchAuthorizable && editingDraftId === draft.id"
+          :editable="batchAuthorizable"
           @edit-requested="startEdit(draft.id)"
           @save="(payload) => onDraftSave(draft.id, draft, payload)"
           @cancel="cancelEdit"
@@ -88,6 +89,7 @@
 
       <v-card-actions class="outbound-review__actions">
         <v-btn
+          v-if="batchAuthorizable"
           variant="tonal"
           color="error"
           size="small"
@@ -104,7 +106,7 @@
           color="primary"
           size="small"
           data-testid="outbound-review-approve"
-          :disabled="busy"
+          :disabled="busy || !batchAuthorizable"
           @click="onApprove"
         >
           <v-icon start size="small">mdi-check</v-icon>
@@ -115,7 +117,7 @@
           color="success"
           size="small"
           data-testid="outbound-review-send"
-          :disabled="busy || !canSend"
+          :disabled="busy || !canSend || !batchAuthorizable"
           @click="onSend"
         >
           <v-icon start size="small">mdi-send</v-icon>
@@ -150,6 +152,7 @@ import type {
   OutboundEmailOutcomeView,
 } from "@/views/api/outboundEmailDelivery";
 import type { AuthorizedEmailWorkerEvent } from "@/entityTypes/outboundEmailDeliveryTypes";
+import { OUTBOUND_EMAIL_AUTHORIZABLE_BATCH_STATUSES } from "@/entityTypes/outboundEmailDeliveryTypes";
 
 /**
  * Review/edit/approve/send dialog for an outbound batch (§18). Loads the
@@ -185,6 +188,18 @@ const sendError = ref<string>("");
 const sendSuccess = ref<boolean>(false);
 const attemptStatus = ref<string | null>(null);
 const progressOutcomes = ref<OutboundEmailOutcomeView[]>([]);
+
+/** A batch whose delivery was attempted or settled — including the
+ *  inconclusive delivery_unknown — is a PROGRESS surface, not a review
+ *  surface (§8.1/FR-OUT-006): approve/send are inert and discard is hidden;
+ *  the main-process approval gate is the authority. */
+const batchAuthorizable = computed<boolean>(() => {
+  const status = batch.value?.status;
+  if (!status) return false;
+  return (OUTBOUND_EMAIL_AUTHORIZABLE_BATCH_STATUSES as ReadonlySet<string>).has(
+    status
+  );
+});
 
 let progressListener: ((event: unknown) => void) | null = null;
 

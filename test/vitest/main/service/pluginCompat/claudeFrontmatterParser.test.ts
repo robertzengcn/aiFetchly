@@ -110,4 +110,28 @@ body`;
       parseFrontmatter("--- not a delimiter\nname: foo").frontmatter
     ).toEqual({});
   });
+
+  it("folds a YAML block scalar and does not promote nested map keys", () => {
+    const md = `---
+name: blog
+description: >
+  Full-lifecycle blog engine
+  with folded lines.
+user-invocable: true
+metadata:
+  author: AgriciDaniel
+  version: "2.3.1"
+---
+# Blog
+`;
+    const { frontmatter, body } = parseFrontmatter(md);
+    expect(frontmatter.name).toBe("blog");
+    expect(frontmatter.description).toBe(
+      "Full-lifecycle blog engine with folded lines."
+    );
+    expect(frontmatter["user-invocable"]).toBe(true);
+    expect(frontmatter.author).toBeUndefined();
+    expect(frontmatter.metadata).toBeUndefined();
+    expect(body.startsWith("# Blog")).toBe(true);
+  });
 });

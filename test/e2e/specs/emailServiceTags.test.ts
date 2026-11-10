@@ -17,6 +17,12 @@ e2eTest("create, assign, filter, rename and delete an email service tag", async 
       if (!result.status) throw new Error(result.msg);
       return result.data.id;
     });
+    // Chat-first boot settles with a late landing-route nav: wait for the
+    // workspace surface before retargeting the hash, otherwise the initial
+    // navigation can finalize over the spec's route several seconds later.
+    await expect(page.getByTestId("chat-center-surface")).toBeVisible({
+      timeout: 30_000,
+    });
     await page.evaluate(() => { window.location.hash = "/emailmarketing/emailservice/list"; });
     await page.getByTestId("email-service-manage-tags-btn").click();
     await page.getByTestId("tag-name").locator("input").fill("Marketing");

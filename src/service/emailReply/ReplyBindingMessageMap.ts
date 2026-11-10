@@ -22,8 +22,6 @@ const CODE_TO_SUFFIX: Record<SendBindingErrorCode, string> = {
   recipient_mismatch: "recipient_mismatch",
   smtp_username_mismatch: "smtp_username_mismatch",
   reply_to_mismatch: "reply_to_mismatch",
-  legacy_reply_identity_requires_review:
-    "legacy_reply_identity_requires_review",
 };
 
 export function replyBindingI18nKey(

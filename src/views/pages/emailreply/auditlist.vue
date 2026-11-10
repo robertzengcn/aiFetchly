@@ -1,9 +1,14 @@
 <template>
-  <div class="tables_page">
+  <AppPageShell
+    page-id="reply-audit-list"
+    title-key="route.ai_auto_replies"
+    content-width="full"
+  >
     <AutoReplyAuditTable />
-  </div>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import AutoReplyAuditTable from "@/views/pages/emailreply/widgets/AutoReplyAuditTable.vue";
 </script>
 <style lang="scss">

@@ -17,6 +17,7 @@
   <a href="#what-is-aifetchly">What is aiFetchly?</a> &middot;
   <a href="#screenshots">Screenshots</a> &middot;
   <a href="#agent-capabilities">Agent Capabilities</a> &middot;
+  <a href="#managed-browser-automation">Managed Browser</a> &middot;
   <a href="#getting-started">Getting Started</a> &middot;
   <a href="#development">Development</a> &middot;
   <a href="#documentation">Documentation</a> &middot;
@@ -40,6 +41,7 @@ aiFetchly helps you turn business intent into executable workflows:
 - **Ask an AI agent to do work** — run research, analyze files, extract data, prepare messages, summarize documents, and operate tools from a chat interface.
 - **Use your business knowledge** — upload documents into a local knowledge library and generate answers or drafts grounded in your own files.
 - **Automate browser and data tasks** — get information from websites, collect structured data, process URLs, and export results.
+- **Let the agent drive a real browser** — start a visible Chrome window the AI can observe and control, watch every step, approve consequential actions, and take over yourself for logins or verification challenges. See [Managed Browser Automation](#managed-browser-automation).
 - **Delegate to specialist subagents** — run background agents with their own prompts, tool permissions, resource limits, and structured outputs.
 - **Extend the workspace** — install skills and plugins to add new tools, business workflows, and integrations.
 - **Stay in control** — keep data in a local SQLite database, review tool activity, gate permissions, and run on your own desktop.
@@ -49,6 +51,10 @@ aiFetchly helps you turn business intent into executable workflows:
 ### AI Agent Workspace
 
 ![aiFetchly AI agent workspace](docs/images/readme/hero-ai-chat.png)
+
+### Managed Browser (Browser Use)
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
 
 ### Knowledge Library
 
@@ -103,6 +109,7 @@ aiFetchly helps you turn business intent into executable workflows:
 
 | Capability | Description |
 |------------|-------------|
+| **LLM-Controlled Managed Browser** | Hand a real, visible Chrome window to the AI agent: it can open a site, read the page, click, type, navigate, extract data, and pause for human handoff. Works for public websites without any saved account and reuses saved Tool Account logins when you want them. |
 | **Web Research Automation** | Search across engines, collect business information, process URL lists, and recover from task errors in real time. |
 | **Structured Data Extraction** | Extract emails, phone numbers, addresses, social profiles, company details, directory records, and other structured business data. |
 | **Task Scheduling** | Schedule tasks with cron timing, chain dependent jobs, set up recurring workflows, and monitor execution history. |
@@ -141,6 +148,7 @@ aiFetchly helps you turn business intent into executable workflows:
 3. Install or enable skills/plugins for the workflows you want the agent to run.
 4. Configure a custom AI provider in System Settings -> AI Provider if you want AI Chat to use your own model instead of hosted aiFetchly AI.
 5. Configure proxies, social accounts, or SMTP credentials only if you plan to use website information collection, social, or email workflows.
+6. Install a supported Chrome/Chromium build and review **System Settings → Managed Browser** if you want the AI agent to drive a browser; public websites can be opened without any saved social account.
 
 ## Development
 
@@ -212,6 +220,8 @@ src/
 │   ├── email-ai-enrichment/       # Email enrichment worker helpers
 │   ├── embedding/                 # Local embedding worker implementation
 │   ├── google-maps/               # Google Maps worker implementation
+│   ├── managed-browser/           # LLM-controlled managed browser worker (Puppeteer + Chrome)
+│   ├── managed-browser-cache/     # Managed-browser cache sizing, eviction, deletion worker
 │   ├── yandex-maps/               # Yandex Maps worker implementation
 │   └── utils/                     # Worker-only automation/recovery utilities
 ├── config/                        # App configuration and platform configuration
@@ -283,7 +293,7 @@ Worker processes in `src/childprocess/` handle CPU-intensive tasks such as scrap
 | Language | TypeScript |
 | Build | Vite, Electron Forge |
 | Database | SQLite, TypeORM, better-sqlite3, sqlite-vec |
-| Automation | Puppeteer |
+| Automation | Puppeteer, headed Chrome/Chromium, LLM-controlled managed browser tools |
 | AI | Hosted aiFetchly AI, OpenAI-compatible custom providers, RAG with vector embeddings, tool execution, subagents |
 | Testing | Mocha, Vitest |
 
@@ -295,9 +305,144 @@ Supported presets include Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI, 
 
 The settings screen can refresh available models, test chat and streaming support, and probe tool-call capability. If tool support is not confirmed for a custom provider, AI Chat falls back to plain chat without tool calls. Plaintext API keys are stored separately from the provider JSON and are never returned to the renderer.
 
+## Managed Browser Automation (Browser Use) <a id="managed-browser-automation"></a>
+
+aiFetchly includes a built-in, autonomous browser use runtime that the AI agent can drive directly. The agent starts a normal, headed Chrome or Chromium window that you can see on your desktop, observes the page semantically, and executes the steps you requested while the application displays real-time session status, approvals, progress, and results.
+
+![aiFetchly Browser Use](docs/images/readme/browseruse.png)
+
+It is designed for authorized social-platform and web automation on sites and accounts you own or manage. It strictly enforces safety boundaries: it does not bypass MFA, login/security challenges, platform safety controls, or access restrictions.
+
+### Architectural Process Isolation
+
+The browser use runtime follows a strict three-tier process isolation model:
+
+```text
+Electron Renderer (Vue 3 UI)
+  Session cards, live status, approval dialogs, human handoff overlays
+  NO raw cookies, worker handles, CDP endpoints, or internal credentials
+             │
+             │ contextBridge + Zod-validated IPC
+             ▼
+Electron Main Process
+  ManagedBrowserSupervisor, ManagedBrowserLeaseService, ManagedBrowserAiToolService
+  Account leases, AES-256 cookie decryption/re-encryption, action risk policy, audit log
+             │
+             │ private utilityProcess IPC (disposable per session)
+             ▼
+src/childprocess/managed-browser/
+  ManagedBrowserRuntime, BrowserFingerprintPolicy, BrowserObservationService,
+  PageReferenceRegistry, BrowserActionExecutor, ChallengeDetector
+             │
+             │ Puppeteer 25.x
+             ▼
+Headed Chrome / Chromium
+  Temporary isolated profile + account-scoped resource cache
+```
+
+- **Main Process**: Supervises lifecycle, leases (one active browser per account), cookie security, approval policies, and audit trails. Volatile Puppeteer objects never touch the main process.
+- **Dedicated Utility Process (`src/childprocess/managed-browser/`)**: One disposable utility process per session controls Chrome via Puppeteer. Volatile browser handles, CDP sessions, and DOM nodes remain isolated within the worker.
+- **Renderer Process**: Completely isolated from cookies, network tokens, and CDP sockets.
+
+### Starting a Session
+
+There are three ways to launch a managed browser session:
+
+- **AI Chat** — ask for something that requires a browser ("open YouTube and find comments from the last week"), and the agent activates the browser tools automatically.
+- **Tool Account → Open managed browser** — reuse a saved account's authenticated login session and connect directly to its platform.
+- **Session card in the AI workspace** — inspect, control, take over, or stop an active browser session.
+
+**Public browsing needs no account.** Any website, including social networks and sites requiring sign-in, can be opened without a saved Tool Account. The session uses an ephemeral disposable profile and standard direct networking. If the site requires login, aiFetchly smoothly hands control to you in that same window instead of refusing to open or falling back to a plain HTTP fetch. When opened with a saved Tool Account, the stored encrypted cookie session is decrypted and applied before navigation.
+
+### AI Browser Tools
+
+| Tool | Purpose |
+|------|---------|
+| `browser_start_session` | Start a managed session for a URL or saved Tool Account |
+| `browser_get_status` | Read session state and the current sanitized URL |
+| `browser_observe` | Get a bounded semantic snapshot of the page and its interactive elements |
+| `browser_navigate` | Navigate to an approved `http(s)` URL |
+| `browser_run_actions` | Run a bounded structured action program (click, type, scroll, wait, extract, repeat) |
+| `browser_screenshot` | Capture the visible page as a thumbnail for the conversation |
+| `browser_request_handoff` | Pause automation and ask you to take control |
+| `browser_resume_after_handoff` | Resume automation after you confirm handoff completion |
+| `browser_evaluate_script` | Run reviewed JavaScript inside the page context, with approval |
+| `browser_clear_cache` | Clear the current account's managed cache after confirmation |
+| `browser_stop_session` | Stop Chrome, terminate the worker, and release the account lease |
+
+`browser_observe` produces compact semantic references such as `@e1 [button] "Search"` bound to a specific page revision number. If navigation or a DOM mutation changes the page, stale references are immediately invalidated to prevent unintended clicks.
+
+The `browser_run_actions` tool executes a structured Action Program DSL allowing multi-step sequences (click, fill/type, pressKey, scroll, wait, extract, hover, loops) in a single atomic tool call, registered with `ToolJobRegistry` for live progress reporting and instant cancellation. Complex DOM tasks beyond structured actions can be performed with `browser_evaluate_script`, which runs strictly inside the webpage's DOM context — never as Node.js, Electron, shell, or filesystem code.
+
+### Session States and Controls
+
+A running session reports its current state (`starting`, `checking browser`, `applying login session`, `verifying login`, `login required`, `ready`, `working`, `awaiting approval`, `verification challenge`, `you have control`, `stopping`, `stopped`, `failed`) alongside the account, platform, sanitized origin, proxy status, and elapsed duration.
+
+Interactive controls available on the session card:
+
+- **Pause AI** — prevent the agent from sending further browser actions;
+- **Take over** — directly interact (click/type) in the visible Chrome window yourself;
+- **I've finished logging in / Continue task** — verify authentication, capture the refreshed session, and return control to the agent;
+- **Extend time** — keep human handoff open longer;
+- **Stop browser** — abort active actions, safely persist the refreshed session, cleanly terminate Chrome and the worker, and release the account lease.
+
+### Approvals and Safety
+
+| Risk | Examples | Behavior |
+|------|----------|----------|
+| Observe | Read text, inspect elements, screenshot | Session-level approval |
+| Reversible interaction | Search, filter, paginate, draft text | Session-level approval |
+| Sensitive input | Email, phone, private message, upload | Preview and explicit approval |
+| Consequential | Send, publish, comment, follow, upload, delete, purchase, change settings | Just-in-time approval with account, target, and effect preview |
+| Privileged script | Any page-context JavaScript | Script, origin, purpose, timeout, and expected output shown before approval |
+| Authentication | Password, MFA, passkey, security CAPTCHA | Always handed to you |
+
+Safety guarantees:
+
+- Page content is treated as untrusted data; malicious prompts in web pages cannot bypass host safety policies.
+- The model cannot mark its own actions as safe, and user rejections are authoritative.
+- Native fingerprint policy matches the actual Chrome binary version and platform, eliminating contradictory evasions that trigger anti-bot flags.
+- Stored cookies are encrypted via `safeStorage` (AES-256-GCM) and domain-filtered; they never cross into the renderer, LLM prompts, tool outputs, or logs.
+- Refreshed login sessions are captured and re-encrypted after successful handoff or task completion, ensuring durable authentication across sessions.
+
+### Settings and Cache
+
+**System Settings → Managed Browser** provides user-level controls:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| **Use built-in managed browser** | On | Allows new AI-controlled browser sessions |
+| **Use managed browser cache** | On | Reuses account-isolated static resources between sessions |
+| **Maximum managed-browser cache** | 500 MB | Bounds disk use (100–2048 MB) |
+| **Clear cache when aiFetchly closes** | Off | Removes managed-browser resource caches at shutdown |
+
+The panel displays approximate cache size, the last cleanup time, and actions to clear a selected account cache or all caches. Clearing the cache never deletes encrypted cookies, saved logins, account records, or downloads.
+
+### Implementation References
+
+- `src/service/ManagedBrowserSupervisor.ts`, `ManagedBrowserLeaseService.ts`, `ManagedBrowserAiToolService.ts` — main-process supervisor, lease management, tool dispatch, risk classification, approvals, and cache coordination.
+- `src/modules/ManagedBrowserModule.ts`, `ManagedBrowserSettingsModule.ts`, `ManagedBrowserCacheModule.ts` — business logic, account cookie orchestration, and settings persistence.
+- `src/childprocess/managed-browser/` — isolated worker process per session: Puppeteer runtime, navigation and fingerprint policy, observation service, action program execution, challenge detection, and cookie application.
+- `src/childprocess/managed-browser-cache/` — off-thread cache sizing, eviction, and deletion worker.
+- `src/views/components/aiChatV2/ManagedBrowserSessionCard.vue`, `ManagedBrowserHandoffDialog.vue`, and `src/views/components/settings/ManagedBrowserSettingsPanel.vue` — frontend session cards, approval modals, and settings UI.
+
+For complete requirements, architecture, and technical contracts, see:
+- Product Requirements: [`docs/prd/puppeteer-managed-social-browser-prd.md`](docs/prd/puppeteer-managed-social-browser-prd.md)
+- Technical Design: [`docs/prd/puppeteer-managed-social-browser-technical-design.md`](docs/prd/puppeteer-managed-social-browser-technical-design.md)
+
 ## Documentation
 
 Full documentation is available at [docs.aifetchly.com](https://docs.aifetchly.com).
+
+LLM-controlled managed browser / browser use (visible Chrome sessions, browser tools, action programs, approvals, handoff, fingerprint policy, cache): [Product Requirements](docs/prd/puppeteer-managed-social-browser-prd.md) and [Technical Design](docs/prd/puppeteer-managed-social-browser-technical-design.md).
+
+Browser decision acceleration proposal (hosted Jev/Laya, custom providers, bounded browser tasks): [product requirements](docs/prd/browser-decision-acceleration-prd.md) and [technical design](docs/prd/browser-decision-acceleration-technical-design.md).
+
+AI email forwarding, Trash, and organization proposal: [product requirements](docs/prd/ai-email-forward-trash-organization-prd.md) and [technical design](docs/prd/ai-email-forward-trash-organization-technical-design.md).
+
+Workspace chat generator streaming proposal: [product requirements](docs/prd/ai-chat-workspace-generator-streaming-prd.md) and [technical design](docs/prd/ai-chat-workspace-generator-streaming-technical-design.md).
+
+AI chat automatic titles and manual renaming proposal: [product requirements](docs/prd/ai-chat-automatic-titles-prd.md) and [technical design](docs/prd/ai-chat-automatic-titles-technical-design.md).
 
 The official application website is [aifetchly.com](https://www.aifetchly.com).
 

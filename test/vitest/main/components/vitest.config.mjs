@@ -34,6 +34,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "../../../../src"),
+      // happy-dom cannot resolve Node builtins; services in the mounted
+      // component graph (Logger via AIChat* services) import fs/os/path.
+      // Alias them to inert stubs — component tests never rely on real
+      // filesystem/logging side effects. See ./_nodeBuiltins/fs.ts.
+      fs: path.resolve(__dirname, "_nodeBuiltins/fs.ts"),
+      os: path.resolve(__dirname, "_nodeBuiltins/os.ts"),
     },
   },
   test: {

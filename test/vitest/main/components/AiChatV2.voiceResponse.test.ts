@@ -4,6 +4,9 @@ import { createI18n } from "vue-i18n";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 import AiChatVoiceSettingsPanel from "@/views/components/settings/AiChatVoiceSettingsPanel.vue";
 import { streamChatV2Message } from "@/views/api/aiChatV2";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
+
+installQueueSendBridge();
 import {
   downloadVoiceModel,
   getVoiceSettings,
@@ -32,6 +35,18 @@ type StreamChunkHandler = StreamChatArgs[1];
 type StreamCompleteHandler = StreamChatArgs[2];
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  awaitChatV2Turn: vi.fn(() => ({
+    promise: Promise.resolve(),
+    detach: vi.fn(),
+  })),
+  createChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  steerChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  cancelChatV2PendingMessage: vi.fn().mockResolvedValue(null),
+  resumeChatV2PendingQueue: vi.fn().mockResolvedValue(true),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
+  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 0 }),
   subscribeAutoCompacted: vi.fn(),
@@ -94,6 +109,18 @@ vi.mock("@/views/api/localAiRuntime", () => ({
     expiresAt: "2099-01-01T00:00:00Z",
   }),
   installLocalAiRuntime: vi.fn().mockResolvedValue(undefined),
+  // AiChatV2.loadVoiceSettings calls getLocalAiRuntimeStatus(voice-sherpa) in
+  // its onMounted Promise.all; leaving it unmocked makes that Promise.all
+  // throw (undefined is not a function) and fall into the catch, which nulls
+  // voiceSettings and breaks every spoken-response assertion. Return a ready
+  // runtime so isLocalAiRuntimeUsable(state) is true and the voice path is
+  // not spuriously blocked.
+  getLocalAiRuntimeStatus: vi.fn().mockResolvedValue({
+    runtimeId: "voice-sherpa",
+    state: "ready",
+    platform: process.platform,
+    arch: process.arch,
+  }),
   onLocalAiRuntimeProgress: vi.fn().mockReturnValue(() => undefined),
 }));
 
@@ -212,6 +239,12 @@ function mountChat() {
         WorkspaceRequiredCard: true,
         WorkspaceBadge: true,
         WorkspaceMemoryPanel: true,
+        AiChatVoiceTtsModelInstallDialog: {
+          props: ["modelValue", "installing", "error"],
+          emits: ["update:modelValue", "confirm", "open-settings"],
+          template:
+            '<div data-testid="tts-install-dialog" :data-open="String(modelValue)" :data-error="String(error)"><button data-testid="tts-install-confirm" @click="$emit(\'confirm\')"/><button data-testid="tts-install-cancel" @click="$emit(\'update:modelValue\', false)"/></div>',
+        },
         VAlert: true,
         VBtn: {
           emits: ["click"],
@@ -243,6 +276,7 @@ function mountChat() {
 describe("AiChatV2 spoken responses", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
     vi.mocked(getVoiceSettings).mockResolvedValue({ ...defaultVoiceSettings });
     vi.mocked(getVoiceStatus).mockResolvedValue({
       sttState: "ready",
@@ -370,7 +404,7 @@ describe("AiChatV2 spoken responses", () => {
     );
   });
 
-  it("does not enable spoken responses when the TTS model is missing; offers to install the speech model", async () => {
+  it("does not enable spoken responses when the TTS model is missing; opens the speech-model install popup", async () => {
     vi.mocked(getVoiceSettings).mockResolvedValue({
       ...defaultVoiceSettings,
       ttsMode: "disabled",
@@ -390,15 +424,124 @@ describe("AiChatV2 spoken responses", () => {
     // Must NOT persist an enablement that would silently fail every reply.
     expect(setVoiceSettings).not.toHaveBeenCalled();
 
-    // Guidance is surfaced with an install affordance in the chat surface.
-    const installBtn = wrapper.find('[data-testid="install-tts-model"]');
-    expect(installBtn.exists()).toBe(true);
-    await installBtn.trigger("click");
+    // Guidance is a popup dialog over the chat, not an inline notice bar.
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+    expect(wrapper.find('[data-testid="install-tts-model"]').exists()).toBe(
+      false
+    );
+  });
+
+  it("installing the speech model from the popup auto-enables spoken responses", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    // Call order: mount loadSettings, toggle gate check, post-install
+    // loadSettings. First two missing_model, third ready. A call counter
+    // avoids mockResolvedValueOnce ordering bugs.
+    let statusCalls = 0;
+    vi.mocked(getVoiceStatus).mockImplementation(async () => {
+      statusCalls += 1;
+      return statusCalls < 3
+        ? { sttState: "ready", ttsState: "missing_model" }
+        : { sttState: "ready", ttsState: "ready" };
+    });
+    vi.mocked(downloadVoiceModel).mockResolvedValue(undefined);
+    vi.mocked(setVoiceSettings).mockImplementation(async (s) => s);
+    const wrapper = mountChat();
     await flushPromises();
 
-    await vi.waitFor(() =>
-      expect(downloadVoiceModel).toHaveBeenCalledWith("sherpa-onnx:tts:auto")
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="tts-install-confirm"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(downloadVoiceModel).toHaveBeenCalledWith("sherpa-onnx:tts:auto");
+    expect(setVoiceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ ttsMode: "all_assistant_messages" })
     );
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("false");
+  });
+
+  it("keeps the popup open with the localized error when the speech-model download fails", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    vi.mocked(downloadVoiceModel).mockRejectedValue(new Error("network"));
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="tts-install-confirm"]')
+      .trigger("click");
+    await flushPromises();
+
+    expect(setVoiceSettings).not.toHaveBeenCalled();
+    // The popup stays open and renders the localized failure message.
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+    expect(
+      wrapper
+        .find('[data-testid="tts-install-dialog"]')
+        .attributes("data-error")
+    ).toContain("failed");
+  });
+
+  it("closing the install popup lets the user reopen it from the toggle", async () => {
+    vi.mocked(getVoiceSettings).mockResolvedValue({
+      ...defaultVoiceSettings,
+      ttsMode: "disabled",
+    });
+    vi.mocked(getVoiceStatus).mockResolvedValue({
+      sttState: "ready",
+      ttsState: "missing_model",
+    });
+    const wrapper = mountChat();
+    await flushPromises();
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
+
+    await wrapper
+      .find('[data-testid="tts-install-cancel"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("false");
+
+    await wrapper
+      .find('[data-testid="spoken-response-toggle"]')
+      .trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="tts-install-dialog"]').attributes("data-open")
+    ).toBe("true");
   });
 
   it("does not enable spoken responses when the TTS runtime is unavailable; opens the runtime installer", async () => {
@@ -453,6 +596,7 @@ function mountVoiceSettingsPanel() {
 describe("AiChatVoiceSettingsPanel spoken response mode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
     vi.mocked(getVoiceSettings).mockResolvedValue({
       ...defaultVoiceSettings,
       ttsMode: "disabled",

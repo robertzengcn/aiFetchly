@@ -7,6 +7,7 @@
  */
 
 import { AiChatApi } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import type {
   RagSearchCandidate,
   KnowledgeSearchResultItem,
@@ -80,7 +81,7 @@ export class RagRerankService {
       for (const item of response.results) {
         const candidate = candidates[item.index];
         if (!candidate) {
-          console.warn(
+          log.warn(
             `Rerank returned invalid candidate index: ${item.index}`
           );
           continue;
@@ -97,7 +98,7 @@ export class RagRerankService {
       const rerankMs = Date.now() - startTime;
       const message =
         error instanceof Error ? error.message : "Unknown rerank error";
-      console.warn(`Rerank failed (${message}), falling back to hybrid ranking`);
+      log.warn(`Rerank failed (${message}), falling back to hybrid ranking`);
 
       return {
         ranked: candidates.slice(0, topN),

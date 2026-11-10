@@ -9,6 +9,7 @@ import {
   RAGDocumentModule,
 } from "@/modules/RAGDocumentModule";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
+import { log } from "@/modules/Logger";
 import { RagConfigApi, ChunkingConfig, DEFAULT_CHUNKING_CONFIG } from "@/api/ragConfigApi";
 import { RAGChunkModule } from "@/modules/RAGChunkModule";
 
@@ -222,9 +223,9 @@ export class RagSearchController {
       try {
         const deletedChunksCount =
           await this.ragChunkModule.deleteDocumentChunks(id);
-        console.log(`Deleted ${deletedChunksCount} chunks for document ${id}`);
+        log.info(`Deleted ${deletedChunksCount} chunks for document ${id}`);
       } catch (error) {
-        console.error(`Failed to delete chunks for document ${id}:`, error);
+        log.error(`Failed to delete chunks for document ${id}:`, error);
         // Don't return false - document was already deleted successfully
         // Chunks deletion failure is logged but doesn't affect the overall success
       }
@@ -342,7 +343,7 @@ export class RagSearchController {
     try {
       // Step 1: Get chunking configuration (local default)
       const chunkingOptions: ChunkingConfig = DEFAULT_CHUNKING_CONFIG;
-      console.log("Using local chunking configuration:", chunkingOptions);
+      log.info("Using local chunking configuration:", chunkingOptions);
 
       const document = await this.getDocument(documentId);
       if (!document) {
@@ -423,7 +424,7 @@ export class RagSearchController {
         },
       };
     } catch (error) {
-      console.error("Error in chunk and embed document:", error);
+      log.error("Error in chunk and embed document:", error);
       return {
         documentId,
         chunksCreated: 0,
@@ -457,9 +458,9 @@ export class RagSearchController {
         dimension
       );
 
-      console.log(`Embedding model updated to: ${modelName}:${dimension}`);
+      log.info(`Embedding model updated to: ${modelName}:${dimension}`);
     } catch (error) {
-      console.error("Error updating embedding model:", error);
+      log.error("Error updating embedding model:", error);
       throw new Error(
         `Failed to update embedding model: ${
           error instanceof Error ? error.message : "Unknown error"

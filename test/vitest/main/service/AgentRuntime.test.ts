@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentDefinitionView } from "@/entityTypes/agentTypes";
+import type {
+  AgentDefinitionView,
+  AgentInitialImageArtifact,
+} from "@/entityTypes/agentTypes";
 
 const definition: AgentDefinitionView = {
   id: "agent-test",
@@ -45,10 +48,12 @@ vi.mock("@/modules/AgentDefinitionModule", () => ({
 vi.mock("@/modules/AgentTaskModule", () => ({
   AgentTaskModule: class {
     toolCallsCount = 0;
-    async createTask() {
+    async createTask(input: Record<string, unknown>) {
+      createdTaskInputs.push(input);
       return undefined;
     }
-    async appendMessage() {
+    async appendMessage(record: { role: string; content: unknown }) {
+      appendedMessages.push(record);
       return undefined;
     }
     async setStatus() {
@@ -94,6 +99,24 @@ vi.mock("@/config/skillsRegistry", () => ({
         type: "function",
         name: "glob_files",
         description: "Find files",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "file_write",
+        description: "Write file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "file_edit",
+        description: "Edit file",
+        parameters: { type: "object" },
+      },
+      {
+        type: "function",
+        name: "shell_execute",
+        description: "Run shell",
         parameters: { type: "object" },
       },
       {
@@ -173,8 +196,13 @@ let lastLoopInput:
       openAITools: Array<{ function: { name: string } }>;
       abortController: AbortController;
       transientRetryConfig?: { maxAttempts?: number; baseDelayMs?: number };
+      messages?: Array<{ role: string; content: unknown }>;
     }
   | undefined;
+// Captured persistence payloads so tests can assert artifacts never reach
+// the database (createTask packet + transcript messages).
+let createdTaskInputs: Array<Record<string, unknown>> = [];
+let appendedMessages: Array<{ role: string; content: unknown }> = [];
 // Results the mocked loop received from the runtime's policy-checked
 // executeTool wrapper — lets tests assert how AgentRuntime rewrote them.
 let executeToolResults: Array<Record<string, unknown>> = [];
@@ -211,9 +239,31 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
 
 import { AgentRuntime } from "@/service/AgentRuntime";
 
+const basePacket = {
+  lead: { companyName: "Acme" },
+  userGoal: "research acme",
+  constraints: {},
+  priorFindings: [],
+  requiredOutputSchema: { type: "object" },
+};
+
+function makeArtifact(
+  overrides: Partial<AgentInitialImageArtifact> = {}
+): AgentInitialImageArtifact {
+  return {
+    sourceId: "msg-1:0",
+    fileName: "generated.png",
+    mimeType: "image/png",
+    dataUrl: "data:image/png;base64,aGVsbG8tZ2VuZXJhdGVkLWltYWdl",
+    detail: "high",
+    ...overrides,
+  };
+}
+
 function makeRequest(
   overrides: Partial<{
     outputSchemaOverride: Record<string, unknown>;
+    initialImageArtifacts: readonly AgentInitialImageArtifact[];
   }> = {}
 ) {
   return {
@@ -221,11 +271,7 @@ function makeRequest(
     prompt: "research",
     executionMode: "foreground" as const,
     taskPacket: {
-      lead: { companyName: "Acme" },
-      userGoal: "research acme",
-      constraints: {},
-      priorFindings: [],
-      requiredOutputSchema: { type: "object" },
+      ...basePacket,
     },
     ...overrides,
   };
@@ -246,6 +292,8 @@ describe("AgentRuntime", () => {
     };
     lastLoopInput = undefined;
     executeToolResults = [];
+    createdTaskInputs = [];
+    appendedMessages = [];
   });
 
   it("fails when an agent exceeds its max tool calls", async () => {
@@ -269,6 +317,44 @@ describe("AgentRuntime", () => {
 
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain("exceeded max tool calls");
+  });
+
+  it("does not cap tool calls when the agent omits maxToolCalls", async () => {
+    mockDefinition = {
+      ...definition,
+      maxToolCalls: null,
+      maxContinueCalls: null,
+    };
+    mockLoopCallCount = 9;
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest(), {
+      executeTool: vi.fn(async (name, _args, ctx) => ({
+        tool_call_id: ctx.toolCallId,
+        tool_name: name,
+        success: true,
+        result: { summary: "ok" },
+        execution_time_ms: 1,
+      })),
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.errorMessage).toBeUndefined();
+  });
+
+  it("uses an Error message from a failed loop instead of Error: prefix", async () => {
+    mockLoopResult = {
+      type: "failed",
+      fullContent: "",
+      error: new Error(
+        "Agent claude-blog:blog-researcher exceeded max tool calls (8)."
+      ),
+    };
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(makeRequest());
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toBe(
+      "Agent claude-blog:blog-researcher exceeded max tool calls (8)."
+    );
   });
 
   // Regression: subagents run under a tight maxRuntimeMs deadline, so they
@@ -411,10 +497,11 @@ describe("AgentRuntime", () => {
     expect(lastLoopInput?.request.model).toBeUndefined();
     const toolNames =
       lastLoopInput?.openAITools.map((tool) => tool.function.name) ?? [];
-    expect(toolNames).toContain("file_read");
-    expect(toolNames).toContain("grep_files");
-    expect(toolNames).toContain("glob_files");
-    expect(toolNames).not.toContain("Bash");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).toContain("Grep");
+    expect(toolNames).toContain("Glob");
+    expect(toolNames).toContain("Bash");
+    expect(toolNames).not.toContain("file_read");
     expect(toolNames).not.toContain("haiku");
   });
 
@@ -540,5 +627,100 @@ describe("AgentRuntime", () => {
     expect(result.status).toBe("completed");
     expect(result.parseWarning).toMatch(/missing required fields/);
     expect(result.output?.wrongField).toBe("x");
+  });
+
+  // Task 16: trusted runtime-only initialImageArtifacts. The artifact must
+  // reach the loop as an image_url content part on the first user message,
+  // with part[0] carrying the exact packet JSON text.
+  it("delivers initialImageArtifacts as image parts on the first user message", async () => {
+    const artifact = makeArtifact();
+    const runtime = new AgentRuntime();
+    await runtime.runSync(
+      makeRequest({ initialImageArtifacts: [artifact] })
+    );
+
+    const userMessage = lastLoopInput?.messages?.find(
+      (m) => m.role === "user"
+    );
+    expect(Array.isArray(userMessage?.content)).toBe(true);
+    const parts = userMessage?.content as Array<Record<string, unknown>>;
+    expect(parts).toHaveLength(2);
+
+    // Part 0: the packet JSON (same serialization as the string-only path).
+    expect(parts[0]?.type).toBe("text");
+    const text = (parts[0] as { text: string }).text;
+    const expectedPacketJson = JSON.stringify(
+      { ...basePacket, requiredOutputSchema: basePacket.requiredOutputSchema },
+      null,
+      2
+    );
+    expect(text).toBe(expectedPacketJson);
+
+    // Part 1: the exact dataUrl + detail — byte-for-byte, never re-encoded.
+    expect(parts[1]).toEqual({
+      type: "image_url",
+      image_url: { url: artifact.dataUrl, detail: "high" },
+    });
+  });
+
+  it("never persists artifacts into created tasks or transcript messages", async () => {
+    const artifact = makeArtifact({
+      dataUrl: "data:image/png;base64,c2VjcmV0Ynl0ZXM=",
+      sourceId: "msg-9:3",
+    });
+    const runtime = new AgentRuntime();
+    await runtime.runSync(
+      makeRequest({ initialImageArtifacts: [artifact] })
+    );
+
+    // createTask receives only clean fields: no artifacts key, no bytes.
+    expect(createdTaskInputs).toHaveLength(1);
+    const persisted = JSON.stringify(createdTaskInputs);
+    expect(persisted).not.toContain("initialImageArtifacts");
+    expect(persisted).not.toContain("data:image");
+
+    // Transcript messages carry no base64/dataUrl either.
+    const messages = JSON.stringify(appendedMessages);
+    expect(messages).not.toContain(artifact.dataUrl);
+    expect(messages).not.toContain("data:image");
+  });
+
+  it("returns an AgentResult that carries no artifact bytes", async () => {
+    const artifact = makeArtifact({
+      dataUrl: "data:image/jpeg;base64,cmVzdWx0LWxlYWs=",
+    });
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(
+      makeRequest({ initialImageArtifacts: [artifact] })
+    );
+
+    expect(JSON.stringify(result)).not.toContain(artifact.dataUrl);
+    expect(JSON.stringify(result)).not.toContain("base64");
+  });
+
+  // Zero-artifact requests must behave exactly as before: plain string
+  // user message content and an identical transcript record.
+  it("keeps zero-artifact runs on the legacy string-content path", async () => {
+    const runtime = new AgentRuntime();
+    await runtime.runSync(makeRequest());
+
+    const userMessage = lastLoopInput?.messages?.find(
+      (m) => m.role === "user"
+    );
+    expect(typeof userMessage?.content).toBe("string");
+    if (typeof userMessage?.content !== "string") return;
+
+    const expected = JSON.stringify(
+      { ...basePacket, requiredOutputSchema: basePacket.requiredOutputSchema },
+      null,
+      2
+    );
+    expect(userMessage.content).toBe(expected);
+
+    const transcriptUsers = appendedMessages.filter(
+      (m) => m.role === "user"
+    );
+    expect(transcriptUsers).toHaveLength(1);
+    expect(transcriptUsers[0]?.content).toBe(userMessage.content);
   });
 });

@@ -151,7 +151,14 @@ describe("AIChatQueryLoop — preserved tool results are wired", () => {
       getSkillDefinition: () => undefined,
       toolResultModule: toolModule,
       toolResultStorage: storage,
-      saveToolResultReceipt: async (input) => {
+      saveToolResultReceipt: async (input: {
+        conversationId: string;
+        assistantMessageId: string;
+        toolCallId: string;
+        toolName: string;
+        content: string;
+        uiMetadata: Record<string, unknown>;
+      }) => {
         persisted.push(input.content);
       },
     } as never);
@@ -245,7 +252,14 @@ describe("AIChatQueryLoop — preserved tool results are wired", () => {
       getSkillDefinition: () => undefined,
       toolResultModule: toolModule,
       toolResultStorage: storage,
-      saveToolResultReceipt: async (input) => {
+      saveToolResultReceipt: async (input: {
+        conversationId: string;
+        assistantMessageId: string;
+        toolCallId: string;
+        toolName: string;
+        content: string;
+        uiMetadata: Record<string, unknown>;
+      }) => {
         persisted.push(input.content);
       },
     } as never);

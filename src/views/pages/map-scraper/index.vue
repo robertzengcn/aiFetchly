@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="map-scraper-form"
+    title-key="route.map_scraper"
+    content-width="form"
+  >
     <v-row class="mb-4">
       <v-col cols="12">
         <div class="d-flex align-center flex-wrap ga-3">
@@ -453,10 +457,11 @@
         </v-card>
       </v-window-item>
     </v-window>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import Papa from "papaparse";

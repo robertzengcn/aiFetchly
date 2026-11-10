@@ -58,7 +58,6 @@ const translations = computed(() => ({
   activityOverview: t('home.activity_overview'),
   searchResults: t('home.search_results'),
   emailsExtracted: t('home.emails_extracted'),
-  yellowPages: t('home.yellow_pages'),
   emailsSent: t('home.emails_sent'),
   retry: t('home.retry'),
   unableToLoadChart: t('home.unable_to_load_chart'),
@@ -104,10 +103,6 @@ const chartSeries = computed(() => {
     {
       name: translations.value.emailsExtracted,
       data: props.data.emailsExtracted
-    },
-    {
-      name: translations.value.yellowPages,
-      data: props.data.yellowPagesResults
     },
     {
       name: translations.value.emailsSent,

@@ -23,40 +23,40 @@ import type { EmailReplyApprovedByType } from "@/entityTypes/emailReplyReliabili
 @Index(["approvalTokenHash"], { unique: true })
 export class EmailReplyApprovalEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  draftId: number;
+  draftId!: number;
 
   @Column("integer")
-  revisionId: number;
+  revisionId!: number;
 
   @Column("varchar", { length: 20 })
-  approvedByType: EmailReplyApprovedByType;
+  approvedByType!: EmailReplyApprovedByType;
 
   /** Renderer-safe actor id (e.g. user id). Null for anonymous tool confirmation. */
   @Column("varchar", { length: 255, nullable: true })
-  approvedById: string | null;
+  approvedById!: string | null;
 
   /** Canonical envelope hash at approval time. Compared again at send time. */
   @Column("varchar", { length: 64 })
-  approvedHash: string;
+  approvedHash!: string;
 
   /** SHA-256 of the one-time approval token. Unique. */
   @Column("varchar", { length: 64 })
-  approvalTokenHash: string;
+  approvalTokenHash!: string;
 
   @Column("datetime")
-  approvedAt: Date;
+  approvedAt!: Date;
 
   /** Optional TTL expiry. Null means no automatic expiry (policy may still invalidate). */
   @Column("datetime", { nullable: true })
-  expiresAt: Date | null;
+  expiresAt!: Date | null;
 
   /** Set when consumed by a send attempt or invalidated by an edit. */
   @Column("datetime", { nullable: true })
-  invalidatedAt: Date | null;
+  invalidatedAt!: Date | null;
 
   @Column("text", { nullable: true })
-  invalidationReason: string | null;
+  invalidationReason!: string | null;
 }

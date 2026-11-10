@@ -4,6 +4,7 @@ import {
   EmailResultDisplay,
 } from "@/entityTypes/emailextraction-type";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
+import { log } from "@/modules/Logger";
 // import { utilityProcess, MessageChannelMain} from "electron";
 // import { Token } from "@/modules/token"
 // import * as path from 'path';
@@ -315,7 +316,7 @@ export class EmailextractionController {
     } else {
       throw new Error("task error file log not found");
     }
-    console.log(content);
+    log.info(content);
     return content;
   }
 

@@ -1,6 +1,6 @@
 /**
- * Renderer-side API for the Hooks management UI. Wraps ipcRenderer
- * calls exposed via the preload bridge.
+ * Renderer-side API for the Hooks management UI. Wraps preload-bridge
+ * calls exposed via window.api.
  */
 import type {
   HookDefinition,
@@ -60,12 +60,18 @@ export interface HookConfigRow {
   updatedAt: string;
 }
 
-interface Envelope<T> { status: boolean; data: T; msg: string; }
+interface Envelope<T> {
+  status: boolean;
+  data: T;
+  msg: string;
+}
 
 function api(): { invoke(channel: string, data?: unknown): Promise<unknown> } {
-  return (window as unknown as {
-    api: { invoke(channel: string, data?: unknown): Promise<unknown> };
-  }).api;
+  return (
+    window as unknown as {
+      api: { invoke(channel: string, data?: unknown): Promise<unknown> };
+    }
+  ).api;
 }
 
 async function invoke<T>(channel: string, data?: unknown): Promise<T> {
@@ -76,7 +82,9 @@ async function invoke<T>(channel: string, data?: unknown): Promise<T> {
   return env.data;
 }
 
-export async function listHooks(filter?: HookListFilter): Promise<HookDefinition[]> {
+export async function listHooks(
+  filter?: HookListFilter
+): Promise<HookDefinition[]> {
   return invoke<HookDefinition[]>("hooks:list", filter ?? {});
 }
 

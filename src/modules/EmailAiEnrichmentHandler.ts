@@ -6,6 +6,7 @@
  */
 
 import { AiChatApi } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import { WriteLog } from "@/modules/lib/function";
 
@@ -119,21 +120,21 @@ export class EmailAiEnrichmentHandler {
   }
 
   private logInfo(message: string): void {
-    console.log(`[Email AI Handler] ${message}`);
+    log.info(`[Email AI Handler] ${message}`);
     if (this.logFile) {
       WriteLog(this.logFile, `[INFO] ${message}`);
     }
   }
 
   private logWarn(message: string): void {
-    console.warn(`[Email AI Handler] ${message}`);
+    log.warn(`[Email AI Handler] ${message}`);
     if (this.logFile) {
       WriteLog(this.logFile, `[WARN] ${message}`);
     }
   }
 
   private logError(message: string): void {
-    console.error(`[Email AI Handler] ${message}`);
+    log.error(`[Email AI Handler] ${message}`);
     if (this.logFile) {
       WriteLog(this.logFile, `[ERROR] ${message}`);
     }

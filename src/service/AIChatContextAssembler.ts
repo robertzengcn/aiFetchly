@@ -1,9 +1,13 @@
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
 import { AIChatTokenEstimator } from "@/service/AIChatTokenEstimator";
 import { AIUserMemoryRetrievalService } from "@/service/AIUserMemoryRetrievalService";
 import { AIWorkspaceMemoryRetrievalService } from "@/service/AIWorkspaceMemoryRetrievalService";
+import { AIWorkspaceMemoryModule } from "@/modules/AIWorkspaceMemoryModule";
+import { PortableWorkspaceMemoryModule } from "@/modules/PortableWorkspaceMemoryModule";
+import { WorkspaceMemoryContextResolver } from "@/service/WorkspaceMemoryContextResolver";
 import { buildPlanModeSystemPrompt } from "@/service/PlanModePromptBuilder";
 import { buildApprovedPlanContextBlock } from "@/service/ApprovedPlanContextBlock";
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
@@ -17,6 +21,9 @@ import { WorkspaceResolver } from "@/service/WorkspaceResolver";
 import { AIFetchlyContextLoader } from "@/service/aifetchlyConfig/AIFetchlyContextLoader";
 import { buildAvailableAgentsBlock } from "@/service/aifetchlyConfig/availableAgentsBlock";
 import { buildBuiltInToolCapabilitiesSection } from "@/service/BuiltInToolCapabilitiesPromptSection";
+import { PromptSkillInvocationModule } from "@/modules/PromptSkillInvocationModule";
+import { buildPromptSkillCatalogBlock } from "@/service/PromptSkillCatalogPresenter";
+import { augmentContentWithGeneratedImages } from "@/service/AIChatGeneratedImageContextService";
 import {
   buildToolHistoryIndexBlock,
   collectConversationToolPairs,
@@ -36,6 +43,7 @@ import type {
 import { MessageType } from "@/entityTypes/commonType";
 import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 import type { AIChatPlanStateView } from "@/entityTypes/aiChatPlanTypes";
+import { log } from "@/modules/Logger";
 import type {
   LegacyProjection,
   LegacyProjectionLookup,
@@ -196,7 +204,15 @@ export class AIChatContextAssembler {
   private readonly v2 = new AIChatV2Module();
   private readonly estimator = new AIChatTokenEstimator();
   private readonly durableMemory = new AIUserMemoryRetrievalService();
-  private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService();
+  // Portable exclusion enabled in production wiring (design §19.4): the
+  // optional module makes retrieval fail-closed for rejected/conflicted/
+  // missing/pending-review portable records.
+  private readonly workspaceMemory = new AIWorkspaceMemoryRetrievalService(
+    new AIWorkspaceMemoryModule(),
+    new WorkspaceMemoryContextResolver(),
+    new AIChatTokenEstimator(),
+    new PortableWorkspaceMemoryModule()
+  );
   private readonly systemSettings = new SystemSettingModule();
   private readonly aifetchlyContext = new AIFetchlyContextLoader();
   /** Opt-in compaction reader (new §12 path); absent → legacy behavior. */
@@ -418,7 +434,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: customDirective });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read custom context directive:",
         err
       );
@@ -438,10 +454,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      console.error(
-        "[ai-chat-context] failed to resolve active workspace:",
-        err
-      );
+      log.error("[ai-chat-context] failed to resolve active workspace:", err);
     }
 
     // Environment & system context. Informs the model of the OS, app
@@ -451,10 +464,7 @@ export class AIChatContextAssembler {
       const envBlock = await this.buildEnvironmentContext();
       messages.push({ role: "system", content: envBlock });
     } catch (err) {
-      console.error(
-        "[ai-chat-context] failed to build environment context:",
-        err
-      );
+      log.error("[ai-chat-context] failed to build environment context:", err);
     }
 
     // AiFetchly global AGENTS.md injection. Reads from the in-memory cache
@@ -471,7 +481,7 @@ export class AIChatContextAssembler {
         });
       }
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] aifetchly instructions injection failed:",
         err
       );
@@ -487,10 +497,7 @@ export class AIChatContextAssembler {
         messages.push({ role: "system", content: agentsBlock });
       }
     } catch (err) {
-      console.error(
-        "[ai-chat-context] available agents injection failed:",
-        err
-      );
+      log.error("[ai-chat-context] available agents injection failed:", err);
     }
 
     // Built-in tool capabilities guidance (HTML-artifacts design §15,
@@ -507,12 +514,56 @@ export class AIChatContextAssembler {
         content: buildBuiltInToolCapabilitiesSection(),
       });
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] built-in tool capabilities injection failed:",
         err
       );
     }
 
+    // Application-owned skill installation routing policy (design §8.5,
+    // FR-26): injected exactly once per turn as system context, after core
+    // capability guidance and BEFORE any repository-authored or invoked-skill
+    // content. Only while the installer feature flag is enabled; repository
+    // content can never replace or weaken this section.
+    try {
+      const { isSkillInstallerEnabled } = await import(
+        "@/modules/SkillInstallationModule"
+      );
+      if (isSkillInstallerEnabled()) {
+        const { buildSkillInstallationRoutingSection } = await import(
+          "@/service/SkillInstallationRoutingPromptSection"
+        );
+        messages.push({
+          role: "system",
+          content: buildSkillInstallationRoutingSection(),
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] skill installation routing policy injection failed:",
+        err
+      );
+    }
+
+    // Available prompt skills catalog (design §10.3, NFR-09): metadata-only
+    // discovery so the model knows what use_skill can invoke. Instruction
+    // bodies are NEVER injected here — they load lazily after invocation.
+    try {
+      const workspaceResolved = await new WorkspaceResolver().resolve(
+        input.conversationId
+      );
+      const catalogBlock = buildPromptSkillCatalogBlock(
+        workspaceResolved ? { workspaceId: workspaceResolved.workspaceId } : {}
+      );
+      if (catalogBlock.length > 0) {
+        messages.push({ role: "system", content: catalogBlock });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] prompt skill catalog injection failed:",
+        err
+      );
+    }
     // Approved-plan execution context. `buildPlanModeSystemPrompt` (the only
     // other path that inlines planMarkdown into the system prompt) is gated on
     // `mode === "plan"`, but after a user approves the plan the execution round
@@ -555,7 +606,7 @@ export class AIChatContextAssembler {
       );
       workspaceInjectionEnabled = wv !== "false";
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read workspace memory injection toggle:",
         err
       );
@@ -574,10 +625,7 @@ export class AIChatContextAssembler {
         workspaceContextBlock = workspaceMem.contextBlock;
         workspaceMemoryCount = workspaceMem.memories.length;
       } catch (err) {
-        console.error(
-          "[ai-chat-context] workspace memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] workspace memory retrieval failed:", err);
       }
     }
     if (workspaceContextBlock.length > 0) {
@@ -590,7 +638,7 @@ export class AIChatContextAssembler {
       );
       injectionEnabled = v !== "false";
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-context] failed to read memory injection toggle:",
         err
       );
@@ -609,10 +657,7 @@ export class AIChatContextAssembler {
         durableContextBlock = durable.contextBlock;
         durableMemoryCount = durable.memories.length;
       } catch (err) {
-        console.error(
-          "[ai-chat-context] durable memory retrieval failed:",
-          err
-        );
+        log.error("[ai-chat-context] durable memory retrieval failed:", err);
       }
     }
     if (durableContextBlock.length > 0) {
@@ -659,6 +704,45 @@ export class AIChatContextAssembler {
       });
     }
 
+    // Invoked prompt-skill reattachment (design §10.10/§17.2): full
+    // compaction must not summarize away active skill contracts. Reattach
+    // the STORED verified snapshots in deterministic invocation order AFTER
+    // the compact summary and BEFORE recent messages, so recent explicit
+    // user instructions can still refine the task. Recovery never mutates
+    // the stored block — a linked source that changed or vanished cannot
+    // rewrite past context.
+    try {
+      const invocationModule = new PromptSkillInvocationModule();
+      // FR-23 reconciliation: only invocations whose skill is still
+      // installed, enabled, and hash-identical reattach; invalid ones are
+      // deactivated with a bounded structured diagnostic (never silently
+      // restored, never silently dropped).
+      const { reattach, diagnostics } =
+        await invocationModule.reconcileForRecovery(input.conversationId);
+      for (const invocation of reattach) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-reattached]\n` +
+            `The following skill was invoked earlier in this conversation and ` +
+            `remains applicable:\n${invocation.normalizedInstructions}`,
+        });
+      }
+      for (const diagnostic of diagnostics) {
+        messages.push({
+          role: "user",
+          content:
+            `[application:invoked-prompt-skill-diagnostic code="${diagnostic.code}" runtime_id="${diagnostic.runtimeId}"]\n` +
+            `${diagnostic.message}`,
+        });
+      }
+    } catch (err) {
+      log.error(
+        "[ai-chat-context] invoked prompt-skill reattachment failed:",
+        err
+      );
+    }
+
     // Active composite boundary wins for tool evidence too; a resolved legacy
     // composite applies only without a generation (same preference as the
     // history exclusion above). Unresolved legacy = advisory only, no trim.
@@ -674,8 +758,25 @@ export class AIChatContextAssembler {
       messages.push({ role: "system", content: toolIndex });
     }
 
+    // Dev-side generated-image augmentation (context parity with rendering):
+    // apply to the text rows before interleaving so replay pairs interleave
+    // around augmented content.
+    // The spread drops TypeORM instance methods; interleaveReplayWithText only
+    // reads the data fields, so cast the plain augmented rows back.
+    const augmentedRecent = trimmedRecent.map(
+      (r) =>
+        ({
+          ...r,
+          content: augmentContentWithGeneratedImages(
+            r.content,
+            r.role,
+            r.metadata,
+            r.messageId
+          ),
+        }) as unknown as AIChatMessageEntity
+    );
     const historyMessages = interleaveReplayWithText({
-      textRows: trimmedRecent,
+      textRows: augmentedRecent,
       replayPairs: selectReplayPairs(toolPairs),
       roleOf,
     });
@@ -766,8 +867,13 @@ export class AIChatContextAssembler {
         );
       }
     }
+    const fallbackRows = await this.loadRecentRowFallback(input);
+    // T14 substitution applies to ANY loaded rows, not only the turn-backed
+    // path: the recent-row fallback also gets bounded projections and counts
+    // its specialized-result misses (audit 2026-10-20 G01).
+    const substituted = await this.substituteProjections(fallbackRows);
     return {
-      rows: await this.loadRecentRowFallback(input),
+      rows: substituted,
       turnBacked: false,
       receipts: [],
     };
@@ -784,10 +890,21 @@ export class AIChatContextAssembler {
     input: AIChatContextAssembleInput
   ): Promise<AIChatMessageEntity[]> {
     const window = input.recentMessageWindow ?? DEFAULT_RECENT_MESSAGE_WINDOW;
-    return this.v2.getRecentMessages(
-      input.conversationId,
-      window * 4 + 64
-    );
+    // Bounded window first (§15). Some histories/tests only expose the full
+    // conversation read: when the bounded read yields nothing but the full
+    // read has rows, use those (bounded windowing still applies upstream).
+    const bounded =
+      (await this.v2.getRecentMessages(
+        input.conversationId,
+        window * 4 + 64
+      )) ?? [];
+    if (bounded.length > 0) return bounded;
+    try {
+      const full = await this.v2.getConversationMessages(input.conversationId);
+      return Array.isArray(full) ? full : bounded;
+    } catch {
+      return bounded;
+    }
   }
 
   /**
@@ -818,13 +935,32 @@ export class AIChatContextAssembler {
       });
     } catch {
       // A lookup failure must never break context assembly — fall back to raw.
+      // G03 §18.1: bounded fallback counter (reason only, never row content).
+      aiChatQueueCounters.incrementLabeled(
+        "ai_chat_workspace_projection_fallback_total",
+        "lookup_error"
+      );
       return rows;
     }
-    if (byKey.size === 0) return rows;
+    if (byKey.size === 0) {
+      // Audit G01: an empty lookup (no projections exist at all) still
+      // counts the specialized-result per-row fallbacks by tool label.
+      for (const row of rows) {
+        this.countProjectionFallbackForTool(row);
+      }
+      return rows;
+    }
     let touched = false;
     const out: AIChatMessageEntity[] = rows.map((row) => {
       const proj = byKey.get(row.messageId);
-      if (!proj) return row;
+      if (!proj) {
+        // Audit 2026-10-20 G01 / design §18.1: a specialized tool result
+        // without a projection falls back to raw content — label the fallback
+        // by tool name (stable tool identifier straight from execution
+        // metadata, bounded to a safe label charset; unknown stays anonymous).
+        this.countProjectionFallbackForTool(row);
+        return row;
+      }
       touched = true;
       // Immutable copy with the bounded content swapped in. `Object.assign`
       // onto a fresh instance sharing the original's prototype preserves the
@@ -841,6 +977,47 @@ export class AIChatContextAssembler {
       return copy;
     });
     return touched ? out : rows;
+  }
+
+  /**
+   * Bounded tool-name label for a projection fallback (audit G01 / §18.1).
+   * Counts only tool-result rows; the label is a stable, sanitized tool
+   * identifier extracted from execution metadata (never tool arguments,
+   * file names, or result content).
+   */
+  private countProjectionFallbackForTool(row: AIChatMessageEntity): void {
+    if (row.messageType !== MessageType.TOOL_RESULT) {
+      // R8 P2-13 (PRD §20): an ordinary user/assistant row without a
+      // projection is expected, not a fallback — counting it here poisoned
+      // the soak metric. Return without incrementing.
+      return;
+    }
+    let toolLabel = "tool_unknown";
+    if (row.metadata) {
+      try {
+        const parsedUnknown: unknown = JSON.parse(row.metadata);
+        if (
+          parsedUnknown &&
+          typeof parsedUnknown === "object" &&
+          "toolName" in parsedUnknown &&
+          typeof (parsedUnknown as { toolName?: unknown }).toolName === "string"
+        ) {
+          const raw = (parsedUnknown as { toolName: string }).toolName;
+          // Bounded label charset/length — tool names are stable machine
+          // identifiers; anything unexpected collapses to a safe prefix.
+          toolLabel = raw
+            .replace(/[^a-zA-Z0-9_.:-]/g, "_")
+            .slice(0, 80);
+          if (toolLabel.length === 0) toolLabel = "tool_unknown";
+        }
+      } catch {
+        // Corrupt metadata — anonymous fallback label, never content.
+      }
+    }
+    aiChatQueueCounters.incrementLabeled(
+      "ai_chat_workspace_projection_fallback_total",
+      `tool:${toolLabel}`
+    );
   }
 
   /**

@@ -7,6 +7,13 @@ import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
 // closed (drawer hidden) when the renderer helper is missing, e.g. a preload
 // that forgot the new export.
 vi.mock("@/views/api/aiChatV2", () => ({
+  cancelCompaction: vi.fn().mockResolvedValue(false),
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),

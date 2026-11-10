@@ -1,17 +1,25 @@
 import { parseFrontmatter } from "@/service/pluginCompat/claudeFrontmatterParser";
+import {
+  classifyClaudeAgentTool,
+  normalizeClaudeAgentToolName,
+  parseClaudeToolField,
+} from "@/service/pluginCompat/claudeAgentTools";
 import type {
   AgentDefinitionView,
   AgentDefinitionHealth,
 } from "@/entityTypes/agentTypes";
 import type { PluginError } from "@/entityTypes/pluginTypes";
 
+export { normalizeClaudeAgentToolName } from "@/service/pluginCompat/claudeAgentTools";
+
 /**
  * Pure translator: one plugin agent Markdown file → AgentDefinitionView.
  * Mirrors ClaudeSkillFormatAdapter: no I/O. Caller reads the file.
  *
- * Security (PRD §17, design §10.8): privilege-bearing frontmatter fields are
- * ignored and surfaced as recoverable `agent-unsupported-field` warnings;
- * they never reach the runtime.
+ * Claude Code tool names (`Read`, `Write`, `Edit`, `Bash`, …) stay on the
+ * allowlist under those names. The runtime translates calls onto AiFetchly
+ * tools. Privilege-bearing frontmatter (`permissionMode`, `hooks`,
+ * `mcpServers`) is ignored and recorded as a recoverable warning.
  */
 
 export interface ClaudeAgentAdaptOptions {
@@ -19,6 +27,12 @@ export interface ClaudeAgentAdaptOptions {
   readonly sourcePath: string;
   /** Directory segments between the declared agent root and this file's dir. */
   readonly namespaceSegments: readonly string[];
+  /**
+   * Claude-format plugins follow Claude Code's agent tool rules: an omitted
+   * `tools` field means the default coding tool set. Native manifests keep
+   * an empty allowlist when `tools` is omitted.
+   */
+  readonly claudeCompatible?: boolean;
 }
 
 export interface ClaudeAgentAdaptSuccess {
@@ -44,29 +58,11 @@ const FORBIDDEN_FIELDS: ReadonlyArray<{ key: string; label: string }> = [
   { key: "hooks", label: "hooks" },
   { key: "mcpServers", label: "mcpServers" },
   { key: "alwaysAllow", label: "alwaysAllow" },
-  { key: "disallowedTools", label: "disallowedTools" },
   { key: "mcp", label: "mcp" },
   { key: "servers", label: "servers" },
 ];
 
 const CLAUDE_MODEL_ALIASES = new Set(["haiku", "sonnet", "opus"]);
-
-const CLAUDE_TOOL_ALIASES: Readonly<Record<string, string | null>> = {
-  Read: "file_read",
-  Grep: "grep_files",
-  Glob: "glob_files",
-  Bash: null,
-  Edit: null,
-  MultiEdit: null,
-  Write: null,
-};
-
-export function normalizeClaudeAgentToolName(name: string): string | null {
-  if (Object.prototype.hasOwnProperty.call(CLAUDE_TOOL_ALIASES, name)) {
-    return CLAUDE_TOOL_ALIASES[name] ?? null;
-  }
-  return name;
-}
 
 export function isClaudeModelAlias(model: string): boolean {
   return CLAUDE_MODEL_ALIASES.has(model.toLowerCase());
@@ -109,6 +105,7 @@ export class ClaudeAgentFormatAdapter {
     options: ClaudeAgentAdaptOptions
   ): ClaudeAgentAdaptResult {
     const { pluginName, sourcePath, namespaceSegments } = options;
+    const claudeCompatible = options.claudeCompatible === true;
     const { frontmatter, body } = parseFrontmatter(markdown);
     const warnings: PluginError[] = [];
 
@@ -160,18 +157,28 @@ export class ClaudeAgentFormatAdapter {
     // Optional fields
     const manifest: Record<string, unknown> = {};
     const tools = normalizeToolNames(
-      toStringArray(frontmatter.tools),
+      parseClaudeToolField(frontmatter.tools, claudeCompatible).tools,
       name,
       sourcePath,
       warnings
     );
     const skills = normalizeToolNames(
-      toStringArray(frontmatter.skills),
+      parseClaudeToolField(frontmatter.skills, false).tools,
       name,
       sourcePath,
       warnings
     );
-    const allowedTools = Array.from(new Set([...tools, ...skills]));
+    const denied = new Set(
+      parseClaudeToolField(frontmatter.disallowedTools, false).tools.map(
+        (tool) => normalizeClaudeAgentToolName(tool) ?? tool
+      )
+    );
+    if (frontmatter.disallowedTools !== undefined) {
+      manifest.disallowedTools = frontmatter.disallowedTools;
+    }
+    const allowedTools = Array.from(
+      new Set([...tools, ...skills].filter((tool) => !denied.has(tool)))
+    );
     const defaultModel = normalizeModel(
       frontmatter.model,
       name,
@@ -180,9 +187,20 @@ export class ClaudeAgentFormatAdapter {
       warnings
     );
     const mode = toMode(frontmatter.mode);
-    const maxToolCalls = toPositiveInt(frontmatter.maxToolCalls, 8);
+    // Claude Code applies maxTurns only when the file sets it, and it has
+    // no tool-call counter. Omitted fields stay uncapped (null). An invalid
+    // value is ignored the same way, with a recoverable warning.
+    const maxToolCalls = optionalPositiveInt(frontmatter.maxToolCalls);
+    if (frontmatter.maxToolCalls !== undefined && maxToolCalls === null) {
+      warnings.push(
+        invalidLimitWarning(name, sourcePath, "maxToolCalls")
+      );
+    }
     const maxRuntimeMs = toPositiveInt(frontmatter.maxRuntimeMs, 300000);
-    const maxContinueCalls = toPositiveInt(frontmatter.maxTurns, 8);
+    const maxContinueCalls = optionalPositiveInt(frontmatter.maxTurns);
+    if (frontmatter.maxTurns !== undefined && maxContinueCalls === null) {
+      warnings.push(invalidLimitWarning(name, sourcePath, "maxTurns"));
+    }
     const outputSchema = toOutputSchema(frontmatter.outputSchema);
 
     // Forbidden fields → warnings only; raw value stashed in manifest for diagnostics.
@@ -230,13 +248,6 @@ export class ClaudeAgentFormatAdapter {
   }
 }
 
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (v): v is string => typeof v === "string" && v.length > 0
-  );
-}
-
 function normalizeToolNames(
   rawTools: readonly string[],
   componentName: string,
@@ -245,23 +256,24 @@ function normalizeToolNames(
 ): string[] {
   const out: string[] = [];
   for (const raw of rawTools) {
-    const mapped = normalizeClaudeAgentToolName(raw);
-    if (mapped !== raw) {
-      if (mapped) {
-        out.push(mapped);
-      } else {
-        warnings.push({
-          code: "agent-unsupported-field",
-          componentType: "agent",
-          componentName,
-          path: sourcePath,
-          message: `Claude agent tool "${raw}" is not exposed to AiFetchly v1 plugin agents and was ignored.`,
-          recoverable: true,
-        });
-      }
+    const classified = classifyClaudeAgentTool(raw);
+    if (classified.kind === "alias") {
+      out.push(classified.alias.claudeName);
       continue;
     }
-    out.push(mapped);
+    if (classified.kind === "omit") continue;
+    if (classified.kind === "unsupported") {
+      warnings.push({
+        code: "agent-unsupported-field",
+        componentType: "agent",
+        componentName,
+        path: sourcePath,
+        message: `Claude agent tool "${raw}" has no AiFetchly equivalent and was ignored.`,
+        recoverable: true,
+      });
+      continue;
+    }
+    out.push(classified.name);
   }
   return out;
 }
@@ -304,10 +316,30 @@ function toMode(value: unknown): AgentDefinitionView["mode"] {
 }
 
 function toPositiveInt(value: unknown, fallback: number): number {
+  return optionalPositiveInt(value) ?? fallback;
+}
+
+/** Positive integer, or null when the field is omitted or not a positive integer. */
+function optionalPositiveInt(value: unknown): number | null {
   if (typeof value === "number" && Number.isInteger(value) && value > 0) {
     return value;
   }
-  return fallback;
+  return null;
+}
+
+function invalidLimitWarning(
+  componentName: string,
+  sourcePath: string,
+  field: "maxToolCalls" | "maxTurns"
+): PluginError {
+  return {
+    code: "agent-frontmatter-invalid",
+    componentType: "agent",
+    componentName,
+    path: sourcePath,
+    message: `Agent field "${field}" must be a positive integer and was ignored.`,
+    recoverable: true,
+  };
 }
 
 function toOutputSchema(value: unknown): Record<string, unknown> {

@@ -45,23 +45,22 @@ describe("AgentPromptBuilder", () => {
 
   it("builds a user message containing the task packet as JSON", () => {
     const builder = new AgentPromptBuilder();
-    const { userMessage } = builder.build({
+    const { userMessageText } = builder.build({
       definition: DEF,
       packet: PACKET,
     });
-    expect(userMessage.role).toBe("user");
-    const parsed = JSON.parse(userMessage.content);
+    const parsed = JSON.parse(userMessageText);
     expect(parsed.lead.companyName).toBe("Acme");
     expect(parsed.userGoal).toBe("prepare outreach");
   });
 
   it("injects the required output schema into the user message", () => {
     const builder = new AgentPromptBuilder();
-    const { userMessage } = builder.build({
+    const { userMessageText } = builder.build({
       definition: DEF,
       packet: PACKET,
     });
-    expect(userMessage.content).toContain("requiredOutputSchema");
+    expect(userMessageText).toContain("requiredOutputSchema");
   });
 
   it("does not include parent chat history", () => {

@@ -5,6 +5,7 @@ import {
   countImageDataUrlChars,
   isImageHandoffMessage,
   stripConsumedImageHandoffs,
+  stripConsumedUserImages,
 } from "@/service/AIChatImageHandoff";
 import type { OpenAIChatMessage } from "@/api/aiChatApi";
 import type { ImageModelArtifact } from "@/entityTypes/aiImageAttachmentToolTypes";
@@ -231,5 +232,95 @@ describe("stripConsumedImageHandoffs", () => {
     ];
     expect(stripConsumedImageHandoffs(messages)).toBe(0);
     expect(countImageContentParts(messages)).toBe(1);
+  });
+});
+
+describe("stripConsumedUserImages", () => {
+  it("strips user image_url parts after an assistant response", () => {
+    const messages: OpenAIChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "analyze this image" },
+          imageUrl("data:image/jpeg;base64,BIGDATA"),
+        ],
+      },
+      { role: "assistant", content: "I see a house." },
+      { role: "user", content: "tell me more" },
+    ];
+    const removed = stripConsumedUserImages(messages);
+    expect(removed).toBe(1);
+    // Text part is kept, image part is gone.
+    const userMsg = messages[0];
+    const content = userMsg.content as unknown[];
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect(countImageContentParts(messages)).toBe(0);
+  });
+
+  it("does NOT strip when no later assistant message exists", () => {
+    const messages: OpenAIChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "analyze this" },
+          imageUrl("data:image/jpeg;base64,BIGDATA"),
+        ],
+      },
+    ];
+    expect(stripConsumedUserImages(messages)).toBe(0);
+    expect(countImageContentParts(messages)).toBe(1);
+  });
+
+  it("does NOT strip handoff messages (those are handled by stripConsumedImageHandoffs)", () => {
+    const messages: OpenAIChatMessage[] = [
+      buildImageArtifactHandoffMessage({
+        artifacts: [artifact()],
+        originalUserRequest: "edit this",
+        toolCallId: "call-1",
+      }),
+      { role: "assistant", content: "done" },
+    ];
+    expect(stripConsumedUserImages(messages)).toBe(0);
+  });
+
+  it("does NOT strip string-content user messages", () => {
+    const messages: OpenAIChatMessage[] = [
+      { role: "user", content: "just text" },
+      { role: "assistant", content: "reply" },
+    ];
+    expect(stripConsumedUserImages(messages)).toBe(0);
+  });
+
+  it("creates a placeholder when user message has no text parts", () => {
+    const messages: OpenAIChatMessage[] = [
+      {
+        role: "user",
+        content: [imageUrl("data:image/png;base64,ONLYIMAGE")],
+      },
+      { role: "assistant", content: "response" },
+    ];
+    const removed = stripConsumedUserImages(messages);
+    expect(removed).toBe(1);
+    const content = messages[0].content as unknown[];
+    expect(content).toHaveLength(1);
+    expect((content[0] as { type: string }).type).toBe("text");
+    expect((content[0] as { text: string }).text).toContain("image(s)");
+  });
+
+  it("strips multiple images from a single user message", () => {
+    const messages: OpenAIChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "compare these" },
+          imageUrl("data:image/jpeg;base64,IMG1"),
+          imageUrl("data:image/png;base64,IMG2"),
+        ],
+      },
+      { role: "assistant", content: "they are different" },
+    ];
+    expect(stripConsumedUserImages(messages)).toBe(2);
+    expect(countImageContentParts(messages)).toBe(0);
   });
 });

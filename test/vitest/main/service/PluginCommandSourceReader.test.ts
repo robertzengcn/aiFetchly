@@ -337,3 +337,99 @@ describe("PluginCommandSourceReader — unsupported Claude command types", () =>
     ).toBe(true);
   });
 });
+
+describe("PluginCommandSourceReader — Claude user-invocable skills", () => {
+  const longDescription = `Full-lifecycle blog engine ${"padding ".repeat(80)}`.trim();
+  const longHint =
+    "[write|rewrite|analyze|brief|calendar|strategy|outline|seo-check|schema|repurpose|geo|image|audit] [topic-or-file]";
+
+  function blogSkillMarkdown(): string {
+    return `---
+name: blog
+description: >
+  ${longDescription}
+user-invocable: true
+argument-hint: "${longHint}"
+metadata:
+  author: AgriciDaniel
+  version: "2.3.1"
+---
+
+# Blog
+
+Read \${CLAUDE_SKILL_DIR}/references and \${CLAUDE_PLUGIN_ROOT}/skills.
+`;
+  }
+
+  it("registers /blog from skills/blog/SKILL.md the way Claude Code does", async () => {
+    const root = tmpPlugin("claude-blog");
+    writeFile(root, "skills/blog/SKILL.md", blogSkillMarkdown());
+    writeFile(
+      root,
+      "skills/blog-secret/SKILL.md",
+      `---
+name: blog-secret
+description: Hidden helper
+user-invocable: false
+---
+Do not show this.
+`
+    );
+    const { definitions, diagnostics } = await read(
+      root,
+      {
+        name: "claude-blog",
+        version: "2.3.1",
+        description: "blog suite",
+        format: "claude",
+      },
+      "claude-blog"
+    );
+
+    const blog = definitions.find((d) => d.name === "blog");
+    expect(blog).toBeDefined();
+    expect(blog?.id).toBe("plugin:claude-blog:command:blog");
+    expect(blog?.type).toBe("prompt");
+    expect(blog?.source).toBe("plugin");
+    expect(blog?.description.length).toBe(
+      AIFETCHLY_CONFIG_LIMITS.commandDescriptionLength
+    );
+    expect(blog?.description.startsWith("Full-lifecycle blog engine")).toBe(
+      true
+    );
+    expect(blog?.argumentHint?.length).toBe(
+      AIFETCHLY_CONFIG_LIMITS.commandArgumentHintLength
+    );
+    expect(blog?.argumentHint?.startsWith("[write|rewrite")).toBe(true);
+    const skillDir = path.join(root, "skills", "blog");
+    expect(blog?.body).toContain(skillDir);
+    expect(blog?.body).toContain(root);
+    expect(blog?.body).not.toContain("${CLAUDE_SKILL_DIR}");
+    expect(blog?.body).not.toContain("${CLAUDE_PLUGIN_ROOT}");
+    expect(definitions.some((d) => d.name === "blog-secret")).toBe(false);
+    expect(
+      diagnostics.some((d) => d.filePath.includes("blog-secret"))
+    ).toBe(false);
+  });
+
+  it("keeps an explicit commands/*.md file when a skill uses the same name", async () => {
+    const root = tmpPlugin("claude-blog");
+    writeFile(root, "commands/blog.md", PROMPT_REVIEW.replace("review", "blog").replace("Review", "Blog"));
+    writeFile(root, "skills/blog/SKILL.md", blogSkillMarkdown());
+    const { definitions } = await read(
+      root,
+      claudeManifest(true, "claude-blog"),
+      "claude-blog"
+    );
+    const blogs = definitions.filter((d) => d.name === "blog");
+    expect(blogs).toHaveLength(1);
+    expect(blogs[0].body).toContain("$ARGUMENTS");
+  });
+
+  it("does not turn native plugin skills into slash commands", async () => {
+    const root = tmpPlugin("native");
+    writeFile(root, "skills/blog/SKILL.md", blogSkillMarkdown());
+    const { definitions } = await read(root, nativeManifest("native"), "native");
+    expect(definitions.some((d) => d.name === "blog")).toBe(false);
+  });
+});

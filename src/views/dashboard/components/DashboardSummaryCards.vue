@@ -80,46 +80,6 @@
       </v-card>
     </v-col>
 
-    <!-- Yellow Pages Results Card -->
-    <v-col cols="12" sm="6" md="3">
-      <v-card
-        class="summary-card"
-        :class="{ 'card-hover': !loading }"
-        :elevation="hoverCard === 'yellowpages' ? 8 : 2"
-        @mouseenter="!loading && (hoverCard = 'yellowpages')"
-        @mouseleave="hoverCard = null"
-        @click="!loading && handleCardClick('yellowpages')"
-      >
-        <v-card-text>
-          <div v-if="loading">
-            <v-skeleton-loader type="article"></v-skeleton-loader>
-          </div>
-          <div v-else class="card-content">
-            <div class="d-flex align-center mb-2">
-              <v-icon color="warning" size="32" class="mr-2">mdi-book-open-page-variant</v-icon>
-              <div class="text-subtitle-2 text-medium-emphasis">{{ translations.yellowPages }}</div>
-            </div>
-            <div class="text-h4 font-weight-bold warning--text mb-2">
-              {{ formatNumber(data?.yellowPagesResults?.periodCount ?? 0) }}
-            </div>
-            <div class="d-flex align-center">
-              <v-icon
-                :color="getTrendColor(data?.yellowPagesResults?.trendDirection)"
-                size="20"
-                class="mr-1"
-              >
-                {{ getTrendIcon(data?.yellowPagesResults?.trendDirection) }}
-              </v-icon>
-              <span :class="`text-${getTrendColor(data?.yellowPagesResults?.trendDirection)}`" class="text-body-2">
-                {{ formatTrend(data?.yellowPagesResults?.trend) }}
-              </span>
-              <span class="text-medium-emphasis text-body-2 ml-1">{{ translations.vsPreviousPeriod }}</span>
-            </div>
-          </div>
-        </v-card-text>
-      </v-card>
-    </v-col>
-
     <!-- Emails Sent Card -->
     <v-col cols="12" sm="6" md="3">
       <v-card
@@ -177,7 +137,6 @@ const { t } = useI18n();
 const translations = computed(() => ({
   searchResults: t('home.search_results'),
   emailsExtracted: t('home.emails_extracted'),
-  yellowPages: t('home.yellow_pages'),
   emailsSent: t('home.emails_sent'),
   vsPreviousPeriod: t('home.vs_previous_period'),
   successRate: t('home.success_rate')

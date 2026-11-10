@@ -1,5 +1,11 @@
 import { ToolFunction } from "@/api/aiChatApi";
+import { log } from "@/modules/Logger";
 import { MCPToolService } from "@/service/MCPToolService";
+import {
+  CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+  CONTACT_VERIFICATION_TOOL_PARAMETERS,
+  EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
+} from "@/schemas/contactVerification";
 
 // Static tool functions
 const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
@@ -69,58 +75,6 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
         },
       },
       required: [],
-    },
-  },
-  {
-    type: "function",
-    name: "search_yellow_pages",
-    description:
-      "Search Yellow Pages business directory for companies, contact information, and business details by category, name, or location. Use get_available_yellow_pages_platforms first to see available platforms.",
-    parameters: {
-      type: "object",
-      properties: {
-        platform: {
-          type: "string",
-          description:
-            'Platform id (e.g., "yellowpages-com"). Call get_available_yellow_pages_platforms first and pass the returned id verbatim; display names like "YellowPages.com" also work.',
-        },
-        search_term: {
-          type: "string",
-          description: "Business name, category, or keyword to search for",
-        },
-        location: {
-          type: "string",
-          description: "City, state, or ZIP code to search in",
-        },
-        num_results: {
-          type: "number",
-          description: "Number of business results to return (default: 20)",
-          default: 20,
-        },
-        include_emails: {
-          type: "boolean",
-          description:
-            "Whether to attempt extracting email addresses from business pages (default: false)",
-          default: false,
-        },
-      },
-      required: ["platform", "search_term", "location"],
-    },
-  },
-  {
-    type: "function",
-    name: "get_available_yellow_pages_platforms",
-    description:
-      "A function that returns the live, up-to-date, authenticated list of Yellow Pages platforms integrated with the system's current APIs, including their latest API version and supported country codes.",
-    parameters: {
-      type: "object",
-      properties: {
-        country_code: {
-          type: "string",
-          description:
-            'Optional ISO 3166-1 alpha-2 country code to filter available platforms (e.g., "US", "DE", "FR").',
-        },
-      },
     },
   },
   {
@@ -276,7 +230,8 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
     name: "extract_contact_info",
     description:
       "Extract contact information (emails, phones, address, social links) from one or more website URLs. Uses AI-assisted discovery and regex fallback. Call this when the user wants to find contact details for given website URLs. " +
-      "IMPORTANT: To avoid timeouts, call this tool in SMALL BATCHES of about 5 URLs or fewer per call; for a larger URL list, make multiple sequential calls instead of one large call. If a batch times out, contacts already collected are returned with partial: true — retry the remaining URLs in a smaller batch.",
+      "IMPORTANT: To avoid timeouts, call this tool in SMALL BATCHES of about 5 URLs or fewer per call; for a larger URL list, make multiple sequential calls instead of one large call. If a batch times out, contacts already collected are returned with partial: true — retry the remaining URLs in a smaller batch. " +
+      EXTRACT_CONTACT_INFO_VERIFICATION_POSTCONDITION,
     parameters: {
       type: "object",
       properties: {
@@ -289,6 +244,12 @@ const STATIC_TOOL_FUNCTIONS: ToolFunction[] = [
       },
       required: ["urls"],
     },
+  },
+  {
+    type: "function",
+    name: "verify_contact_info",
+    description: CONTACT_VERIFICATION_TOOL_DESCRIPTION,
+    parameters: CONTACT_VERIFICATION_TOOL_PARAMETERS,
   },
 ];
 
@@ -304,7 +265,7 @@ export async function getAvailableToolFunctions(): Promise<ToolFunction[]> {
     const mcpTools = await mcpService.getEnabledMCPToolsAsFunctions();
     return [...staticTools, ...mcpTools];
   } catch (error) {
-    console.error("Failed to load MCP tools:", error);
+    log.error("Failed to load MCP tools:", error);
     // Return static tools if MCP tools fail to load
     return staticTools;
   }

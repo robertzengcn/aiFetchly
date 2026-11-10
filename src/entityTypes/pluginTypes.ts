@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
+import type { PluginCapabilities } from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Plugin Management System — shared type contracts.
@@ -47,6 +48,8 @@ export interface PluginManifest {
   readonly dependencies?: readonly PluginDependency[];
   readonly homepage?: string;
   readonly repository?: string;
+  /** Declared host capability surface (browser execution, file artifacts). */
+  readonly capabilities?: PluginCapabilities;
   readonly agents?: PluginAgentDeclaration;
   /** Unknown top-level fields are allowed but preserved under diagnostics only. */
   readonly [extra: string]: unknown;
@@ -113,6 +116,15 @@ export interface PluginMcpServerDeclaration {
   readonly description?: string;
   readonly authType?: "none" | "api_key" | "bearer_token" | "custom";
   readonly metadata?: Record<string, unknown>;
+  /**
+   * Host-managed JavaScript runtime (plugin PRD §19.5). When set, the host
+   * launches its own embedded Node runtime (`process.execPath` in Node mode)
+   * instead of a plugin-supplied OS command. Mutually exclusive with
+   * `command`/`args`.
+   */
+  readonly runtime?: "aifetchly-node";
+  /** Plugin-relative path to the built entry file (requires `runtime`). */
+  readonly entry?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +169,7 @@ export type PluginErrorCode =
   | "skill-import-failed"
   | "mcp-config-invalid"
   | "mcp-server-conflict"
+  | "mcp-discovery-failed"
   | "permission-denied"
   | "dependency-unsatisfied"
   | "install-io-failed"
@@ -174,6 +187,16 @@ export type PluginErrorCode =
   | "agent-name-conflict"
   | "agent-path-invalid"
   | "agent-unsupported-field"
+  // Git-free GitHub plugin installation (PRD §14 / design §11): stable,
+  // machine-readable acquisition + native-Git diagnostics.
+  | "git-not-installed"
+  | "github-repository-unavailable"
+  | "github-ref-not-found"
+  | "github-rate-limited"
+  | "source-timeout"
+  | "source-download-failed"
+  | "source-redirect-rejected"
+  | "source-cancelled"
   | "unknown";
 
 export interface PluginError {
@@ -184,6 +207,27 @@ export interface PluginError {
   readonly path?: string;
   readonly message: string;
   readonly recoverable: boolean;
+}
+
+/**
+ * Renderer-safe install-from-source result (design §12.1): expected domain
+ * failures ride the OUTER IPC success envelope as data — the union member
+ * describes the plugin-install outcome, not whether IPC worked. Unexpected
+ * exceptions remain outer status:false via registerValidatedHandler.
+ */
+export type PluginInstallFromSourceResult =
+  | {
+      readonly success: true;
+      readonly plugin: PluginSummary;
+    }
+  | {
+      readonly success: false;
+      readonly errors: readonly PluginError[];
+    };
+
+/** Renderer-visible install capability flags (design §12.4). */
+export interface PluginInstallCapabilities {
+  readonly githubArchiveInstallEnabled: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +256,12 @@ export interface PluginSummary {
   readonly sourceUri?: string;
   readonly sourceRef?: string;
   readonly installPath?: string;
+  /** Raw acquisition metadata (trusted fetcher keys only, e.g. GitHub
+   *  archive provenance: `resolvedCommitSha`, `acquisition`, host). Key
+   *  mapping PRD→design: PRD `resolvedRevision` == design `resolvedCommitSha`;
+   *  PRD `archiveType` == design `acquisition` ("github-archive" |
+   *  "github-release-asset"). Never contains credentials or signed URLs. */
+  readonly sourceMeta?: Record<string, unknown>;
 }
 
 export interface PluginSkillComponent {

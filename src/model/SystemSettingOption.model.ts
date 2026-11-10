@@ -2,6 +2,7 @@ import { BaseDb } from "@/model/Basedb";
 import { Repository } from "typeorm"
 import {SystemSettingOptionEntity} from "@/entity/SystemSettingOption.entity"
 import {SystemSettingEntity} from "@/entity/SystemSetting.entity"
+import { SUPPORTED_LANGUAGES } from "@/config/languages"
 
 export class SystemSettingOptionModel extends BaseDb {
 private repository: Repository<SystemSettingOptionEntity>
@@ -21,8 +22,13 @@ constructor(filepath: string) {
  * const options = await systemSettingOptionModel.findOptionBySettingId(settingEntity);
  */
 public async findOptionBySetting(settingEntity:SystemSettingEntity): Promise<SystemSettingOptionEntity[]> {
+    // Match by the relation's primary key. Passing the full entity instance
+    // into FindOptionsWhere does not match rows under TypeORM 0.3 (returns
+    // [] even when FK rows exist), which left the Language switch empty.
     return this.repository.find({
-        where: { systemSetting: settingEntity }
+        where: {
+            systemSetting: { id: settingEntity.id }
+        }
     })
 }
 
@@ -31,23 +37,22 @@ public async findOptionBySetting(settingEntity:SystemSettingEntity): Promise<Sys
  * @param settingEntity - The language preference setting entity
  */
 public async initLanguageOptions(settingEntity: SystemSettingEntity): Promise<void> {
-    const languageOptions = [
-        { value: 'en', label: 'English', description: 'English language' },
-        { value: 'zh', label: '中文', description: 'Chinese language' }
-    ];
-
-    for (const option of languageOptions) {
+    // Seeded from the shared language config so the switch offers exactly
+    // the languages the app ships (src/views/lang/*).
+    for (const option of SUPPORTED_LANGUAGES) {
+        // Match the FK by primary key (entity instances do not match in
+        // FindOptionsWhere under TypeORM 0.3).
         const existingOption = await this.repository.findOne({
             where: { 
-                systemSetting: settingEntity,
-                value: option.value
+                systemSetting: { id: settingEntity.id },
+                value: option.code
             }
         });
 
         if (!existingOption) {
             const optionEntity = new SystemSettingOptionEntity();
             optionEntity.systemSetting = settingEntity;
-            optionEntity.value = option.value;
+            optionEntity.value = option.code;
             optionEntity.label = option.label;
             optionEntity.description = option.description;
             await this.repository.save(optionEntity);

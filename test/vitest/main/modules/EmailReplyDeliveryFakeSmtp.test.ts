@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi, afterEach } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+import { SqliteDb } from "@/config/SqliteDb";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
 import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprovalService";
@@ -225,6 +229,30 @@ function buildDelivery(behavior: Behavior): EmailReplyDeliveryService {
 }
 
 describe("P0.6 — delivery state machine via fake SMTP", () => {
+  // Isolated temp DB so this file doesn't race the shared aifetchly-test
+  // singleton under vitest's thread pool (SQLITE_BUSY_SNAPSHOT during
+  // DataSource.synchronize). All inline module/service constructions in this
+  // file resolve SqliteDb.getInstance, which returns the authoritative
+  // singleton established here.
+  let dbpath: string;
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-delivery-fakesmtp-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+  });
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
   it("accepted -> sent (with provider message id)", async () => {
     const { draftId, token } = await seedValidApproval();
     const outcome = await buildDelivery("accept").sendApprovedReply({
@@ -282,7 +310,9 @@ describe("P0.6 — delivery state machine via fake SMTP", () => {
       delivery.sendApprovedReply({ draftId, approvalToken: token }),
     ]);
     const sent = [a, b].filter((o) => o.status === "sent").length;
-    const already = [a, b].filter((o) => o.status === "already_processed").length;
+    const already = [a, b].filter(
+      (o) => o.status === "already_processed"
+    ).length;
     expect(sent + already).toBe(2);
     expect(calls).toBeLessThanOrEqual(1);
   });
@@ -673,7 +703,12 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
     expect(draft?.status).toBe("approved");
   });
 
-  it("detection `unknown` (probe_timeout) -> no claim, no SMTP, code = detection-unknown", async () => {
+  it("detection `unknown` (probe_timeout) -> ASSISTED: one lifecycle audit, SMTP fires, draft -> sent", async () => {
+    // Spec 2026-10-29-email-send-inconclusive-detection-assisted-design.md:
+    // probe-execution unknowns (probe_failed/probe_timeout/probe_limit_exceeded/
+    // sent_folder_unavailable) proceed on the local-ledger negative + the
+    // human-confirmed approval. Nothing negative is persisted; the lifecycle
+    // audit row records the assisted decision.
     const { draftId, token, messageId } = await seedValidApproval();
     const unknown: ReplyDetectionResult = {
       state: "unknown",
@@ -681,6 +716,68 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
       source: "unavailable",
       matchedMessageId: null,
       reasonCode: "probe_timeout",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(unknown, "accept");
+
+    const outcome = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+
+    // The lifecycle audit row is written (stage pre_send, assisted: true).
+    // Mirror check: the auto-table gets NO mirrored row for this action.
+    const logs = await new EmailReplyAuditLogModule().list({
+      messageId,
+      page: 0,
+      size: 50,
+    });
+    const inconclusive = logs.records.filter(
+      (r) => (r as { action: string }).action === "detection_inconclusive_proceeded"
+    );
+    expect(inconclusive).toHaveLength(1);
+    const meta = JSON.parse(inconclusive[0].metadataJson ?? "{}") as {
+      assisted?: boolean;
+      code?: string;
+      stage?: string;
+    };
+    expect(meta.assisted).toBe(true);
+    expect(meta.code).toBe("probe_timeout");
+    expect(meta.stage).toBe("pre_send");
+    const draft = await new EmailReplyDraftModule().readAggregate(draftId);
+    expect(draft?.status).toBe("sent");
+  });
+
+  it("detection `unknown` (probe_failed — the reported deadlock code) -> assisted send succeeds", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    const { delivery, smtpCalls } = buildDeliveryWithDetection(
+      probeFailed,
+      "accept"
+    );
+    const outcome = await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    expect(outcome.status).toBe("sent");
+    expect(smtpCalls.count).toBe(1);
+  });
+
+  it("ambiguous_match still refuses with SendPolicyRejection (no assisted bypass)", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const unknown: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "ambiguous_match",
       checkedAt: new Date().toISOString(),
       fromCache: false,
       coverage: "partial",
@@ -694,22 +791,19 @@ describe("sendApprovedReply forced mailbox detection (T04 step 8, §9.2)", () =>
       if (error instanceof SendPolicyRejection) rejection = error;
     }
     expect(rejection).toBeInstanceOf(SendPolicyRejection);
-    // The typed unknown code flows through SendPolicyRejection so the B12 IPC
-    // envelope surfaces it machine-readably (§9.2).
-    expect(rejection?.code).toBe("probe_timeout");
-
+    expect(rejection?.code).toBe("ambiguous_match");
     expect(smtpCalls.count).toBe(0);
-    const refusals = await refusalAuditsFor(messageId);
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0].reason).toContain("[probe_timeout]");
-    const meta = JSON.parse(refusals[0].metadataJson ?? "{}") as {
-      stage?: string;
-      code?: string;
-      source?: string;
-    };
-    expect(meta.stage).toBe("pre_send");
-    expect(meta.code).toBe("probe_timeout");
-    expect(meta.source).toBe("reply_detection");
+    // Ambiguous mailbox evidence stays a standard reply_skipped refusal —
+    // it is NOT an assisted-proceed case.
+    const refusalMeta = JSON.parse(
+      (
+        await new EmailReplyAuditLogModule().list({ messageId, page: 0, size: 50 })
+      ).records.find(
+        (r) => (r as { action: string }).action === "reply_skipped"
+      )?.metadataJson ?? "{}"
+    ) as { code?: string; assisted?: boolean };
+    expect(refusalMeta.code).toBe("ambiguous_match");
+    expect(refusalMeta.assisted).toBeUndefined();
     const draft = await new EmailReplyDraftModule().readAggregate(draftId);
     expect(draft?.status).toBe("approved");
   });
@@ -2294,4 +2388,242 @@ describe("sendApprovedReply post-claim gate integrity (F01/F02)", () => {
     expect(refusals).toHaveLength(1);
     expect(refusals[0]?.reason).toContain("[reply_state_conflict]");
   }, 20_000);
+});
+
+/**
+ * Assisted-inconclusive coverage (final review I-2): negative-path
+ * protections and probe economy must hold IN assisted mode.
+ *  - a positive landing mid-flight refuses at the post-claim gate (zero SMTP);
+ *  - attempt ownership is retained (same-token replay → already_processed);
+ *  - the assisted flow probes exactly ONCE (no useless refresh dance).
+ */
+describe("assisted inconclusive coverage — negatives + probe economy", () => {
+  const auditModule = new EmailReplyAuditLogModule();
+
+  function assistedDetectionFactory(
+    result: ReplyDetectionResult
+  ): () => EmailReplyDetectionService {
+    return () => {
+      const svc = new EmailReplyDetectionService();
+      vi.spyOn(svc, "detect").mockImplementation(async (input) => {
+        if (result.state === "not_replied") {
+          // Mirror production persistNegative (D1b) so a decisive negative
+          // satisfies the claim fence the same way production does.
+          await new EmailReceivedMessageModule().updateReplyEvidence({
+            id: input.messageId,
+            replyNegativeCheckAt: new Date(),
+            replyNegativeContextHash: "test-context-hash",
+            isAnswered: 0,
+            answeredFlagCheckedAt: new Date(),
+          });
+        }
+        return result;
+      });
+      return svc;
+    };
+  }
+
+  it("a sticky positive arriving before the gate refuses the assisted send with ZERO SMTP", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    let smtpCallsCount = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          smtpCallsCount += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: "Hi",
+            info: `<prov-assisted-pos-${smtpCallsCount}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: assistedDetectionFactory(probeFailed),
+    });
+    // The manual reply lands WHILE the probe was inconclusive: the message
+    // row gains sticky positive evidence before the post-claim gate runs.
+    await new EmailReceivedMessageModule().updateReplyEvidence({
+      id: messageId,
+      replyDetectedAt: new Date(),
+      replyDetectionSource: "mailbox_flag",
+      isAnswered: 1,
+      answeredFlagCheckedAt: new Date(),
+    });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    expect(smtpCallsCount).toBe(0);
+    // The refusal route is the STANDARD reply_skipped path (assisted never
+    // bypasses positive evidence).
+    const refusals = await auditModule.list({ messageId, page: 0, size: 50 });
+    const refusalRows = refusals.records.filter(
+      (r) => (r as { action: string }).action === "reply_skipped"
+    );
+    expect(refusalRows.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("assisted send retains attempt ownership: same-token replay is already_processed (no double SMTP)", async () => {
+    const { draftId, token } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    let callCount = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          callCount += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: "Hi",
+            info: `<prov-assisted-replay-${callCount}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: assistedDetectionFactory(probeFailed),
+    });
+    const [a, b] = await Promise.all([
+      delivery.sendApprovedReply({ draftId, approvalToken: token }),
+      delivery.sendApprovedReply({ draftId, approvalToken: token }),
+    ]);
+    const sent = [a, b].filter((o) => o.status === "sent").length + [a, b].filter((o) => o.status === "already_processed").length;
+    expect(sent).toBe(2);
+    expect(callCount).toBeLessThanOrEqual(1);
+  });
+
+  it("the assisted flow probes exactly ONCE per send (no excluded refresh dance)", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    let detectCalls = 0;
+    const svc = new EmailReplyDetectionService();
+    vi.spyOn(svc, "detect").mockImplementation(async () => {
+      detectCalls += 1;
+      if (detectCalls > 1) {
+        // The assisted gate/fence must NEVER probe again — fail loudly if it
+        // does (the freshness dance would be running).
+        throw new Error("assisted flow must probe exactly once");
+      }
+      return {
+        state: "unknown",
+        replied: null,
+        source: "unavailable",
+        matchedMessageId: null,
+        reasonCode: "probe_failed",
+        checkedAt: new Date().toISOString(),
+        fromCache: false,
+        coverage: "partial",
+      };
+    });
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => ({
+          receiver: "prospect@example.com",
+          status: true,
+          title: "Re: Pricing",
+          content: "Hi",
+          info: `<prov-assisted-count-1@x>`,
+        }),
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: () => svc,
+    });
+    const outcome = await delivery.sendApprovedReply({
+      draftId,
+      approvalToken: token,
+    });
+    expect(outcome.status).toBe("sent");
+    expect(detectCalls).toBe(1);
+  });
+
+  it("a positive landing DURING the claimed pause refuses at the gate/fence — assisted mode never swallows refusals", async () => {
+    const { draftId, token, messageId } = await seedValidApproval();
+    const probeFailed: ReplyDetectionResult = {
+      state: "unknown",
+      replied: null,
+      source: "unavailable",
+      matchedMessageId: null,
+      reasonCode: "probe_failed",
+      checkedAt: new Date().toISOString(),
+      fromCache: false,
+      coverage: "partial",
+    };
+    let smtpCallsCount = 0;
+    const delivery = new EmailReplyDeliveryService({
+      senderFactory: (() => ({
+        sendReplyEmail: async (): Promise<EmailSendResult> => {
+          smtpCallsCount += 1;
+          return {
+            receiver: "prospect@example.com",
+            status: true,
+            title: "Re: Pricing",
+            content: "Hi",
+            info: `<prov-assisted-mid-${smtpCallsCount}@x>`,
+          };
+        },
+      })) as never,
+      serviceLoader: async () => FAKE_MAILBOX,
+      detectionServiceFactory: assistedDetectionFactory(probeFailed),
+    });
+    // The sticky positive lands BETWEEN the claim (assisted, clean ledger)
+    // and the post-claim gate — exactly the window the gate exists for. Seed
+    // it on the PROTOTYPE spy before constructing the delivery service (the
+    // BaseDb connection-guard copies prototype methods onto instances at
+    // construction, so a post-construction instance spy is bypassed), inside
+    // markSubmitted, which runs immediately before the gate.
+    const originalMarkSubmitted =
+      EmailReplySendAttemptModule.prototype.markSubmitted;
+    const prototypeSpy = vi
+      .spyOn(EmailReplySendAttemptModule.prototype, "markSubmitted")
+      .mockImplementation(async function (
+        this: EmailReplySendAttemptModule,
+        attemptId: number,
+        now: Date
+      ) {
+        await originalMarkSubmitted.call(this, attemptId, now);
+        await new EmailReceivedMessageModule().updateReplyEvidence({
+          id: messageId,
+          replyDetectedAt: new Date(),
+          replyDetectionSource: "mailbox_flag",
+          isAnswered: 1,
+          answeredFlagCheckedAt: new Date(),
+        });
+      });
+
+    let rejection: SendPolicyRejection | null = null;
+    try {
+      await delivery.sendApprovedReply({ draftId, approvalToken: token });
+    } catch (error) {
+      if (error instanceof SendPolicyRejection) rejection = error;
+    }
+    prototypeSpy.mockRestore();
+    expect(rejection).toBeInstanceOf(SendPolicyRejection);
+    expect(rejection?.code).toBe("already_replied");
+    expect(smtpCallsCount).toBe(0);
+  });
 });

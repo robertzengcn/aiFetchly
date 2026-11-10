@@ -144,7 +144,7 @@ let refreshInterval: ReturnType<typeof setInterval> | undefined;
 
 const startAutoRefresh = () => {
   refreshInterval = setInterval(function () {
-    loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+    loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
   }, 10000); // Refresh every 5 seconds
 }
 const stopAutoRefresh = () => {
@@ -158,7 +158,7 @@ function createTemplate() {
     name: 'Email_Marketing_Template_Create'
   });
 }
-function loadItems({ page = 1, itemsPerPage = 10, sortBy }) {
+function loadItems({ page = 1, itemsPerPage = 10, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
   options.page = page;
   loading.value = true
   options.page = page;
@@ -240,7 +240,7 @@ const confirmrmItem = async () => {
     if (resp.id > 0) {
       showDeleteModal.value = false;
       loading.value = false
-      loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
+      loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: [] });
     } else {
       alert.value = true;
       alertcolor.value = t("common.error");

@@ -42,6 +42,7 @@ const mockDeny = vi.hoisted(() =>
   })
 );
 const mockSubmit = vi.hoisted(() => vi.fn());
+const mockRunTurn = vi.hoisted(() => vi.fn());
 /** Drives the sink from the test; set by each test before the run starts. */
 const terminalEvent = vi.hoisted(() => ({
   value: null as
@@ -56,6 +57,7 @@ const mockStopActiveTurn = vi.hoisted(() => vi.fn());
 
 interface MockEngine {
   submitMessage: typeof mockSubmit;
+  runTurn: typeof mockRunTurn;
   resumeToolAfterPermission: typeof mockResume;
   denyToolPermission: typeof mockDeny;
   stopActiveTurn: typeof mockStopActiveTurn;
@@ -72,10 +74,22 @@ function createMockClass<T extends object>(
   return cls;
 }
 
+const testDbDir = vi.hoisted(() => () => {
+  // Pool-namespaced test DB (resolveTestDbPath pattern): a fixed
+  // /tmp/test-db made two workers' DataSource.synchronize collide
+  // on the same SQLite file ("database is locked") in shared runs.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const os = require("os") as typeof import("os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const path = require("path") as typeof import("path");
+  const poolId = process.env.VITEST_POOL_ID ?? "0";
+  return path.join(os.tmpdir(), "aifetchly-test", poolId, "scraper.db");
+});
+
 vi.mock("@/modules/token", () => ({
   Token: createMockClass(() => ({
     getValue: vi.fn((key: string) =>
-      key === "user_ai_enabled" ? aiEnabled.value : "/tmp/test-db"
+      key === "user_ai_enabled" ? aiEnabled.value : testDbDir()
     ),
   })),
 }));
@@ -127,6 +141,7 @@ vi.mock("@/service/AIChatQueryEngineFactory", () => ({
     createScheduled(): MockEngine {
       return {
         submitMessage: mockSubmit,
+        runTurn: mockRunTurn,
         resumeToolAfterPermission: mockResume,
         denyToolPermission: mockDeny,
         stopActiveTurn: mockStopActiveTurn,
@@ -263,6 +278,30 @@ beforeEach(() => {
     async (input: { eventSink: { emit: (e: unknown) => void } }) => {
       capturedSink = input.eventSink;
       driveSink(input.eventSink);
+    }
+  );
+  // TODO-11: the runner calls runTurn; mirror the sink-driving behavior and
+  // return a paused outcome when the fixture parked the turn (permission
+  // tests), completed otherwise.
+  mockRunTurn.mockImplementation(
+    async (input: {
+      eventSink: { emit: (e: unknown) => void };
+      request: { conversationId: string };
+    }) => {
+      capturedSink = input.eventSink;
+      driveSink(input.eventSink);
+      if (sinkOutcome.value === "pause") {
+        return {
+          type: "paused_for_permission",
+          conversationId: input.request.conversationId,
+          assistantMessageId: "",
+        };
+      }
+      return {
+        type: "completed",
+        conversationId: input.request.conversationId,
+        assistantMessageId: "",
+      };
     }
   );
   // Mirrors production: grant/deny launches a resumed `void loop.run` that

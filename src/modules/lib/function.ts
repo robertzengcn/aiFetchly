@@ -1,4 +1,5 @@
 import path from "path";
+import { log } from "@/modules/Logger";
 import { execSync, exec, execFile } from "child_process";
 import { app, BrowserWindow } from "electron";
 import { Notification } from "electron";
@@ -29,7 +30,7 @@ export type queryParams = {
   search: string;
 };
 //scroll down to the bottom of the page
-export async function autoScroll(page) {
+export async function autoScroll(page: Page) {
   await page.evaluate(async () => {
     await new Promise((resolve) => {
       let totalHeight = 0;
@@ -47,54 +48,12 @@ export async function autoScroll(page) {
     });
   });
 }
-export async function delay(time) {
+export async function delay(time: number) {
   return new Promise(function (resolve) {
     setTimeout(resolve, time);
   });
 }
-//get record date string for local db
-export function getRecorddatetime(): string {
-  const date = new Date();
-
-  return (
-    date.getFullYear().toString() +
-    "-" +
-    pad2(date.getMonth() + 1) +
-    "-" +
-    pad2(date.getDate()) +
-    " " +
-    pad2(date.getHours()) +
-    ":" +
-    pad2(date.getMinutes()) +
-    ":" +
-    pad2(date.getSeconds())
-  );
-}
-export function pad2(n: number): string {
-  if (n < 10) {
-    return "0" + n.toString();
-  } else {
-    return n.toString();
-  }
-}
-//return date string
-export function getdate(): string {
-  const date = new Date();
-
-  return (
-    date.getFullYear().toString() +
-    "-" +
-    pad2(date.getMonth() + 1) +
-    "-" +
-    pad2(date.getDate()) +
-    " " +
-    pad2(date.getHours()) +
-    ":" +
-    pad2(date.getMinutes()) +
-    ":" +
-    pad2(date.getSeconds())
-  );
-}
+export { getRecorddatetime, pad2, getdate } from "./datetime";
 
 export function getUserhome(): string | undefined {
   switch (process.platform) {
@@ -137,78 +96,7 @@ export const hash = Math.floor(Math.random() * 90000) + 10000;
 export function showNotification(title: string, body: string) {
   new Notification({ title: title, body: body }).show();
 }
-//get pip package list
-export function checkPipPackage(): string {
-  try {
-    return execSync("pip list", { encoding: "utf8" });
-  } catch (error) {
-    if (error instanceof Error) {
-      console.error(`Error executing command: ${error.message}`);
-    }
-    return "";
-  }
-}
-//install pip package, event driver
-export function installPipPackage(
-  packageName: string,
-  version: string,
-  errorcall?: (error: Error) => void,
-  stdoutCall?: (stdout: string) => void,
-  stderrCall?: (stderr: string) => void
-): void {
-  // Security: pass arguments as an array to execFile so packageName/version
-  // can never be interpreted as shell syntax (command injection).
-  execFile(
-    "pip",
-    ["install", `${packageName}==${version}`],
-    (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        // console.error(`exec error: ${error}`);
-        if (errorcall) {
-          errorcall(error);
-        }
-        // return;
-      }
-      if (stdoutCall) {
-        stdoutCall(stdout);
-      }
-      if (stderrCall) {
-        stderrCall(stderr);
-      }
-    }
-  );
-}
-//uninstall pip package
-export function uninstallPipPackage(
-  packageName: string,
-  errorcall?: (error: Error) => void,
-  stdoutCall?: (stdout: string) => void,
-  stderrCall?: (stderr: string) => void
-): void {
-  // Security: pass arguments as an array to execFile so packageName
-  // can never be interpreted as shell syntax (command injection).
-  execFile(
-    "pip",
-    ["uninstall", packageName, "-y"],
-    (error: Error | null, stdout: string, stderr: string) => {
-      if (error) {
-        console.error(`exec error: ${error}`);
-        if (errorcall) {
-          errorcall(error);
-        }
-        return;
-      }
-      console.log(`stdout: ${stdout}`);
-      console.error(`stderr: ${stderr}`);
-      if (stdoutCall) {
-        stdoutCall(stdout);
-      }
-      if (stderrCall) {
-        stderrCall(stderr);
-      }
-    }
-  );
-}
+export { checkPipPackage, installPipPackage, uninstallPipPackage } from "./pipUtils";
 //write data to yaml file
 // export function writeYamlFile(filepath: string, data: object) {
 
@@ -231,200 +119,8 @@ export function randomFileName(prefix: string, suffix: string): string {
   );
 }
 
-// This is where we'll put the code to get around the tests.
-export async function evadeChromeHeadlessDetection(page: Page) {
-  // Pass the Webdriver Test.
-  await page.evaluateOnNewDocument(() => {
-    // const newProto = navigator.__proto__;
-    const newProto = Object.getPrototypeOf(navigator);
-    delete newProto.webdriver;
-    // navigator.__proto__ = newProto;
-    Object.setPrototypeOf(navigator, newProto);
-  });
-
-  // Pass the Chrome Test.
-  await page.evaluateOnNewDocument(() => {
-    const mockObj = {
-      app: {
-        isInstalled: false,
-      },
-      webstore: {
-        onInstallStageChanged: {},
-        onDownloadProgress: {},
-      },
-      runtime: {
-        PlatformOs: {
-          MAC: "mac",
-          WIN: "win",
-          ANDROID: "android",
-          CROS: "cros",
-          LINUX: "linux",
-          OPENBSD: "openbsd",
-        },
-        PlatformArch: {
-          ARM: "arm",
-          X86_32: "x86-32",
-          X86_64: "x86-64",
-        },
-        PlatformNaclArch: {
-          ARM: "arm",
-          X86_32: "x86-32",
-          X86_64: "x86-64",
-        },
-        RequestUpdateCheckStatus: {
-          THROTTLED: "throttled",
-          NO_UPDATE: "no_update",
-          UPDATE_AVAILABLE: "update_available",
-        },
-        OnInstalledReason: {
-          INSTALL: "install",
-          UPDATE: "update",
-          CHROME_UPDATE: "chrome_update",
-          SHARED_MODULE_UPDATE: "shared_module_update",
-        },
-        OnRestartRequiredReason: {
-          APP_UPDATE: "app_update",
-          OS_UPDATE: "os_update",
-          PERIODIC: "periodic",
-        },
-      },
-    };
-    (window as any).chrome = mockObj;
-    (window.navigator as any).chrome = mockObj;
-  });
-
-  // Pass the Permissions Test.
-  await page.evaluateOnNewDocument(() => {
-    const originalQuery = window.navigator.permissions.query;
-    Object.getPrototypeOf(window.navigator.permissions).query = (parameters) =>
-      parameters.name === "notifications"
-        ? Promise.resolve({ state: Notification.permission })
-        : originalQuery(parameters);
-  });
-
-  // Pass the Plugins Length Test with realistic plugin data.
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "plugins", {
-      get: () => {
-        const plugins = [
-          {
-            0: {
-              type: "application/pdf",
-              suffixes: "pdf",
-              description: "Portable Document Format",
-            },
-            description: "Portable Document Format",
-            filename: "internal-pdf-viewer",
-            length: 1,
-            name: "Chrome PDF Plugin",
-          },
-          {
-            0: {
-              type: "application/x-google-chrome-pdf",
-              suffixes: "pdf",
-              description: "Portable Document Format",
-            },
-            description: "Portable Document Format",
-            filename: "internal-pdf-viewer",
-            length: 1,
-            name: "Chrome PDF Viewer",
-          },
-          {
-            0: {
-              type: "application/x-nacl",
-              suffixes: "",
-              description: "Native Client Executable",
-            },
-            1: {
-              type: "application/x-pnacl",
-              suffixes: "",
-              description: "Portable Native Client Executable",
-            },
-            description: "",
-            filename: "internal-nacl-plugin",
-            length: 2,
-            name: "Native Client",
-          },
-        ];
-        return Object.assign(plugins, { length: plugins.length });
-      },
-    });
-  });
-
-  // Pass the Languages Test.
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "languages", {
-      get: () => ["en-US", "en"],
-    });
-  });
-
-  // Pass the iframe Test
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(HTMLIFrameElement.prototype, "contentWindow", {
-      get: function () {
-        return window;
-      },
-    });
-  });
-
-  // Pass toString test, though it breaks console.debug() from working
-  await page.evaluateOnNewDocument(() => {
-    window.console.debug = () => {
-      return null;
-    };
-  });
-
-  // Fix WebGL vendor/renderer for headless Chrome detection
-  await page.evaluateOnNewDocument(() => {
-    const getParameter = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function (parameter) {
-      if (parameter === 37445) {
-        return "Google Inc. (NVIDIA)";
-      }
-      if (parameter === 37446) {
-        return "ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 Direct3D11 vs_5_0 ps_5_0)";
-      }
-      return getParameter.call(this, parameter);
-    };
-  });
-
-  // Override navigator.connection to look realistic
-  await page.evaluateOnNewDocument(() => {
-    if (!(navigator as any).connection) {
-      Object.defineProperty(navigator, "connection", {
-        get: () => ({
-          effectiveType: "4g",
-          rtt: 50,
-          downlink: 10,
-          saveData: false,
-        }),
-      });
-    }
-  });
-
-  // Hide automation indicators on window
-  await page.evaluateOnNewDocument(() => {
-    // Remove Puppeteer/CDP markers
-    delete (window as any).__puppeteer_evaluation_script__;
-    // Override the CDP detection vector
-    const originalError = Error.captureStackTrace;
-    if (originalError) {
-      Error.captureStackTrace = function (
-        targetObject: object,
-        constructorOpt?: (...args: unknown[]) => unknown
-      ) {
-        originalError.call(this, targetObject, constructorOpt);
-        if ((targetObject as any).stack) {
-          (targetObject as any).stack = (targetObject as any).stack.replace(
-            /\n.*puppeteer.*\n/g,
-            "\n"
-          );
-        }
-      };
-    }
-  });
-}
-export function read_keywords_from_file(fname) {
+export { evadeChromeHeadlessDetection } from "./puppeteerStealth";
+export function read_keywords_from_file(fname: string) {
   let kws = fs.readFileSync(fname).toString().split(os.EOL);
   // clean keywords
   kws = kws.filter((kw) => {
@@ -432,14 +128,14 @@ export function read_keywords_from_file(fname) {
   });
   return kws;
 }
-export function writeResults(fname, data) {
+export function writeResults(fname: string, data: string) {
   fs.writeFileSync(fname, data, "utf8");
 }
-const StringIsNumber = (value) => isNaN(Number(value)) === false;
-export function ToArray(enumme) {
+const StringIsNumber = (value: string) => isNaN(Number(value)) === false;
+export function ToArray(enumme: Record<string, unknown>) {
   return Object.keys(enumme)
     .filter(StringIsNumber)
-    .map((key) => enumme[key]);
+    .map((key) => enumme[key] as string);
 }
 
 // export function forkScript(scriptName:string,command:Array<string>):Electron.UtilityProcess{
@@ -463,11 +159,11 @@ export function getApplogspath(username: string): string {
 export async function checkAndCreatePath(pathToCheck: string): Promise<void> {
   try {
     await fs.promises.access(pathToCheck, fs.constants.F_OK);
-    console.log("Path exists.");
+    log.info("Path exists.");
   } catch {
-    console.log("Path does not exist. Creating...");
+    log.info("Path does not exist. Creating...");
     await fs.promises.mkdir(pathToCheck, { recursive: true });
-    console.log("Path created.");
+    log.info("Path created.");
   }
 }
 export function getEnumKeyByValue(
@@ -501,89 +197,20 @@ export function WriteLog(logPath: string, data: string): void {
   }
   fs.appendFile(logPath, logEntry, (err) => {
     if (err) {
-      console.error("Failed to write to log file:", err);
+      log.error("Failed to write to log file:", err);
     }
   });
 }
 export function getRandomValues(buf: Uint8Array): Uint8Array {
   return crypto.randomFillSync(buf);
 }
-//convert proxy entity to url
-export function proxyEntityToUrl(proxyEntity: ProxyParseItem): string {
-  if (!proxyEntity.protocol) {
-    throw new Error("protocol is required");
-  }
-  if (!proxyEntity.host) {
-    throw new Error("host is required");
-  }
-  if (!proxyEntity.port) {
-    throw new Error("port is required");
-  }
-  let proxyUrl = "";
-  if (proxyEntity.protocol.includes("http")) {
-    if (
-      proxyEntity.user &&
-      proxyEntity.user?.length > 0 &&
-      proxyEntity.pass &&
-      proxyEntity.pass?.length > 0
-    ) {
-      proxyUrl = `${proxyEntity.protocol}://${proxyEntity.user}:${proxyEntity.pass}@${proxyEntity.host}:${proxyEntity.port}`;
-    } else {
-      proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-    }
-  } else if (proxyEntity.protocol.includes("socks")) {
-    // let socketType:4|5=5
-    // if(proxyEntity.protocol.includes('4')){
-    //     let socketType=4
-    // }
-    proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-  } else {
-    throw new Error("protocol is not valid");
-  }
-  return proxyUrl;
-}
-export function convertProxyServertourl(proxyServer: ProxyServer): string {
-  if (!proxyServer.server) {
-    throw new Error("server is required");
-  }
-  let proxyUrl = "";
-  if (
-    proxyServer.username &&
-    proxyServer.username?.length > 0 &&
-    proxyServer.password &&
-    proxyServer.password?.length > 0
-  ) {
-    proxyUrl = `${proxyServer.server}://${proxyServer.username}:${proxyServer.password}`;
-  } else {
-    proxyUrl = `${proxyServer.server}`;
-  }
-  return proxyUrl;
-}
-//convert proxy entity to proxy server
-export function proxyEntityToServer(proxyEntity: ProxyParseItem): ProxyServer {
-  if (!proxyEntity.protocol) {
-    throw new Error("protocol is required");
-  }
-  if (!proxyEntity.host) {
-    throw new Error("host is required");
-  }
-  if (!proxyEntity.port) {
-    throw new Error("port is required");
-  }
-  const proxyUrl = `${proxyEntity.protocol}://${proxyEntity.host}:${proxyEntity.port}`;
-  const rest: ProxyServer = {
-    server: proxyUrl,
-    username: proxyEntity.user,
-    password: proxyEntity.pass,
-  };
-  return rest;
-}
-export function getDomain(url) {
+export { proxyEntityToUrl, convertProxyServertourl, proxyEntityToServer } from "./proxyUtils";
+export function getDomain(url: string) {
   try {
     const parsedUrl = new URL(url);
     return parsedUrl.hostname;
   } catch (e) {
-    console.error("Invalid URL:", e);
+    log.error("Invalid URL:", e);
     return null;
   }
 }
@@ -614,101 +241,7 @@ export function removeDuplicates(array: any[]): any[] {
  * @param folderPath - The path to the folder.
  * @returns A promise that resolves to an array of file names if the folder exists, or an empty array if it doesn't.
  */
-export async function checkFolderAndGetFiles(
-  folderPath: string
-): Promise<string[]> {
-  try {
-    // Check if the folder exists
-    const folderExists = await fs.promises
-      .stat(folderPath)
-      .then((stat) => stat.isDirectory())
-      .catch(() => false);
-
-    if (!folderExists) {
-      // console.log(`Folder does not exist: ${folderPath}`);
-      return [];
-    }
-
-    // Read the contents of the folder
-    const files = await fs.promises.readdir(folderPath);
-    return files;
-  } catch (error) {
-    // console.error(`Error checking folder or reading files: ${error.message}`);
-    return [];
-  }
-}
-/**
- * Download a file from a remote URL and save it to a specified path.
- * @param url - The URL of the file to download.
- * @param savePath - The path where the file should be saved.
- * @returns A promise that resolves when the file has been downloaded and saved.
- */
-export async function downloadFile(
-  url: string,
-  savePath: string,
-  onSuccess?: () => void,
-  onFailure?: (error: Error) => void
-): Promise<void> {
-  try {
-    //defined a tmp file name
-    const tmpFileName = savePath + ".tmp";
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      throw new Error(`Failed to download file: ${response.statusText}`);
-    }
-
-    const fileStream = fs.createWriteStream(tmpFileName);
-
-    return new Promise((resolve, reject) => {
-      if (response.body) {
-        response.body.pipe(fileStream);
-        response.body.on("error", (error) => {
-          reject(error);
-          if (onFailure) {
-            onFailure(error as Error);
-          }
-        });
-      } else {
-        if (onFailure) {
-          onFailure(new Error("Response body is null"));
-        }
-
-        reject(new Error("Response body is null"));
-      }
-      fileStream.on("finish", () => {
-        //rename to tmp file to save path
-        fs.rename(tmpFileName, savePath, (error) => {
-          if (error) {
-            reject(error);
-            if (onFailure) {
-              onFailure(error as Error);
-            }
-          } else {
-            resolve();
-            if (onSuccess) {
-              onSuccess();
-            }
-          }
-        });
-
-        // resolve();
-        // if (onSuccess) {
-        //   onSuccess();
-        // }
-      });
-    });
-  } catch (error) {
-    //remove file if download failed
-    //await removeFile(savePath)
-    if (onFailure) {
-      onFailure(error as Error);
-    }
-
-    throw error;
-  }
-}
-
+export { checkFolderAndGetFiles, downloadFile } from "./fileUtils";
 export function convertCookiesToNetscapeFile(
   cookies: CookiesType[],
   filePath: string
@@ -797,7 +330,7 @@ export function removeFile(
     });
   }
 }
-export function readLogFile(filePath): Promise<string> {
+export function readLogFile(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     fs.readFile(filePath, "utf8", (err, data) => {
       if (err) {
@@ -876,7 +409,7 @@ export function compareVersions(versionA: string, versionB: string): number {
  * Scrolls down an infinite scroll page until reaching bottom or max scrolls
  */
 export async function scrollPageToBottom(
-  page,
+  page: Page,
   maxScrolls = 10,
   cssclass = "#spinnerContainer, button.yt-spec-button-shape-next"
 ) {
@@ -885,9 +418,9 @@ export async function scrollPageToBottom(
 
   while (currentScrolls < maxScrolls) {
     // Get current scroll height
-    const currentHeight = await page.evaluate(
+    const currentHeight = (await page.evaluate(
       "document.documentElement.scrollHeight"
-    );
+    )) as number;
 
     // If we haven't moved since last scroll, we might be at the bottom
     if (currentHeight === lastHeight) {
@@ -897,9 +430,9 @@ export async function scrollPageToBottom(
       );
       await puppeteerDelay(2000);
 
-      const newHeight = await page.evaluate(
+      const newHeight = (await page.evaluate(
         "document.documentElement.scrollHeight"
-      );
+      )) as number;
       if (newHeight === currentHeight) {
         // We're truly at the bottom
         break;
@@ -920,15 +453,15 @@ export async function scrollPageToBottom(
       const spinnerSelector = cssclass;
       const hasSpinner = await page.$(spinnerSelector);
       if (hasSpinner) {
-        await page.evaluate((selector) => {
+        await page.evaluate((selector: string) => {
           const element = document.querySelector(selector);
-          if (element) element.click();
+          if (element) (element as HTMLElement).click();
         }, spinnerSelector);
         await puppeteerDelay(2000);
       }
     } catch (error) {
       // Continue if spinner not found or not clickable
-      console.log("No spinner/button found or not clickable");
+      log.info("No spinner/button found or not clickable");
     }
 
     currentScrolls++;
@@ -962,7 +495,7 @@ export async function closePuppeteer(
       await browser.close();
     }
   } catch (error) {
-    console.error("Error closing puppeteer resources:", error);
+    log.error("Error closing puppeteer resources:", error);
   }
 }
 // Function to find Chrome path on macOS
@@ -978,7 +511,7 @@ export function findChromeOnMac(): string | undefined {
       return path.join(chromePath, "Contents/MacOS/Google Chrome");
     }
   } catch (error) {
-    console.error("Error finding Chrome:", error);
+    log.error("Error finding Chrome:", error);
   }
 
   // Fallback paths
@@ -1015,7 +548,7 @@ export function findChromeOnMac(): string | undefined {
   ];
 
   for (const chromePath of possiblePaths) {
-    console.log("chromePath", chromePath);
+    log.info("chromePath", chromePath);
     if (fs.existsSync(chromePath)) {
       return chromePath;
     }
@@ -1064,7 +597,7 @@ export function findChromeOnWindows(): string | undefined {
       }
     }
   } catch (error) {
-    console.error("Error finding Chrome in registry:", error);
+    log.error("Error finding Chrome in registry:", error);
   }
 
   return undefined;
@@ -1077,7 +610,7 @@ export function findChromeOnLinux(): string | undefined {
       return chromePath;
     }
   } catch (error) {
-    console.error("Error finding Chrome with which:", error);
+    log.error("Error finding Chrome with which:", error);
   }
 
   const possiblePaths = [
@@ -1221,6 +754,6 @@ export function sendSystemMessage(message: {
       }
     });
   } catch (error) {
-    console.error("Failed to send system message:", error);
+    log.error("Failed to send system message:", error);
   }
 }

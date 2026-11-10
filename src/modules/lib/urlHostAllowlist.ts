@@ -13,7 +13,6 @@ export const ALLOWED_HOSTS = {
   bing: 'bing.com',
   baidu: 'baidu.com',
   yandex: ['yandex.com', 'yandex.ru'],
-  yellowpages: 'yellowpages.com',
   yelp: 'yelp.com',
   yell: 'yell.com',
   '192': '192.com',

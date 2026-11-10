@@ -1,10 +1,10 @@
-'use strict';
-import { z } from 'zod/v4';
+"use strict";
+import { z } from "zod/v4";
 import type {
   DiagnosticReportPackage,
   ErrorRecord,
   DiagnosticBreadcrumb,
-} from './DiagnosticSchemas';
+} from "./DiagnosticSchemas";
 
 /**
  * Wire contract for POST /api/crash-reports.
@@ -28,20 +28,29 @@ export const MAX_BREADCRUMB_ENTRIES = 100;
 export const MAX_RECENT_ERROR_ENTRIES = 50;
 export const MAX_BREADCRUMB_MESSAGE = 1024;
 export const MAX_BREADCRUMB_CATEGORY = 64;
+/** Cap for the optional main.log tail field (matches DiagnosticSchemas). */
+export const MAX_MAIN_LOG_TAIL = 32 * 1024;
 
-const rfc3339 = z.string().regex(
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/,
-  { message: 'timestamp must be RFC3339' },
-);
+const rfc3339 = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, {
+    message: "timestamp must be RFC3339",
+  });
 
 // validPlatforms (schema.go): darwin, win32, linux, mas.
-const platformWire = z.enum(['darwin', 'win32', 'linux', 'mas']);
+const platformWire = z.enum(["darwin", "win32", "linux", "mas"]);
 
 // validProcessType (schema.go): main, renderer, worker, utility, gpu.
-const processTypeWire = z.enum(['main', 'renderer', 'worker', 'utility', 'gpu']);
+const processTypeWire = z.enum([
+  "main",
+  "renderer",
+  "worker",
+  "utility",
+  "gpu",
+]);
 
 // validSeverity (schema.go): info, warning, error, fatal.
-const severityWire = z.enum(['info', 'warning', 'error', 'fatal']);
+const severityWire = z.enum(["info", "warning", "error", "fatal"]);
 
 export const crashPayloadWireSchema = z.object({
   timestamp: rfc3339,
@@ -79,6 +88,9 @@ export const crashReportWireSchema = z.object({
   crash: crashPayloadWireSchema,
   recentErrors: z.array(errorPayloadWireSchema).max(MAX_RECENT_ERROR_ENTRIES),
   breadcrumbs: z.array(breadcrumbWireSchema).max(MAX_BREADCRUMB_ENTRIES),
+  // Optional so the backend can reject it with a clear 400 via
+  // DisallowUnknownFields if it does not model the field yet.
+  mainLogTail: z.string().max(MAX_MAIN_LOG_TAIL).optional(),
 });
 
 export type CrashReportWirePayload = z.infer<typeof crashReportWireSchema>;
@@ -90,22 +102,45 @@ function cap(s: string | undefined, max: number): string | undefined {
 }
 
 /**
+ * Whether to include `mainLogTail` in the wire payload.
+ *
+ * The backend decodes with DisallowUnknownFields, so uploading the field
+ * before `marketing/services/crashreport/schema.go` models `MainLogTail`
+ * (shipped in backend commit d3f98f0) is 400'd. Default OFF.
+ *
+ * Where to define AIFETCHLY_SEND_MAIN_LOG_TAIL:
+ *  - dev: shell env before `yarn dev` (`AIFETCHLY_SEND_MAIN_LOG_TAIL=true yarn dev`).
+ *    Note: a plain `.env` entry does NOT reach the main process at runtime —
+ *    dotenv is only loaded at build time (forge.config.js).
+ *  - production builds: baked at build time by the `define` block in
+ *    vite.main.config.mjs from the build environment (CI env var or `.env`,
+ *    which forge.config.js loads via dotenv before vite runs).
+ *  - tests: live process.env (the define is skipped for mode 'test').
+ *
+ * Once the backend field is deployed, flip the default to ON here (or set the
+ * build env var) per PRD open question 1.
+ */
+function shouldSendMainLogTail(): boolean {
+  return process.env.AIFETCHLY_SEND_MAIN_LOG_TAIL === "true";
+}
+
+/**
  * Map the internal CrashRecord processType to a server-valid value. The client
  * schema permits `"unknown"` (e.g. child-process-gone, see CrashReporterService),
  * which the backend rejects. Unknown values are coerced to `"main"` — the
  * observing/recording process — which is always a safe, valid default.
  */
 function toWireProcessType(
-  pt: string,
-): 'main' | 'renderer' | 'worker' | 'utility' | 'gpu' {
+  pt: string
+): "main" | "renderer" | "worker" | "utility" | "gpu" {
   switch (pt) {
-    case 'renderer':
-    case 'worker':
-    case 'utility':
-    case 'gpu':
+    case "renderer":
+    case "worker":
+    case "utility":
+    case "gpu":
       return pt;
     default:
-      return 'main';
+      return "main";
   }
 }
 
@@ -116,13 +151,13 @@ function toWireProcessType(
  * enums) throws here rather than surfacing as an opaque HTTP 400.
  */
 export function projectToWirePayload(
-  pkg: DiagnosticReportPackage,
+  pkg: DiagnosticReportPackage
 ): CrashReportWirePayload {
   const crash = {
     timestamp: pkg.crash.timestamp,
     processType: toWireProcessType(pkg.crash.processType),
     crashType: pkg.crash.crashType,
-    message: cap(pkg.crash.message, MAX_MESSAGE) ?? '',
+    message: cap(pkg.crash.message, MAX_MESSAGE) ?? "",
     stack: cap(pkg.crash.stack, MAX_STACK),
     reason: pkg.crash.reason,
     // severity intentionally omitted: the internal CrashRecord carries no severity.
@@ -132,8 +167,8 @@ export function projectToWirePayload(
     .slice(-MAX_RECENT_ERROR_ENTRIES)
     .map((e: ErrorRecord) => ({
       timestamp: e.timestamp,
-      name: e.feature ?? '',
-      message: cap(e.message, MAX_MESSAGE) ?? '',
+      name: e.feature ?? "",
+      message: cap(e.message, MAX_MESSAGE) ?? "",
       stack: cap(e.stack, MAX_STACK),
     }));
 
@@ -141,10 +176,17 @@ export function projectToWirePayload(
     .slice(-MAX_BREADCRUMB_ENTRIES)
     .map((b: DiagnosticBreadcrumb) => ({
       timestamp: b.timestamp,
-      category: cap(b.category, MAX_BREADCRUMB_CATEGORY) ?? '',
-      message: cap(b.message, MAX_BREADCRUMB_MESSAGE) ?? '',
+      category: cap(b.category, MAX_BREADCRUMB_CATEGORY) ?? "",
+      message: cap(b.message, MAX_BREADCRUMB_MESSAGE) ?? "",
       level: b.level,
     }));
+
+  // Gated: the key is spread in ONLY when the flag is on and a tail exists,
+  // so a flag-off payload is key-for-key identical to the pre-mainLogTail
+  // contract (the backend's DisallowUnknownFields sees nothing new).
+  const mainLogTail = shouldSendMainLogTail()
+    ? cap(pkg.mainLogTail, MAX_MAIN_LOG_TAIL)
+    : undefined;
 
   const built = {
     schemaVersion: 1 as const,
@@ -156,6 +198,7 @@ export function projectToWirePayload(
     crash,
     recentErrors,
     breadcrumbs,
+    ...(mainLogTail !== undefined ? { mainLogTail } : {}),
   };
 
   return crashReportWireSchema.parse(built);

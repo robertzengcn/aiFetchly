@@ -32,6 +32,7 @@ import {
   writeStateManifest,
 } from "../fixtures/temporaryState";
 import { launchAiFetchly, type LaunchedApp } from "../fixtures/electronApp";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 import { closeApp } from "../support/processCleanup";
 import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
 
@@ -50,7 +51,14 @@ function composer(app: LaunchedApp): import("@playwright/test").Locator {
 }
 
 async function openChat(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  // Single-authoritative-surface doctrine (audit A01, 2026-10-18): the
+  // workspace shell is the only authenticated shell — the legacy
+  // `ai-chat-toggle` dock entry was removed after convergence. This spec
+  // drives the same engine/Stop contract through the workspace composer.
+  await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
+  await expect(
+    app.mainWindow.getByTestId("chat-center-surface")
+  ).toBeVisible({ timeout: 30_000 });
   await expect(composer(app)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -82,7 +90,7 @@ test("Stop during an enrolled turn cancels the stream and the conversation recov
       // verb lead with a material target) → the engine enrolls an execution.
       await composer(app).fill("Search the workspace for launch blockers");
       await app.mainWindow.getByTestId("ai-chat-send").click();
-      await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
         "Streaming",
         { timeout: 30_000 }
       );
@@ -92,7 +100,7 @@ test("Stop during an enrolled turn cancels the stream and the conversation recov
       await expect(stop).toBeVisible({ timeout: 15_000 });
       await stop.click();
       await expect(
-        app.mainWindow.getByTestId("ai-chat-root")
+        app.mainWindow.getByTestId("workspace-transcript")
       ).not.toContainText("-should-be-cancelled", { timeout: 6_000 });
       // Send re-enables once the cancelled turn unwinds.
       await expect(app.mainWindow.getByTestId("ai-chat-send")).toBeVisible({
@@ -104,7 +112,7 @@ test("Stop during an enrolled turn cancels the stream and the conversation recov
       await fakeAi.setScenario("stream-text");
       await composer(app).fill("Search again for the release checklist");
       await app.mainWindow.getByTestId("ai-chat-send").click();
-      await expect(app.mainWindow.getByTestId("ai-chat-root")).toContainText(
+      await expect(app.mainWindow.getByTestId("workspace-transcript")).toContainText(
         "Hello world!",
         { timeout: 30_000 }
       );

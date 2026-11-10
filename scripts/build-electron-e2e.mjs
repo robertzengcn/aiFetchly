@@ -53,15 +53,62 @@ async function main() {
 
   step("Building production taskCode into .vite/e2e/build (taskCode.js)");
   await build({
+    configFile: path.resolve(projectRoot, "vite.e2e.taskCode.config.mjs"),
+    mode: "development",
+  });
+
+  step(
+    "Building production managed-browser worker into .vite/e2e/build (ManagedBrowser.js)"
+  );
+  await build({
     configFile: path.resolve(
       projectRoot,
-      "vite.e2e.taskCode.config.mjs"
+      "vite.e2e.managedBrowserWorker.config.mjs"
+    ),
+    mode: "development",
+  });
+
+  step(
+    "Building production local voice worker into .vite/e2e/build (AiChatVoiceWorker.js)"
+  );
+  await build({
+    configFile: path.resolve(
+      projectRoot,
+      "vite.e2e.aiChatVoiceWorker.config.mjs"
+    ),
+  });
+
+  step(
+    "Building workspace watch worker into .vite/e2e/build (WorkspaceConfigWatchWorker.js)"
+  );
+  await build({
+    configFile: path.resolve(
+      projectRoot,
+      "vite.e2e.workspaceConfigWatchWorker.config.mjs"
     ),
     mode: "development",
   });
 
   step("Verifying required E2E artifacts");
   const required = ["e2e-main.js", "preload.js", "taskCode.js"];
+  const managedWorkerPath = path.join(e2eOutDir, "ManagedBrowser.js");
+  // The managed-browser worker is required only by the ENV-GUARDED real-Chrome
+  // spec (managedBrowser.test.ts). Missing it degrades that opt-in run, not
+  // the default suite — warn instead of failing the build.
+  if (!fs.existsSync(managedWorkerPath)) {
+    console.warn(
+      "[e2e-build] ManagedBrowser.js missing — AIFETCHLY_MB_E2E=1 runs will fail to start sessions"
+    );
+  }
+  // The local voice worker is required by the voice parity spec (it must be
+  // FORKABLE so the real missing-runtime/model paths are exercised); missing
+  // it degrades that spec to the fast worker-file-not-found path — warn.
+  const voiceWorkerPath = path.join(e2eOutDir, "AiChatVoiceWorker.js");
+  if (!fs.existsSync(voiceWorkerPath)) {
+    console.warn(
+      "[e2e-build] AiChatVoiceWorker.js missing — voice parity spec will hit the fast no-worker path"
+    );
+  }
   const missing = required.filter((f) => {
     const p = path.join(e2eOutDir, f);
     return !fs.existsSync(p) || fs.statSync(p).size === 0;

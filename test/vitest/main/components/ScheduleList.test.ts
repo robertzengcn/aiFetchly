@@ -1,5 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
+import { createPinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ScheduleListPage from "@/views/pages/schedule/list.vue";
 import { TaskType } from "@/entity/ScheduleTask.entity";
@@ -129,7 +130,7 @@ function makeResponse(count: number): ScheduleListResponse {
 
 function mountPage() {
   return mount(ScheduleListPage, {
-    global: { plugins: [i18n], stubs },
+    global: { plugins: [createPinia(), i18n], stubs },
   });
 }
 

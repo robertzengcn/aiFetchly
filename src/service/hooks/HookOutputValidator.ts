@@ -112,7 +112,7 @@ function pickBoolean(
     throw new ValidationError(`${field} must be a boolean when present`);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { [field]: value } as any;
+  return { [field]: value };
 }
 
 function pickObject(
@@ -127,7 +127,7 @@ function pickObject(
     throw new ValidationError(`${field} exceeded max serialized size`);
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { [field]: value } as any;
+  return { [field]: value };
 }
 
 function pickPermission(

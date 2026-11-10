@@ -74,6 +74,14 @@ export const createEmailReplyDraftSchema = z.object({
   goal: z.string().trim().max(1000).optional(),
   extra_instructions: z.string().trim().max(2000).optional(),
   use_knowledge_library: z.coerce.boolean().default(true),
+  /**
+   * Reviewed flag (spec docs/superpowers/specs/2026-10-29-email-reply-reviewed-flag-design.md):
+   * true ONLY when the user has already reviewed this message and explicitly
+   * asked for the reply in conversation. Exempts the classification-family
+   * blocks (needs_human_review / unknown) for this human-assisted draft;
+   * never overrides machine-safety blocks or the duplicate guard.
+   */
+  reviewed: z.coerce.boolean().optional(),
 });
 
 export const sendEmailReplySchema = z.object({

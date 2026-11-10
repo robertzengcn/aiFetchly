@@ -1,5 +1,6 @@
 import type { PluginMarketplaceSourceKind } from "@/entityTypes/pluginMarketplaceTypes";
 import type { PluginMarketplaceFetcher } from "./marketplaceFetcherTypes";
+import { AiFetchHubMarketplaceFetcher } from "./AiFetchHubMarketplaceFetcher";
 import { GitMarketplaceFetcher } from "./GitMarketplaceFetcher";
 import { GitHubMarketplaceFetcher } from "./GitHubMarketplaceFetcher";
 import { LocalMarketplaceFetcher } from "./LocalMarketplaceFetcher";
@@ -43,5 +44,6 @@ export function createDefaultMarketplaceFetcherRegistry(): PluginMarketplaceFetc
   reg.register(local); // local-folder
   reg.register(local, "local-file"); // local-file reuses the same fetcher
   reg.register(new UrlMarketplaceFetcher());
+  reg.register(new AiFetchHubMarketplaceFetcher()); // first-party Plugin Hub
   return reg;
 }

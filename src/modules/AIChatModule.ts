@@ -32,6 +32,35 @@ export class AIChatModule extends BaseModule {
   /**
    * Save a chat message to database
    */
+  /**
+   * r3 G01: stamp durable turn identity onto an ALREADY-persisted user row
+   * (queue promotion happens before the engine assigns the turn). Merges
+   * turnId/sourceProviderVersion into the row's JSON metadata without
+   * touching content; idempotent; a miss is a no-op.
+   */
+  async stampUserMessageTurnIdentity(
+    messageId: string,
+    turnId: string,
+    sourceProviderVersion: number
+  ): Promise<void> {
+    if (!messageId) return;
+    await this.ensureConnection();
+    const repo = this.chatMessageModel.repository;
+    const row = await repo.findOne({ where: { messageId } });
+    if (!row) return;
+    let meta: Record<string, unknown> = {};
+    if (row.metadata) {
+      try {
+        meta = JSON.parse(row.metadata) as Record<string, unknown>;
+      } catch {
+        meta = {};
+      }
+    }
+    if (meta.turnId === turnId) return;
+    row.metadata = JSON.stringify({ ...meta, turnId, sourceProviderVersion });
+    await repo.save(row);
+  }
+
   async saveMessage(options: SaveMessageOptions): Promise<AIChatMessageEntity> {
     const existing = await this.chatMessageModel.getMessageByMessageId(
       options.messageId
@@ -158,6 +187,49 @@ export class AIChatModule extends BaseModule {
     messageId: string
   ): Promise<AIChatMessageEntity | null> {
     return await this.chatMessageModel.getMessageByMessageId(messageId);
+  }
+
+  /**
+   * Merge patch keys into an existing message's metadata WITHOUT replacing
+   * the rest of the record (AC-18/G02: queue-dispatched turns resolve
+   * history selections AFTER the user row was promoted, so provenance must
+   * attach post-hoc). No-op when the row is missing; a JSON parse failure
+   * starts from an empty record rather than dropping the row.
+   */
+  async mergeMessageMetadata(
+    messageId: string,
+    patch: Record<string, unknown>
+  ): Promise<void> {
+    await this.ensureConnection();
+    const existing = await this.chatMessageModel.getMessageByMessageId(
+      messageId
+    );
+    if (!existing) return;
+    let current: Record<string, unknown> = {};
+    try {
+      current =
+        typeof existing.metadata === "string" && existing.metadata
+          ? (JSON.parse(existing.metadata) as Record<string, unknown>)
+          : {};
+    } catch {
+      current = {};
+    }
+    existing.metadata = JSON.stringify({ ...current, ...patch });
+    await this.chatMessageModel.saveMessage(existing);
+  }
+
+  /**
+   * Get message by conversation ID and message ID
+   */
+  async getMessageByConversationAndMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    await this.ensureConnection();
+    return await this.chatMessageModel.getMessageByConversationAndMessageId(
+      conversationId,
+      messageId
+    );
   }
 
   /**

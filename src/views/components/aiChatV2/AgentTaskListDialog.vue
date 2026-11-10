@@ -1,11 +1,13 @@
 <template>
   <v-menu
+    :model-value="menuOpen"
     :close-on-content-click="false"
     location="bottom end"
     offset="4"
-    @update:model-value="onToggle"
+    :target="target"
+    @update:model-value="onMenuUpdate"
   >
-    <template v-slot:activator="{ props: menuProps }">
+    <template v-if="showActivator" v-slot:activator="{ props: menuProps }">
       <v-btn
         v-bind="menuProps"
         icon
@@ -114,11 +116,38 @@ import { useI18n } from "vue-i18n";
 import type { AgentTaskSnapshot, AgentDefinitionView } from "@/entityTypes/agentTypes";
 import { listAgentTasks, listAgentDefinitions } from "@/views/api/agentRuntime";
 
+withDefaults(
+  defineProps<{
+    /** Render the inline icon-button activator (dock chat header). When
+     * false the menu opens only programmatically via open(). */
+    showActivator?: boolean;
+    /** Optional anchor selector for the menu (used without an activator,
+     * e.g. anchored to the header overflow "..." button). */
+    target?: string;
+  }>(),
+  { showActivator: true, target: undefined }
+);
+
 const emit = defineEmits<{
   (e: "cancel-task", agentTaskId: string): void;
 }>();
 
 const { t } = useI18n();
+
+const menuOpen = ref(false);
+
+function onMenuUpdate(isOpen: boolean): void {
+  menuOpen.value = isOpen;
+  onToggle(isOpen);
+}
+
+/** Programmatic open (e.g. from the conversation-header overflow menu). */
+function open(): void {
+  menuOpen.value = true;
+  onToggle(true);
+}
+
+defineExpose({ open });
 
 const loading = ref(false);
 const tasks = ref<AgentTaskSnapshot[]>([]);

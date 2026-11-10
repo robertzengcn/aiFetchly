@@ -1,0 +1,477 @@
+/**
+ * Cross-platform process execution provider contract.
+ *
+ * Source of truth: natural-language-skill-installation technical design §7,
+ * PRD §16. Shell selection and process behavior must live behind platform
+ * providers rather than scattered `process.platform` conditions.
+ *
+ * The observed Windows defect (design §3.2): commands could exit 0 while
+ * captured stdout/stderr were empty, making installation verification
+ * impossible. Providers therefore:
+ *   - collect raw buffers + byte counts BEFORE decoding;
+ *   - detect UTF-8 / UTF-16LE BOMs and decode deterministically;
+ *   - wait for stream completion before producing a final result;
+ *   - report spawn errors, stream errors, exit code, signal, timeout, and
+ *     byte counts separately;
+ *   - flag `PROCESS_OUTPUT_EMPTY_UNEXPECTED` when a command that was
+ *     expected to emit output exits 0 with both byte counts zero.
+ */
+
+export type ProcessProviderKind = "windows" | "posix";
+
+export interface ProcessInvocation {
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly environment: Readonly<Record<string, string>>;
+  readonly timeoutMs: number;
+  readonly outputLimitBytes: number;
+  /**
+   * When true, a zero exit with both stdout and stderr byte counts at zero
+   * produces `PROCESS_OUTPUT_EMPTY_UNEXPECTED` instead of a silent success.
+   */
+  readonly expectOutput?: boolean;
+  /** Identifier used by cancellation registries; optional. */
+  readonly cancellationId?: string;
+  /**
+   * Timeout action (chat shell auto-background, PRD §16 / NFR-02): when
+   * set, a timeout hands the child to this callback (the BackgroundShellRegistry
+   * takes over stream collection) and the run resolves with
+   * `backgrounded: true` + `backgroundId` instead of killing the tree.
+   */
+  readonly onTimeoutDetain?: (child: ChildProcess) => string;
+  /**
+   * dev-merge 2026-10-09 (shell output capture): fired SYNCHRONOUSLY right
+   * after a successful spawn, before any stream listener attaches — lets the
+   * caller spool output (attachShellCapture) with no lost early chunks.
+   * Returning nothing; a throwing callback is ignored (capture is optional).
+   */
+  readonly onSpawn?: (child: ChildProcess) => void;
+}
+
+export interface ProcessExecutionResult {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+  readonly provider: ProcessProviderKind;
+  readonly diagnosticCode?: ProcessDiagnosticCode;
+  /** Auto-background outcome (onTimeoutDetain path) — not a failure. */
+  readonly backgrounded?: boolean;
+  readonly backgroundId?: string;
+}
+
+export type ProcessDiagnosticCode =
+  | "PROCESS_SPAWN_FAILED"
+  | "PROCESS_STREAM_ERROR"
+  | "PROCESS_OUTPUT_EMPTY_UNEXPECTED"
+  | "PROCESS_OUTPUT_TRUNCATED"
+  | "PROCESS_TIMEOUT";
+
+export interface PlatformProcessProvider {
+  readonly kind: ProcessProviderKind;
+  execute(invocation: ProcessInvocation): Promise<ProcessExecutionResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Shared buffer capture + decoding helpers (used by both providers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode captured bytes deterministically (design §7.3):
+ *   1. UTF-8 BOM → utf-8 (strip BOM)
+ *   2. UTF-16LE BOM → utf16le (strip BOM)
+ *   3. Heuristic: a high proportion of NUL bytes → utf16le
+ *   4. else utf-8
+ */
+export function decodeProcessOutput(buffer: Buffer): string {
+  if (buffer.length === 0) return "";
+  if (buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    return buffer.subarray(3).toString("utf-8");
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.subarray(2).toString("utf16le");
+  }
+  if (buffer.length >= 2) {
+    // Heuristic for BOM-less UTF-16LE: every other byte is NUL for ASCII text.
+    const sample = buffer.subarray(0, Math.min(buffer.length, 512));
+    let nulls = 0;
+    for (let i = 1; i < sample.length; i += 2) {
+      if (sample[i] === 0) nulls += 1;
+    }
+    const pairs = Math.floor(sample.length / 2);
+    if (pairs > 0 && nulls / pairs > 0.7) {
+      return buffer.toString("utf16le");
+    }
+  }
+  return buffer.toString("utf-8");
+}
+
+/** Normalize CRLF → LF without erasing other output. */
+export function normalizeProcessLineEndings(text: string): string {
+  return text.replace(/\r\n/g, "\n");
+}
+
+/** Build the environment for a child process from the current one, minus secrets. */
+export const SENSITIVE_ENV_KEYS: ReadonlySet<string> = new Set([
+  "AIFETCHLY_TOKEN",
+  "AIFETCHLY_REFRESH_TOKEN",
+  "ELEVENLABS_API_KEY",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GITHUB_TOKEN",
+  "GH_TOKEN",
+  "NPM_TOKEN",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+]);
+
+/**
+ * Pattern-based secret scrub (review S7): a fixed 10-key denylist misses
+ * GOOGLE_API_KEY, *_PASSWORD, DATABASE_URL with embedded credentials, etc.
+ * Children spawned here run repository-influenced commands (dependency
+ * probes, later approved helpers), so anything secret-SHAPED is dropped
+ * unless the caller explicitly injects it via `overrides`.
+ */
+const SENSITIVE_ENV_KEY_RE =
+  /(API_?KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIAL|PRIVATE_?KEY|AUTH|_PAT$|_ID$|_KEY_ID$|ACCESS_KEY)$/i;
+
+/**
+ * App-internal prefixes (review D2): configuration and build-time values
+ * must never reach a model-run child process.
+ */
+const APP_INTERNAL_ENV_PREFIXES: readonly string[] = [
+  "AIFETCHLY_",
+  "VITE_",
+  "ELECTRON_",
+];
+
+/** Connection-string keys whose VALUES commonly embed credentials. */
+const CREDENTIAL_URL_KEYS: ReadonlySet<string> = new Set([
+  "DATABASE_URL",
+  "REDIS_URL",
+  "REDIS_TLS_URL",
+  "MONGO_URL",
+  "MONGODB_URI",
+  "AMQP_URL",
+  "RABBITMQ_URL",
+  "POSTGRES_URL",
+  "MYSQL_URL",
+  "SENTRY_DSN",
+]);
+
+function isSecretShapedEnvKey(key: string): boolean {
+  if (SENSITIVE_ENV_KEY_RE.test(key)) return true;
+  const upper = key.toUpperCase();
+  if (CREDENTIAL_URL_KEYS.has(upper)) return true;
+  return APP_INTERNAL_ENV_PREFIXES.some((prefix) =>
+    upper.startsWith(prefix)
+  );
+}
+
+/**
+ * Environment baseline shared by every provider: start from the application
+ * environment and REMOVE known-sensitive keys instead of applying a
+ * Unix-centric allowlist (design §7.2 — the allowlist stripped required
+ * Windows variables and is a suspected cause of empty Windows output).
+ */
+export function buildChildEnvironment(
+  base: NodeJS.ProcessEnv = process.env,
+  overrides?: Readonly<Record<string, string>>
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined) continue;
+    const upper = key.toUpperCase();
+    if (SENSITIVE_ENV_KEYS.has(upper)) continue;
+    if (isSecretShapedEnvKey(key)) continue;
+    env[key] = value;
+  }
+  if (overrides) {
+    // Explicit overrides are the approved-injection channel and always win.
+    for (const [key, value] of Object.entries(overrides)) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
+// ---------------------------------------------------------------------------
+// Shared capture core
+// ---------------------------------------------------------------------------
+
+import { spawn, type ChildProcess } from "child_process";
+import {
+  ownedSpawnAllowed,
+  registerOwnedProcess,
+} from "@/main-process/lifecycle/ownedSpawn";
+
+export interface ProcessRunnerConfig {
+  readonly kind: ProcessProviderKind;
+  /** Windows defaults to false unless a verified background design needs it. */
+  readonly detached: boolean;
+  /** Platform-appropriate process-tree termination. */
+  killTree(child: ChildProcess): void;
+}
+
+class ByteCapture {
+  private chunks: Buffer[] = [];
+  private total = 0;
+  truncated = false;
+
+  push(chunk: Buffer, limit: number): void {
+    if (this.truncated) return;
+    this.total += chunk.length;
+    this.chunks.push(chunk);
+    if (this.total > limit) {
+      // Keep only up to the limit.
+      let kept = 0;
+      const keptChunks: Buffer[] = [];
+      for (const c of this.chunks) {
+        if (kept + c.length > limit) {
+          keptChunks.push(c.subarray(0, limit - kept));
+          kept = limit;
+          break;
+        }
+        keptChunks.push(c);
+        kept += c.length;
+      }
+      this.chunks = keptChunks;
+      this.total = kept;
+      this.truncated = true;
+    }
+  }
+
+  toBuffer(): Buffer {
+    return Buffer.concat(this.chunks);
+  }
+
+  get bytes(): number {
+    return this.total;
+  }
+}
+
+/**
+ * Spawn + capture with byte counts before decoding, separate streams,
+ * timeout handling, and complete stream-drain before resolving
+ * (design §7.3). Never turns non-empty bytes into an empty result.
+ */
+export async function runProcessCapture(
+  invocation: ProcessInvocation,
+  config: ProcessRunnerConfig
+): Promise<ProcessExecutionResult> {
+  const start = Date.now();
+  const stdoutCapture = new ByteCapture();
+  const stderrCapture = new ByteCapture();
+  let spawnError: Error | null = null;
+  let streamError: Error | null = null;
+  let timedOut = false;
+  let settled = false;
+  // Once the child is handed to a background registry, local collection
+  // must stop — the registry attaches its own stream listeners.
+  let detained = false;
+
+  return new Promise<ProcessExecutionResult>((resolve) => {
+    let child: ChildProcess;
+    // AC-05 spawn gate (dev merge 2026-10-09): every main-process launch
+    // site consults the owned-spawn gate; a refused launch resolves as a
+    // typed spawn failure instead of orphaning work at shutdown.
+    if (!ownedSpawnAllowed("process-provider")) {
+      resolve({
+        exitCode: null,
+        signal: null,
+        stdout: "",
+        stderr: "Application is shutting down; process execution refused",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        timedOut: false,
+        durationMs: Date.now() - start,
+        provider: config.kind,
+        diagnosticCode: "PROCESS_SPAWN_FAILED",
+      });
+      return;
+    }
+    try {
+      child = spawn(invocation.executable, [...invocation.args], {
+        cwd: invocation.cwd,
+        env: invocation.environment,
+        shell: false,
+        detached: config.detached,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (err) {
+      resolve({
+        exitCode: null,
+        signal: null,
+        stdout: "",
+        stderr: err instanceof Error ? err.message : String(err),
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        timedOut: false,
+        durationMs: Date.now() - start,
+        provider: config.kind,
+        diagnosticCode: "PROCESS_SPAWN_FAILED",
+      });
+      return;
+    }
+
+    // Detached children own their process group (pgid === pid) — record
+    // it so force-verify signals the group, not just the leader.
+    registerOwnedProcess("process-provider", child, {
+      isolatedProcessGroupId: child.pid ?? undefined,
+    });
+    // Sync spawn hook (capture spool) — before any listeners attach.
+    if (invocation.onSpawn) {
+      try {
+        invocation.onSpawn(child);
+      } catch {
+        /* capture is best-effort; never fail the run */
+      }
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (invocation.onTimeoutDetain) {
+        // Auto-background (chat shell): the registry takes over the child
+        // and its streams; resolve with the partial output captured so far
+        // plus the background id. NOT a timeout failure.
+        if (settled) return;
+        detained = true;
+        let backgroundId: string;
+        try {
+          backgroundId = invocation.onTimeoutDetain(child);
+        } catch (detainError) {
+          // A throwing registry must never orphan the run: fall back to a
+          // normal timeout kill so execute() always resolves.
+          void detainError;
+          config.killTree(child);
+          finish(child.exitCode, child.signalCode as NodeJS.Signals | null);
+          return;
+        }
+        settled = true;
+        resolve({
+          exitCode: null,
+          signal: null,
+          stdout: normalizeProcessLineEndings(
+            decodeProcessOutput(stdoutCapture.toBuffer())
+          ),
+          stderr: normalizeProcessLineEndings(
+            decodeProcessOutput(stderrCapture.toBuffer())
+          ),
+          stdoutBytes: stdoutCapture.bytes,
+          stderrBytes: stderrCapture.bytes,
+          timedOut: false,
+          durationMs: Date.now() - start,
+          provider: config.kind,
+          backgrounded: true,
+          backgroundId,
+        });
+        return;
+      }
+      config.killTree(child);
+      finish(child.exitCode, child.signalCode as NodeJS.Signals | null);
+    }, invocation.timeoutMs);
+
+    const finish = (
+      code: number | null,
+      signal: NodeJS.Signals | null
+    ): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const stdoutBytes = stdoutCapture.bytes;
+      const stderrBytes = stderrCapture.bytes;
+      const stdout = normalizeProcessLineEndings(
+        decodeProcessOutput(stdoutCapture.toBuffer())
+      );
+      const stderr = normalizeProcessLineEndings(
+        decodeProcessOutput(stderrCapture.toBuffer())
+      );
+
+      let diagnosticCode: ProcessDiagnosticCode | undefined;
+      if (spawnError) diagnosticCode = "PROCESS_SPAWN_FAILED";
+      else if (streamError) diagnosticCode = "PROCESS_STREAM_ERROR";
+      else if (timedOut) diagnosticCode = "PROCESS_TIMEOUT";
+      else if (stdoutCapture.truncated || stderrCapture.truncated)
+        diagnosticCode = "PROCESS_OUTPUT_TRUNCATED";
+      else if (
+        invocation.expectOutput === true &&
+        code === 0 &&
+        stdoutBytes === 0 &&
+        stderrBytes === 0
+      ) {
+        // A command that was expected to emit output exited zero with zero
+        // bytes on both streams — never treat this as verified success
+        // (design §7.3).
+        diagnosticCode = "PROCESS_OUTPUT_EMPTY_UNEXPECTED";
+      }
+
+      resolve({
+        exitCode: code,
+        signal,
+        stdout,
+        stderr: spawnError ? `${stderr}${spawnError.message}`.trim() : stderr,
+        stdoutBytes,
+        stderrBytes,
+        timedOut,
+        durationMs: Date.now() - start,
+        provider: config.kind,
+        diagnosticCode,
+      });
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (detained) return;
+      stdoutCapture.push(chunk, invocation.outputLimitBytes);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (detained) return;
+      stderrCapture.push(chunk, invocation.outputLimitBytes);
+    });
+    // Stream errors must not silently discard captured bytes.
+    child.stdout?.on("error", (err: Error) => {
+      streamError = err;
+    });
+    child.stderr?.on("error", (err: Error) => {
+      streamError = err;
+    });
+
+    child.on("error", (err: Error) => {
+      spawnError = err;
+      finish(null, null);
+    });
+
+    // Wait for BOTH stream closure and process exit so the final result is
+    // produced only after all output has been captured.
+    let stdoutClosed = false;
+    let stderrClosed = false;
+    let exited = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+
+    const maybeFinish = (): void => {
+      if (stdoutClosed && stderrClosed && exited && !settled) {
+        finish(exitCode, exitSignal);
+      }
+    };
+    child.stdout?.on("close", () => {
+      stdoutClosed = true;
+      maybeFinish();
+    });
+    child.stderr?.on("close", () => {
+      stderrClosed = true;
+      maybeFinish();
+    });
+    child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+      exited = true;
+      exitCode = code;
+      exitSignal = signal;
+      maybeFinish();
+    });
+  });
+}

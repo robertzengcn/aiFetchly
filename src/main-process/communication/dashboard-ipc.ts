@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { log } from "@/modules/Logger";
 import { DashboardController } from '@/controller/DashboardController';
 import {
   DASHBOARD_SUMMARY,
@@ -28,7 +29,7 @@ import {
  * msg:'ok'. Frontend should rely on status + data, not msg wording.
  */
 export function registerDashboardIpcHandlers(): void {
-  console.log("Dashboard IPC handlers registered");
+  log.info("Dashboard IPC handlers registered");
 
   // Summary Statistics
   registerValidatedHandler(

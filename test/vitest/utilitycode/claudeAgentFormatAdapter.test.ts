@@ -30,6 +30,7 @@ describe("ClaudeAgentFormatAdapter", () => {
     expect(d.allowedTools).toEqual(["knowledge_library_search"]);
     expect(d.defaultModel).toBe("gpt-5-mini");
     expect(d.mode).toBe("verifier");
+    expect(d.maxToolCalls).toBeNull();
     expect(d.maxContinueCalls).toBe(8);
     expect(d.source).toBe("plugin");
     expect(d.health).toBe("healthy");
@@ -74,18 +75,118 @@ Locate definitions.`;
     if (!r.ok) return;
     expect(r.definition.id).toBe("caveman:cavecrew-investigator");
     expect(r.definition.allowedTools).toEqual([
-      "file_read",
-      "grep_files",
-      "glob_files",
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash",
     ]);
     expect(r.definition.defaultModel).toBeUndefined();
     expect(r.manifest.claudeModelAlias).toBe("haiku");
     expect(r.warnings.map((w) => w.message).join("\n")).toContain(
       'Claude model alias "haiku"'
     );
-    expect(r.warnings.map((w) => w.message).join("\n")).toContain(
+    expect(r.warnings.map((w) => w.message).join("\n")).not.toContain(
       'Claude agent tool "Bash"'
     );
+  });
+
+  it("keeps Claude Write and Edit and honors disallowedTools", () => {
+    const md = `---
+name: blog-writer
+description: Writes posts.
+tools: Write, Edit, Read, Bash, Agent, NotebookEdit
+disallowedTools: [Bash]
+---
+
+Write the post.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "blog",
+      sourcePath: "agents/blog-writer.md",
+      namespaceSegments: [],
+      claudeCompatible: true,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.allowedTools).toEqual(["Write", "Edit", "Read"]);
+    expect(r.warnings.map((w) => w.message).join("\n")).toContain(
+      'Claude agent tool "NotebookEdit"'
+    );
+    expect(r.warnings.map((w) => w.message).join("\n")).not.toContain(
+      'Claude agent tool "Write"'
+    );
+    expect(r.warnings.map((w) => w.message).join("\n")).not.toContain(
+      'Claude agent tool "Agent"'
+    );
+  });
+
+  it("grants the default Claude coding tools when tools is omitted", () => {
+    const md = `---
+name: writer
+description: Writes.
+---
+
+Write.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "blog",
+      sourcePath: "agents/writer.md",
+      namespaceSegments: [],
+      claudeCompatible: true,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.allowedTools).toEqual([
+      "Read",
+      "Write",
+      "Edit",
+      "Grep",
+      "Glob",
+      "Bash",
+      "WebFetch",
+      "WebSearch",
+      "Skill",
+    ]);
+  });
+
+  it("leaves tool-call and turn limits unset when the file omits them", () => {
+    const md = `---
+name: blog-researcher
+description: Research specialist.
+tools: [WebSearch, WebFetch]
+---
+
+Find sources.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "claude-blog",
+      sourcePath: "agents/blog-researcher.md",
+      namespaceSegments: [],
+      claudeCompatible: true,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.maxToolCalls).toBeNull();
+    expect(r.definition.maxContinueCalls).toBeNull();
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("keeps an authored tool-call cap and ignores an invalid maxTurns", () => {
+    const md = `---
+name: reviewer
+description: Reviews drafts.
+maxToolCalls: 12
+maxTurns: 0
+---
+
+Review.`;
+    const r = ClaudeAgentFormatAdapter.adapt(md, {
+      pluginName: "p",
+      sourcePath: "agents/reviewer.md",
+      namespaceSegments: [],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.definition.maxToolCalls).toBe(12);
+    expect(r.definition.maxContinueCalls).toBeNull();
+    expect(r.warnings.map((w) => w.message).join("\n")).toContain("maxTurns");
   });
 
   it("rejects missing name", () => {

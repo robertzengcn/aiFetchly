@@ -1,8 +1,10 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { AIChatModule } from "@/modules/AIChatModule";
 import { AIChatSessionMemoryModule } from "@/modules/AIChatSessionMemoryModule";
 import { AIChatCompactModule } from "@/modules/AIChatCompactModule";
 import { AIArtifactModule } from "@/modules/AIArtifactModule";
+import { PluginFileArtifactModule } from "@/modules/PluginFileArtifactModule";
 import { AIChatMessageEntity } from "@/entity/AIChatMessage.entity";
 import { MessageType } from "@/entityTypes/commonType";
 import { Token } from "@/modules/token";
@@ -17,6 +19,10 @@ import type {
   ChatV2ConversationSummary,
   ChatV2MessageMetadata,
 } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatPlanQuestionView,
+  AIChatPlanStateView,
+} from "@/entityTypes/aiChatPlanTypes";
 
 const V2_CONVERSATION_PREFIX = "v2-";
 const V2_DEFAULT_SYSTEM_PROMPT =
@@ -31,6 +37,31 @@ function uuid(): string {
     return crypto.randomUUID();
   }
   return `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Defensively parse the JSON `metadata` column into a record. Returns null for
+ * absent/corrupt/non-object payloads instead of throwing.
+ */
+function parseMetadataRecord(
+  raw: string | undefined
+): Record<string, unknown> | null {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export class AIChatV2Module extends BaseModule {
@@ -125,6 +156,27 @@ export class AIChatV2Module extends BaseModule {
     });
     await this.coupleArchiveAppend(params.conversationId);
     return saved;
+  }
+
+  /**
+   * r3 G01: stamp durable turn identity onto an ALREADY-persisted user row
+   * (queue promotion happens before the engine assigns the turn). Merges
+   * turnId/sourceProviderVersion into the row's JSON metadata without
+   * touching content — a failed stamp only degrades association to role
+   * order, never the message itself.
+   */
+  async stampUserMessageTurnIdentity(
+    messageId: string,
+    turnId: string,
+    sourceProviderVersion: number
+  ): Promise<void> {
+    if (!messageId) return;
+    await this.ensureConnection();
+    await this.chatModule.stampUserMessageTurnIdentity(
+      messageId,
+      turnId,
+      sourceProviderVersion
+    );
   }
 
   async saveAssistantMessage(params: {
@@ -229,7 +281,13 @@ export class AIChatV2Module extends BaseModule {
           ? ("error" as const)
           : ("success" as const),
       toolResultSummary:
-        typeof toolResult.summary === "string" ? toolResult.summary : undefined,
+        typeof toolResult.summary === "string"
+          ? toolResult.summary
+          : // Steering-skipped tools carry a stable reason code instead of
+          // a summary — surface it so receipts explain the skip.
+          typeof toolResult.reason === "string"
+          ? toolResult.reason
+          : undefined,
       success: toolResult.success !== false,
       executionTimeMs:
         typeof toolResult.executionTimeMs === "number"
@@ -256,6 +314,77 @@ export class AIChatV2Module extends BaseModule {
     return saved;
   }
 
+  /** Delegate: merge patch keys into an existing message's metadata. */
+  async mergeMessageMetadata(
+    messageId: string,
+    patch: Record<string, unknown>
+  ): Promise<void> {
+    await this.chatModule.mergeMessageMetadata(messageId, patch);
+  }
+
+  /**
+   * Persist ONE durable plan-lifecycle display row (PRD §12.4: the plan
+   * decision card, question flow and receipts are pure projections of the
+   * transcript; streams alone would lose them on every renderer re-seed
+   * because the workspace selection handshake replaces the live buffer with
+   * the durable snapshot).
+   *
+   * The row carries the SAME metadata shape the workspace stream presenter
+   * uses for live rows (`planEventType` / `planId` / `questionView` /
+   * `planStateView`, plus `source: "chat-v2"`), so seeded history rows and
+   * live rows classify identically in `selectPlanPresentation` and
+   * `isAwaitingDecisionRow` — one contract, two producers.
+   *
+   * Idempotent by construction: the messageId is derived from the plan id +
+   * version + event type, so a replayed transition (restart, retry, loop
+   * re-emission) upserts the SAME row instead of duplicating it — matching
+   * tools' single-receipt contract.
+   */
+  async savePlanEventMessage(params: {
+    conversationId: string;
+    /** Loop/IPC transition that produced the row. Raw plan_state carries no planEventType. */
+    eventType:
+      | "plan_state"
+      | "ask_user_question"
+      | "plan_submitted"
+      | "plan_approved"
+      | "plan_rejected"
+      | "plan_changes_requested"
+      | "plan_blocked_tool";
+    /** Authoritative plan view persisted into the row's metadata. */
+    planState: AIChatPlanStateView;
+    /** ask_user_question rows additionally carry the pending question view. */
+    question?: AIChatPlanQuestionView;
+    timestamp?: Date;
+  }): Promise<void> {
+    const planId = params.planState?.planId;
+    const conversationId = params.conversationId;
+    if (!planId || !conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
+      return;
+    }
+    const version = params.planState.currentVersion ?? 0;
+    const planEventType =
+      params.eventType === "plan_state" ? undefined : params.eventType;
+    const metadata: ChatV2MessageMetadata = {
+      source: "chat-v2",
+      ...(planEventType ? { planEventType } : {}),
+      planId,
+      ...(params.question ? { questionView: params.question } : {}),
+      planStateView: params.planState,
+    };
+    const messageId = `plan-event-${planId}-v${version}-${params.eventType}`;
+    await this.chatModule.saveMessage({
+      messageId,
+      conversationId,
+      role: "assistant",
+      content: "",
+      timestamp: params.timestamp,
+      metadata,
+      messageType: MessageType.MESSAGE,
+    });
+    await this.coupleArchiveAppend(conversationId);
+  }
+
   async getConversationMessages(
     conversationId: string,
     limit?: number,
@@ -266,6 +395,36 @@ export class AIChatV2Module extends BaseModule {
       limit,
       offset
     );
+  }
+
+  /**
+   * Resolve a v2 assistant message by composite (conversation, messageId).
+   * Guards: conversation must be v2-scoped, role assistant, messageType
+   * MESSAGE, and metadata must carry source "chat-v2". Returns null otherwise;
+   * never touches the filesystem.
+   */
+  async getGeneratedImageSourceMessage(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    if (!conversationId.startsWith(V2_CONVERSATION_PREFIX)) {
+      return null;
+    }
+    const message = await this.chatModule.getMessageByConversationAndMessageId(
+      conversationId,
+      messageId
+    );
+    if (!message || message.role !== "assistant") {
+      return null;
+    }
+    if (message.messageType !== MessageType.MESSAGE) {
+      return null;
+    }
+    const metadata = parseMetadataRecord(message.metadata);
+    if (!metadata || metadata.source !== "chat-v2") {
+      return null;
+    }
+    return message;
   }
 
   /** Bounded existence check after (timestamp, rowId) — no full load. */
@@ -383,7 +542,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.sessionMemoryModule.deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearConversation: session memory clear failed:",
         err
       );
@@ -391,16 +550,22 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
-        "[ai-chat-v2] clearConversation: compact clear failed:",
-        err
-      );
+      log.error("[ai-chat-v2] clearConversation: compact clear failed:", err);
     }
     try {
       await new AIArtifactModule().deleteByConversation(conversationId);
     } catch (err) {
-      console.error(
-        "[ai-chat-v2] clearConversation: artifact clear failed:",
+      log.error("[ai-chat-v2] clearConversation: artifact clear failed:", err);
+    }
+    // B12: plugin-owned file artifacts are conversation-scoped too — the
+    // confirmed deletion removes them (Module-mediated, best-effort).
+    try {
+      await new PluginFileArtifactModule().removeForConversation(
+        conversationId
+      );
+    } catch (err) {
+      log.error(
+        "[ai-chat-v2] clearConversation: plugin artifact clear failed:",
         err
       );
     }
@@ -428,8 +593,19 @@ export class AIChatV2Module extends BaseModule {
       try {
         await new AIArtifactModule().deleteByConversation(s.conversationId);
       } catch (err) {
-        console.error(
+        log.error(
           "[ai-chat-v2] clearAllV2History: artifact clear failed:",
+          err
+        );
+      }
+      // B12: plugin-owned file artifacts follow the conversation delete.
+      try {
+        await new PluginFileArtifactModule().removeForConversation(
+          s.conversationId
+        );
+      } catch (err) {
+        log.error(
+          "[ai-chat-v2] clearAllV2History: plugin artifact clear failed:",
           err
         );
       }
@@ -437,7 +613,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.sessionMemoryModule.deleteAllV2();
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearAllV2History: session memory clearAll failed:",
         err
       );
@@ -445,7 +621,7 @@ export class AIChatV2Module extends BaseModule {
     try {
       await this.compactModule.deleteAllV2();
     } catch (err) {
-      console.error(
+      log.error(
         "[ai-chat-v2] clearAllV2History: compact clearAll failed:",
         err
       );

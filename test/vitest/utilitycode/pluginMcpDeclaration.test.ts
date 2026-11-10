@@ -135,3 +135,123 @@ describe("normalizeMcpDeclaration", () => {
     }
   });
 });
+
+describe("normalizeMcpDeclaration — host runtime variant", () => {
+  it("normalizes a valid runtime/entry declaration", () => {
+    const r = normalizeMcpDeclaration(
+      "scraper",
+      { transport: "stdio", runtime: "aifetchly-node", entry: "dist/server.cjs" },
+      ROOT,
+      ".mcp.json"
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.normalized.runtime).toBe("aifetchly-node");
+      expect(r.normalized.entry).toBe("dist/server.cjs");
+      expect(r.normalized.command).toBeUndefined();
+      expect(r.normalized.args).toEqual([]);
+      expect(
+        r.normalized.metadata["_aifetchlyRuntimeV1"]
+      ).toEqual({
+        contractVersion: 1,
+        runtime: "aifetchly-node",
+        entry: "dist/server.cjs",
+      });
+    }
+  });
+
+  it("rejects an unknown runtime", () => {
+    const r = normalizeMcpDeclaration(
+      "scraper",
+      { runtime: "system-node" } as unknown as PluginMcpServerDeclaration,
+      ROOT,
+      ".mcp.json"
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("mcp-config-invalid");
+  });
+
+  it("rejects runtime combined with command", () => {
+    const r = normalizeMcpDeclaration(
+      "scraper",
+      {
+        runtime: "aifetchly-node",
+        entry: "dist/server.cjs",
+        command: "node",
+      } as PluginMcpServerDeclaration,
+      ROOT,
+      ".mcp.json"
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe("mcp-config-invalid");
+      expect(r.error.message).toContain("mutually exclusive");
+    }
+  });
+
+  it("rejects a missing entry", () => {
+    const r = normalizeMcpDeclaration(
+      "scraper",
+      { runtime: "aifetchly-node" } as PluginMcpServerDeclaration,
+      ROOT,
+      ".mcp.json"
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("mcp-config-invalid");
+  });
+
+  it("rejects an absolute or traversal entry", () => {
+    for (const entry of ["/etc/passwd", "../escape.cjs", "a/../../b.cjs"]) {
+      const r = normalizeMcpDeclaration(
+        "scraper",
+        { runtime: "aifetchly-node", entry },
+        ROOT,
+        ".mcp.json"
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.code).toBe("path-outside-plugin");
+    }
+  });
+
+  it("rejects a package-supplied reserved runtime metadata key (design section 5.3)", () => {
+    const r = normalizeMcpDeclaration(
+      "scraper",
+      {
+        runtime: "aifetchly-node",
+        entry: "dist/server.cjs",
+        metadata: {
+          _aifetchlyRuntimeV1: { contractVersion: 1, runtime: "aifetchly-node", entry: "/etc/evil.cjs" },
+        },
+      },
+      ROOT,
+      ".mcp.json"
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe("mcp-config-invalid");
+      expect(r.error.message).toContain("_aifetchlyRuntimeV1");
+      expect(r.error.message).toContain("only the host writes it");
+    }
+
+    // Non-package metadata that does NOT declare the reserved key coexists
+    // with the host descriptor untouched.
+    const compatible = normalizeMcpDeclaration(
+      "scraper",
+      {
+        runtime: "aifetchly-node",
+        entry: "dist/server.cjs",
+        metadata: { pluginServerName: "scraper" },
+      },
+      ROOT,
+      ".mcp.json"
+    );
+    expect(compatible.ok).toBe(true);
+    if (compatible.ok) {
+      const descriptor = compatible.normalized.metadata[
+        "_aifetchlyRuntimeV1"
+      ] as { entry: string };
+      expect(descriptor.entry).toBe("dist/server.cjs");
+      expect(compatible.normalized.metadata.pluginServerName).toBe("scraper");
+    }
+  });
+});

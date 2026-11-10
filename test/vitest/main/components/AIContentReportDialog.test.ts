@@ -31,6 +31,10 @@ const createMock = vi.fn();
 vi.mock("@/views/api/aiContentReport", () => ({
   createAIContentReport: (...args: unknown[]) => createMock(...args),
 }));
+const recordMock = vi.fn();
+vi.mock("@/views/api/aiChatWorkspaceActions", () => ({
+  recordWorkspaceActionCount: (...args: unknown[]) => recordMock(...args),
+}));
 // The image encoder touches the DOM Canvas API; stub it to null so no preview
 // is attached and the dialog submits text-only evidence.
 vi.mock(
@@ -150,6 +154,15 @@ function setCategory(
 describe("AIContentReportDialog — clientReportId", () => {
   beforeEach(() => {
     createMock.mockReset();
+    recordMock.mockReset();
+  });
+
+  /** R8 §2: dialog-open counts into the workspace action counter. */
+  it("records a dialog_open workspace action on false→true open", async () => {
+    const w = mountDialog({ modelValue: false });
+    expect(recordMock).not.toHaveBeenCalled();
+    await w.setProps({ modelValue: true });
+    expect(recordMock).toHaveBeenCalledWith("report", "dialog_open", "ok");
   });
 
   it("submits a non-empty clientReportId when mounted already-open (v-if mount-on-demand)", async () => {

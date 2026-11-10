@@ -7,9 +7,10 @@
  * escape the application-owned directory.
  */
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import semver from "semver";
 import {
-  LOCAL_AI_RUNTIME_IDS,
+  LOCAL_AI_RUNTIME_IDS_V2,
   LocalAiRuntimeError,
   type LocalAiRuntimeId,
 } from "@/entityTypes/localAiRuntimeTypes";
@@ -19,6 +20,10 @@ const DOWNLOADS_DIR = ".downloads";
 const STAGING_DIR = ".staging";
 const CATALOG_CACHE_FILE = "catalog-cache.json";
 const CATALOG_CACHE_META_FILE = "catalog-cache.meta.json";
+const CATALOG_CACHE_V2_FILE = "catalog-cache.v2.json";
+const CATALOG_CACHE_V2_META_FILE = "catalog-cache.v2.meta.json";
+const MODEL_PARTS_DIR = path.join(DOWNLOADS_DIR, "files");
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const ACTIVE_STATE_FILE = "active.json";
 const PACKAGE_MANIFEST_FILE = "manifest.json";
 
@@ -62,7 +67,11 @@ export function resolveContainedPath(
 function assertRuntimeId(
   runtimeId: string
 ): asserts runtimeId is LocalAiRuntimeId {
-  if (!(LOCAL_AI_RUNTIME_IDS as readonly string[]).includes(runtimeId)) {
+  // v2 ids (grounding) are valid app-known ids for paths and state; the v1
+  // catalog schema still rejects them via its own z.enum(LOCAL_AI_RUNTIME_IDS).
+  if (
+    !(LOCAL_AI_RUNTIME_IDS_V2 as readonly string[]).includes(runtimeId)
+  ) {
     throw new LocalAiRuntimeError(
       "runtime_unknown_error",
       `Unknown runtime id: ${runtimeId}`
@@ -104,12 +113,47 @@ export class LocalAiRuntimePathService {
     return path.join(this.runtimeRoot, CATALOG_CACHE_META_FILE);
   }
 
+  /** v2 catalog cache files are separate from v1 (§7.3: upgrades and
+   * downgrades never parse the other schema's cache). */
+  get catalogCacheV2Path(): string {
+    return path.join(this.runtimeRoot, CATALOG_CACHE_V2_FILE);
+  }
+
+  get catalogCacheV2MetaPath(): string {
+    return path.join(this.runtimeRoot, CATALOG_CACHE_V2_META_FILE);
+  }
+
+  /** <runtimeRoot>/.downloads/files/<sha256>.part (§7.5: hash-keyed resume). */
+  getResumablePartPath(sha256: string): string {
+    if (!SHA256_HEX_PATTERN.test(sha256)) {
+      throw new LocalAiRuntimeError(
+        "runtime_unknown_error",
+        "Resumable part names must be a 64-char lowercase hex sha256."
+      );
+    }
+    return resolveContainedPath(this.runtimeRoot, MODEL_PARTS_DIR, `${sha256}.part`);
+  }
+
+  /** The .downloads/files directory (cleanup / reconciliation). */
+  get modelPartsRoot(): string {
+    return resolveContainedPath(this.runtimeRoot, MODEL_PARTS_DIR);
+  }
+
   get downloadsRoot(): string {
     return path.join(this.runtimeRoot, DOWNLOADS_DIR);
   }
 
   get stagingRoot(): string {
     return path.join(this.runtimeRoot, STAGING_DIR);
+  }
+
+  /**
+   * Create the runtime root and sibling hidden dirs used for downloads and
+   * extraction staging. Safe to call before every install/repair pipeline.
+   */
+  async ensureOperationDirectories(): Promise<void> {
+    await fs.mkdir(this.downloadsRoot, { recursive: true });
+    await fs.mkdir(this.stagingRoot, { recursive: true });
   }
 
   /** Directory holding all versions of one runtime id. */

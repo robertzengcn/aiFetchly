@@ -209,13 +209,13 @@ const confirmDialogctl = ref(false);
 const tmpId = ref(0);
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const tmpPlatform = ref("");
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     const fetchitem: Fetchparam = {
         // id:parseInt(campaignId),
         page: page,
         itemsPerPage: itemsPerPage,
-        sortBy: sortBy,
+        sortBy: sortBy?.[0] ?? { key: '', order: '' },
         search: search.value
     }
     FakeAPI.fetch(fetchitem).then(
@@ -246,12 +246,12 @@ function loadItems({ page, itemsPerPage, sortBy }) {
 //     console.log(routeData.href)
 //     window.open(routeData.href, '_blank')
 // }
-const editAccount = (item) => {
+const editAccount = (item: SocialAccountListData) => {
     router.push({
         name: 'editSocialAccount', params: { id: item.id }
     });
 }
-const deleteAccount = (item) => {
+const deleteAccount = (item: SocialAccountListData) => {
     showDeleteModal.value = true;
     deleteAccountid.value = item.id;
 }
@@ -265,7 +265,7 @@ const confirmrmAccount = () => {
         (res) => {
             console.log(res)
             showDeleteModal.value = false;
-            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
+            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] })
         }).catch(function (error) {
             console.error(error);
             // alertTitle.value=t('socialaccount.delete_account_errror')
@@ -284,7 +284,7 @@ const loginAccount = (item: SocialAccountListData) => {
     tmpId.value = item.id
     // tmpPlatform.value = item.social_type
 }
-const clearCookies = (item) => {
+const clearCookies = (item: SocialAccountListData) => {
     showClearCookiesModal.value = true;
     clearCookiesAccountid.value = item.id;
 }
@@ -299,7 +299,7 @@ const confirmClearCookies = () => {
         (res) => {
             console.log(res)
             setAlert(t('socialaccount.clear_cookies_success'), t('socialaccount.cookies_cleared_successfully'), "success")
-            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: '' })
+            loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] })
         }).catch(function (error) {
             console.error(error);
             setAlert(t('socialaccount.clear_cookies_error'), error.message, "error")
@@ -333,7 +333,7 @@ const receiveLoginMsg = (channel: string) => {
                     const content = json_value.data.content ? t(json_value.data.content) : t(json_value.data.title);
                     setAlert(t(json_value.data.title), content, alertType);
                     if (json_value.status) {
-                        loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
+                        loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: [] });
                     }
                 } else if (json_value.data.action == "manualLoginMsg") {
                     gstatus.value = 2
@@ -343,7 +343,7 @@ const receiveLoginMsg = (channel: string) => {
 
                 }else if(json_value.data.action == "saveCookiesSuccess"){
                     setAlert(t(json_value.data.title), t(json_value.data.content), "success")
-                    loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
+                    loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: [] });
                 }
             } else if (json_value.msg) {
                 setAlert(t("socialaccount.login_account_error"), json_value.msg, "error");
@@ -353,7 +353,7 @@ const receiveLoginMsg = (channel: string) => {
                 const content = json_value.data.content ? t(json_value.data.content) : t(json_value.data.title);
                 setAlert(t(json_value.data.title), content, "success");
             }
-            loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: "" });
+            loadItems({ page: options.page, itemsPerPage: itemsPerPage.value, sortBy: [] });
         }
     }
     )

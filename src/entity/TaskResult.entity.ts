@@ -4,23 +4,23 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Entity("task_result")
 export class TaskResultEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("integer")
-    taskrun_id: number;
+    taskrun_id!: number;
 
     @Column("text",{ nullable: true })
-    url: string;
+    url!: string;
     @Column("text",{ nullable: true })
-    title: string;
+    title!: string;
     @Column("text",{ nullable: true })
-    content: string;
+    content!: string;
     @Column("text",{ nullable: true })
-    lang: string;
+    lang!: string;
     
     // @Column("text", { nullable: true })
     // result_path: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
 }

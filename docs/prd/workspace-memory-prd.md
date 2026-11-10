@@ -5,6 +5,12 @@
 **Owner:** AiFetchly AI Chat
 **Related areas:** AI Chat V2, workspace-aware file tools, durable user memory, auto-dream, agent runtime
 **Technical design:** `docs/prd/workspace-memory-technical-design.md`
+**Follow-on PRDs:**
+
+- `docs/prd/workspace-memory-ai-tools-prd.md` — explicit chat tools / "Remember this" (Layer A)
+- `docs/prd/workspace-memory-auto-remember-prd.md` — auto-dream after tasks and durable failures (Layers B and C)
+- `docs/prd/portable-workspace-memory-prd.md` — portable Markdown projection
+
 **Builds on:**
 
 - `docs/superpowers/specs/2026-06-22-auto-dream-user-memory-prd.md`
@@ -271,6 +277,8 @@ Required:
 - Record run metrics and errors.
 - Respect AI enablement and memory settings.
 
+Phase 2 shipped a conservative batch path. Agent tasks were collected but not attached to a workspace (no conversation link in the original technical design §15.3). Failed tasks were not sources. Follow-on: `docs/prd/workspace-memory-auto-remember-prd.md`.
+
 ### 12.3 Phase 3: Better Retrieval And Surfacing
 
 Improve relevance and observability.
@@ -448,6 +456,8 @@ Requirements:
 7. Auto-dream shall respect a user-controllable workspace memory setting.
 8. Auto-dream shall log source counts, memory changes, model, status, and error messages.
 9. Auto-dream failures shall not block visible chat responses or agent task completion.
+10. Agent-task packets shall resolve workspace from `parentConversationId` then `agentConversationId` when those fields exist. Follow-on details: `docs/prd/workspace-memory-auto-remember-prd.md` FR-AR-001.
+11. Durable workspace-specific failures may create a capped `warning` without waiting for the 24-hour batch bar. Follow-on: same PRD, Layer C.
 
 ### FR-009: Source Attribution
 
@@ -671,7 +681,11 @@ The consolidation prompt must instruct the model:
 - Prefer explicit user statements over inferred facts.
 - Merge duplicates.
 - Archive contradictions.
+- Store a `warning` when a tool or command failed for a workspace-specific reason that would recur. Skip transient errors (rate limit, network, cancel).
+- Store a `workflow` when a completed task established a durable procedure. Prefer a `reference` to a file the task already wrote; never paste CSV or contact dumps.
 - Return JSON only.
+
+Prompt wording for failure extraction and the capped failure→warning path: `docs/prd/workspace-memory-auto-remember-prd.md`.
 
 ### 16.3 Output Schema
 
@@ -946,3 +960,5 @@ Do not send memory content in telemetry.
 6. Inject workspace memory before global user memory.
 7. Keep auto-dream conservative and scope-aware.
 8. Expose manual controls before enabling broad automatic extraction.
+
+Auto-remember after agent tasks and durable failures is specified in `docs/prd/workspace-memory-auto-remember-prd.md`. Explicit in-chat remember is `docs/prd/workspace-memory-ai-tools-prd.md`.

@@ -151,14 +151,6 @@ vi.mock("@/controller/SearchController", () => ({
   SearchController: { resetInstance: vi.fn() },
 }));
 
-vi.mock("@/controller/YellowPagesController", () => ({
-  YellowPagesController: { resetInstance: vi.fn() },
-}));
-
-vi.mock("@/modules/YellowPagesProcessManager", () => ({
-  YellowPagesProcessManager: { resetInstance: vi.fn() },
-}));
-
 vi.mock("@/main-process/communication/websocket-ipc", () => ({
   initializeWebSocketConnection: vi.fn().mockResolvedValue(undefined),
 }));
@@ -269,7 +261,7 @@ describe("desktop login window resolution", () => {
     // The navigation command must reach the LIVE window via the registry.
     expect(liveWindow.webContents.send).toHaveBeenCalledWith(
       NATIVATECOMMAND,
-      expect.objectContaining({ path: "Dashboard" })
+      expect.objectContaining({ path: "AI_Chat_Workspace" })
     );
     // And obviously not the destroyed one.
     expect(deadWindow.webContents.send).not.toHaveBeenCalled();

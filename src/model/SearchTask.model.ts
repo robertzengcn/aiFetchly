@@ -1,4 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
+import { log } from "@/modules/Logger";
 import { Repository } from "typeorm";
 import { SearchTaskEntity } from "@/entity/SearchTask.entity";
 import { getRecorddatetime } from "@/modules/lib/function";
@@ -232,7 +233,7 @@ export class SearchTaskModel extends BaseDb {
     if (!task) {
       return false;
     }
-    console.log("task.status",task.status)
+    log.info("task.status",task.status)
     // Tasks with status "NotStart", "Error", "Processing", or "Complete" can be edited
     return task.status === SearchTaskStatus.NotStart || 
            task.status === SearchTaskStatus.Error || 

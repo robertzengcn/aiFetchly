@@ -18,37 +18,37 @@ import {
 @Index(["hookId", "timestamp"])
 export class HookAuditEntryEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ name: "hook_run_id", type: "text" })
-  hookRunId: string;
+  hookRunId!: string;
 
   @Column({ name: "hook_id", type: "text" })
-  hookId: string;
+  hookId!: string;
 
   @Column({ name: "event_name", type: "text" })
-  eventName: string;
+  eventName!: string;
 
   @Column({ type: "text" })
-  source: string;
+  source!: string;
 
   /** "callback" | "command" */
   @Column({ type: "text" })
-  type: string;
+  type!: string;
 
   @Column({ name: "match_query", type: "text", nullable: true })
-  matchQuery: string | null;
+  matchQuery!: string | null;
 
   /** "started" | "success" | "blocked" | "failed" | "timeout" */
   @Column({ type: "text" })
-  status: string;
+  status!: string;
 
   @Column({ name: "duration_ms", type: "integer", nullable: true })
-  durationMs: number | null;
+  durationMs!: number | null;
 
   @Column({ type: "text", nullable: true })
-  reason: string | null;
+  reason!: string | null;
 
   @Column({ type: "datetime" })
-  timestamp: Date;
+  timestamp!: Date;
 }

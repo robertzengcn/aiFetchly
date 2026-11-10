@@ -38,27 +38,27 @@ import { Order } from "./order.decorator";
 ])
 export class AIChatArchiveEntryEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(2)
   @Column("varchar", { length: 64, nullable: false })
-  epoch: string;
+  epoch!: string;
 
   @Order(3)
   @Column("int", { nullable: false })
-  sourceRowId: number;
+  sourceRowId!: number;
 
   @Order(4)
   @Column("bigint", { nullable: false, default: 0 })
-  timestampMs: number;
+  timestampMs!: number;
 
   @Order(5)
   @Column("int", { nullable: false, default: 0 })
-  sourceRevision: number;
+  sourceRevision!: number;
 
   @Order(6)
   @Column("varchar", { length: 100, nullable: true })
@@ -66,7 +66,7 @@ export class AIChatArchiveEntryEntity extends AuditableEntity {
 
   @Order(7)
   @Column("varchar", { length: 20, nullable: false })
-  messageType: string;
+  messageType!: string;
 
   @Order(8)
   @Column("varchar", { length: 100, nullable: true })
@@ -78,9 +78,9 @@ export class AIChatArchiveEntryEntity extends AuditableEntity {
 
   @Order(10)
   @Column("int", { nullable: false, default: 0 })
-  contentCodePointLength: number;
+  contentCodePointLength!: number;
 
   @Order(11)
   @Column("varchar", { length: 100, nullable: false })
-  messageId: string;
+  messageId!: string;
 }

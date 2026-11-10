@@ -37,6 +37,9 @@ jobs:
       WINDOWS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.WINDOWS_STORE_PUBLISHER_DISPLAY_NAME }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
+      VITE_PLUGIN_HUB_URL_TEST: ${{ secrets.VITE_PLUGIN_HUB_URL_TEST || vars.VITE_PLUGIN_HUB_URL_TEST || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}
+      VITE_PLUGIN_HUB_URL_PROD: ${{ secrets.VITE_PLUGIN_HUB_URL_PROD || vars.VITE_PLUGIN_HUB_URL_PROD || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}
+      AIFETCHLY_ALLOW_HTTP_HUB: ${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}
 
     steps:
       - name: Checkout code
@@ -83,17 +86,29 @@ jobs:
           if [ "$BUILD_MODE" = "production" ] || [ "$BUILD_MODE" = "store" ]; then
             node_env="production"
             login_url="$VITE_LOGIN_URL_PROD"
+            hub_url="${VITE_PLUGIN_HUB_URL_PROD:-}"
           else
             node_env="test"
             login_url="$VITE_LOGIN_URL_TEST"
+            hub_url="${VITE_PLUGIN_HUB_URL_TEST:-}"
           fi
           if [ -z "$login_url" ]; then
             echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
             exit 1
           fi
+          allow_http="${AIFETCHLY_ALLOW_HTTP_HUB:-}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=$node_env"
             echo "VITE_LOGIN_URL=$login_url"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env ".env.${node_env}"
 
@@ -216,6 +231,9 @@ jobs:
       MAKE_MAC_DMG: ${{ github.event_name == 'push' && 'true' || inputs.build_mode == 'production' && 'true' || 'false' }}
       VITE_LOGIN_URL_TEST: ${{ secrets.VITE_LOGIN_URL_TEST }}
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
+      VITE_PLUGIN_HUB_URL_TEST: ${{ secrets.VITE_PLUGIN_HUB_URL_TEST || vars.VITE_PLUGIN_HUB_URL_TEST || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}
+      VITE_PLUGIN_HUB_URL_PROD: ${{ secrets.VITE_PLUGIN_HUB_URL_PROD || vars.VITE_PLUGIN_HUB_URL_PROD || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}
+      AIFETCHLY_ALLOW_HTTP_HUB: ${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}
 
     steps:
       - name: Checkout code
@@ -309,17 +327,29 @@ jobs:
           if [ "$BUILD_MODE" = "production" ]; then
             node_env="production"
             login_url="$VITE_LOGIN_URL_PROD"
+            hub_url="${VITE_PLUGIN_HUB_URL_PROD:-}"
           else
             node_env="test"
             login_url="$VITE_LOGIN_URL_TEST"
+            hub_url="${VITE_PLUGIN_HUB_URL_TEST:-}"
           fi
           if [ -z "$login_url" ]; then
             echo "::error::The login URL secret for ${BUILD_MODE} builds is empty."
             exit 1
           fi
+          allow_http="${AIFETCHLY_ALLOW_HTTP_HUB:-}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=$node_env"
             echo "VITE_LOGIN_URL=$login_url"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env ".env.${node_env}"
 
@@ -446,6 +476,8 @@ jobs:
       artifact_name: ${{ steps.calculate_version.outputs.artifact_name }}
     env:
       VITE_LOGIN_URL_PROD: ${{ secrets.VITE_LOGIN_URL_PROD }}
+      VITE_PLUGIN_HUB_URL_PROD: ${{ secrets.VITE_PLUGIN_HUB_URL_PROD || vars.VITE_PLUGIN_HUB_URL_PROD || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}
+      AIFETCHLY_ALLOW_HTTP_HUB: ${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}
 
     steps:
       - name: Checkout code
@@ -539,9 +571,20 @@ jobs:
             echo "::error::Store builds require the VITE_LOGIN_URL_PROD secret."
             exit 1
           fi
+          hub_url="${VITE_PLUGIN_HUB_URL_PROD:-}"
+          allow_http="${AIFETCHLY_ALLOW_HTTP_HUB:-}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=production"
             echo "VITE_LOGIN_URL=$VITE_LOGIN_URL_PROD"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env .env.production
 

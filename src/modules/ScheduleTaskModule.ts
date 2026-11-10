@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import { ScheduleTaskModel } from "@/model/ScheduleTask.model";
 import { ScheduleTaskEntity } from "@/entity/ScheduleTask.entity";
 import { ScheduleCreateRequest, ScheduleUpdateRequest, ScheduleDetailResponse, DependencyValidationResponse } from "@/entityTypes/schedule-type";
@@ -23,7 +24,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
             }
             return await this.scheduleTaskModel.createSchedule(scheduleData);
         } catch (error) {
-            console.error('Error creating schedule:', error);
+            log.error('Error creating schedule:', error);
             throw error;
         }
     }
@@ -36,7 +37,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
             }
             await this.scheduleTaskModel.updateSchedule(id, scheduleData);
         } catch (error) {
-            console.error('Error updating schedule:', error);
+            log.error('Error updating schedule:', error);
             throw error;
         }
     }
@@ -49,7 +50,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
             }
             await this.scheduleTaskModel.deleteSchedule(id);
         } catch (error) {
-            console.error('Error deleting schedule:', error);
+            log.error('Error deleting schedule:', error);
             throw error;
         }
     }
@@ -58,7 +59,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getScheduleById(id);
         } catch (error) {
-            console.error('Error getting schedule by ID:', error);
+            log.error('Error getting schedule by ID:', error);
             throw error;
         }
     }
@@ -69,7 +70,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
             const num = await this.scheduleTaskModel.getScheduleTotal();
             return { records, num };
         } catch (error) {
-            console.error('Error listing schedules:', error);
+            log.error('Error listing schedules:', error);
             throw error;
         }
     }
@@ -78,7 +79,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getScheduleTotal();
         } catch (error) {
-            console.error('Error getting schedule total:', error);
+            log.error('Error getting schedule total:', error);
             throw error;
         }
     }
@@ -87,7 +88,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getActiveSchedules();
         } catch (error) {
-            console.error('Error getting active schedules:', error);
+            log.error('Error getting active schedules:', error);
             throw error;
         }
     }
@@ -96,7 +97,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getSchedulesReadyToExecute();
         } catch (error) {
-            console.error('Error getting schedules ready to execute:', error);
+            log.error('Error getting schedules ready to execute:', error);
             throw error;
         }
     }
@@ -105,7 +106,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.updateNextRunTime(id, nextRunTime);
         } catch (error) {
-            console.error('Error updating next run time:', error);
+            log.error('Error updating next run time:', error);
             throw error;
         }
     }
@@ -114,7 +115,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.updateLastRunTime(id, lastRunTime);
         } catch (error) {
-            console.error('Error updating last run time:', error);
+            log.error('Error updating last run time:', error);
             throw error;
         }
     }
@@ -123,7 +124,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.incrementExecutionCount(id, success);
         } catch (error) {
-            console.error('Error incrementing execution count:', error);
+            log.error('Error incrementing execution count:', error);
             throw error;
         }
     }
@@ -132,7 +133,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.updateLastErrorMessage(id, errorMessage);
         } catch (error) {
-            console.error('Error updating last error message:', error);
+            log.error('Error updating last error message:', error);
             throw error;
         }
     }
@@ -141,7 +142,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getChildSchedules(parentId);
         } catch (error) {
-            console.error('Error getting child schedules:', error);
+            log.error('Error getting child schedules:', error);
             throw error;
         }
     }
@@ -150,7 +151,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getParentSchedule(childId);
         } catch (error) {
-            console.error('Error getting parent schedule:', error);
+            log.error('Error getting parent schedule:', error);
             throw error;
         }
     }
@@ -159,7 +160,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getDependencyChain(scheduleId);
         } catch (error) {
-            console.error('Error getting dependency chain:', error);
+            log.error('Error getting dependency chain:', error);
             throw error;
         }
     }
@@ -168,7 +169,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.checkCircularDependencies(scheduleId);
         } catch (error) {
-            console.error('Error checking circular dependencies:', error);
+            log.error('Error checking circular dependencies:', error);
             throw error;
         }
     }
@@ -177,7 +178,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getSchedulesByTaskType(taskType);
         } catch (error) {
-            console.error('Error getting schedules by task type:', error);
+            log.error('Error getting schedules by task type:', error);
             throw error;
         }
     }
@@ -186,7 +187,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             return await this.scheduleTaskModel.getSchedulesByTriggerType(triggerType);
         } catch (error) {
-            console.error('Error getting schedules by trigger type:', error);
+            log.error('Error getting schedules by trigger type:', error);
             throw error;
         }
     }
@@ -195,7 +196,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.enableSchedule(id);
         } catch (error) {
-            console.error('Error enabling schedule:', error);
+            log.error('Error enabling schedule:', error);
             throw error;
         }
     }
@@ -204,7 +205,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.disableSchedule(id);
         } catch (error) {
-            console.error('Error disabling schedule:', error);
+            log.error('Error disabling schedule:', error);
             throw error;
         }
     }
@@ -213,7 +214,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.pauseSchedule(id);
         } catch (error) {
-            console.error('Error pausing schedule:', error);
+            log.error('Error pausing schedule:', error);
             throw error;
         }
     }
@@ -222,7 +223,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.resumeSchedule(id);
         } catch (error) {
-            console.error('Error resuming schedule:', error);
+            log.error('Error resuming schedule:', error);
             throw error;
         }
     }
@@ -329,7 +330,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
                 warnings
             };
         } catch (error) {
-            console.error('Error validating schedule:', error);
+            log.error('Error validating schedule:', error);
             errors.push('Validation failed due to system error');
             return {
                 isValid: false,
@@ -358,7 +359,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
                 }
             };
         } catch (error) {
-            console.error('Error getting schedule details:', error);
+            log.error('Error getting schedule details:', error);
             throw error;
         }
     }
@@ -367,7 +368,7 @@ export class ScheduleTaskModule extends BaseModule implements ScheduleTaskModule
         try {
             await this.scheduleTaskModel.truncatedb();
         } catch (error) {
-            console.error('Error truncating database:', error);
+            log.error('Error truncating database:', error);
             throw error;
         }
     }

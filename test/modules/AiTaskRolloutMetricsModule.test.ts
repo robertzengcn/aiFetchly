@@ -635,34 +635,20 @@ describe("AiTaskRolloutMetricsModule (§17 snapshot; Mocha)", function () {
     expect(snapshot.manual.consumption.estimatedTokens).to.equal(0);
   });
 
-  it("guards worker access: model throws, module fail-closes to the zeroed snapshot", async () => {
+  it("guards worker access: BaseDb construction throws for model and module (NFR-03)", () => {
     const previous = process.env.WORKER_TYPE;
     process.env.WORKER_TYPE = "test-worker";
     try {
-      // Model layer: assertNotWorker throws BEFORE any repository/raw query
-      // access — a worker import fails loudly at the data-access boundary.
-      const model = new AiTaskRolloutMetricsModel(tmpDir);
-      let modelError: unknown = null;
-      try {
-        await model.aggregateSince({ since: windowStart() });
-      } catch (e) {
-        modelError = e;
-      }
-      expect(modelError).to.be.instanceOf(Error);
-      expect((modelError as Error).message).to.include(
+      // The worker guard is enforced at BaseDb construction (assertNotWorker
+      // runs before any model wiring): a worker can never wire the rollout
+      // tables at all — stricter than the previous per-method guard whose
+      // throw the module's fail-close contract used to absorb. The
+      // fail-close-to-zeroed-snapshot behavior for table/row errors keeps
+      // its own coverage above (partial tables, malformed rows).
+      expect(() => new AiTaskRolloutMetricsModel(tmpDir)).to.throw(
         "Direct database access from worker process is not allowed"
       );
-
-      // Module layer: the fail-closed contract catches the guard throw and
-      // returns the zeroed snapshot — a monitor never throws into IPC, and
-      // no query runs either way. The guard throw IS an aggregation failure,
-      // so the snapshot is marked degraded (D7 review fix).
-      const snapshot = await new AiTaskRolloutMetricsModule().getRolloutSnapshot(
-        { since: windowStart() }
-      );
-      expect(snapshot.manual.consumption.executions).to.equal(0);
-      expect(snapshot.operations.total).to.equal(0);
-      expect(snapshot.degraded).to.equal(true);
+      expect(() => new AiTaskRolloutMetricsModule()).to.throw(/worker/i);
     } finally {
       if (previous === undefined) {
         delete process.env.WORKER_TYPE;

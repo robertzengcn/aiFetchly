@@ -23,12 +23,32 @@ export class OpenAIStreamParser {
   /**
    * Consume a fetch `Response` body as an OpenAI SSE stream.
    * Resolves when the stream ends (or `[DONE]`); rejects on abort.
+   * Stage B §7 (FR-001): the callback consumer delegates to the native
+   * `parseBodyStream` generator — there is one parser implementation.
    */
   async consume(
     response: Response,
     onChunk: (chunk: OpenAIChatCompletionChunk) => void,
     signal?: AbortSignal
   ): Promise<void> {
+    for await (const chunk of this.parseBodyStream(response, signal)) {
+      onChunk(chunk);
+    }
+  }
+
+  /**
+   * Stage B §7 (generator-streaming PRD FR-001): native incremental
+   * iteration of an OpenAI SSE body. Yields parsed chunks with fragmented
+   * content, tool-call arguments, reasoning fields, final usage-only frames,
+   * and supported finish reasons preserved; `[DONE]` terminates the stream
+   * (no later buffered payload becomes output). Early consumer close
+   * (`.return()`), abort, or failure cancels the owned body and releases the
+   * reader lock in `finally`.
+   */
+  async *parseBodyStream(
+    response: Response,
+    signal?: AbortSignal
+  ): AsyncGenerator<OpenAIChatCompletionChunk, void, void> {
     if (!response.body) {
       throw new Error("Provider response body is null.");
     }
@@ -40,6 +60,9 @@ export class OpenAIStreamParser {
     const decoder = new TextDecoder();
     let buffer = "";
     let readBytes = 0;
+    let completedNaturally = false;
+    /** TODO-04: the SSE protocol said [DONE] — stop parsing ANY later bytes. */
+    let sawDoneMarker = false;
 
     try {
       let streamActive = true;
@@ -94,6 +117,7 @@ export class OpenAIStreamParser {
           }
           const payload = trimmed.slice(5).trim();
           if (payload === "[DONE]") {
+            sawDoneMarker = true;
             streamActive = false;
             break;
           }
@@ -109,21 +133,25 @@ export class OpenAIStreamParser {
           }
           const chunk = this.toChunk(parsed);
           if (chunk) {
-            onChunk(chunk);
+            yield chunk;
           }
         }
       }
+      // Physical EOF reached (done === true): nothing more can arrive.
+      completedNaturally = true;
 
-      // Flush any trailing data line left in the buffer.
+      // Flush any trailing data line left in the buffer — but NEVER after
+      // the protocol terminated with [DONE]: late buffered payload is not
+      // output (TODO-04).
       const trailing = buffer.trim();
-      if (trailing.startsWith("data:")) {
+      if (!sawDoneMarker && trailing.startsWith("data:")) {
         const payload = trailing.slice(5).trim();
         if (payload && payload !== "[DONE]") {
           try {
             const parsed: unknown = JSON.parse(payload);
             const chunk = this.toChunk(parsed);
             if (chunk) {
-              onChunk(chunk);
+              yield chunk;
             }
           } catch {
             // ignore trailing parse error
@@ -131,6 +159,19 @@ export class OpenAIStreamParser {
         }
       }
     } finally {
+      // Review F6 (TODO-04): [DONE] is protocol completion, not physical EOF
+      // — trailing unread bytes would hold the socket, so cancel there too.
+      // Only a fully-drained body (done === true with no DONE marker) leaves
+      // the reader unsettled.
+      if (!completedNaturally || sawDoneMarker) {
+        // Early close / abort / failure / post-DONE: cancel the owned body
+        // so the request is not left streaming unobserved (design §7).
+        try {
+          await reader.cancel().catch(() => undefined);
+        } catch {
+          // releaseLock below still runs.
+        }
+      }
       reader.releaseLock();
     }
   }

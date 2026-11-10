@@ -13,30 +13,30 @@ export enum DependencyCondition {
 @Index(["parent_schedule_id", "child_schedule_id"], { unique: true })
 export class ScheduleDependencyEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Column("integer", { comment: "Foreign key to parent ScheduleTaskEntity" })
-    parent_schedule_id: number;
+    parent_schedule_id!: number;
 
     @Column("integer", { comment: "Foreign key to child ScheduleTaskEntity" })
-    child_schedule_id: number;
+    child_schedule_id!: number;
 
     @Column("varchar", {
         length: 20,
         default: DependencyCondition.ON_SUCCESS,
         comment: "When to trigger the child job: on_success, on_completion, on_failure"
     })
-    dependency_condition: string;
+    dependency_condition!: string;
 
     @Column("integer", { 
         default: 0, 
         comment: "Delay in minutes after parent job completes" 
     })
-    delay_minutes: number;
+    delay_minutes!: number;
 
     @Column("boolean", { default: true, comment: "Whether the dependency is active" })
-    is_active: boolean;
+    is_active!: boolean;
 
     @Column("text", { nullable: true, comment: "Additional notes about the dependency" })
-    notes: string | null;
+    notes!: string | null;
 } 

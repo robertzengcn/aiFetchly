@@ -40,6 +40,16 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   "read_attachment_content",
   "knowledge_library_search",
   "run_subagent",
+  // Universal prompt-skill invocation (design §10.4): one stable tool instead
+  // of one documentation tool per skill; the schema is tiny and the model
+  // must be able to invoke installed skills without a catalog search.
+  "use_skill",
+  "skill_resource_list",
+  "skill_resource_read",
+  // Installer entry point (design §8.7): while the feature flag is enabled,
+  // prepare is ALWAYS loaded — the model must never need tool_catalog_search
+  // to discover it. Evaluated dynamically (not at module load) so runtime
+  // flag changes and test setups are respected.
   "conversation_tool_history",
   // The preserved-output readers are ALWAYS in the core tool set, never behind
   // `tool_catalog_search`. They are the only way the model can reach an output
@@ -51,6 +61,18 @@ const ALWAYS_LOADED_TOOL_NAMES: ReadonlySet<string> = new Set([
   TOOL_RESULT_READ_TOOL_NAME,
   TOOL_RESULT_SEARCH_TOOL_NAME,
 ]);
+// The installer names live in their own set so the flag check stays dynamic.
+const INSTALLER_ALWAYS_TOOLS: ReadonlySet<string> = new Set([
+  "skill_install_prepare",
+  "skill_install_status",
+  "skill_install_cancel",
+]);
+
+/** Installer feature flag read at classify time (kill-switch pattern). */
+function installerToolsAlwaysLoaded(): boolean {
+  const raw = process.env.AIFETCHLY_SKILL_INSTALL_ENABLED;
+  return raw === "true" || raw === "1";
+}
 
 const CONTEXTUAL_SHELL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "shell_execute",
@@ -110,6 +132,14 @@ const CONTEXTUAL_EMAIL_INBOX_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Contact verification tool. Promoted when the user asks to verify, validate,
+ * normalize, clean, check, or classify email/phone contacts (design §16.1).
+ * Generic email questions ("how does email work?") must NOT promote it.
+ */
+const CONTEXTUAL_VERIFICATION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "verify_contact_info",
+]);
+/**
  * Outbound marketing send tools. Promoted when the user asks to send new
  * emails to contacts/customers so the model uses `start_email_send_task`
  * instead of claiming it can only reply via `send_email_reply`, or treating
@@ -120,7 +150,6 @@ const CONTEXTUAL_EMAIL_SEND_TOOL_NAMES: ReadonlySet<string> = new Set([
   "list_email_templates",
   "start_email_send_task",
 ]);
-
 const SHELL_INTENT_RE =
   /\b(shell|terminal|bash|powershell|cmd|command|execute|run|rm|unlink)\b|(?:\b(delete|remove)\b.*(?:\b(file|folder|directory|path)\b|[./~]|\.[A-Za-z0-9]{1,8}\b))/i;
 
@@ -191,9 +220,12 @@ const HTML_ARTIFACT_INTENT_RE =
  * Surfaces `attach_local_images` so the model does not fall back to
  * shell/Pillow for workspace image edits (PRD UC1).
  * `backgroun\w*` tolerates common typos such as "backgroud".
+ * The last branch covers extension-named files ("edit the logo.png") which
+ * the earlier noun branches miss: their `[^.]` gap cannot cross the dot of
+ * the file extension.
  */
 const IMAGE_ATTACH_INTENT_RE =
-  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b/i;
+  /\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.]{0,100}?\b(images?|photos?|pictures?|jpe?g|png|webp|gif|background)\b|\b(images?|photos?|pictures?)\b[^.]{0,100}?\b(attach|analyze|compare|edit|background|white|transparent)\b|\b(make|change|set|update)\b[^.]{0,60}?\bbackgroun\w*\b|\b(attach|analyze|compare|edit|modify|update|change|fix|replace|remove)\b[^.!?\n]{0,60}?\.(?:png|jpe?g|jfif|webp|gif|bmp|tiff?)\b/i;
 
 const IMAGE_EDIT_ACTION_RE =
   /\b(edit|modify|update|change|fix|replace|remove|make|set|convert|transform)\b|\bbackgroun\w*\b[^.]{0,60}?\b(white|transparent|color|colour)\b/i;
@@ -218,6 +250,24 @@ const EMAIL_INBOX_INTENT_RE =
   /\b(inbox|inboxes|mailbox|mailboxes|emaibox)\b|\b(unread|new|received|inbound)\s+emails?\b|\bcheck(?:ing)?\b[^.]{0,60}?\b(emails?|mails?|inbox|mailbox|emaibox)\b|\b(emails?|mails?)\b[^.]{0,60}?\b(inbox|mailbox|emaibox|unread)\b/i;
 
 /**
+ * Contact verification intent (design §16.1).
+ *
+ * Branch 1: a verification action verb (verify|validate|check|clean|normalize|
+ * classify) within ~40 chars of a contact noun. Generic questions like
+ * "how does email work?" or "what is phone verification?" must NOT match.
+ *
+ * Branch 2: a gather/extract verb near a contact noun ("get their contact
+ * method", "find emails and phones", "extract contact info"). Lead-research
+ * requests must promote the tool so plan execution can call it; otherwise it
+ * stays deferred after "Plan approved" and the model skips verification.
+ */
+const VERIFY_CONTACT_INTENT_RE =
+  /\b(?:verify|validate|check|clean|normalize|normalise|classify)\b[^.!?\n]{0,40}?\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b|\b(?:emails?|e-mails?|mail address|phones?|telephone|mobile|contacts?)\b[^.!?\n]{0,40}?\b(?:verify|validate|check|clean|normalize|normalise|classify)\b/i;
+
+const GATHER_CONTACT_INTENT_RE =
+  /\b(?:get|find|extract|collect|gather|scrape|discover)\b[^.!?\n]{0,80}?\b(?:emails?|e-mails?|phones?|telephone|mobile|contacts?|contact\s+(?:info|information|method|details|list))\b/i;
+
+/**
  * Natural-language outbound / marketing send intent.
  * Surfaces SMTP senders + `start_email_send_task` so "write a marketing
  * email and send it to these customers" does not leave the send tool
@@ -226,7 +276,6 @@ const EMAIL_INBOX_INTENT_RE =
  */
 const EMAIL_SEND_INTENT_RE =
   /\bmarketing\s+emails?\b|\bbulk\s+emails?\b|\bemail\s+campaign\b|\bcampaign\s+emails?\b|\boutreach\s+emails?\b|\bnewsletter\s+emails?\b|\bsend(?:ing)?\b[^.!?\n]{0,80}?\b(?:marketing|bulk|campaign|newsletter|outreach)\s+emails?\b|\bsend(?:ing)?\b[^.!?\n]{0,80}?\b(?:emails?|mails?)\b[^.!?\n]{0,80}?\b(?:customers?|contacts?|recipients?|companies|clients?|leads?)\b|\bsend\s+(?:it|them|these|those)\s+to\b[^.!?\n]{0,50}?\b(?:customers?|contacts?|recipients?|companies|clients?|leads?)\b|\b(?:write|draft|create)\b[^.!?\n]{0,50}?\bmarketing\s+emails?\b|\bsend\s+(?:the\s+|these\s+|those\s+)?(?:emails?|mails?)\b|\bemail\s+(?:these\s+|those\s+|the\s+)?(?:customers?|contacts?|recipients?)\b/i;
-
 /**
  * Short follow-ups that should inherit intent from recent prior user messages
  * (e.g. "continue" after an image-edit request, or "yes, please send them"
@@ -234,6 +283,15 @@ const EMAIL_SEND_INTENT_RE =
  */
 const CONTINUATION_MESSAGE_RE =
   /^(?:continue|yes|y|ok|okay|sure|go\s*on|go\s*ahead|retry|try\s*again|please\s*continue|do\s*it|proceed|keep\s*going)(?:[,.]?\s+(?:please\s+)?(?:send|do)\s+(?:them|it|these|those)?)?\.?$|^(?:please\s+)?send\s+(?:them|it|these|those)(?:\s+now)?\.?$/i;
+
+/**
+ * Plan-approval / begin-execution turns are not short "continue" replies, but
+ * they should still inherit contextual tool promotion from the original goal.
+ * Without this, specialized tools stay deferred after "Plan approved. Please
+ * begin executing the plan now."
+ */
+const PLAN_EXECUTION_MESSAGE_RE =
+  /\bplan approved\b|\bbegin executing\b|\bexecute the plan\b|\bstart executing\b/i;
 
 /** Source types that are always deferred by default. */
 const DEFERRED_SOURCES: ReadonlySet<ToolCatalogSource> = new Set([
@@ -264,6 +322,13 @@ export class ToolLoadPolicyService {
 
     // 3. Explicit always-loaded core helpers.
     if (ALWAYS_LOADED_TOOL_NAMES.has(name)) return "always";
+    // 3b. Installer tools are always-loaded while the feature flag is on.
+    if (
+      installerToolsAlwaysLoaded() &&
+      INSTALLER_ALWAYS_TOOLS.has(name)
+    ) {
+      return "always";
+    }
 
     // 4. Explicitly blocked tools are never auto-exposed.
     if (input.context.blockedToolNames?.has(name)) return "deferred";
@@ -365,6 +430,14 @@ export class ToolLoadPolicyService {
       return "contextual";
     }
     if (
+      CONTEXTUAL_VERIFICATION_TOOL_NAMES.has(name) &&
+      this.messageMatchesIntent(input.context, (msg) =>
+        this.hasVerifyContactIntent(msg)
+      )
+    ) {
+      return "contextual";
+    }
+    if (
       CONTEXTUAL_EMAIL_SEND_TOOL_NAMES.has(name) &&
       this.messageMatchesIntent(input.context, (msg) =>
         this.hasEmailSendIntent(msg)
@@ -374,6 +447,11 @@ export class ToolLoadPolicyService {
     }
 
     // 10. Built-in default: specialized tools are deferred and discoverable.
+    // Note: follow-up edits on AI-generated images are intentionally NOT
+    // force-promoted here — selected generated images arrive attached to the
+    // current user turn, so no export/attach tool is needed for them. The
+    // workspace-file IMAGE_ATTACH_INTENT_RE path above still promotes
+    // attach_local_images for real workspace image files.
     return "deferred";
   }
 
@@ -385,7 +463,11 @@ export class ToolLoadPolicyService {
   private intentMessages(context: ToolCatalogRuntimeContext): string[] {
     const current = context.currentUserMessage ?? "";
     const recent = context.recentUserMessages ?? [];
-    if (CONTINUATION_MESSAGE_RE.test(current.trim()) && recent.length > 0) {
+    if (
+      (CONTINUATION_MESSAGE_RE.test(current.trim()) ||
+        PLAN_EXECUTION_MESSAGE_RE.test(current)) &&
+      recent.length > 0
+    ) {
       return [current, ...recent];
     }
     return [current];
@@ -438,6 +520,12 @@ export class ToolLoadPolicyService {
 
   private hasEmailInboxIntent(message: string): boolean {
     return EMAIL_INBOX_INTENT_RE.test(message);
+  }
+  private hasVerifyContactIntent(message: string): boolean {
+    return (
+      VERIFY_CONTACT_INTENT_RE.test(message) ||
+      GATHER_CONTACT_INTENT_RE.test(message)
+    );
   }
 
   private hasEmailSendIntent(message: string): boolean {

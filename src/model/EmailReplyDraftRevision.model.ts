@@ -6,14 +6,17 @@ import { emailReplyDraftRevisionWriteSchema } from "@/schemas/entity/emailReplyD
 import { rejectDatabaseAccessFromWorker } from "@/model/_workerBoundaryGuard";
 
 export class EmailReplyDraftRevisionModel extends BaseDb {
-  private repository: Repository<EmailReplyDraftRevisionEntity>;
+  /** Resolved per access — BaseDb rebinds the live singleton before every
+   * guarded async call; a construction-time repository could stay bound to a
+   * replaced DataSource (test describe-scope module construction). */
+  private get repository(): Repository<EmailReplyDraftRevisionEntity> {
+    return this.sqliteDb.connection.getRepository(EmailReplyDraftRevisionEntity);
+  }
 
   constructor(filepath: string) {
     super(filepath);
     rejectDatabaseAccessFromWorker("EmailReplyDraftRevisionModel");
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplyDraftRevisionEntity
-    );
+
   }
 
   /** Persist an immutable revision. `actor` must be "ai" | "user". */

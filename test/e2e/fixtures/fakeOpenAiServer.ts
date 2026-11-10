@@ -32,6 +32,9 @@ import {
   parseChatRequestBody,
   toolCallChunk,
   toolCallFinishChunk,
+  textChunk,
+  imagesChunk,
+  stopChunk,
   type FakeAiScenarioName,
 } from "../scenarios/openAiProtocol";
 import { resolveScenario } from "../scenarios/aiChatScenarios";
@@ -43,8 +46,16 @@ export interface RedactedRequest {
   readonly model: string | undefined;
   readonly messageCount: number;
   readonly roles: readonly string[];
+  /** Last-3 message roles, in order (continuation-classification evidence). */
+  readonly tailRoles: readonly string[];
   readonly stream: boolean;
   readonly toolNames: readonly string[];
+  /**
+   * SHA-256 of every `image_url` content-part URL in the request, in message
+   * then part order. Hashes (never base64/data URLs) let specs assert which
+   * images were attached and in which order without logging payloads.
+   */
+  readonly imagePartHashes: readonly string[];
   /**
    * The `response_format.type` the client requested (`json_object` when the
    * caller passed the FR-026 JSON hint), if any. Format name only — never
@@ -52,7 +63,30 @@ export interface RedactedRequest {
    */
   readonly responseFormat: string | undefined;
   readonly clientDisconnected: boolean;
+  /**
+   * Occurrences of the fixed prompt-skill context markers — REDACTED counts
+   * (constant markers, never user content), used to prove single vs
+   * duplicated instruction injection and post-compaction reattachment.
+   * Lost in a merge and restored (skillAcceptance/skillInstallRuntimeFlows
+   * depend on them).
+   */
+  readonly hiddenSkillBlocks: number;
+  readonly reattachedSkillBlocks: number;
+  readonly skillDiagnostics: readonly string[];
   readonly timestamp: number;
+}
+
+/** One scripted queue entry: a tool call, or a canned scenario response. */
+export interface ScriptedToolCall {
+  readonly name?: string;
+  readonly arguments?: string;
+  /** When set, respond with this scenario instead of emitting a tool call
+   * (used to script isolated batch-worker requests that must return images). */
+  readonly scenario?: FakeAiScenarioName;
+  /** When set alongside scenario "stream-generated-image"(-delayed), override
+   * the base64 PNG payload served by that scenario so each worker request
+   * returns a distinct image. Ignored for other scenarios. */
+  readonly imageB64?: string;
 }
 
 export interface FakeOpenAiController {
@@ -60,8 +94,45 @@ export interface FakeOpenAiController {
   readonly providerBaseUrl: string;
   readonly port: number;
   setScenario(name: FakeAiScenarioName): Promise<void>;
+  /**
+   * Override the text served to a tool-result CONTINUATION request (the
+   * follow-up model round after the app executes an approved tool). Pass
+   * null to fall back to the tool-success-followup scenario. Lost in a
+   * merge and restored (skillInstallRuntimeFlows/skillAcceptanceVideoUse
+   * depend on it).
+   */
+  setFollowupText(text: string | null): Promise<void>;
   /** Configure a tool call for the next (non-continuation) chat request. */
   setToolCall(name: string, argsJson: string): Promise<void>;
+  /** Clear the configured tool call (POST tool-call with no name). */
+  clearToolCall(): Promise<void>;
+  /**
+   * Override NON-continuation replies when no tool call is configured.
+   * Lost in a merge and restored (compaction/post-invoke scenarios script
+   * plain-text rounds with it).
+   */
+  setResponseText(text: string | null): Promise<void>;
+  /**
+   * Configure MULTIPLE tool calls in one response (queue/steering E2E):
+   * the app's loop executes them sequentially, so steering committed while
+   * the stream is still open lands at the after_model boundary and skips
+   * every unstarted call. `delayMs` delays before the first tool-call delta
+   * so the test can click Steer mid-stream.
+   */
+  setToolCalls(
+    calls: ReadonlyArray<{ name: string; arguments: string }>,
+    delayMs?: number
+  ): Promise<void>;
+  /**
+   * Replace the scripted tool-call queue. Each chat request (continuation or
+   * not) consumes the next entry; when the queue is empty requests fall back
+   * to the other configured tool call / active scenario. Lets a spec script a
+   * whole multi-round tool conversation (e.g. tool_catalog_search →
+   * process_artifact_batch → one streamed image per isolated batch worker →
+   * parent follow-up). Entries may carry a canned `scenario` (optionally with
+   * an `imageB64` payload override) instead of a tool call.
+   */
+  setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void>;
   /**
    * Queue canned bodies for the next non-streaming chat completions, in
    * order (G03 local-provider compatibility: reply-draft generation needs a
@@ -115,6 +186,24 @@ function redactChatRequest(
   const toolNames = (Array.isArray(parsed.tools) ? parsed.tools : [])
     .map((t) => (t as { function?: { name?: string } })?.function?.name)
     .filter((n): n is string => typeof n === "string");
+  // Image parts are recorded as SHA-256 hashes only — never the data URLs.
+  const imagePartHashes: string[] = [];
+  for (const message of messages) {
+    const content = (message as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const url = (part as { type?: string; image_url?: { url?: unknown } })
+        ?.image_url?.url;
+      if (
+        (part as { type?: unknown })?.type === "image_url" &&
+        typeof url === "string"
+      ) {
+        imagePartHashes.push(
+          crypto.createHash("sha256").update(url, "utf8").digest("hex")
+        );
+      }
+    }
+  }
   const responseFormat =
     typeof (parsed.response_format as { type?: unknown } | undefined)?.type ===
     "string"
@@ -126,11 +215,24 @@ function redactChatRequest(
     model: parsed.model,
     messageCount: messages.length,
     roles,
+    // Last-3 message roles — what the server's continuation classification
+    // keys on. Deduped `roles` cannot reveal ordering, and handoff (role:user)
+    // placement after the tool batch decides continuation detection.
+    tailRoles: messages
+      .slice(-3)
+      .map((m) => (m as { role?: string }).role ?? "?"),
     stream: parsed.stream === true,
     toolNames,
+    imagePartHashes,
     responseFormat: responseFormat !== "" ? responseFormat : undefined,
     clientDisconnected,
     timestamp: Date.now(),
+    hiddenSkillBlocks: (rawBody.match(/<invoked_prompt_skill /g) ?? []).length,
+    reattachedSkillBlocks: (
+      rawBody.match(/invoked-prompt-skill-reattached/g) ?? []
+    ).length,
+    skillDiagnostics:
+      rawBody.match(/invoked-prompt-skill-diagnostic code="([A-Z_]+)"/g) ?? [],
   };
 }
 
@@ -139,18 +241,65 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   let scenario: FakeAiScenarioName = "stream-text";
   /** Optional tool call to emit on the next (non-continuation) chat request. */
   let toolCallConfig: { name: string; arguments: string } | null = null;
+  let followupText: string | null = null;
+  let responseText: string | null = null;
+  /** Optional multi-call variant (queue/steering E2E). */
+  let toolCallsConfig: {
+    calls: ReadonlyArray<{ name: string; arguments: string }>;
+    delayMs: number;
+  } | null = null;
+  /**
+   * Scripted tool-call queue. Each chat request (continuation or not)
+   * consumes the head entry; when empty, requests fall back to the default
+   * plan (configured tool call / follow-up completion / active scenario).
+   */
+  let toolCallQueue: ScriptedToolCall[] = [];
+  /** Monotonic id for scripted tool calls (unique across rounds). */
+  let scriptedCallCounter = 0;
   /** Canned non-streaming completion bodies, popped in order (G03). */
   let nonStreamingQueue: string[] = [];
   const requestLog: RedactedRequest[] = [];
+
+  /** True when a role:user message is a MODEL-ONLY handoff the app appends
+   * after the tool batch (Chat Completions contract, ticket P2-8): prompt-skill
+   * instructions or image artifacts. These must NOT break continuation
+   * classification — the request is still the loop feeding tool results. */
+  function isHandoffMessage(message: unknown): boolean {
+    const m = message as { role?: string; content?: unknown };
+    if (m?.role !== "user") return false;
+    if (typeof m.content === "string") {
+      return m.content.includes("[application:invoked-prompt-skill]");
+    }
+    if (Array.isArray(m.content)) {
+      return m.content.some(
+        (p) =>
+          (p as { type?: string; text?: string })?.type === "text" &&
+          typeof (p as { text?: string }).text === "string" &&
+          (p as { text?: string }).text.includes("[AIFETCHLY_IMAGE_HANDOFF_V1]")
+      );
+    }
+    return false;
+  }
 
   /** True when a chat request carries a tool-result message (the continuation
    * after the app executed an approved tool). */
   function hasToolResultMessage(rawBody: string): boolean {
     try {
       const parsed = JSON.parse(rawBody) as { messages?: unknown[] };
-      return Array.isArray(parsed.messages)
-        ? parsed.messages.some((m) => (m as { role?: string }).role === "tool")
-        : false;
+      if (!Array.isArray(parsed.messages) || parsed.messages.length === 0) {
+        return false;
+      }
+      // A continuation is the loop feeding a JUST-EXECUTED tool result back.
+      // Trailing handoff messages (role:user, model-only context appended
+      // AFTER the tool batch — skill instructions / image artifacts) are
+      // skipped first: the request still ends its tool flow at role:"tool".
+      // Checking ANY message (the original bug) made every later turn in the
+      // same conversation a "continuation" forever, because tool rows persist
+      // in history — locking the server onto one followup text.
+      let idx = parsed.messages.length - 1;
+      while (idx >= 0 && isHandoffMessage(parsed.messages[idx])) idx -= 1;
+      if (idx < 0) return false;
+      return (parsed.messages[idx] as { role?: string }).role === "tool";
     } catch {
       return false;
     }
@@ -180,10 +329,40 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         res.end();
         return;
       }
+      if (req.method === "POST" && url === "/__e2e/followup-text") {
+        // readBody(req) above already consumed the stream — parse the
+        // shared body string (re-reading req yields nothing and every
+        // override silently 400'd, the root cause of F1).
+        try {
+          const parsed = JSON.parse(body) as { text?: unknown };
+          followupText = typeof parsed.text === "string" ? parsed.text : null;
+          res.writeHead(204);
+        } catch {
+          res.writeHead(400);
+        }
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/response-text") {
+        try {
+          const parsed = JSON.parse(body) as { text?: unknown };
+          responseText = typeof parsed.text === "string" ? parsed.text : null;
+          res.writeHead(204);
+        } catch {
+          res.writeHead(400);
+        }
+        res.end();
+        return;
+      }
       if (req.method === "POST" && url === "/__e2e/reset") {
         requestLog.length = 0;
         scenario = "stream-text";
         toolCallConfig = null;
+        toolCallsConfig = null;
+        toolCallQueue = [];
+        scriptedCallCounter = 0;
+        followupText = null;
+        responseText = null;
         nonStreamingQueue = [];
         res.writeHead(204);
         res.end();
@@ -209,14 +388,69 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           const parsed = JSON.parse(body) as {
             name?: string;
             arguments?: string;
+            calls?: ReadonlyArray<{ name: string; arguments?: string }>;
+            delayMs?: number;
           };
-          if (parsed.name) {
+          toolCallQueue = [];
+          if (Array.isArray(parsed.calls) && parsed.calls.length > 0) {
+            toolCallsConfig = {
+              calls: parsed.calls.map((call) => ({
+                name: call.name,
+                arguments: call.arguments ?? "{}",
+              })),
+              delayMs: parsed.delayMs ?? 0,
+            };
+            toolCallConfig = null;
+          } else if (parsed.name) {
             toolCallConfig = {
               name: parsed.name,
               arguments: parsed.arguments ?? "{}",
             };
+            toolCallsConfig = null;
           } else {
             toolCallConfig = null;
+            toolCallsConfig = null;
+          }
+        } catch {
+          /* ignore */
+        }
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+      if (req.method === "POST" && url === "/__e2e/tool-call-queue") {
+        try {
+          const parsed = JSON.parse(body) as {
+            calls?: ReadonlyArray<{
+              name?: string;
+              arguments?: string;
+              scenario?: FakeAiScenarioName;
+              imageB64?: string;
+            }>;
+          };
+          if (Array.isArray(parsed.calls)) {
+            toolCallConfig = null;
+            toolCallsConfig = null;
+            toolCallQueue = parsed.calls
+              .filter(
+                (
+                  c
+                ): c is {
+                  name?: string;
+                  arguments?: string;
+                  scenario?: FakeAiScenarioName;
+                  imageB64?: string;
+                } =>
+                  !!c &&
+                  typeof c === "object" &&
+                  (typeof c.name === "string" || typeof c.scenario === "string")
+              )
+              .map((c) => ({
+                name: c.name,
+                arguments: c.arguments ?? "{}",
+                ...(c.scenario ? { scenario: c.scenario } : {}),
+                ...(c.imageB64 ? { imageB64: c.imageB64 } : {}),
+              }));
           }
         } catch {
           /* ignore */
@@ -253,6 +487,21 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       // generic completion. Existing SSE scenarios are untouched (stream:true).
       const parsedBody = parseChatRequestBody(rawBody);
       if (!parsedBody.stream) {
+        // Summarize-only control scenarios (recoverable-history FR-HIS-005):
+        // the compaction coordinator's summarize calls are the non-streaming
+        // path, so a spec can settle a run FAILED or keep it cancellable
+        // without ever breaking streaming chat sends.
+        if (scenario === "summarize-http-500") {
+          await sleep(200);
+          requestLog.push(redactChatRequest(req, rawBody, false));
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "summarize down" } }));
+          return;
+        }
+        if (scenario === "summarize-delayed") {
+          // Hold the summarize behind a barrier the spec can cancel inside.
+          await sleep(6_000);
+        }
         requestLog.push(redactChatRequest(req, rawBody, false));
         // G03: a queued canned body wins (reply-draft generation needs valid
         // reply JSON); otherwise the pre-existing default selection applies.
@@ -297,9 +546,64 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       //    flow can gate execution.
       //  - else the active scenario.
       const isContinuation = hasToolResultMessage(rawBody);
+      const scripted = toolCallQueue.length > 0 ? toolCallQueue[0] : undefined;
       const isDeferralRetry = isContinuation && isDeferralRetryRequest(rawBody);
       let plan;
-      if (isDeferralRetry && toolCallConfig) {
+      if (scripted && scripted.scenario) {
+        toolCallQueue = toolCallQueue.slice(1);
+        // An image override on a stream-generated-image* scenario lets each
+        // queued worker request serve a DISTINCT generated image without a
+        // new scenario name per payload. The "-delayed" variant holds the
+        // image frame behind a 4s barrier so a spec can stop mid-flight.
+        const isImageScenario =
+          (scripted.scenario === "stream-generated-image" ||
+            scripted.scenario === "stream-generated-image-delayed") &&
+          typeof scripted.imageB64 === "string";
+        if (isImageScenario) {
+          const imageDelay =
+            scripted.scenario === "stream-generated-image-delayed" ? 4_000 : 0;
+          plan = {
+            kind: "sse" as const,
+            frames: [
+              { delayMs: 0, payload: textChunk("Here is your image.") },
+              {
+                delayMs: imageDelay,
+                payload: imagesChunk([
+                  {
+                    type: "image",
+                    b64_json: scripted.imageB64,
+                    mime_type: "image/png",
+                  },
+                ]),
+              },
+              { delayMs: 0, payload: stopChunk() },
+            ],
+          };
+        } else {
+          plan = resolveScenario(scripted.scenario);
+        }
+      } else if (scripted && scripted.name) {
+        toolCallQueue = toolCallQueue.slice(1);
+        // Unique id per scripted call: the app's transcript already carries
+        // earlier rounds' tool messages, and a duplicate tool_call id makes
+        // the second round's call indistinguishable from the answered first.
+        scriptedCallCounter += 1;
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            {
+              delayMs: 0,
+              payload: toolCallChunk({
+                index: 0,
+                id: `call_e2e_${scriptedCallCounter}`,
+                name: scripted.name,
+                arguments: scripted.arguments ?? "{}",
+              }),
+            },
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
+      } else if (isDeferralRetry && toolCallConfig) {
         plan = {
           kind: "sse" as const,
           frames: [
@@ -316,7 +620,39 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           ],
         };
       } else if (isContinuation) {
-        plan = resolveScenario("tool-success-followup");
+        plan = followupText
+          ? {
+              kind: "sse" as const,
+              frames: [
+                { delayMs: 0, payload: textChunk(followupText) },
+                { delayMs: 0, payload: stopChunk() },
+              ],
+            }
+          : resolveScenario("tool-success-followup");
+      } else if (responseText) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            { delayMs: 0, payload: textChunk(responseText) },
+            { delayMs: 0, payload: stopChunk() },
+          ],
+        };
+      } else if (toolCallsConfig) {
+        plan = {
+          kind: "sse" as const,
+          frames: [
+            ...toolCallsConfig.calls.map((call, index) => ({
+              delayMs: index === 0 ? toolCallsConfig.delayMs : 0,
+              payload: toolCallChunk({
+                index,
+                id: `call_e2e_multi_${index}`,
+                name: call.name,
+                arguments: call.arguments,
+              }),
+            })),
+            { delayMs: 0, payload: toolCallFinishChunk() },
+          ],
+        };
       } else if (toolCallConfig) {
         plan = {
           kind: "sse" as const,
@@ -338,6 +674,9 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
       }
 
       if (plan.kind === "http-error") {
+        if (plan.delayMs && plan.delayMs > 0) {
+          await Promise.race([sleep(plan.delayMs), clientGone]);
+        }
         requestLog.push(redactChatRequest(req, rawBody, false));
         res.writeHead(plan.status, { "Content-Type": "application/json" });
         res.end(plan.body);
@@ -427,11 +766,49 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
         body: JSON.stringify({ name }),
       });
     },
+    async setFollowupText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/followup-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    },
     async setToolCall(name: string, argsJson: string): Promise<void> {
       await controlFetch("/__e2e/tool-call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, arguments: argsJson }),
+      });
+    },
+    async clearToolCall(): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+    },
+    async setResponseText(text: string | null): Promise<void> {
+      await controlFetch("/__e2e/response-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    },
+    async setToolCalls(
+      calls: ReadonlyArray<{ name: string; arguments: string }>,
+      delayMs = 0
+    ): Promise<void> {
+      await controlFetch("/__e2e/tool-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calls, delayMs }),
+      });
+    },
+    async setToolCallQueue(calls: readonly ScriptedToolCall[]): Promise<void> {
+      await controlFetch("/__e2e/tool-call-queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ calls }),
       });
     },
     async queueNonStreamingContents(contents: string[]): Promise<void> {

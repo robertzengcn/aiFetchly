@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   ConversationToolStateModule,
   normalizeToolStateNames,
@@ -12,7 +12,22 @@ import fs from "node:fs";
 
 const tmpDir = path.join(os.tmpdir(), "aifetchly-conv-tool-state");
 
-beforeEach(() => {
+// BaseModule.ensureConnection() re-resolves the dbpath through Token — with
+// the real Token it returns a DIFFERENT path, flipping the SqliteDb singleton
+// off the initialized tmpDir connection mid-test ("connection is not open").
+// Mock Token to the same isolated dir (portable-memory test pattern).
+vi.mock("@/modules/token", () => ({
+  Token: class {
+    getValue() {
+      return (
+        process.env.AIFETCHLY_TEST_DBPATH ??
+        path.join(os.tmpdir(), "aifetchly-conv-tool-state")
+      );
+    }
+  },
+}));
+
+beforeEach(async () => {
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
   for (const f of fs.readdirSync(tmpDir)) {
     if (f.startsWith("scraper.db")) {
@@ -27,6 +42,11 @@ beforeEach(() => {
   (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath =
     null;
   (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
+  // Make the isolated dir authoritative AND initialized up front — the lazy
+  // DataSource races module queries otherwise ("connection is not open").
+  process.env.AIFETCHLY_TEST_DBPATH = tmpDir;
+  await SqliteDb.resetInstance(tmpDir);
+  await SqliteDb.ensureInitialized();
 });
 
 describe("normalizeToolStateNames (pure)", () => {

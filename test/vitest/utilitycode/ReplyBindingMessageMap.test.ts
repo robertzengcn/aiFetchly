@@ -26,7 +26,6 @@ const ALL_CODES: SendBindingErrorCode[] = [
   "recipient_mismatch",
   "smtp_username_mismatch",
   "reply_to_mismatch",
-  "legacy_reply_identity_requires_review",
 ];
 
 /** Traverse a dotted i18n key path against a locale object. */

@@ -92,7 +92,6 @@ vi.mock("@/service/agentTools/toolResultContext", () => ({
 }));
 
 import { AIChatModule } from "@/modules/AIChatModule";
-import { RecoverableHistoryError } from "@/entityTypes/aiChatArchiveTypes";
 
 describe("AIChatModule clear-path tool-output fence (C1)", () => {
   beforeEach(() => {

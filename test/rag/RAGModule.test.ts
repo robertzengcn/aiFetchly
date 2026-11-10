@@ -5,6 +5,7 @@ import { SqliteDb } from '@/config/SqliteDb';
 import * as path from 'path';
 import * as fs from 'fs';
 
+/* eslint-disable @typescript-eslint/no-var-requires */
 describe('RAGModule', () => {
     let ragModule: RAGModule;
     let db: SqliteDb;
@@ -278,3 +279,5 @@ describe('RAGModule', () => {
         });
     });
 });
+
+/* eslint-enable @typescript-eslint/no-var-requires */

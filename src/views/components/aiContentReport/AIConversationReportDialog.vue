@@ -154,6 +154,7 @@ import {
   emitConversationReportAnalytics,
 } from "./conversationReportAnalytics";
 import { createAIContentReport } from "@/views/api/aiContentReport";
+import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import type { ConversationReportSnapshot } from "./conversationReportSnapshot";
 import {
   AI_CONTENT_REPORT_CATEGORIES,
@@ -323,6 +324,9 @@ watch(
       lastFocusedEl = (document.activeElement as HTMLElement | null) ?? props.activatorEl ?? null;
       clientReportId.value = generateClientReportId();
       selectedItemIds.value = new Set();
+      // R8 §2 (design §18.1): the dialog-opened count belongs in the
+      // bounded workspace action counter — fire-and-forget, labels only.
+      void recordWorkspaceActionCount("report", "dialog_open", "ok");
       // FR-2.5 / §10.2: default-select all generated images so a single-image
       // report is one click. The request builder caps at ≤3 total.
       const allImageIds = props.snapshot.candidates.flatMap((c) =>

@@ -26,23 +26,23 @@ import { Order } from "./order.decorator";
 ])
 export class AIChatContextGenerationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false, unique: true })
-  generationId: string;
+  generationId!: string;
 
   @Order(2)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   @Order(3)
   @Column("varchar", { length: 64, nullable: false })
-  epoch: string;
+  epoch!: string;
 
   @Order(4)
   @Column("int", { nullable: false })
-  revision: number;
+  revision!: number;
 
   @Order(5)
   @Column("varchar", { length: 100, nullable: true })
@@ -50,19 +50,19 @@ export class AIChatContextGenerationEntity extends AuditableEntity {
 
   @Order(6)
   @Column("int", { nullable: false, default: 0 })
-  representedSectionOrdinal: number;
+  representedSectionOrdinal!: number;
 
   @Order(7)
   @Column("bigint", { nullable: false, default: 0 })
-  coveredThroughTimestampMs: number;
+  coveredThroughTimestampMs!: number;
 
   @Order(8)
   @Column("int", { nullable: false, default: 0 })
-  coveredThroughRowId: number;
+  coveredThroughRowId!: number;
 
   @Order(9)
   @Column("text", { nullable: false })
-  overviewJson: string;
+  overviewJson!: string;
 
   @Order(10)
   @Column("text", { nullable: true })
@@ -82,5 +82,5 @@ export class AIChatContextGenerationEntity extends AuditableEntity {
 
   @Order(14)
   @Column("varchar", { length: 20, nullable: false, default: "active" })
-  status: string;
+  status!: string;
 }

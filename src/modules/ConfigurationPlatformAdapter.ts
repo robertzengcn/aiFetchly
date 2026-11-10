@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from '@/modules/BasePlatformAdapter';
 import { SearchResult } from '@/modules/interface/IBasePlatformAdapter';
 import { BusinessData } from '@/modules/interface/IDataExtractor';
@@ -21,7 +22,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
      * Search for businesses using default implementation
      */
     async searchBusinesses(page: Page, keywords: string[], location: string): Promise<SearchResult[]> {
-        console.log(`Searching ${this.platformName} with keywords: ${keywords.join(', ')} in ${location}`);
+        log.info(`Searching ${this.platformName} with keywords: ${keywords.join(', ')} in ${location}`);
         
         // For configuration-only platforms, we return empty results
         // The actual search is handled by the scraping engine
@@ -32,7 +33,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
      * Extract business data using configuration selectors
      */
     async extractBusinessData(page: Page): Promise<BusinessData> {
-        console.log(`Extracting business data from ${this.platformName} using configuration selectors`);
+        log.info(`Extracting business data from ${this.platformName} using configuration selectors`);
         
         // Use the default implementation from BasePlatformAdapter
         return await this.defaultExtractBusinessData(page);
@@ -42,7 +43,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
      * Handle pagination using configuration selectors
      */
     async handlePagination(page: Page, maxPages: number): Promise<void> {
-        console.log(`Handling pagination for ${this.platformName} (max pages: ${maxPages})`);
+        log.info(`Handling pagination for ${this.platformName} (max pages: ${maxPages})`);
         
         // Use the default implementation from BasePlatformAdapter
         await this.defaultHandlePagination(page, maxPages);
@@ -52,7 +53,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
      * Apply cookies using default implementation
      */
     async applyCookies(page: Page, cookies: any): Promise<void> {
-        console.log(`Applying cookies for ${this.platformName}`);
+        log.info(`Applying cookies for ${this.platformName}`);
         
         // Use the default implementation from BasePlatformAdapter
         await this.defaultApplyCookies(page, cookies);
@@ -64,7 +65,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
     async navigateToSearch(page: Page, keywords: string[], location: string): Promise<void> {
         const searchUrl = this.buildSearchUrl(keywords, location);
         
-        console.log(`Navigating to search page: ${searchUrl}`);
+        log.info(`Navigating to search page: ${searchUrl}`);
         
         await page.goto(searchUrl, {
             waitUntil: 'networkidle2',
@@ -165,7 +166,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
                     const button = await page.$(selector);
                     if (button) {
                         await button.click();
-                        console.log(`Accepted cookies using selector: ${selector}`);
+                        log.info(`Accepted cookies using selector: ${selector}`);
                         break;
                     }
                 } catch {
@@ -187,7 +188,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
                     const button = await page.$(selector);
                     if (button) {
                         await button.click();
-                        console.log(`Closed popup using selector: ${selector}`);
+                        log.info(`Closed popup using selector: ${selector}`);
                         break;
                     }
                 } catch {
@@ -196,7 +197,7 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
             }
 
         } catch (error) {
-            console.log(`No site-specific features to handle for ${this.platformName}`);
+            log.info(`No site-specific features to handle for ${this.platformName}`);
         }
     }
 
@@ -233,9 +234,9 @@ export class ConfigurationPlatformAdapter extends BasePlatformAdapter {
                 });
             });
             
-            console.log(`Scrolled page to load lazy content for ${this.platformName}`);
+            log.info(`Scrolled page to load lazy content for ${this.platformName}`);
         } catch (error) {
-            console.log(`No lazy content to load for ${this.platformName}`);
+            log.info(`No lazy content to load for ${this.platformName}`);
         }
     }
 }

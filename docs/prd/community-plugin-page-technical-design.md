@@ -728,3 +728,58 @@ Each phase is self-contained, buildable, test-passing. Per AGENTS.md, stage + co
 - **Search/filter UI** — Stage 1 only passes `category`/`search` query params to the Hub; no client-side search box beyond what IPC input supports.
 - **Reviews UI** — Hub already has `GET /api/v1/plugins/:pluginName/reviews` (`routes.go:433`); desktop consumes it in a later phase.
 - **Stage 3 (RS256/JWKS)** — desktop change is a no-op; it still forwards the same JWT. Only update `VITE_PLUGIN_HUB_URL` if the JWKS endpoint lives on a different origin.
+## 20. Implementation Notes — Stage 1 As-Built (2026-08-17)
+
+The desktop side shipped on branch `worktree-plugin-hub` (commits `21d4deb2`…).
+Divergences from this design discovered during implementation, all verified
+against the live codebase:
+
+1. **HttpClient is baseUrl-bound (§5.2 sketch was wrong).** `HttpClient`
+   prefixes every request with `loginUrl + "/apis"`, so `client.get(<absolute
+   URL>)` cannot reach the Hub. As-built: `_fetchJSON`/`_refreshTokenAndRetry`
+   accept an `absolute` flag and a new `HttpClient.getFirstParty(url)` gates it
+   behind `assertFirstPartyHubUrl` (origin must equal the configured hub base),
+   preserving auth-attach + 401-refresh-retry while making token exfiltration
+   to a non-first-party origin impossible.
+2. **`user_info_updated` needs no new preload receive channel (§6.4/§12).**
+   The broadcast rides the already-allowlisted `WEBSOCKET_EVENT`
+   (`websocket:event`) channel with a nested payload
+   (`{type:"message", data:{type:"user_info_updated",…}}`); the page
+   subscribes there and filters. Only the four `PLUGIN_COMMUNITY_*` invoke
+   channels were added to `preload.ts`.
+3. **Hub refresh does not reuse `refreshMarketplace()` (§7 sketch).**
+   `refreshMarketplace` delegates through `addMarketplace`, which re-parses
+   the stored URI as kind `"url"` and performs a filesystem cache-dir swap —
+   both wrong for the hub kind. As-built: a dedicated
+   `refreshHubMarketplace()` persists `manifestJson` directly into the
+   built-in marketplace row (the row IS the cache; no cache dir).
+4. **Hub manifests skip `validateMarketplaceManifest`.** That validator
+   requires a marketplace-shaped `source` on every entry, but locked (`ticket`)
+   hub rows carry none. The hub response is instead validated by its own zod
+   schema inside `AiFetchHubMarketplaceFetcher` (first-party contract), and the
+   synthesized manifest is persisted without re-running marketplace validation.
+5. **Fourth channel `PLUGIN_COMMUNITY_OPEN_PLANS`.** The Upgrade CTA opens
+   `MARKETING_PLANS_URL` via `shell.openExternal` in the main process
+   (constant, never renderer-supplied), mirroring `APP_OPEN_WEBSITE` — there
+   is no renderer `window.openExternal`.
+6. **Reserved name is the slug `aifetch-plugin-hub`** (not the display string
+   "AiFetchly Plugin Hub") so it always satisfies `MARKETPLACE_NAME_REGEX`;
+   display name stays "AiFetchly Plugin Hub". `listMarketplaces()` and
+   `listAvailablePlugins()` filter the built-in row out of the Plugin Manager,
+   and `removeMarketplace` refuses it (§18.1 recommendation, adopted).
+7. **Catalog cache TTL = 10 min** (mirrors the hub's introspection snapshot
+   TTL). Normal mounts serve the fresh cache; Refresh and
+   `user_info_updated` force a re-fetch; a fetch failure throws (error state)
+   rather than serving a stale list as fresh.
+8. **Schemas import classic `zod`**, not `zod/v4` — `registerValidatedHandler`
+   and the shared zodToJsonSchema machinery type against root-zod `ZodType`,
+   same as every other file in `src/schemas/ipc/`.
+9. **`.env.example` was not updated** (file is permission-restricted in the
+   implementation environment); the default `https://plugins.aifetchly.com`
+   and the `http://localhost:8080` dev override are documented in
+   `src/config/pluginHubUrl.ts` and baked via the `vite.main.config.mjs`
+   `define`. Add the entry manually when convenient.
+
+Test evidence: 40 new tests across config/httpclient/fetcher/service/IPC
+suites; full main-process suite green (424 files / 3764 tests);
+`tsc --noEmit` and `vue-tsc --noEmit` clean.

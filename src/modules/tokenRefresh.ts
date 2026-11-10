@@ -155,7 +155,7 @@ export class TokenRefreshService {
     try {
       new URL(loginUrl);
     } catch (error) {
-      console.warn(
+      log.warn(
         `Invalid VITE_LOGIN_URL: ${loginUrl}, falling back to default`
       );
       loginUrl = "http://localhost:3000";
@@ -526,24 +526,50 @@ export class TokenRefreshService {
 
     if (!res.ok) {
       // 401/403 means the refresh token was rejected — a genuine auth
-      // failure. Everything else (5xx, etc.) stays a plain Error so callers
-      // can treat it as a transient/backend issue.
+      // failure. Everything else (5xx, etc.) stays a plain Error unless the
+      // server explicitly returned an auth-rejection message in JSON.
       if (res.status === 401 || res.status === 403) {
         throw new RefreshTokenInvalidError(
           `Refresh token rejected (HTTP ${res.status})`
         );
       }
-      throw new Error(`HTTP error: ${res.status} ${res.statusText}`);
+      let errorMsg = `HTTP error: ${res.status} ${res.statusText}`;
+      try {
+        const errJson = (await res.json()) as CommonApiresp<unknown>;
+        if (errJson?.msg) {
+          errorMsg = errJson.msg;
+          if (
+            errJson.code === 401 ||
+            errJson.code === 403 ||
+            /failed to refresh|invalid|expired|not found|no row found|token/i.test(
+              errJson.msg
+            )
+          ) {
+            throw new RefreshTokenInvalidError(errJson.msg);
+          }
+        }
+      } catch (parseErr) {
+        if (parseErr instanceof RefreshTokenInvalidError) {
+          throw parseErr;
+        }
+      }
+      throw new Error(errorMsg);
     }
 
     const response: CommonApiresp<TokenRefreshData> = await res.json();
 
     // Handle API response errors
     if (!response.status) {
-      // Check for specific error codes
-      if (response.code === 401) {
-        // Auth-shaped refresh failure. Callers keep local auth state and fail
-        // only the current remote request.
+      // Check for specific error codes or auth-rejection messages (e.g. backend
+      // returning { status: false, code: 500, msg: "Failed to refresh access token" }
+      // when no matching row is found in DB).
+      if (
+        response.code === 401 ||
+        response.code === 403 ||
+        /failed to refresh|invalid|expired|not found|no row found|token/i.test(
+          response.msg || ""
+        )
+      ) {
         throw new RefreshTokenInvalidError(
           response.msg || "Invalid or expired refresh token"
         );

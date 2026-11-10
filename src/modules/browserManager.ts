@@ -1,4 +1,5 @@
 import puppeteer, { Browser, LaunchOptions } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { addExtra } from 'puppeteer-extra';
 import { detectBrowserPlatform, install, canDownload, Browser as PuppeteerBrowser, getInstalledBrowsers, resolveBuildId } from '@puppeteer/browsers';
 import * as path from 'path';
@@ -63,7 +64,7 @@ export class BrowserManager {
                 return latestBuildId;
             }
         } catch (error) {
-            console.error('Failed to resolve latest Chrome version:', error);
+            log.error('Failed to resolve latest Chrome version:', error);
         }
         return this.options.chromeBuildId || DEFAULT_CHROME_BUILD_ID;
     }
@@ -82,7 +83,7 @@ export class BrowserManager {
 
         for (const path of commonPaths) {
             if (fs.existsSync(path)) {
-                console.log('Found system Chrome at:', path);
+                log.info('Found system Chrome at:', path);
                 return path;
             }
         }
@@ -100,11 +101,11 @@ export class BrowserManager {
             );
             
             if (chromeInstallation) {
-                console.log('Found cached Chrome installation:', chromeInstallation.executablePath);
+                log.info('Found cached Chrome installation:', chromeInstallation.executablePath);
                 return chromeInstallation.executablePath;
             }
         } catch (error) {
-            console.error('Failed to check cached browsers:', error);
+            log.error('Failed to check cached browsers:', error);
         }
         return undefined;
     }
@@ -122,7 +123,7 @@ export class BrowserManager {
             const browser = 'chrome' as PuppeteerBrowser;
             const buildId = this.options.chromeBuildId || DEFAULT_CHROME_BUILD_ID;
             
-            console.log('Installing Chrome version:', buildId);
+            log.info('Installing Chrome version:', buildId);
             
             const canDownloadBrowser = await canDownload({
                 browser,
@@ -142,10 +143,10 @@ export class BrowserManager {
                 // Get the installed browser path
                 return await this.findCachedChrome();
             } else {
-                console.error('Cannot download Chrome browser');
+                log.error('Cannot download Chrome browser');
             }
         } catch (error) {
-            console.error('Failed to install Chrome:', error);
+            log.error('Failed to install Chrome:', error);
         }
         return undefined;
     }
@@ -162,7 +163,7 @@ export class BrowserManager {
         // 1. Check for local browser path from environment
         if (this.options.localBrowserPath && fs.existsSync(this.options.localBrowserPath)) {
             executablePath = this.options.localBrowserPath;
-            console.log('Using local browser installation:', executablePath);
+            log.info('Using local browser installation:', executablePath);
             return {
                 executablePath,
                 buildId,
@@ -196,7 +197,7 @@ export class BrowserManager {
                 };
             }
         } catch (error) {
-            console.error('Failed to install Chrome:', error);
+            log.error('Failed to install Chrome:', error);
         }
 
         // 4. Fallback to system Chrome
@@ -212,7 +213,7 @@ export class BrowserManager {
         }
 
         // 5. If all else fails, return undefined (will use Puppeteer's bundled Chrome)
-        console.warn('No Chrome installation found, will use Puppeteer bundled Chrome');
+        log.warn('No Chrome installation found, will use Puppeteer bundled Chrome');
         return {
             executablePath: '',
             buildId,

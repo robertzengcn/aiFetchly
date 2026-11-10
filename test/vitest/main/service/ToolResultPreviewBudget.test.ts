@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OMITTED_REGION_MARKER,
+  TOOL_RESULT_RECEIPT_PREVIEW_MAX_BYTES,
   ToolResultPreviewService,
 } from "@/service/toolResult/ToolResultPreviewService";
 import { ToolResultBudgetService } from "@/service/toolResult/ToolResultBudgetService";
@@ -136,6 +137,60 @@ describe("ToolResultPreviewService", () => {
       isComplete: false,
     });
     expect(result.text).not.toContain("\ufffd");
+  });
+
+  it("honors a per-request preview budget override above the default", () => {
+    // A batch record larger than the default 2KB preview must survive whole
+    // under the batch budget (the renderer parses it for the batch card).
+    const batchRecord = JSON.stringify({
+      status: "completed",
+      processor: "image_edit",
+      requestedCount: 4,
+      completedCount: 4,
+      failedCount: 0,
+      cancelledCount: 0,
+      concurrency: 3,
+      instruction: "make the lighting warmer ".repeat(130),
+      items: Array.from({ length: 4 }, (_, i) => ({
+        input: {
+          kind: "generated_image",
+          reference: { messageId: "m1", imageIndex: i },
+        },
+        status: "completed",
+        outputImages: [
+          {
+            url: `aifetchly-generated-image://local/user/conv/agent/image-${i}.png`,
+            mime_type: "image/png",
+            delivery: "local_file",
+          },
+        ],
+      })),
+    });
+    expect(utf8ByteLength(batchRecord)).toBeGreaterThan(
+      TOOL_RESULT_CONFIG.previewMaxBytes
+    );
+    const underBudget = preview.build({
+      text: batchRecord,
+      kind: "text",
+      isComplete: true,
+      maxBytes: TOOL_RESULT_CONFIG.batchPreviewMaxBytes,
+    });
+    expect(underBudget.previewComplete).toBe(true);
+    expect(() => JSON.parse(underBudget.text)).not.toThrow();
+  });
+
+  it("clamps a per-request override to the receipt schema preview cap", () => {
+    const result = preview.build({
+      text: "x".repeat(20_000),
+      kind: "text",
+      isComplete: true,
+      maxBytes: 64 * 1024,
+    });
+    // Oversized overrides are clamped: never imply complete coverage.
+    expect(result.previewComplete).toBe(false);
+    expect(utf8ByteLength(result.text)).toBeLessThanOrEqual(
+      TOOL_RESULT_RECEIPT_PREVIEW_MAX_BYTES + 200
+    );
   });
 });
 

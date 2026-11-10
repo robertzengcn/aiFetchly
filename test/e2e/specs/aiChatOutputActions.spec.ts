@@ -18,6 +18,7 @@
 import { e2eTest as test, expect } from "../fixtures/base";
 import { assertCleanTeardown } from "../support/assertions";
 import { STREAM_TEXT_FINAL } from "../scenarios/aiChatScenarios";
+import { RENDERER_ORIGIN } from "../fixtures/types";
 
 /** The composer's real <textarea> (Vuetify auto-grow adds a hidden measurement
  * textarea, so pick the first one — the user-editable input). */
@@ -30,11 +31,18 @@ function composerTextarea(app: {
     .first();
 }
 
-/** Open the AI chat dock and wait for the composer to be actionable. */
+/**
+ * Open the workspace chat surface and wait for the composer to be
+ * actionable (retargeted from the removed chat-dock toggle: the workspace
+ * shell mounts the conversation surface directly).
+ */
 async function openChat(app: {
   readonly mainWindow: import("@playwright/test").Page;
 }): Promise<void> {
-  await app.mainWindow.getByTestId("ai-chat-toggle").click();
+  await app.mainWindow.goto(`${RENDERER_ORIGIN}/#/aiworkspace`);
+  await expect(
+    app.mainWindow.getByTestId("chat-center-surface")
+  ).toBeVisible({ timeout: 20_000 });
   await expect(composerTextarea(app)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -53,10 +61,12 @@ async function openChat(app: {
  */
 async function sendAndAwaitStreaming(app: {
   readonly mainWindow: import("@playwright/test").Page;
+  readonly draft: string;
 }): Promise<void> {
   const send = app.mainWindow.getByTestId("ai-chat-send");
   const stop = app.mainWindow.getByTestId("ai-chat-stop");
-  const root = app.mainWindow.getByTestId("ai-chat-root");
+  const root = app.mainWindow.getByTestId("workspace-transcript");
+  const draft = composerTextarea(app);
   await send.click();
   await expect
     .poll(
@@ -66,6 +76,18 @@ async function sendAndAwaitStreaming(app: {
           return "streaming";
         }
         if ((await send.count()) > 0) {
+          // Two known races can strand the retry loop on a dead composer:
+          // an accepted-but-never-started turn already cleared the draft,
+          // and the app's late landing-nav remount can wipe a freshly
+          // filled draft (the emailServiceTags boot race). Either leaves
+          // Send visible but disabled (empty composer) — clicks became
+          // no-ops. Restore the draft before every retry click.
+          if (
+            (await draft.count()) > 0 &&
+            (await draft.inputValue()) !== app.draft
+          ) {
+            await draft.fill(app.draft);
+          }
           await send.click();
           // Let a just-started turn render before the next check so a slow
           // runner cannot stack a second send behind the first.
@@ -99,7 +121,7 @@ test.describe("AI output actions row (copy + compact report)", () => {
     await aiApp.mainWindow.getByTestId("ai-chat-send").click();
 
     // Wait for the streamed assistant turn to complete and render.
-    await expect(aiApp.mainWindow.getByTestId("ai-chat-root")).toContainText(
+    await expect(aiApp.mainWindow.getByTestId("workspace-transcript")).toContainText(
       STREAM_TEXT_FINAL,
       { timeout: 30_000 }
     );
@@ -108,7 +130,7 @@ test.describe("AI output actions row (copy + compact report)", () => {
     // ICON-ONLY: the visible "Report AI output" label is hidden in compact
     // mode so it does not crowd each output row.
     const reportButton = aiApp.mainWindow
-      .getByTestId("ai-chat-root")
+      .getByTestId("workspace-transcript")
       .getByTestId("ai-content-report-btn");
     await expect(reportButton).toBeVisible({ timeout: 30_000 });
     await expect(reportButton).not.toContainText("Report AI output");
@@ -133,14 +155,21 @@ test.describe("AI output actions row (copy + compact report)", () => {
     aiApp,
     fakeAi,
   }) => {
-    // stream-delayed emits one chunk fast, then holds a bounded 10s delay —
-    // enough margin to assert the actions row is absent mid-stream.
-    await fakeAi.setScenario("stream-delayed");
+    // stream-hold-30s emits one chunk fast, then holds a bounded 30s delay —
+    // the 10s stream-delayed barrier proved load-sensitive in full-suite
+    // runs (the whole mid-stream window closed once a worker got stuck on a
+    // busy host), so this assertion class uses the wider window.
+    await fakeAi.setScenario("stream-hold-30s");
     await openChat(aiApp);
     await composerTextarea(aiApp).fill("e2e-streaming-no-actions");
 
-    // The first chunk renders, proving the turn started.
-    await sendAndAwaitStreaming(aiApp);
+    // The first chunk renders, proving the turn started (the helper re-fills
+    // the identified draft on every retry cycle to survive the boot-remount
+    // draft wipe).
+    await sendAndAwaitStreaming({
+      mainWindow: aiApp.mainWindow,
+      draft: "e2e-streaming-no-actions",
+    });
 
     // While streaming, the actions row (copy + report) must NOT be present —
     // it appears only on completed assistant text/image messages.

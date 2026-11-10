@@ -112,9 +112,7 @@ function containsControlCharacter(value: string): boolean {
  * (duplicate entry names, relative-source shape, control chars). Unknown
  * fields are preserved (passthrough) for future Claude compatibility.
  */
-export function validateMarketplaceManifest(
-  rawJson: string
-): ValidationResult {
+export function validateMarketplaceManifest(rawJson: string): ValidationResult {
   if (rawJson.length > MARKETPLACE_LIMITS.maxManifestBytes) {
     return {
       success: false,
@@ -133,7 +131,12 @@ export function validateMarketplaceManifest(
   } catch {
     return {
       success: false,
-      errors: [marketError("marketplace-manifest-invalid-json", "Manifest is not valid JSON.")],
+      errors: [
+        marketError(
+          "marketplace-manifest-invalid-json",
+          "Manifest is not valid JSON."
+        ),
+      ],
     };
   }
 

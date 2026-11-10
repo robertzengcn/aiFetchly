@@ -1,4 +1,7 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { SearchDataParam } from "@/entityTypes/scrapeType";
+import { log } from "@/modules/Logger";
 import {
   SearchTaskModel,
   SearchTaskStatus,
@@ -43,7 +46,6 @@ import {
   CookieServiceError,
 } from "@/modules/AccountSessionService";
 import { normalizedToCookiesType } from "@/modules/accountSession/cookieNormalize";
-import { log } from "@/modules/Logger";
 import { Usersearchdata } from "@/entityTypes/searchControlType";
 import { utilityProcess, MessageChannelMain } from "electron";
 import { SystemSettingGroupModule } from "@/modules/SystemSettingGroupModule";
@@ -65,7 +67,7 @@ import { USERLOGPATH, USEREMAIL } from "@/config/usersetting";
 import { v4 as uuidv4 } from "uuid";
 import { SocialAccountModule } from "./socialAccountModule";
 import { AIRecoveryHandler } from "./AIRecoveryHandler";
-import { YellowPagesAiSupportHandler } from "./YellowPagesAiSupportHandler";
+import { ScraperAiSupportHandler } from "./ScraperAiSupportHandler";
 import type { AiSupportRequestMessage } from "@/modules/interface/BackgroundProcessMessages";
 import { parseChildMessage } from "@/utils/childProcessMessage";
 import type {
@@ -183,16 +185,16 @@ export class SearchModule extends BaseModule {
             // Randomly select one account
             const randomIndex = Math.floor(Math.random() * accounts.length);
             selectedAccounts = [accounts[randomIndex].id];
-            console.log(
+            log.info(
               `Randomly selected account ${selectedAccounts[0]} for platform ${platformId} (${engineName})`
             );
           } else {
-            console.log(
+            log.info(
               `No accounts found for platform ${platformId} (${engineName}), proceeding without account`
             );
           }
         } catch (error) {
-          console.error(
+          log.error(
             `Error selecting account for platform ${platformId}:`,
             error
           );
@@ -376,10 +378,13 @@ export class SearchModule extends BaseModule {
     //         throw new Error("user data dir not exist")
     //     }
     // }
-    //console.log("two captcha token value is "+twoCaptchaTokenvalue)
-    //console.log("local browser excute path is "+localBrowserexcutepath)
-    //console.log("user data dir is "+userDataDir)
-    const child = utilityProcess.fork(childPath, [], {
+    //log.info("two captcha token value is "+twoCaptchaTokenvalue)
+    //log.info("local browser excute path is "+localBrowserexcutepath)
+    //log.info("user data dir is "+userDataDir)
+    const child = spawnOwned(
+      "search-scraper",
+      () =>
+        utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env: buildPackagedWorkerEnv({
@@ -389,14 +394,15 @@ export class SearchModule extends BaseModule {
           //USEDATADIR: userDataDir
         },
       }),
-    });
+    })
+    );
     child.on("spawn", async () => {
-      console.log("child process satart, pid is" + child.pid);
+      log.info("child process satart, pid is" + child.pid);
       this.updateTaskStatus(taskId, SearchTaskStatus.Processing);
       // Store PID in database
       if (child.pid) {
         this.updateTaskPID(taskId, child.pid).catch((err) => {
-          console.error(`Failed to update PID for task ${taskId}:`, err);
+          log.error(`Failed to update PID for task ${taskId}:`, err);
         });
         // Register process with SearchController
         const searchController = (
@@ -413,7 +419,7 @@ export class SearchModule extends BaseModule {
 
     child.stdout?.on("data", (data) => {
       const text = chunkToUtf8(data);
-      console.log(`Received data chunk ${text}`);
+      log.info(`Received data chunk ${text}`);
       WriteLog(runLogfile, text);
       // child.kill()
     });
@@ -430,7 +436,7 @@ export class SearchModule extends BaseModule {
       if (ignoreStr.some((value) => text.includes(value))) {
         return;
       }
-      console.log(
+      log.info(
         `[SearchModule] task ${taskId} stderr (not failing task): ${text}`
       );
       WriteLog(errorLogfile, text);
@@ -444,15 +450,15 @@ export class SearchModule extends BaseModule {
         ).SearchController.getInstance();
         searchController.unregisterProcess(taskId);
       } catch (error) {
-        console.error(`Failed to clear PID for task ${taskId}:`, error);
+        log.error(`Failed to clear PID for task ${taskId}:`, error);
       }
 
       if (code !== 0) {
-        console.error(`Child process exited with code ${code}`);
+        log.error(`Child process exited with code ${code}`);
         this.updateTaskStatus(taskId, SearchTaskStatus.Error);
       } else {
         this.updateTaskStatus(taskId, SearchTaskStatus.Complete);
-        console.log("Child process exited successfully");
+        log.info("Child process exited successfully");
       }
     });
     child.on("message", (message: unknown) => {
@@ -461,14 +467,14 @@ export class SearchModule extends BaseModule {
         if (message && typeof message === "object" && message !== null) {
           const msg = message as Record<string, unknown>;
           if (msg.type === "AI_SUPPORT_REQUEST") {
-            const aiSupportHandler = new YellowPagesAiSupportHandler();
+            const aiSupportHandler = new ScraperAiSupportHandler();
             aiSupportHandler
               .handleAiSupportRequest(
                 msg as unknown as AiSupportRequestMessage,
                 child
               )
               .catch((err) => {
-                console.error("AI support request failed:", err);
+                log.error("AI support request failed:", err);
               });
             return;
           }
@@ -480,14 +486,14 @@ export class SearchModule extends BaseModule {
               typeof parsed === "object" &&
               parsed.type === "AI_SUPPORT_REQUEST"
             ) {
-              const aiSupportHandler = new YellowPagesAiSupportHandler();
+              const aiSupportHandler = new ScraperAiSupportHandler();
               aiSupportHandler
                 .handleAiSupportRequest(
                   parsed as AiSupportRequestMessage,
                   child
                 )
                 .catch((err) => {
-                  console.error("AI support request failed:", err);
+                  log.error("AI support request failed:", err);
                 });
               return;
             }
@@ -498,7 +504,7 @@ export class SearchModule extends BaseModule {
 
         const parseResult = parseChildMessage<ResultParseItemType>(message);
         if (parseResult.kind === "error") {
-          console.error(
+          log.error(
             `Invalid message from child process (${parseResult.reason}):`,
             message
           );
@@ -509,8 +515,8 @@ export class SearchModule extends BaseModule {
           data?: unknown;
         };
 
-        console.log("get message from child");
-        console.log("Message from child:", childdata);
+        log.info("get message from child");
+        log.info("Message from child:", childdata);
         if (childdata.action == "savesearchresult") {
           //save individual result immediately
           // Handle both single result and array (for backward compatibility)
@@ -519,7 +525,7 @@ export class SearchModule extends BaseModule {
             : [childdata.data as ResultParseItemType];
           // Save result immediately without waiting for completion
           this.saveSearchResult(resultData, taskId).catch((err) => {
-            console.error(
+            log.error(
               `Failed to save search result for task ${taskId}:`,
               err
             );
@@ -533,7 +539,7 @@ export class SearchModule extends BaseModule {
           const errorData = childdata.data as { error?: string } | null;
           const errorMessage =
             errorData?.error || "Unknown error occurred during search";
-          console.error(`Search error for task ${taskId}:`, errorMessage);
+          log.error(`Search error for task ${taskId}:`, errorMessage);
           this.updateTaskStatus(taskId, SearchTaskStatus.Error);
           child.kill();
         } else if (childdata.action == "updateaccountcookies") {
@@ -543,14 +549,14 @@ export class SearchModule extends BaseModule {
             cookies: Array<CookiesType>;
           } | null;
           if (cookiesData && cookiesData.accountId && cookiesData.cookies) {
-            console.log(
+            log.info(
               `Updating cookies for account ${cookiesData.accountId}`
             );
             this.updateAccountCookies(
               cookiesData.accountId,
               cookiesData.cookies
             ).catch((err) => {
-              console.error(
+              log.error(
                 `Failed to update cookies for account ${cookiesData.accountId}:`,
                 err
               );
@@ -559,9 +565,9 @@ export class SearchModule extends BaseModule {
         }
         // Search flow uses AI_SUPPORT_REQUEST (observe_execute) only; requestAIRecovery branch removed.
       } catch (error) {
-        console.error("Failed to parse message from child process:", error);
+        log.error("Failed to parse message from child process:", error);
         if (error instanceof Error) {
-          console.error("Error details:", error.message);
+          log.error("Error details:", error.message);
         }
       }
     });
@@ -569,7 +575,7 @@ export class SearchModule extends BaseModule {
 
   //save search task, call it when user start search keyword
   public async saveSearchtask(data: SearchDataParam): Promise<number> {
-    console.log("save search task");
+    log.info("save search task");
     // const tokenService = new Token()
     // const dbpath = await tokenService.getValue(USERSDBPATH)
     // if (!dbpath) {
@@ -577,7 +583,7 @@ export class SearchModule extends BaseModule {
     // }
     //const searchtask = new SearchTaskdb(this.dbpath)
     const enginId = this.convertSEtoNum(data.engine);
-    console.log("enginId is" + enginId);
+    log.info("enginId is" + enginId);
     if (!enginId) {
       throw new Error("enginerId empty");
     }
@@ -622,9 +628,9 @@ export class SearchModule extends BaseModule {
    * @returns The ID of the created task
    */
   public async saveSearchtaskOnly(data: SearchDataParam): Promise<number> {
-    console.log("save search task only");
+    log.info("save search task only");
     const enginId = this.convertSEtoNum(data.engine);
-    console.log("enginId is" + enginId);
+    log.info("enginId is" + enginId);
     if (!enginId) {
       throw new Error("enginerId empty");
     }
@@ -744,10 +750,10 @@ export class SearchModule extends BaseModule {
     data: Array<ResultParseItemType>,
     taskId: number
   ) {
-    // console.log("save search result")
-    // console.log(`data: ${data}`);
+    // log.info("save search result")
+    // log.info(`data: ${data}`);
     // const resultsMap = new Map(Object.entries(data.results));
-    // console.log(resultsMap);
+    // log.info(resultsMap);
     for (const item of data) {
       // for (const [key, value] of resultsMap) {
       let keywordId = await this.serKeywordModel.getKeywordId(
@@ -762,19 +768,19 @@ export class SearchModule extends BaseModule {
           taskId
         );
       }
-      //console.log(value)
+      //log.info(value)
       //const resval = new Map(Object.entries(value));
       const linkearr: Array<string> = [];
       //    for (const [rvkey, rvvalue] of resval) {
-      //console.log(rvkey)
-      //console.log(rvvalue.value)
+      //log.info(rvkey)
+      //log.info(rvvalue.value)
       //if(rvvalue.value){
       if (item.results && item.results.length > 0) {
         for (const sitem of item.results) {
-          //    console.log(`item: ${item}`);
+          //    log.info(`item: ${item}`);
           if (sitem.link && sitem.link.length > 0) {
             if (!linkearr.includes(sitem.link)) {
-              //    console.log(`item.link: ${sitem.link}`);
+              //    log.info(`item.link: ${sitem.link}`);
               const reEntity: SearchResEntity = {
                 keyword_id: Number(keywordId),
                 link: sitem.link,
@@ -786,14 +792,14 @@ export class SearchModule extends BaseModule {
                 reEntity,
                 taskId
               );
-              console.log(`save result is: ${res}`);
+              log.info(`save result is: ${res}`);
               linkearr.push(sitem.link);
             }
           }
         }
       }
     }
-    //console.log(`Saving result for key: ${key}, value: ${value}`);
+    //log.info(`Saving result for key: ${key}, value: ${value}`);
     //}
   }
 
@@ -838,8 +844,8 @@ export class SearchModule extends BaseModule {
     //convert task list to search item list
 
     for (const item of tasklist) {
-      //console.log("item is follow")
-      //console.log(item)
+      //log.info("item is follow")
+      //log.info(item)
       const keywords = await this.serKeywordModel.getKeywordsByTask(item.id);
       const resultCount = await this.countSearchResult(item.id);
       const data: SearchtaskItem = {
@@ -848,7 +854,7 @@ export class SearchModule extends BaseModule {
         status: this.taskdbModel.taskStatusToString(item.status),
         keywords: keywords,
         record_time: item.record_time,
-        pid: item.pid ?? undefined,
+        pid: (item as { pid?: number }).pid ?? undefined,
         result_count: resultCount,
       };
       data.keywordline = data.keywords.join(",");
@@ -889,6 +895,36 @@ export class SearchModule extends BaseModule {
   //upate task status
   public async updateTaskStatus(taskId: number, status: SearchTaskStatus) {
     await this.taskdbModel.updateTaskStatus(taskId, status);
+  }
+
+  /**
+   * FR-06/AC-09 at-exit reconciliation: map every RUNNING search task to the
+   * existing Error state with an interruption note, and clear its stored PID.
+   * Called by the lifecycle participant BEFORE the process is force-killed —
+   * the module's own child-exit handler races app termination and cannot be
+   * relied on for the DB write. Completed rows are untouched; retry stays
+   * user-initiated (no subsystem auto-restarts an Error task).
+   */
+  public async reconcileInterruptedTasks(reason: string): Promise<number[]> {
+    const { SearchController } = await import("@/controller/SearchController");
+    const taskIds = SearchController.getInstance().getActiveTaskIds();
+    for (const taskId of taskIds) {
+      try {
+        await this.updateTaskStatus(taskId, SearchTaskStatus.Error);
+        await this.updateTaskPID(taskId, null);
+        await this.taskdbModel.updateRuntimeLog(
+          taskId,
+          `[${new Date().toISOString()}] Task interrupted: ${reason}`
+        );
+        SearchController.getInstance().unregisterProcess(taskId);
+      } catch (err) {
+        log.error(
+          `Failed to reconcile interrupted search task ${taskId}:`,
+          err
+        );
+      }
+    }
+    return taskIds;
   }
 
   //get search result list by task id
@@ -1030,12 +1066,12 @@ export class SearchModule extends BaseModule {
       throw new Error("task not exist");
     }
     try {
-      console.log(task);
+      log.info(task);
       const absolutePath = path.resolve(task.error_log);
       const content = fs.readFileSync(absolutePath, "utf-8");
       return content;
     } catch (error) {
-      console.error(`Error reading file at ${task.error_log}:`, error);
+      log.error(`Error reading file at ${task.error_log}:`, error);
       throw error;
     }
   }
@@ -1334,7 +1370,7 @@ export class SearchModule extends BaseModule {
         );
         return;
       }
-      log.error(`Failed to update cookies for account ${accountId}`);
+      log.error(`Failed to update cookies for account ${accountId}`, err);
       throw err;
     }
   }

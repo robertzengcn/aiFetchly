@@ -18,7 +18,6 @@ export interface EmailMetricSummary extends MetricSummary {
 export interface DashboardSummary {
   searchResults: MetricSummary;
   emailsExtracted: MetricSummary;
-  yellowPagesResults: MetricSummary;
   emailsSent: EmailMetricSummary;
 }
 
@@ -27,7 +26,6 @@ export interface TrendData {
   dates: string[];               // ISO date strings
   searchResults: number[];
   emailsExtracted: number[];
-  yellowPagesResults: number[];
   emailsSent: number[];
 }
 

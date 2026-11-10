@@ -132,4 +132,37 @@ describe("tool_result_read denial recovery", () => {
     expect(recovery.length).toBeGreaterThan(20);
     expect(recovery.toLowerCase()).toMatch(/receipt|output_id|exactly|never|fabricat|invent/);
   });
+
+  it("returns the CURSOR-specific recovery for INVALID_OUTPUT_CURSOR, not the generic denial text", async () => {
+    // A damaged cursor must steer the model to drop it and restart from a
+    // verbatim next_cursor — the generic denial text (re-use a receipt id)
+    // is wrong guidance for this code.
+    currentContext = buildContext({ resolveTargetCode: "INVALID_OUTPUT_CURSOR" });
+    const res = await handleToolResultRead(
+      { output_id: "out_5cb021289856b41b869773e8030f28f4", cursor: "mangled.sig" },
+      buildSkillContext()
+    );
+    expect(res.success).toBe(false);
+    expect(res.result.error).toBe("INVALID_OUTPUT_CURSOR");
+    const recovery = String(res.result.recovery);
+    expect(recovery).toBeTruthy();
+    expect(recovery.toLowerCase()).toMatch(/cursor/);
+    expect(recovery.toLowerCase()).not.toMatch(/not found or is not available/);
+  });
+
+  it("returns an argument recovery instruction when the read schema rejects the arguments", async () => {
+    // A bare INVALID_OUTPUT_ARGUMENTS code makes the model retry the same
+    // illegal arguments; the envelope must say which fields read accepts.
+    currentContext = buildContext({});
+    const res = await handleToolResultRead(
+      { output_id: 1234, max_tokens: "lots" },
+      buildSkillContext()
+    );
+    expect(res.success).toBe(false);
+    expect(res.result.error).toBe("INVALID_OUTPUT_ARGUMENTS");
+    const recovery = String(res.result.recovery);
+    expect(recovery).toBeTruthy();
+    expect(recovery.toLowerCase()).toMatch(/output_id/);
+    expect(recovery.toLowerCase()).toMatch(/verbatim/);
+  });
 });

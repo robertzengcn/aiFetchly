@@ -28,7 +28,11 @@ vi.mock("@/modules/token", () => ({
   },
 }));
 
-import { SkillExecutor, sanitizeForLog } from "@/service/SkillExecutor";
+import {
+  SkillExecutor,
+  sanitizeForLog,
+  toolBodyErrorText,
+} from "@/service/SkillExecutor";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { SkillPermissionService } from "@/service/SkillPermissionService";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
@@ -267,6 +271,26 @@ describe("SkillExecutor", () => {
       const long = "x".repeat(200);
       const out = sanitizeForLog({ query: long });
       expect(String(out.query)).toContain("[truncated");
+    });
+  });
+
+  describe("toolBodyErrorText", () => {
+    test("reads a subagent failure from result.error", () => {
+      expect(
+        toolBodyErrorText({
+          agentId: "claude-blog:blog-researcher",
+          status: "failed",
+          error: "Agent claude-blog:blog-researcher exceeded max tool calls (8).",
+        })
+      ).toBe("Agent claude-blog:blog-researcher exceeded max tool calls (8).");
+    });
+
+    test("reads a nested result.error", () => {
+      expect(
+        toolBodyErrorText({
+          result: { error: "tool execution failed" },
+        })
+      ).toBe("tool execution failed");
     });
   });
 });

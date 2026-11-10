@@ -58,7 +58,6 @@ node dist/bin/cli.js --db /path/to/data
 - `schedule` - Task scheduling (list, detail, create, update, delete, enable, disable)
 - `proxy` - Proxy management (list, add, check, delete, import)
 - `social-account` - Social media accounts (list, detail, delete)
-- `yellow-pages` - Yellow Pages scraping (list, results, platforms, statistics)
 - `maps` - Maps search history (history, history-detail)
 - `knowledge` - Knowledge base (list-documents, search, stats)
 - `dashboard` - Dashboard statistics (summary, trends)

@@ -20,15 +20,15 @@ import { Order } from "./order.decorator";
 @Index(["profileId", "conversationId"], { unique: true })
 export class AIToolOutputScopeEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Order(1)
     @Column("varchar", { length: 100, nullable: false })
-    profileId: string;
+    profileId!: string;
 
     @Order(2)
     @Column("varchar", { length: 100, nullable: false })
-    conversationId: string;
+    conversationId!: string;
 
     /**
      * Durable generation marker. Cleared/deleted conversations get a NEW
@@ -37,10 +37,10 @@ export class AIToolOutputScopeEntity extends AuditableEntity {
      */
     @Order(3)
     @Column("varchar", { length: 64, nullable: false })
-    outputEpoch: string;
+    outputEpoch!: string;
 
     /** Set when the conversation is cleared/deleted; blocks all late commits. */
     @Order(4)
     @Column("boolean", { nullable: false, default: false })
-    invalidated: boolean;
+    invalidated!: boolean;
 }

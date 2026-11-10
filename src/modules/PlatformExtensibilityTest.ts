@@ -1,4 +1,5 @@
 import { PlatformRegistry } from '@/modules/PlatformRegistry';
+import { log } from "@/modules/Logger";
 import { UnifiedPlatformFactory } from '@/modules/UnifiedPlatformFactory';
 import { PlatformConfig, PlatformType, PlatformFeature } from '@/modules/interface/IPlatformConfig';
 import { IBasePlatformAdapter } from '@/modules/interface/IBasePlatformAdapter';
@@ -37,7 +38,7 @@ export class PlatformExtensibilityTest extends BaseModule {
         };
         summary: string;
     }> {
-        console.log('Starting comprehensive platform extensibility framework tests...');
+        log.info('Starting comprehensive platform extensibility framework tests...');
 
         try {
             // Platform registry is ready to use without initialization
@@ -61,7 +62,7 @@ export class PlatformExtensibilityTest extends BaseModule {
 
             const summary = this.generateTestSummary(results);
 
-            console.log('Comprehensive tests completed:', { success, summary });
+            log.info('Comprehensive tests completed:', { success, summary });
 
             return {
                 success,
@@ -70,7 +71,7 @@ export class PlatformExtensibilityTest extends BaseModule {
             };
 
         } catch (error) {
-            console.error('Comprehensive tests failed:', error);
+            log.error('Comprehensive tests failed:', error);
             return {
                 success: false,
                 results: {
@@ -89,7 +90,7 @@ export class PlatformExtensibilityTest extends BaseModule {
      */
     private async testConfigurationOnlyPlatform(): Promise<TestResult> {
         try {
-            console.log('Testing configuration-only platform...');
+            log.info('Testing configuration-only platform...');
 
             // Create test configuration
             const config: PlatformConfig = {
@@ -168,7 +169,7 @@ export class PlatformExtensibilityTest extends BaseModule {
             };
 
         } catch (error) {
-            console.error('Configuration-only platform test failed:', error);
+            log.error('Configuration-only platform test failed:', error);
             return {
                 success: false,
                 message: `Configuration-only platform test failed: ${error instanceof Error ? error.message : String(error)}`
@@ -181,7 +182,7 @@ export class PlatformExtensibilityTest extends BaseModule {
      */
     private async testClassBasedPlatform(): Promise<TestResult> {
         try {
-            console.log('Testing class-based platform...');
+            log.info('Testing class-based platform...');
 
             // Create test configuration
             const config: PlatformConfig = {
@@ -251,7 +252,7 @@ export class PlatformExtensibilityTest extends BaseModule {
             };
 
         } catch (error) {
-            console.error('Class-based platform test failed:', error);
+            log.error('Class-based platform test failed:', error);
             return {
                 success: false,
                 message: `Class-based platform test failed: ${error instanceof Error ? error.message : String(error)}`
@@ -264,7 +265,7 @@ export class PlatformExtensibilityTest extends BaseModule {
      */
     private async testHybridPlatform(): Promise<TestResult> {
         try {
-            console.log('Testing hybrid platform...');
+            log.info('Testing hybrid platform...');
 
             // Create test configuration
             const config: PlatformConfig = {
@@ -340,7 +341,7 @@ export class PlatformExtensibilityTest extends BaseModule {
             };
 
         } catch (error) {
-            console.error('Hybrid platform test failed:', error);
+            log.error('Hybrid platform test failed:', error);
             return {
                 success: false,
                 message: `Hybrid platform test failed: ${error instanceof Error ? error.message : String(error)}`
@@ -353,7 +354,7 @@ export class PlatformExtensibilityTest extends BaseModule {
      */
     private async testIntegration(): Promise<TestResult> {
         try {
-            console.log('Testing integration between components...');
+            log.info('Testing integration between components...');
 
             // Test platform registry functionality
             const registryTest = await this.testPlatformRegistry();
@@ -377,7 +378,7 @@ export class PlatformExtensibilityTest extends BaseModule {
             };
 
         } catch (error) {
-            console.error('Integration test failed:', error);
+            log.error('Integration test failed:', error);
             return {
                 success: false,
                 message: `Integration test failed: ${error instanceof Error ? error.message : String(error)}`

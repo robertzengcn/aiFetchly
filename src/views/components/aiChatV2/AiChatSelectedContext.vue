@@ -57,6 +57,7 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
+import type { SelectedContextItem } from "./selectedContextTypes";
 
 /**
  * Selected-context panel (technical-design §13.3).
@@ -65,19 +66,12 @@ import type { HistoryExcerpt } from "@/entityTypes/aiChatArchiveTypes";
  * are per-conversation; the backend re-resolves them on submit (no renderer text
  * is trusted as the original quote). Rejected selections (SOURCE_UNAVAILABLE)
  * are flagged with the error color so the user can act before sending.
+ *
+ * The item shape lives in `./selectedContextTypes` (plain `.ts`, importable
+ * under both `vue-tsc` and plain `tsc`); re-exported here so existing
+ * `from ".../AiChatSelectedContext.vue"` type imports keep working.
  */
-export interface SelectedContextItem {
-  /** Opaque source id — the only value trusted across the boundary. */
-  sourceId: string;
-  /** Short preview text for display only (never re-sent as original quote). */
-  preview: string;
-  /** Estimated tokens for this selection (chars/4 heuristic). */
-  estimatedTokens: number;
-  /** True when the backend re-resolution refreshed a stale reference. */
-  refreshed?: boolean;
-  /** True when the backend rejected this source id (no longer available). */
-  rejected?: boolean;
-}
+export type { SelectedContextItem } from "./selectedContextTypes";
 
 const props = defineProps<{
   selections: ReadonlyArray<SelectedContextItem>;

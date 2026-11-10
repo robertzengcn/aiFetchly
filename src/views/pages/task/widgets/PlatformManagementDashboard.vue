@@ -390,7 +390,6 @@ const getPlatformIcon = (name: string) => {
     twitter: 'mdi-twitter',
     instagram: 'mdi-instagram',
     youtube: 'mdi-youtube',
-    yellowpages: 'mdi-phone',
     yelp: 'mdi-star',
     bing: 'mdi-magnify'
   }

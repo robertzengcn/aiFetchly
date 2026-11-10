@@ -24,12 +24,16 @@ export class AIWorkspaceMemoryConsolidationRunModule extends BaseModule {
     reviewedSince?: Date | null;
     reviewedThrough?: Date | null;
   }): Promise<AIWorkspaceMemoryConsolidationRunView> {
+    // SMBW-008: do NOT persist the candidate reviewedThrough at start. The
+    // watermark must commit only with the successful transaction
+    // (applyPlanAndCompleteRun / completeRun) so a failed or cancelled run
+    // never advances the cursor past unprocessed material.
     const e = await this.runModel.createRunning({
       runId: `wrun-${randomUUID()}`,
       workspaceKey: input.workspaceKey,
       startedAt: new Date(),
       reviewedSince: input.reviewedSince ?? null,
-      reviewedThrough: input.reviewedThrough ?? null,
+      reviewedThrough: null,
     });
     return this.toView(e);
   }

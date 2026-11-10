@@ -1,5 +1,10 @@
 <template>
-  <v-sheet class="mx-auto" rounded>
+  <AppPageShell
+    page-id="email-filter-editor"
+    title-key="route.email_filter_create"
+    content-width="form"
+  >
+    <v-sheet class="mx-auto" rounded>
 
     <v-form ref="form" @submit.prevent="onSubmit" class="ml-2 mr-2">
       <v-alert
@@ -64,11 +69,11 @@ v-model="alert" border="start" variant="tonal" closable close-label="Close Alert
         {{ alertContent }}
       </v-alert>
     </v-form>
-  </v-sheet>
-
-
+    </v-sheet>
+  </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 // import router from '@/views/router';
 import { ref, onMounted } from "vue";
 import { useRoute } from "vue-router";

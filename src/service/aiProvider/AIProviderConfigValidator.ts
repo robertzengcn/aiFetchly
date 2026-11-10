@@ -163,6 +163,18 @@ export function validateLocalProviderConfig(
     errors.push("Default model must not be empty.");
   }
 
+  // Chat-titles FR-08: optional explicit title model. Undefined = untouched
+  // (binding rule applies); "" = explicit clear; non-empty = selection.
+  // Whitespace-only is treated as a clear, never an invalid-save blocker.
+  let titleModel: string | undefined;
+  if (typeof input.titleModel === "string") {
+    titleModel = input.titleModel.trim();
+    if (titleModel.length > 100) {
+      errors.push("Title model must be 100 characters or fewer.");
+      titleModel = undefined;
+    }
+  }
+
   const baseUrlRaw = typeof input.baseUrl === "string" ? input.baseUrl : "";
   let normalizedBaseUrl = "";
   if (baseUrlRaw.trim().length === 0) {
@@ -227,6 +239,7 @@ export function validateLocalProviderConfig(
     name,
     baseUrl: normalizedBaseUrl,
     defaultModel,
+    ...(titleModel !== undefined ? { titleModel } : {}),
     ...(typeof input.apiKey === "string" ? { apiKey: input.apiKey } : {}),
     ...(input.clearApiKey ? { clearApiKey: true } : {}),
     ...(typeof input.contextSize === "number" && input.contextSize > 0

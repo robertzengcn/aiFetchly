@@ -1,6 +1,8 @@
+import { randomUUID } from "crypto";
 import { MCPToolEntity } from "@/entity/MCPTool.entity";
+import { log } from "@/modules/Logger";
 import { MCPToolModule } from "@/modules/MCPToolModule";
-import { MCPClient } from "@/modules/MCPClient";
+import { MCPClient, type MCPToolCallContent } from "@/modules/MCPClient";
 import { PluginOptionsStore } from "@/service/pluginCompat/PluginOptionsStore";
 import {
   buildPluginToolName,
@@ -8,10 +10,16 @@ import {
   unscopeServerName,
 } from "@/service/pluginCompat/McpToolNaming";
 import { MCP_CALL_TIMEOUT_MS } from "@/config/mcpConfig";
-import { MCPTimeoutError } from "@/service/MCPTimeoutError";
+import { MCPTimeoutError, MCPPartialAbuseError } from "@/service/MCPTimeoutError";
 import { sanitizeMcpToolMetadata } from "@/service/ToolSchemaSanitizer";
 import { TOOL_CATALOG_DEFAULTS } from "@/config/toolCatalogConfig";
 import { toolCatalogCounters } from "@/service/ToolCatalogCounters";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { PluginPartialGate } from "@/modules/mcp/pluginPartial";
+import {
+  ProgressRateLimiter,
+  redactProgressText,
+} from "@/modules/mcp/progressCoalescing";
 import type { ToolFunction } from "@/api/aiChatApi";
 import {
   mcpServerConfigSchema,
@@ -19,6 +27,16 @@ import {
 } from "@/schemas/config/mcpServer";
 import { Token } from "@/modules/token";
 import { getPluginInstallRoot } from "@/service/pluginPaths";
+import { getPluginBrowserCapabilityService } from "@/service/PluginBrowserCapabilityService";
+import { PluginMcpOwnershipChecker } from "@/service/PluginMcpOwnershipChecker";
+import { getPluginToolPolicyRegistry } from "@/service/PluginToolPolicyRegistry";
+import {
+  readRuntimeDescriptorFromMetadata,
+  HOST_CLEANUP_RESERVE_MS,
+  type PluginToolExecutionOptions,
+  type HostAuthorizedRecoveryV1,
+} from "@/entityTypes/pluginExecutionTypes";
+import { getPluginFileArtifactService } from "@/service/PluginFileArtifactService";
 
 /**
  * Build a sanitized `toolSchemas` map (toolName -> { description, inputSchema })
@@ -105,8 +123,15 @@ export interface MCPToolWithServer {
  * Build an MCPClient config from a persisted MCPToolEntity. Plugin-owned stdio
  * servers store command/args/env in dedicated columns; legacy manual servers
  * store the space-separated command in `host`. (Design §9.2, §9.3)
+ *
+ * The validated host-runtime descriptor is injected by the caller after the
+ * launch-time ownership contract (B13) has passed: buildClientConfig itself
+ * never authorizes a launch. Exported for B11 capability-gating tests.
  */
-function buildClientConfig(server: MCPToolEntity): {
+export function buildClientConfig(
+  server: MCPToolEntity,
+  hostRuntime?: { entry: string; pluginVersion: string }
+): {
   host?: string;
   port?: number;
   transport: "stdio" | "sse" | "websocket";
@@ -117,6 +142,22 @@ function buildClientConfig(server: MCPToolEntity): {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  hostRuntime?: {
+    pluginName: string;
+    entry: string;
+    pluginVersion?: string;
+    context?: {
+      mode: "execute";
+      executionId: string;
+      outputDirectory?: string;
+      browser?: {
+        executablePath: string;
+        version: string;
+      };
+      deadlineEpochMs?: number;
+      authorizedRecovery?: HostAuthorizedRecoveryV1;
+    };
+  };
 } {
   const base: {
     host?: string;
@@ -129,6 +170,22 @@ function buildClientConfig(server: MCPToolEntity): {
     args?: string[];
     env?: Record<string, string>;
     cwd?: string;
+    hostRuntime?: {
+      pluginName: string;
+      entry: string;
+      pluginVersion?: string;
+      context?: {
+        mode: "execute";
+        executionId: string;
+        outputDirectory?: string;
+        browser?: {
+          executablePath: string;
+          version: string;
+        };
+        deadlineEpochMs?: number;
+        authorizedRecovery?: HostAuthorizedRecoveryV1;
+      };
+    };
   } = {
     transport: server.transport,
     authType: server.authType,
@@ -137,6 +194,32 @@ function buildClientConfig(server: MCPToolEntity): {
       : undefined,
     timeout: server.timeout,
   };
+
+  // Host-managed runtime branch (plugin PRD §19.5): a validated runtime
+  // descriptor in host-owned metadata wins over any command — the MCPClient
+  // resolves the trusted launch (process.execPath + entry + host context)
+  // and ignores command-style spawning for this server. The descriptor is
+  // injected by the caller AFTER the B13 ownership contract passes; a
+  // present descriptor without a validated descriptor from the caller is an
+  // internal error (never launch on metadata alone).
+  if (server.transport === "stdio" && server.pluginName) {
+    const descriptor = readRuntimeDescriptorFromMetadata(
+      safeJsonParse(server.metadata ?? "")
+    );
+    if (descriptor) {
+      if (!hostRuntime) {
+        throw new Error(
+          "Host runtime descriptor present but ownership validation did not run; refusing to build a launch config."
+        );
+      }
+      base.hostRuntime = {
+        pluginName: server.pluginName,
+        entry: hostRuntime.entry,
+        pluginVersion: hostRuntime.pluginVersion,
+      };
+      return base;
+    }
+  }
 
   if (server.transport === "stdio" && server.command) {
     // Plugin-owned stdio server — use explicit fields.
@@ -165,7 +248,7 @@ function buildClientConfig(server: MCPToolEntity): {
         // Unresolved placeholders — leave them in place; the spawn will
         // surface a clear error. The Plugin Manager UI renders the
         // missing vars so the user can supply values.
-        console.warn(
+        log.warn(
           `[MCPToolService] plugin "${server.pluginName}" server ` +
             `"${scopedName}" has unresolved env placeholders: ` +
             `${resolved.missing.join(", ")}`
@@ -224,17 +307,116 @@ function safeJsonParseRecord(
  */
 export class MCPToolService {
   private mcpToolModule: MCPToolModule;
+  private readonly ownershipChecker: PluginMcpOwnershipChecker;
 
   /**
    * @param mcpToolModule Optional injected module for unit testing. Production
    * callers omit it and get a real MCPToolModule instance.
    */
-  constructor(mcpToolModule?: MCPToolModule) {
+  constructor(
+    mcpToolModule?: MCPToolModule,
+    ownershipChecker?: PluginMcpOwnershipChecker
+  ) {
     this.mcpToolModule = mcpToolModule ?? new MCPToolModule();
+    this.ownershipChecker = ownershipChecker ?? new PluginMcpOwnershipChecker();
   }
 
-  private createClientForServer(server: MCPToolEntity): MCPClient {
-    return new MCPClient(buildClientConfig(server));
+  /**
+   * B13 launch-time ownership contract: a hostManaged runtime row is only
+   * launchable when (a) its metadata carries a valid descriptor, (b) the
+   * owning plugin row exists, is enabled and healthy, and (c) the descriptor
+   * entry still matches the CURRENT on-disk manifest declaration. Returns
+   * null when the row is not a host runtime row; throws when it is one and
+   * the contract fails, so a stale/forged descriptor never spawns.
+   */
+  private async resolveValidatedHostRuntime(
+    server: MCPToolEntity
+  ): Promise<{ entry: string; pluginVersion: string } | null> {
+    if (server.transport !== "stdio" || !server.pluginName) return null;
+    const descriptor = readRuntimeDescriptorFromMetadata(
+      safeJsonParse(server.metadata ?? "")
+    );
+    if (!descriptor) return null;
+    const ownership = await this.ownershipChecker.check({
+      pluginName: server.pluginName,
+      rowServerName: server.serverName,
+      rowMetadata: server.metadata ?? undefined,
+    });
+    if (!ownership.ok) {
+      throw new Error(`[plugin-runtime] ${ownership.error}`);
+    }
+    return { entry: descriptor.entry, pluginVersion: ownership.pluginVersion };
+  }
+
+  private async createClientForServer(
+    server: MCPToolEntity,
+    executeContext?: {
+      readonly executionId: string;
+      readonly deadlineEpochMs?: number;
+      readonly deadlinePerfMs?: number;
+      /** Recovery attempt the ledger authorized for this call (H1/H3). */
+      readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
+    }
+  ): Promise<MCPClient> {
+    const hostRuntime = await this.resolveValidatedHostRuntime(server);
+    const config = buildClientConfig(server, hostRuntime ?? undefined);
+    // Execute-mode host context (design §6.2/§6.3): plugin runtime servers
+    // receive the host-approved browser descriptor (capability-gated, no
+    // application settings exposure), the authoritative deadline, the
+    // host-provisioned staging directory, and the ledger-authorized recovery
+    // through the trusted context file — never through model-visible
+    // arguments.
+    if (config.hostRuntime && executeContext) {
+      // H1 (§2): provision the per-job staging directory under the SAME
+      // execution id BEFORE tools/call, so the plugin can finalize
+      // candidates into it and the host can promote them after exit.
+      // B11/HOST-15: grants are checked against the plugin's DECLARED
+      // capabilities — a tool without the fileArtifacts grant gets no
+      // staging directory and never triggers require-artifacts semantics
+      // (its promotion is generic, not artifact-graded).
+      const declaresArtifacts =
+        getPluginToolPolicyRegistry()
+          .getPluginArtifactFormats(config.hostRuntime.pluginName)
+          .length > 0;
+      const outputDirectory = declaresArtifacts
+        ? getPluginFileArtifactService().provisionStaging(
+            executeContext.executionId
+          )
+        : null;
+      // B11: the browser descriptor leaks no filesystem state into the
+      // context and is granted ONLY to plugins whose manifest declares
+      // browser execution; a missing/older browser resolves to no context
+      // browser entry plus a typed dependency diagnostic at scrape time.
+      const browser = getPluginBrowserCapabilityService().describe();
+      const browserGranted =
+        browser !== null &&
+        getPluginToolPolicyRegistry().pluginDeclaresBrowserExecution(
+          config.hostRuntime.pluginName
+        );
+      config.hostRuntime = {
+        ...config.hostRuntime,
+        context: {
+          mode: "execute" as const,
+          executionId: executeContext.executionId,
+          deadlineEpochMs: executeContext.deadlineEpochMs,
+          ...(outputDirectory ? { outputDirectory } : {}),
+          ...(browserGranted
+            ? {
+                browser: {
+                  executablePath: browser.path,
+                  version: browser.version,
+                },
+              }
+            : {}),
+          ...(executeContext.authorizedRecovery
+            ? {
+                authorizedRecovery: executeContext.authorizedRecovery,
+              }
+            : {}),
+        },
+      };
+    }
+    return new MCPClient(config);
   }
 
   /**
@@ -364,7 +546,7 @@ export class MCPToolService {
                 { description?: string; inputSchema?: Record<string, unknown> }
               >) || {};
           } catch (error) {
-            console.error(
+            log.error(
               `Failed to parse metadata for server ${server.id}:`,
               error
             );
@@ -393,7 +575,7 @@ export class MCPToolService {
           }
         }
       } catch (error) {
-        console.error(`Failed to parse tools for server ${server.id}:`, error);
+        log.error(`Failed to parse tools for server ${server.id}:`, error);
       }
     }
 
@@ -536,7 +718,7 @@ export class MCPToolService {
 
     this.assertStdioTrusted(server);
 
-    const client = this.createClientForServer(server);
+    const client = await this.createClientForServer(server);
 
     try {
       await client.connect();
@@ -553,7 +735,7 @@ export class MCPToolService {
         try {
           metadata = JSON.parse(server.metadata);
         } catch (e) {
-          console.warn("Failed to parse existing metadata, initializing new");
+          log.warn("Failed to parse existing metadata, initializing new");
         }
       }
 
@@ -580,7 +762,7 @@ export class MCPToolService {
         try {
           toolConfig = JSON.parse(server.toolConfig);
         } catch (e) {
-          console.warn("Failed to parse existing toolConfig, initializing new");
+          log.warn("Failed to parse existing toolConfig, initializing new");
         }
       }
 
@@ -636,7 +818,7 @@ export class MCPToolService {
       try {
         toolConfig = JSON.parse(server.toolConfig);
       } catch (e) {
-        console.warn("Failed to parse toolConfig");
+        log.warn("Failed to parse toolConfig");
       }
     }
 
@@ -676,7 +858,7 @@ export class MCPToolService {
     this.assertToolEnabled(server, toolName);
     this.assertStdioTrusted(server);
 
-    const client = this.createClientForServer(server);
+    const client = await this.createClientForServer(server);
     const callTimeoutMs = MCP_CALL_TIMEOUT_MS;
 
     try {
@@ -711,6 +893,283 @@ export class MCPToolService {
   }
 
   /**
+   * Managed-async execution (plugin PRD §11.8 / design §9.1, HOST-03/04/07).
+   *
+   * Unlike the foreground method above, the call is NOT raced against the
+   * fixed 240 s ceiling. Every inner timeout derives from the single
+   * authoritative deadline:
+   *   - reject without spawning when the remaining budget is at or below the
+   *     cleanup reserve;
+   *   - SDK `timeout` and `maxTotalTimeout` both use the remaining budget;
+   *   - `resetTimeoutOnProgress: false` — progress never extends lifetime;
+   *   - the registry-owned signal propagates to the SDK request;
+   *   - progress notifications flow to `options.onProgress`.
+   *
+   * Returns the COMPLETE content union (`callToolContent`) so the executor
+   * can apply domain-envelope normalization (isError vs transport) instead
+   * of the throwing `callTool` compatibility shape.
+   */
+  async executeMCPToolContent(
+    serverId: number,
+    toolName: string,
+    params: Record<string, unknown>,
+    options: PluginToolExecutionOptions
+  ): Promise<MCPToolCallContent> {
+    const server = await this.mcpToolModule.getMCPToolById(serverId);
+
+    if (!server) {
+      throw new Error(`MCP server with id ${serverId} not found`);
+    }
+    if (!server.enabled) {
+      throw new Error(`MCP server ${server.serverName} is disabled`);
+    }
+    if (options.signal?.aborted) {
+      throw new Error(`Tool ${toolName} was cancelled before execution`);
+    }
+
+    this.assertToolEnabled(server, toolName);
+    this.assertStdioTrusted(server);
+
+    // B07: the deadline is recomputed before EVERY awaited step — browser /
+    // context setup, connect() and tools/call each take a FRESH remaining
+    // budget, so a slow earlier step can never silently consume or extend
+    // the whole plan.
+    const remainingMsNow = (): number =>
+      options.deadlinePerfMs !== undefined
+        ? // H5: monotonic-clock budget when the caller anchored one.
+          Math.max(0, options.deadlinePerfMs - performance.now())
+        : options.deadlineEpochMs !== undefined
+          ? Math.max(0, options.deadlineEpochMs - Date.now())
+          : Number.POSITIVE_INFINITY;
+    if (remainingMsNow() <= HOST_CLEANUP_RESERVE_MS) {
+      throw new MCPTimeoutError(
+        toolName,
+        server.serverName,
+        Math.max(0, remainingMsNow())
+      );
+    }
+
+    // H1: the caller (job registry) owns the execution id so the context
+    // file, staging directory, journal, and promotion share ONE id. Only a
+    // caller with no id at all falls back to an untracked one.
+    const executionId = options.executionId ?? randomUUID();
+    const client = await this.createClientForServer(server, {
+      executionId,
+      deadlineEpochMs: options.deadlineEpochMs,
+      authorizedRecovery: options.authorizedRecovery,
+    });
+
+    // H5: the plugin-partial gate — snapshots are validated against THIS
+    // call's execution id, monotonic sequence, byte cap, and the live job,
+    // then mapped onto the registry tool record and the renderer
+    // tool_progress stream (phase included). Set BEFORE connect so the
+    // notification route is bound in time.
+    const jobRegistry = getDefaultToolJobRegistry();
+    const gate = new PluginPartialGate(executionId, () =>
+      jobRegistry.isJobActive(executionId)
+    );
+    // G02: partial updates are coalesced to one per second and abuse is
+    // remembered so the transport-failure path reports the SAFE error.
+    const partialLimiter = new ProgressRateLimiter();
+    let partialAbuseSeen = false;
+    client.setPluginPartialSink?.((raw) => {
+      const outcome = gate.observe(raw);
+      const mapping = outcome.mapping;
+      if (outcome.accept && mapping !== undefined) {
+        // Bounded counts only — full records never enter the registry.
+        jobRegistry.updatePartial(executionId, {
+          data: mapping,
+          collectedCount: mapping.partialCount,
+          expectedCount: mapping.expectedCount,
+        });
+        partialLimiter.schedule(() => {
+          options.onProgress?.(mapping);
+        });
+      }
+      if (outcome.terminateCall) {
+        partialAbuseSeen = true;
+      }
+      return outcome;
+    });
+    // B07: connect() is bounded by the SAME remaining budget — a delayed
+    // handshake or slow capability resolution cannot extend the plan.
+    const connectBudgetMs = remainingMsNow();
+    if (connectBudgetMs <= HOST_CLEANUP_RESERVE_MS) {
+      throw new MCPTimeoutError(
+        toolName,
+        server.serverName,
+        connectBudgetMs
+      );
+    }
+    try {
+      await this.raceDeadlineStep(
+        () => client.connect(),
+        connectBudgetMs,
+        toolName,
+        server.serverName
+      );
+
+      // B07: recompute AFTER connect, then SUBTRACT the cleanup reserve —
+      // `tools/call` can never consume the five seconds the shutdown needs.
+      const callBudgetMs = remainingMsNow() - HOST_CLEANUP_RESERVE_MS;
+      if (callBudgetMs <= 0) {
+        throw new MCPTimeoutError(
+          toolName,
+          server.serverName,
+          remainingMsNow()
+        );
+      }
+
+      let result: MCPToolCallContent | undefined;
+      let callError: unknown = undefined;
+      // G02: standard-MCP progress coalescing — at most 4 events/second,
+      // trailing-latest preserved; redaction + clamping below.
+      const progressLimiter = new ProgressRateLimiter();
+      try {
+        result = await this.raceDeadlineStep(
+          () =>
+            client.callToolContent(toolName, params, {
+              timeoutMs: callBudgetMs,
+              maxTotalTimeoutMs: callBudgetMs,
+              signal: options.signal,
+              resetTimeoutOnProgress: false,
+              onprogress: options.onProgress
+                ? (notification) => {
+                    // Design §9.2: units are collected records, not
+                    // elapsed-time percentage. `total` is omitted by
+                    // servers that cannot know it (unknown stays null — a
+                    // missing estimate is never zero).
+                    const total =
+                      notification.total !== undefined &&
+                      Number.isFinite(notification.total) &&
+                      notification.total > 0
+                        ? notification.total
+                        : null;
+                    // G02: `progress > total` is normalized, not forwarded
+                    // — the renderer never sees an impossible fraction.
+                    const bounded = Math.max(
+                      0,
+                      Number.isFinite(notification.progress)
+                        ? notification.progress
+                        : 0
+                    );
+                    const clamped =
+                      total !== null ? Math.min(bounded, total) : bounded;
+                    const message =
+                      typeof notification.message === "string" &&
+                      notification.message.length > 0
+                        ? redactProgressText(notification.message)
+                        : total !== null
+                          ? `Collected ${clamped} of ${total} records`
+                          : `Collected ${clamped} records`;
+                    progressLimiter.schedule(() => {
+                      options.onProgress?.({
+                        phase: "extracting",
+                        message,
+                        progress:
+                          total !== null && total > 0
+                            ? clamped / total
+                            : null,
+                        partialCount: clamped,
+                        expectedCount: total,
+                      });
+                    });
+                  }
+                : undefined,
+            }),
+          callBudgetMs,
+          toolName,
+          server.serverName
+        );
+      } catch (e) {
+        callError = e;
+      } finally {
+        // The call is over (or raced away): a pending trailing progress
+        // update must not fire after settlement.
+        progressLimiter.dispose();
+        partialLimiter.dispose();
+      }
+
+      // G02 (abuse): when partial-abuse terminated the transport, the
+      // surfaced error must be the SAFE classification, not the raw
+      // transport failure.
+
+      // B07: cleanup is awaited (bounded by the reserve) BEFORE classifying
+      // the outcome. An unconfirmed shutdown is never reported as a definite
+      // stop: the deadline error carries `cleanupPending`.
+      let cleanupConfirmed = true;
+      try {
+        cleanupConfirmed = await Promise.race([
+          client.disconnect(),
+          new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(false), HOST_CLEANUP_RESERVE_MS);
+          }),
+        ]);
+      } catch {
+        cleanupConfirmed = false;
+      }
+      if (callError !== undefined || result === undefined) {
+        const failure =
+          callError !== undefined
+            ? callError
+            : new Error(`MCP tool ${toolName} produced no result`);
+        // G02 (abuse): the transport died because the plugin exceeded the
+        // partial-snapshot abuse threshold — surface the telemetry-safe
+        // abuse error instead of the raw transport failure.
+        if (partialAbuseSeen && !(failure instanceof MCPTimeoutError)) {
+          throw new MCPPartialAbuseError(toolName, server.serverName);
+        }
+        if (
+          failure instanceof MCPTimeoutError &&
+          !cleanupConfirmed
+        ) {
+          failure.cleanupPending = true;
+        }
+        throw failure;
+      }
+      return result;
+    } finally {
+      // The classify-with-cleanup flow above already awaited disconnect in
+      // every path; this belt-and-suspenders call is a no-op then — except
+      // when it is not (no-op early return path), so stay bounded here too:
+      // a hung shutdown must never hang the caller.
+      await Promise.race([
+        client.disconnect().catch(() => undefined),
+        new Promise<undefined>((resolve) => {
+          setTimeout(() => resolve(undefined), HOST_CLEANUP_RESERVE_MS);
+        }),
+      ]);
+    }
+  }
+
+  /**
+   * B07: race one awaited MCP step (connect / tools/call) against the given
+   * deadline budget. A slow step aborts with MCPTimeoutError instead of
+   * extending the plan; a result that arrives in time resolves normally.
+   */
+  private async raceDeadlineStep<T>(
+    op: () => Promise<T>,
+    budgetMs: number,
+    toolName: string,
+    serverName: string
+  ): Promise<T> {
+    if (!Number.isFinite(budgetMs)) {
+      return await op();
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new MCPTimeoutError(toolName, serverName, budgetMs));
+      }, budgetMs);
+    });
+    try {
+      return await Promise.race([op(), timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
    * Assert that an individual tool is not disabled in the server's toolConfig.
    * Throws if the tool is explicitly disabled. Silently skips the check when
    * toolConfig is missing or unparseable (backward compatibility).
@@ -721,7 +1180,7 @@ export class MCPToolService {
     try {
       toolConfig = JSON.parse(server.toolConfig);
     } catch {
-      console.warn("Failed to parse toolConfig for tool check");
+      log.warn("Failed to parse toolConfig for tool check");
       return;
     }
     if (toolConfig[toolName]?.enabled === false) {
@@ -741,7 +1200,7 @@ export class MCPToolService {
 
     this.assertStdioTrusted(server);
 
-    const client = this.createClientForServer(server);
+    const client = await this.createClientForServer(server);
 
     try {
       await client.connect();

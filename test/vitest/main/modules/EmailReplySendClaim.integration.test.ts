@@ -1939,3 +1939,144 @@ describe("R20 — Send lifecycle audit dual-correlation (model level)", () => {
     expect(inv1MsgCorrIds[0]).toMatch(/^erx-/);
   });
 });
+
+/**
+ * Assisted inconclusive claim fence (spec
+ * docs/superpowers/specs/2026-10-29-email-send-inconclusive-detection-assisted-design.md):
+ * a human-confirmed assisted send where the mailbox probe was INCONCLUSIVE
+ * (probe_failed etc.) persists NO negative observation, so `replyNegativeCheckAt`
+ * stays null. The claim's §9.3 freshness precondition is fail-closed on a null
+ * observation; with `assistedProbe` the delivery service asserts the
+ * local-ledger negative + human confirmation, and the fence may proceed.
+ * Positive evidence (replyDetectedAt / replyStatus sent) and the sibling check
+ * are NEVER bypassed.
+ */
+describe("assisted inconclusive claim fence", () => {
+  let dbpath: string;
+  let draftModel: EmailReplyDraftModel;
+  let approvalModel: EmailReplyApprovalModel;
+
+  beforeAll(async () => {
+    dbpath = path.join(
+      os.tmpdir(),
+      `aifetchly-reply-claim-assisted-${Date.now()}`
+    );
+    fs.mkdirSync(dbpath, { recursive: true });
+    await SqliteDb.resetInstance(dbpath);
+    await SqliteDb.ensureInitialized();
+    draftModel = new EmailReplyDraftModel(dbpath);
+    approvalModel = new EmailReplyApprovalModel(dbpath);
+  });
+
+  afterAll(async () => {
+    await SqliteDb.destroyInstance();
+    try {
+      fs.rmSync(dbpath, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  async function seedMessageRow(): Promise<EmailReceivedMessageEntity> {
+    const message = new EmailReceivedMessageEntity();
+    message.emailServiceId = 7;
+    message.providerUid = `uid-${Math.random()}`;
+    message.fromAddress = "prospect@example.com";
+    message.toAddressesJson = '["me@x.com"]';
+    message.subject = "Pricing?";
+    message.receivedAt = new Date();
+    message.normalizedMessageId = null;
+    return await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .save(message);
+  }
+
+  it("assistedProbe skips the freshness precondition: null replyNegativeCheckAt still claims", async () => {
+    const msg = await seedMessageRow();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    const result = await draftModel.claimApprovedRevisionForSend({
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: seed.idempotencyKey,
+      approvalId: seed.approvalId,
+      messageId: msg.id,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: "owner@service7.com",
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+      assistedProbe: {
+        reasonCode: "probe_failed",
+        checkedAt: new Date().toISOString(),
+      },
+    });
+    expect(result.status).toBe("claimed");
+    // The inconclusive probe must NOT fabricate a negative observation.
+    const row = await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .findOneBy({ id: msg.id });
+    expect(row?.replyNegativeCheckAt).toBeNull();
+    expect(row?.replyDetectedAt).toBeNull();
+  });
+
+  it("without assistedProbe the same null-observation claim still refuses (fail-closed unchanged)", async () => {
+    const msg = await seedMessageRow();
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    const result = await draftModel.claimApprovedRevisionForSend({
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: seed.idempotencyKey,
+      approvalId: seed.approvalId,
+      messageId: msg.id,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: "owner@service7.com",
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+    });
+    expect(result.status).toBe("precondition_failed");
+    if (result.status === "precondition_failed") {
+      expect(result.reason).toContain("freshness_stale");
+    }
+  });
+
+  it("assistedProbe does not bypass positive evidence: replyDetectedAt set → already_replied refusal", async () => {
+    const msg = await seedMessageRow();
+    await SqliteDb.getInstance(dbpath).connection
+      .getRepository(EmailReceivedMessageEntity)
+      .update({ id: msg.id }, { replyDetectedAt: new Date() });
+    const seed = await seedApprovedDraft(
+      { draftModel, approvalModel },
+      { messageId: msg.id }
+    );
+    const result = await draftModel.claimApprovedRevisionForSend({
+      draftId: seed.draftId,
+      revisionId: seed.revisionId,
+      approvedHash: seed.contentHash,
+      idempotencyKey: seed.idempotencyKey,
+      approvalId: seed.approvalId,
+      messageId: msg.id,
+      conversationId: null,
+      emailServiceId: seed.emailServiceId,
+      senderAddress: "owner@service7.com",
+      recipientAddress: "prospect@example.com",
+      policyVersion: "policy-1",
+      assistedProbe: {
+        reasonCode: "probe_failed",
+        checkedAt: new Date().toISOString(),
+      },
+    });
+    expect(result.status).toBe("precondition_failed");
+    if (result.status === "precondition_failed") {
+      expect(result.code).toBe("already_replied");
+    }
+  });
+});

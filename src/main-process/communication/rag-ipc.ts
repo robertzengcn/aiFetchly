@@ -1,4 +1,5 @@
 import { ipcMain, app, dialog } from "electron";
+import { log } from "@/modules/Logger";
 import { RagSearchController } from "@/controller/RagSearchController";
 import { SearchRequest, SearchResponse } from "@/modules/RagSearchModule";
 import {
@@ -92,7 +93,7 @@ async function createRagController(): Promise<RagSearchController> {
  * pattern. 24 ipcMain.handle handlers migrated to registerValidatedHandler.
  */
 export function registerRagIpcHandlers(): void {
-  console.log("RAG IPC handlers registered");
+  log.info("RAG IPC handlers registered");
 
   // ── Out-of-scope: streaming on handler ───────────────────────────────
   ipcMain.on(SAVE_TEMP_FILE, async (event, data): Promise<void> => {
@@ -223,11 +224,25 @@ export function registerRagIpcHandlers(): void {
             documentDate?: string;
             customMetadata?: unknown;
           };
-          const parsedMetadata = saveTempFileMetadataSchema.safeParse(metadataTyped);
+          const parsedMetadata =
+            saveTempFileMetadataSchema.safeParse(metadataTyped);
           if (!parsedMetadata.success) {
+            // The staged upload is orphaned the moment this rejection
+            // returns tempFilePath: "" — nobody else owns the file. Delete it
+            // so rejected uploads cannot accumulate under userData/uploads.
+            try {
+              fs.unlinkSync(appDataFilePath);
+            } catch (unlinkError) {
+              log.warn(
+                "Failed to delete staged upload after metadata rejection:",
+                unlinkError
+              );
+            }
             const errorResponse: CommonMessage<SaveTempFileResponse> = {
               status: false,
-              msg: `Invalid upload metadata: ${parsedMetadata.error.issues.map((i) => i.message).join("; ")}`,
+              msg: `Invalid upload metadata: ${parsedMetadata.error.issues
+                .map((i) => i.message)
+                .join("; ")}`,
               data: {
                 tempFilePath: "",
                 databaseSaved: false,
@@ -236,14 +251,18 @@ export function registerRagIpcHandlers(): void {
             };
             (
               event as { sender: { send: (c: string, m: string) => void } }
-            ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(errorResponse));
+            ).sender.send(
+              SAVE_TEMP_FILE_COMPLETE,
+              JSON.stringify(errorResponse)
+            );
             return;
           }
           const uploadOptions = {
             filePath: appDataFilePath,
             name: originalFileName,
             title:
-              parsedMetadata.data.title || originalFileName.replace(/\.[^/.]+$/, ""),
+              parsedMetadata.data.title ||
+              originalFileName.replace(/\.[^/.]+$/, ""),
             description:
               parsedMetadata.data.description ||
               `Uploaded document: ${originalFileName}`,
@@ -289,7 +308,7 @@ export function registerRagIpcHandlers(): void {
           };
           databaseSaved = true;
         } catch (dbError) {
-          console.warn("Failed to save document to database:", dbError);
+          log.warn("Failed to save document to database:", dbError);
           databaseError =
             dbError instanceof Error
               ? dbError.message
@@ -302,7 +321,7 @@ export function registerRagIpcHandlers(): void {
                 "SAVE_TEMP_FILE database save error"
               );
             } catch (logError) {
-              console.error("Failed to save error log:", logError);
+              log.error("Failed to save error log:", logError);
             }
           }
         }
@@ -329,7 +348,7 @@ export function registerRagIpcHandlers(): void {
         event as { sender: { send: (c: string, m: string) => void } }
       ).sender.send(SAVE_TEMP_FILE_COMPLETE, JSON.stringify(response));
     } catch (error) {
-      console.error("Error saving temporary file:", error);
+      log.error("Error saving temporary file:", error);
       if (documentInfo?.id) {
         try {
           if (!ragController) {
@@ -341,7 +360,7 @@ export function registerRagIpcHandlers(): void {
             "SAVE_TEMP_FILE general error"
           );
         } catch (logError) {
-          console.error("Failed to save error log:", logError);
+          log.error("Failed to save error log:", logError);
         }
       }
       const errorResponse: CommonMessage<SaveTempFileResponse> = {

@@ -14,6 +14,7 @@ import {
   isSameRegistrableHost,
   ALLOWED_HOSTS,
 } from "@/modules/lib/urlHostAllowlist";
+import { log } from "@/modules/Logger";
 
 /**
  * Try to resolve the final URL from a Bing redirect URL (e.g. /ck/a?...&u=...).
@@ -198,7 +199,7 @@ export class BingScraper extends SearchScrape {
             //catch time out error
             if (error instanceof TimeoutError) {
               // Do something if this is a timeout.
-              console.log("Navigation timed out:", error);
+              log.info("Navigation timed out:", error);
             }
           } finally {
             if (!newPage.isClosed()) {
@@ -206,7 +207,7 @@ export class BingScraper extends SearchScrape {
             }
           }
         } catch (error) {
-          console.error("Error creating new page:", error);
+          log.error("Error creating new page:", error);
         }
       }
       result.results.push(seval);
@@ -359,7 +360,7 @@ export class BingScraper extends SearchScrape {
     return true;
   }
 
-  async search_keyword(keyword: string) {
+  async search_keyword(keyword: string): Promise<void> {
     //wait for full page loading
     // await delay(5000)
     await this.page.waitForFunction(
@@ -420,7 +421,7 @@ export class BingScraper extends SearchScrape {
             'form[action="/search"]'
           ) as HTMLFormElement;
           if (form) {
-            console.log("form found and submit");
+            log.info("form found and submit");
             form.submit();
           }
         });

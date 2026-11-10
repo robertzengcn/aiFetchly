@@ -10,42 +10,42 @@ import AuditableEntity from "@/entity/Auditable.entity";
 @Index(["emailServiceId"])
 export class EmailAutoReplyRuleEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("integer")
-  emailServiceId: number;
+  emailServiceId!: number;
 
   @Column("varchar", { length: 255 })
-  name: string;
+  name!: string;
 
   @Column("integer", { default: 0 })
-  enabled: number;
+  enabled!: number;
 
   /** Serialized {@code EmailMessageClassification[]}. */
   @Column("text")
-  allowedClassificationsJson: string;
+  allowedClassificationsJson!: string;
 
   /** Serialized string[] of sender patterns to block. */
   @Column("text", { nullable: true })
-  blockedSenderPatternsJson: string | null;
+  blockedSenderPatternsJson!: string | null;
 
   /** Serialized string[] of domain patterns to block. */
   @Column("text", { nullable: true })
-  blockedDomainPatternsJson: string | null;
+  blockedDomainPatternsJson!: string | null;
 
   @Column("integer", { default: 10 })
-  dailySendLimit: number;
+  dailySendLimit!: number;
 
   @Column("integer", { default: 1 })
-  perThreadReplyLimit: number;
+  perThreadReplyLimit!: number;
 
   @Column("real", { default: 0.7 })
-  confidenceThreshold: number;
+  confidenceThreshold!: number;
 
   /** Serialized quiet-hours window, e.g. {@code { start: "22:00", end: "07:00" }}. */
   @Column("text", { nullable: true })
-  quietHoursJson: string | null;
+  quietHoursJson!: string | null;
 
   @Column("real", { default: 0.7 })
-  requireApprovalBelowThreshold: number;
+  requireApprovalBelowThreshold!: number;
 }

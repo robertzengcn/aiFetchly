@@ -104,6 +104,7 @@ export class PluginAgentImportService {
         pluginName: manifest.name,
         sourcePath: f.rel,
         namespaceSegments: f.namespaceSegments,
+        claudeCompatible: manifest.format === "claude",
       });
       if (!adapted.ok) {
         errors.push(...adapted.errors);

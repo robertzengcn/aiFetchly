@@ -19,6 +19,7 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 
+/* eslint-disable @typescript-eslint/no-var-requires */
 /**
  * materializeRevision1 is the shared core of the v2 generate and edit wiring.
  * Proving it here (model-level, real SQLite) covers both IPC paths' essential
@@ -331,3 +332,5 @@ describe("materializeRevision1 — v2 generate/edit wiring core", () => {
     });
   });
 });
+
+/* eslint-enable @typescript-eslint/no-var-requires */

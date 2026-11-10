@@ -137,6 +137,24 @@ const TOOL_SEARCH_HINTS: ReadonlyMap<string, readonly string[]> = new Map([
     ],
   ],
   [
+    "verify_contact_info",
+    [
+      "verify email",
+      "validate email",
+      "check phone",
+      "normalize phone",
+      "clean contacts",
+      "contact quality",
+      "invalid contacts",
+      "disposable email",
+      "phone region",
+      "get contact",
+      "contact method",
+      "extract email",
+      "extract phone",
+    ],
+  ],
+  [
     "start_email_send_task",
     [
       "send email",

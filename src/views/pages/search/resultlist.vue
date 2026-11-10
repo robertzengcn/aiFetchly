@@ -1,5 +1,9 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="search-task-list"
+      title-key="route.search_task_list"
+      content-width="full"
+    >
         <!-- Add create task button -->
         <div class="search_bar mt-4 d-flex jsb">
             <div class="d-flex jsb search_tool">
@@ -18,9 +22,11 @@ rounded class="elevation-0" density="compact" variant="solo" :label="t('home.sea
         </div>
        
         <SearchresultTable :search="searchText" />
-    </div>
+    </AppPageShell>
 </template>
+
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 import { ref } from 'vue';
 import SearchresultTable from '@/views/pages/search/widgets/SearchResultTable.vue'

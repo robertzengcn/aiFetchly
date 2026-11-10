@@ -2618,6 +2618,55 @@ describe("AIChatQueryLoop", () => {
         expect(msg).toMatch(/transient server/i);
       }
     });
+
+    it("surfaces an error when the stream ends with finish_reason=error after streaming partial content", async () => {
+      // Regression: the /goal flow stopped silently when the upstream server
+      // killed the stream with finish_reason="error" AFTER partial content
+      // had already been streamed (the model's plan text was cut off
+      // mid-sentence). The loop only threw when the content was EMPTY, so a
+      // partial-content error fell through to a "completed" result with
+      // truncated content and no error event — the UI showed a silent stop.
+      // The turn must fail instead; the failed result preserves the partial
+      // content so the engine's failed path persists it and surfaces the
+      // error. (No duplicate-output retry risk: the retry wrapper skips
+      // retries once content has been delivered — tracker.delivered.)
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          onChunk(makeChunk("The answers are noted. Here is the plan:"));
+          onChunk(makeChunk("", "error"));
+        }
+      );
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: vi.fn(),
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+      const input: AIChatQueryLoopInput = {
+        conversationId: "v2-err-partial",
+        assistantMessageId: "assistant-err-partial",
+        messages: [],
+        request: { message: "hi" },
+        openAITools: [],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+        transientRetryConfig: { maxAttempts: 0 },
+      };
+
+      const result = await loop.run(input);
+      expect(result.type).toBe("failed");
+      if (result.type === "failed") {
+        expect(result.error).toBeInstanceOf(Error);
+        const msg = (result.error as Error).message;
+        expect(msg).toMatch(/finish_reason=error/i);
+        // The partial content must be preserved for durable save + UI.
+        expect(result.partialContent).toContain("The answers are noted");
+      }
+    });
   });
 
   describe("seven-layer recovery", () => {

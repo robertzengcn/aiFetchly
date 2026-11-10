@@ -18,48 +18,48 @@ import type { AiTaskOperationState } from "@/entityTypes/aiTaskExecutionTypes";
 @Index(["operation_state"])
 export class AiTaskOperationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /** Stable operation key for dedup across retries. */
   @Column("varchar", { length: 160 })
-  operation_key: string;
+  operation_key!: string;
 
   @Column("varchar", { length: 100 })
-  execution_id: string;
+  execution_id!: string;
 
   /** Trusted tool/domain identity, e.g. `send_email`. */
   @Column("varchar", { length: 100 })
-  tool_identity: string;
+  tool_identity!: string;
 
   /** Approved domain target, e.g. `campaign:5`; null for non-targeted ops. */
   @Column("varchar", { length: 255, nullable: true })
-  domain_target: string | null;
+  domain_target!: string | null;
 
   /** Canonical hash of the approved intent. */
   @Column("varchar", { length: 128 })
-  intent_hash: string;
+  intent_hash!: string;
 
   @Column("varchar", { length: 20, default: "pending" })
-  operation_state: AiTaskOperationState;
+  operation_state!: AiTaskOperationState;
 
   /** CAS generation for dispatch/settlement (§10). */
   @Column("integer", { default: 0 })
-  claim_generation: number;
+  claim_generation!: number;
 
   /** Native send/job receipt reference (Slice 3). */
   @Column("varchar", { length: 255, nullable: true })
-  receipt_reference: string | null;
+  receipt_reference!: string | null;
 
   /** Safe failure code (never raw error text). */
   @Column("varchar", { length: 64, nullable: true })
-  failure_code: string | null;
+  failure_code!: string | null;
 
   @Column("datetime", { nullable: true })
-  claimed_at: Date | null;
+  claimed_at!: Date | null;
 
   @Column("datetime", { nullable: true })
-  dispatched_at: Date | null;
+  dispatched_at!: Date | null;
 
   @Column("datetime", { nullable: true })
-  settled_at: Date | null;
+  settled_at!: Date | null;
 }

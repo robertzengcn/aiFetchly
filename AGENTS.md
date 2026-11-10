@@ -16,6 +16,17 @@ AiFetchly is an AI-powered marketing automation Electron application for social 
 - `yarn test` - Run test suite with Mocha
 - `yarn tsc` - Type check with TypeScript (watch mode)
 
+### FORBIDDEN LOCALLY: `yarn package` (electron-forge packaging)
+**CRITICAL: Do NOT run `yarn package` (or any local electron-forge packaging run,
+e.g. `yarn make` which includes the same packaged step) on a developer machine.
+Running electron-forge packaging locally degrades the machine and can crash the
+developer's system. If packaged-delivery evidence is needed (package smoke tests,
+packaged parent/descendant process termination checks per OS/architecture), it is
+an OPERATOR/CI gate — see `docs/prd/aifetchly-desktop-yellow-pages-plugin-todo.md`
+R01. Treat `yarn package` output as environment-blocked evidence in any TODO
+record instead of attempting it locally. Safe local equivalents: `yarn build`
+(vite production bundles only, no forge packaging) and `yarn build:e2e`.
+
 ### Local Testing URL
 - The application can be tested in a browser at `http://localhost:5173` after running `yarn dev`.
 

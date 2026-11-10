@@ -5,6 +5,7 @@ export type AIChatPlanStatus =
   | "awaiting_question"
   | "awaiting_approval"
   | "approved"
+  | "executing"
   | "rejected"
   | "completed"
   | "cancelled";
@@ -20,7 +21,13 @@ export type AIChatPlanStatus =
  * processes can never disagree about which prompt/toolset a round uses.
  */
 export const PLAN_LIFECYCLE_ENDED_STATUSES: ReadonlySet<AIChatPlanStatus> =
-  new Set<AIChatPlanStatus>(["approved", "completed", "cancelled", "rejected"]);
+  new Set<AIChatPlanStatus>([
+    "approved",
+    "executing",
+    "completed",
+    "cancelled",
+    "rejected",
+  ]);
 
 /**
  * True when the given status represents an active, in-progress plan
@@ -106,4 +113,33 @@ export interface AIChatPlanStateView {
   pendingQuestion?: AIChatPlanQuestionView;
   approvedAt?: string;
   rejectedAt?: string;
+}
+
+/**
+ * Continuation action encoded in a deterministic pending-message id
+ * (plan-cont-<sha256(planId:version:action)>). Must stay in sync with the
+ * renderer's PlanContinuationAction in planContinuationStore.ts and the
+ * decision→action mapping in AIChatPlanModule so the same id is derived in
+ * both processes (cross-process identity parity).
+ */
+export type AIChatPlanContinuationAction =
+  | "approve-plan"
+  | "reject-plan"
+  | "request-plan-changes";
+
+/**
+ * A plan continuation intent reconstructed by main from the persisted
+ * decision transition (R12 FR-PLN-005..008): the decision committed durably
+ * but its follow-up turn was never accepted. Rendered by the existing
+ * continuation banner; the retry reuses the deterministic clientRequestId so
+ * an accepted continuation can never be duplicated.
+ */
+export interface AIChatPlanContinuationRecoveryView {
+  conversationId: string;
+  planId: string;
+  version: number;
+  action: AIChatPlanContinuationAction;
+  feedback: string;
+  clientRequestId: string;
+  decidedAt: string;
 }

@@ -1,4 +1,5 @@
 import { BaseModule } from "@/modules/baseModule";
+import { log } from "@/modules/Logger";
 import {
   EmailReplyAuditLogModel,
   ReplyAuditLogListInput,
@@ -19,7 +20,7 @@ export class EmailReplyAuditLogModule extends BaseModule {
       await this.ensureConnection();
       return await this.auditModel.create(entity);
     } catch (error) {
-      console.error("Error writing reply audit log:", error);
+      log.error("Error writing reply audit log:", error);
       throw error;
     }
   }
@@ -33,7 +34,7 @@ export class EmailReplyAuditLogModule extends BaseModule {
       const total = await this.auditModel.count(input);
       return { records, total };
     } catch (error) {
-      console.error("Error listing reply audit logs:", error);
+      log.error("Error listing reply audit logs:", error);
       throw error;
     }
   }

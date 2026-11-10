@@ -53,6 +53,22 @@ export class AIChatPlanModel extends BaseDb {
     return plans.find((p) => !TERMINAL_STATUSES.includes(p.status)) ?? null;
   }
 
+  /**
+   * Returns the newest plan for a conversation REGARDLESS of status.
+   * Unlike `getActiveByConversation`, this also returns terminal plans
+   * (e.g. `rejected`), so plan-continuation recovery (R12) can reconstruct
+   * a rejected decision's follow-up intent whose feedback must not be lost.
+   */
+  async getNewestByConversation(
+    conversationId: string
+  ): Promise<AIChatPlanEntity | null> {
+    const plans = await this.repository.find({
+      where: { conversationId },
+      order: { createdAt: "DESC" },
+    });
+    return plans[0] ?? null;
+  }
+
   /** Fetch active plans for many conversations (avoids N+1 in history lists). */
   async getActiveByConversationIds(
     conversationIds: string[]

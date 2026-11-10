@@ -1,4 +1,5 @@
 import { getIpcTransport } from "./ipcTransport";
+import type { Iresponse } from "@/views/api/types";
 
 // NOTE: `data` is intentionally typed `any` at this boundary to preserve the
 // historical contract — hundreds of call sites assign windowInvoke's return
@@ -6,16 +7,6 @@ import { getIpcTransport } from "./ipcTransport";
 // refactor outside the dev-browser-bridge scope. The transport layer itself
 // (ipcTransport.ts) is fully typed and avoids `any`.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-type Iresponse = {
-  status: boolean;
-  msg: string;
-  data?: any;
-  /** B12: structured-failure fields echoed from the IPC envelope. */
-  code?: string;
-  existing_draft_id?: number;
-  next_action?: string;
-  requestCorrelationId?: string;
-};
 
 /**
  * B12: typed IPC failure error. Thrown by windowInvoke / windowInvokeBinary
@@ -64,7 +55,9 @@ function toIpcRequestError(result: Iresponse): IpcRequestError {
 export const windowInvoke = async (channel: string, data?: object) => {
   // console.log(data)
   // campaign:list
-  const result = (await getIpcTransport().invoke(channel, data)) as Iresponse | undefined;
+  const result = (await getIpcTransport().invoke(channel, data)) as
+    | Iresponse
+    | undefined;
   if (!result) {
     throw new Error("unknow error");
   }
@@ -80,7 +73,9 @@ export const windowInvoke = async (channel: string, data?: object) => {
 
 // Special method for binary data that doesn't use JSON.stringify
 export const windowInvokeBinary = async (channel: string, data?: any) => {
-  const result = (await getIpcTransport().invokeBinary(channel, data)) as Iresponse | undefined;
+  const result = (await getIpcTransport().invokeBinary(channel, data)) as
+    | Iresponse
+    | undefined;
   if (!result) {
     throw new Error("unknow error");
   }

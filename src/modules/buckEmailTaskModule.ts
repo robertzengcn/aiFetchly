@@ -1,6 +1,8 @@
+import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { Token } from "@/modules/token";
 import { BuckemailTaskEntity } from "@/entity/BuckemailTask.entity";
-import { BuckEmailType } from "@/model/buckEmailTaskdb";
+import { BuckEmailType } from "@/entityTypes/buckEmail-type";
 import { BuckEmailTaskModel } from "@/model/BuckEmailTask.model";
 import { TaskStatus } from "@/entityTypes/commonType";
 import { SortBy } from "@/entityTypes/commonType";
@@ -25,6 +27,7 @@ import {
   getRecorddatetime,
 } from "@/modules/lib/function";
 import { v4 as uuidv4 } from "uuid";
+import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { utilityProcess, MessageChannelMain, app } from "electron";
@@ -607,7 +610,10 @@ export class BuckEmailTaskModule extends BaseModule {
     }
     const { port1 } = new MessageChannelMain();
 
-    const child = utilityProcess.fork(childPath, [], {
+    const child = spawnOwned(
+      "bulk-email",
+      () =>
+        utilityProcess.fork(childPath, [], {
       stdio: "pipe",
       execArgv: ["puppeteer-cluster:*"],
       env: buildPackagedWorkerEnv({
@@ -616,7 +622,8 @@ export class BuckEmailTaskModule extends BaseModule {
           ELECTRON_USER_DATA_PATH: app.getPath("userData"),
         },
       }),
-    });
+    })
+    );
 
     child.on("spawn", () => {
       console.log("child process satart, pid is" + child.pid);
@@ -908,5 +915,43 @@ export class BuckEmailTaskModule extends BaseModule {
    */
   getBuckEmailTypeName(type: BuckEmailType): string {
     return this.buckEmailTaskModel.getBuckEmailTypeName(type);
+  }
+
+  /**
+   * FR-06/AC-09 at-exit reconciliation: map Processing rows to the existing
+   * Error state with an [interrupted] note in the error file. Completed and
+   * not-started rows untouched; nothing is requeued (retry stays a user
+   * action, so uncertain SMTP outcomes are never blindly retried).
+   */
+  public async reconcileInterruptedTasks(reason: string): Promise<number[]> {
+    const {
+      reconcileBulkEmailAtExit,
+    } = await import("@/main-process/communication/durableTaskReconciliation");
+    // T08: the interruption note goes into a real per-task log file whose
+    // PATH is stored — exactly like the normal sender's error handling.
+    return reconcileBulkEmailAtExit(
+      this.buckEmailTaskModel,
+      reason,
+      async (taskId, note) => {
+        let logpath = "";
+        try {
+          logpath = new Token().getValue(USERLOGPATH) || "";
+        } catch {
+          logpath = "";
+        }
+        if (!logpath) {
+          // No configured log dir: fall back to a temp-scoped path so the
+          // entity still stores a PATH, never the message text.
+          logpath = path.join(os.tmpdir(), "aifetchly-bulk-email");
+          fs.mkdirSync(logpath, { recursive: true });
+        }
+        const file = path.join(
+          logpath,
+          `emailsend_interrupted_${taskId}_${Date.now()}.error.log`
+        );
+        WriteLog(file, note);
+        return file;
+      }
+    );
   }
 }

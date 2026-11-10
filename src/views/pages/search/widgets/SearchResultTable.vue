@@ -157,7 +157,7 @@ watch(() => props.search, (newVal) => {
             clearTimeout(searchTimeout);
         }
         searchTimeout = setTimeout(() => {
-            loadItems({ page: 1, itemsPerPage: options.itemsPerPage, sortBy: "" });
+            loadItems({ page: 1, itemsPerPage: options.itemsPerPage, sortBy: [] });
         }, 500);
     }
 });
@@ -166,7 +166,7 @@ let searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const startAutoRefresh = () => {
     refreshInterval = setInterval(function(){
-        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
     }, 10000); // Refresh every 5 seconds
 }
 const stopAutoRefresh = () => {
@@ -176,7 +176,7 @@ const stopAutoRefresh = () => {
   }
 };
 
-function loadItems({ page=1, itemsPerPage=10, sortBy}) {
+function loadItems({ page=1, itemsPerPage=10, sortBy}: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     options.page = page;
     loading.value = true
     options.page = page;
@@ -219,13 +219,13 @@ function loadItems({ page=1, itemsPerPage=10, sortBy}) {
     //     path: '/graphics/oasis-engine',
     // });
 // };
-const openfolder=(item)=>{
+const openfolder=(item: SearchtaskItem)=>{
     // console.log(item)
     router.push({
             name: 'Searchtaskdetail',params: { id: item.id } 
      });
     }
-const downloadErrorlog=(item)=>{
+const downloadErrorlog=(item: SearchtaskItem)=>{
     // console.log(item)
     Errorlogquery(item.id).then((res)=>{
         console.log(res)
@@ -234,13 +234,13 @@ const downloadErrorlog=(item)=>{
         // link.href
     })
 }
-const retryTask = async (item) => {
+const retryTask = async (item: SearchtaskItem) => {
     try {
         await retrySearchTask(item.id);
         // console.log(response)   
         // if (response) {
             // Refresh the table after successful retry
-            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
         // } else {
         //     console.error('Failed to retry task:');
         // }
@@ -272,7 +272,7 @@ const runTask = async (item: any) => {
         // Call the run task API
         await retrySearchTask(item.id);
         // Refresh the table after successful run
-        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+        loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
     } catch (error) {
         console.error('Error running task:', error);
     }
@@ -286,7 +286,7 @@ const killProcess = async (item: any) => {
         if (result.success) {
             console.log(`Successfully killed process for task ${item.id}: ${result.message}`);
             // Refresh the table after successful kill
-            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: "" });
+            loadItems({ page: options.page, itemsPerPage: options.itemsPerPage, sortBy: [] });
         } else {
             console.error(`Failed to kill process: ${result.message}`);
             alert(result.message);

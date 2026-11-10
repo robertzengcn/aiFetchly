@@ -1,5 +1,9 @@
 <template>
-  <v-container fluid>
+  <AppPageShell
+    page-id="settings-about"
+    title-key="about.title"
+    content-width="reading"
+  >
     <v-card>
       <v-card-title class="d-flex align-center justify-space-between">
         <span>{{ t("about.title") || "About aiFetchly" }}</span>
@@ -90,10 +94,11 @@
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="4000">
       {{ snackbarText }}
     </v-snackbar>
-  </v-container>
+  </AppPageShell>
 </template>
 
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";

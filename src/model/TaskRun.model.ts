@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { Repository } from "typeorm";
+import { Repository, DeepPartial } from "typeorm";
 import { TaskRunEntity } from "@/entity/TaskRun.entity";
 import { TaskRunEntity as TaskRunType } from "@/entityTypes/taskrun-type";
 
@@ -14,7 +14,7 @@ export class TaskRunModel extends BaseDb {
     /**
      * Save task run
      */
-    async saveTaskrun(taskrun: TaskRunEntity): Promise<number> {
+    async saveTaskrun(taskrun: DeepPartial<TaskRunEntity>): Promise<number> {
         // const taskRunEntity = new TaskRunEntity();
         // taskRunEntity.task_id = taskrun.task_id;
         // taskRunEntity.log_path = taskrun.log_path;

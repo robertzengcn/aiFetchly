@@ -5,11 +5,11 @@ import {SystemSettingEntity} from "@/entity/SystemSetting.entity"
 @Entity("system_setting_group")
 export class SystemSettingGroupEntity extends AuditableEntity{
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     @Column('text')
-    name: string;
+    name!: string;
     @Column("text")
-    description: string;
+    description!: string;
     @OneToMany(() => SystemSettingEntity, (systemSettingEntity) => systemSettingEntity.group)
-    settings: SystemSettingEntity[];
+    settings!: SystemSettingEntity[];
 }

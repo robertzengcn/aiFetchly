@@ -128,6 +128,15 @@ describe("SkillRegistry", () => {
       expect(skill!.source).toBe("built-in");
     });
 
+    test("extract_contact_info requires verify_contact_info before presenting", () => {
+      const skill = SkillRegistry.getSkill("extract_contact_info");
+      expect(skill).not.toBeNull();
+      expect(skill!.description).toContain("MUST call verify_contact_info");
+      expect(skill!.description).not.toContain(
+        "Do not call verify_contact_info again"
+      );
+    });
+
     test("AI message task list is a confirmation-free pure lookup", () => {
       const skill = SkillRegistry.getSkill("list_ai_message_tasks");
       expect(skill).not.toBeNull();
@@ -197,6 +206,7 @@ describe("SkillRegistry", () => {
       expect(names).toContain("extract_emails_from_urls");
       expect(names).toContain("generate_keywords");
       expect(names).toContain("extract_contact_info");
+      expect(names).toContain("verify_contact_info");
       expect(names).toContain("search_maps_businesses");
       expect(names).toContain("conversation_tool_history");
       expect(names).toContain("list_ai_message_tasks");

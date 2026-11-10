@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import { Usersearchdata } from "@/entityTypes/searchControlType"
 import { ScrapeManager } from "@/childprocess/scrapeManager"
 import { SMstruct, SearchDataParam,ResultParseItemType } from "@/entityTypes/scrapeType"
@@ -17,7 +18,7 @@ export class UserSearch {
     public async searchData(data: Usersearchdata, callback?: (arg: ResultParseItemType) => void, cookiesCallback?: CookiesUpdateCallback):Promise<void> {
 
         const proxyStrList:Array<string> = []
-        console.log("proxy are following")
+        log.info("proxy are following")
        // console.log(data.proxys)
         if (data.proxys) {
                data.proxys.forEach((value, key) => {

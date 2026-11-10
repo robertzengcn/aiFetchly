@@ -123,7 +123,7 @@ const computedHeaders = computed(() => {
   }
 });  
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     loading.value = true
     // console.log(page);
     const fetchitem: Fetchparam = {
@@ -149,7 +149,7 @@ function loadItems({ page, itemsPerPage, sortBy }) {
 }
 // },
 // }
-const editItem = (item) => {
+const editItem = (item: EmailFilterdata) => {
  
     // else if(item.Types=="social task"){
         
@@ -180,7 +180,7 @@ const handleDelete=async ()=>{
     if(res){
         console.log(res)
         loading.value = false;
-        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: "" });
+        loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
     }
 }
 

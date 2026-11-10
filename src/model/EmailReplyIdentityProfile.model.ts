@@ -5,13 +5,21 @@ import { parseAndStrip } from "@/utils/parseAndStrip";
 import { emailReplyIdentityProfileWriteSchema } from "@/schemas/entity/emailReplyIdentityProfile";
 
 export class EmailReplyIdentityProfileModel extends BaseDb {
-  private repository: Repository<EmailReplyIdentityProfileEntity>;
+  /**
+   * Resolved per access: BaseDb rebinds `this.sqliteDb` to the live
+   * singleton before every guarded async call, so a repository captured
+   * at construction could stay bound to a replaced (never-initialized or
+   * destroyed) DataSource — the describe-scope module construction pattern
+   * in tests hits exactly that. A getter cannot go stale.
+   */
+  private get repository(): Repository<EmailReplyIdentityProfileEntity> {
+    return this.sqliteDb.connection.getRepository(
+      EmailReplyIdentityProfileEntity
+    );
+  }
 
   constructor(filepath: string) {
     super(filepath);
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplyIdentityProfileEntity
-    );
   }
 
   async getByEmailServiceId(

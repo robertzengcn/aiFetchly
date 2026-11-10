@@ -23,11 +23,18 @@ export interface SseFrame {
 export type FakeAiScenarioName =
   | "stream-text"
   | "stream-delayed"
+  | "stream-hold-30s"
+  | "stream-generated-image"
+  | "stream-generated-image-delayed"
   | "tool-requires-permission"
   | "tool-success-followup"
   | "http-500"
+  | "http-500-delayed"
   | "malformed-sse"
-  | "disconnect-mid-stream";
+  | "disconnect-mid-stream"
+  /** Non-streaming summarize-only failures (compaction runs, FR-HIS-005). */
+  | "summarize-http-500"
+  | "summarize-delayed";
 
 /** Build a standard text-content chunk payload string. */
 export function textChunk(
@@ -52,6 +59,31 @@ export function stopChunk(model = FAKE_MODEL_ID): string {
     created: 0,
     model,
     choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+  });
+}
+
+/** Wire image shape accepted by the production accumulator (`delta.images`).
+ * `type: "image"` is REQUIRED — the accumulator drops objects without it. */
+export interface FakeStreamImage {
+  readonly type: "image";
+  readonly b64_json: string;
+  readonly mime_type?: string;
+}
+
+/**
+ * Build a chunk carrying generated images in `delta.images` — the streaming
+ * metadata path OpenAIStreamAccumulator collects into message.images.
+ */
+export function imagesChunk(
+  images: readonly FakeStreamImage[],
+  model = FAKE_MODEL_ID
+): string {
+  return JSON.stringify({
+    id: "chatcmpl-e2e",
+    object: "chat.completion.chunk",
+    created: 0,
+    model,
+    choices: [{ index: 0, delta: { images } as never, finish_reason: null }],
   });
 }
 
@@ -120,6 +152,14 @@ export const MODELS_RESPONSE = {
       object: "model",
       created: 0,
       owned_by: "aifetchly-e2e",
+      // Advertise a large context window so the production request-budget
+      // guard measures against a realistic provider contract. Without it the
+      // catalog falls back to 256k CHAR units, and the char-conservative
+      // accounting (§8.2) rejects the ~200k-char full tool catalog plus even
+      // a tiny conversation — an environment artifact, not the behavior
+      // under test (the guard still enforces whatever is advertised).
+      context_window: 1_000_000,
+      max_tokens: 16_384,
     },
   ],
 };
@@ -181,6 +221,49 @@ export const SECTION_SUMMARY_CONTENT = JSON.stringify({
 
 /** Generic content for non-streaming calls that are not compaction summarize. */
 export const NON_STREAMING_DEFAULT_CONTENT = "Non-streaming e2e completion.";
+
+/**
+ * A valid workspace auto-dream plan the fake server returns for workspace
+ * consolidation requests (non-streaming path). The workspaceKey is omitted on
+ * purpose: a single-workspace run has exactly one valid key and the production
+ * parser defaults it (AIWorkspaceAutoDreamPromptBuilder
+ * resolveCreateWorkspaceKey), which is what the small route does in practice.
+ */
+export const WORKSPACE_AUTO_DREAM_PLAN_CONTENT = JSON.stringify({
+  create: [
+    {
+      type: "decision",
+      title: "Approved the e2e workspace memory decision",
+      content:
+        "During the e2e session the workspace was approved; auto dream recorded the durable decision.",
+      confidence: 88,
+      sourceKind: "chat_v2",
+      sourceId: "e2e-auto-dream-source",
+      sourceMessageIds: ["e2e-auto-dream-message"],
+      reason: "e2e scripted consolidation plan",
+    },
+  ],
+  update: [],
+  archive: [],
+});
+
+/**
+ * True when the request carries the workspace auto-dream consolidation prompt:
+ * AIWorkspaceAutoDreamPromptBuilder.buildWorkspaceAutoDreamSystemPrompt() is
+ * emitted with the stable first line "You consolidate workspace memories for
+ * AiFetchly." (the user-memory variant says "durable user memories"), making it
+ * a deterministic content marker — same posture as isSectionSummaryRequest.
+ */
+export function isWorkspaceAutoDreamRequest(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>
+): boolean {
+  return messages.some(
+    (m) =>
+      m.role === "system" &&
+      typeof m.content === "string" &&
+      m.content.includes("You consolidate workspace memories for AiFetchly.")
+  );
+}
 
 /**
  * A non-streaming chat completion body, mirroring the production
@@ -250,6 +333,9 @@ export function isSectionSummaryRequest(
 export function nonStreamingContent(
   messages: ReadonlyArray<{ role?: string; content?: unknown }>
 ): string {
+  if (isWorkspaceAutoDreamRequest(messages)) {
+    return WORKSPACE_AUTO_DREAM_PLAN_CONTENT;
+  }
   return isSectionSummaryRequest(messages)
     ? SECTION_SUMMARY_CONTENT
     : NON_STREAMING_DEFAULT_CONTENT;

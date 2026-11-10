@@ -22,6 +22,33 @@ export class AIChatMessageModel extends BaseDb {
   /**
    * Get messages for a conversation
    */
+  /**
+   * r3 G03: bounded page of CHAT rows only (role user/assistant AND
+   * messageType 'message'). Tool/plan/system rows are excluded at the SQL
+   * level so a tool-heavy first answer can never push the title window out
+   * of the considered bound, and no tool content is materialized.
+   */
+  async getChatExchangeRows(
+    conversationId: string,
+    limit: number,
+    offset: number
+  ): Promise<AIChatMessageEntity[]> {
+    return this.repository
+      .createQueryBuilder("message")
+      .where("message.conversationId = :conversationId", { conversationId })
+      .andWhere("message.messageType = :messageType", {
+        messageType: "message",
+      })
+      .andWhere("message.role IN (:...roles)", {
+        roles: ["user", "assistant"],
+      })
+      .orderBy("message.timestamp", "ASC")
+      .addOrderBy("message.id", "ASC")
+      .take(limit)
+      .skip(offset)
+      .getMany();
+  }
+
   async getMessagesByConversation(
     conversationId: string,
     limit?: number,
@@ -159,6 +186,20 @@ export class AIChatMessageModel extends BaseDb {
   }
 
   /**
+   * Ownership-safe composite lookup: both fields are matched in the SQL WHERE
+   * clause, so a messageId reused across conversations resolves only within
+   * the requested conversation.
+   */
+  async getMessageByConversationAndMessageId(
+    conversationId: string,
+    messageId: string
+  ): Promise<AIChatMessageEntity | null> {
+    return await this.repository.findOne({
+      where: { conversationId, messageId },
+    });
+  }
+
+  /**
    * Delete all messages for a conversation
    */
   async deleteConversation(conversationId: string): Promise<number> {
@@ -293,6 +334,37 @@ export class AIChatMessageModel extends BaseDb {
       (a, b) =>
         b.lastMessageTimestamp.getTime() - a.lastMessageTimestamp.getTime()
     );
+  }
+
+  /**
+   * Cursor-paged history query for the workspace redesign (design §12.1).
+   *
+   * Queries DESCENDING by (timestamp, id), takes `limit + 1` to detect older
+   * rows, and returns the page reversed to chronological order. The cursor
+   * prevents offset drift when new messages arrive concurrently.
+   */
+  async getConversationPageDescending(
+    conversationId: string,
+    limit: number,
+    before?: { timestamp: Date; messageId: string }
+  ): Promise<{ rows: AIChatMessageEntity[]; hasOlder: boolean }> {
+    const qb = this.repository
+      .createQueryBuilder("message")
+      .where("message.conversationId = :conversationId", { conversationId });
+    if (before) {
+      qb.andWhere(
+        "(message.timestamp < :ts OR (message.timestamp = :ts AND message.messageId < :mid))",
+        { ts: before.timestamp, mid: before.messageId }
+      );
+    }
+    const fetched = await qb
+      .orderBy("message.timestamp", "DESC")
+      .addOrderBy("message.messageId", "DESC")
+      .take(limit + 1)
+      .getMany();
+    const hasOlder = fetched.length > limit;
+    const page = hasOlder ? fetched.slice(0, limit) : fetched;
+    return { rows: page.reverse(), hasOlder };
   }
 
   /**

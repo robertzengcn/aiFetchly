@@ -1,12 +1,13 @@
 "use strict";
 import { SearchScrape } from "@/childprocess/searchScraper";
-import {
-  ScrapeOptions,
-  SearchData,
-  SearchResult,
-} from "@/entityTypes/scrapeType";
+import { log } from "@/modules/Logger";
+import { ScrapeOptions, SearchData } from "@/entityTypes/scrapeType";
 import { CustomError } from "@/modules/customError";
-import { TimeoutError, InterceptResolutionAction } from "puppeteer";
+import {
+  TimeoutError,
+  InterceptResolutionAction,
+  HTTPResponse,
+} from "puppeteer";
 import useProxy from "@lem0-packages/puppeteer-page-proxy";
 import { convertProxyServertourl } from "@/modules/lib/function";
 import { hostMatchesAny, ALLOWED_HOSTS } from "@/modules/lib/urlHostAllowlist";
@@ -373,7 +374,7 @@ export class YandexScraper extends SearchScrape {
       }
 
       if (this.last_response) {
-        const status = (this.last_response as any).status();
+        const status = (this.last_response as HTTPResponse).status();
         this.logger.info(`Page loaded with status: ${status}`);
         if (status !== 200) {
           this.logger.warn(
@@ -462,7 +463,7 @@ export class YandexScraper extends SearchScrape {
     return r;
   }
 
-  async search_keyword(keyword: string) {
+  async search_keyword(keyword: string): Promise<void> {
     for (const selector of this.searchSelectors) {
       try {
         const input = await this.page.$(selector);
@@ -490,7 +491,7 @@ export class YandexScraper extends SearchScrape {
             );
 
             // Clear any existing text
-            await input.click({ clickCount: 3 });
+            await input.click({ count: 3 });
             await this.page.keyboard.press("Backspace");
 
             // Type keyword with random delays
@@ -516,7 +517,7 @@ export class YandexScraper extends SearchScrape {
               await this.page.evaluate(() => {
                 const form = document.querySelector("form") as HTMLFormElement;
                 if (form) {
-                  console.log("form found and submit");
+                  log.info("form found and submit");
                   form.submit();
                 }
               });

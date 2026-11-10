@@ -5,18 +5,18 @@ import { EmailSearchTaskEntity } from "./EmailSearchTask.entity";
 @Entity("emailsearch_url")
 export class EmailSearchTaskUrlEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
     
     @Column("integer")
-    task_id: number;
+    task_id!: number;
     
     @Column("text")
-    url: string;
+    url!: string;
     
     @Column("text", { nullable: true })
-    record_time: string;
+    record_time!: string;
 
     @ManyToOne(() => EmailSearchTaskEntity, task => task.urls)
     @JoinColumn({ name: "task_id" })
-    emailSearchTask: EmailSearchTaskEntity;
+    emailSearchTask!: EmailSearchTaskEntity;
 }

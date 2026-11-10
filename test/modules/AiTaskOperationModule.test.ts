@@ -702,27 +702,15 @@ describe("AiTaskOperationModule scaffolding (Slice 3 prep)", function () {
     expect(stored).to.equal(false);
   });
 
-  it("refuses DB access from a worker process (NFR-03, assertNotWorker)", async () => {
-    // The worker guard must throw under process.env.WORKER_TYPE so a worker
-    // process can never corrupt the task-operation tables directly.
+  it("refuses DB access from a worker process (NFR-03, assertNotWorker)", () => {
+    // The worker guard is enforced at BaseDb construction (assertNotWorker
+    // runs before any model wiring), so building the module under
+    // WORKER_TYPE throws — a worker can never touch the task-operation
+    // tables directly.
     const previous = process.env.WORKER_TYPE;
     process.env.WORKER_TYPE = "test-worker";
     try {
-      const mod = new AiTaskOperationModule();
-      let threw = false;
-      try {
-        await mod.recordOperation({
-          operationKey: "op-worker",
-          executionId: "exec-w",
-          toolIdentity: "send_email",
-          domainTarget: "campaign:5",
-          intentHash: "sha256:w",
-        });
-      } catch (e) {
-        threw = true;
-        expect(String(e)).to.match(/worker/i);
-      }
-      expect(threw).to.equal(true);
+      expect(() => new AiTaskOperationModule()).to.throw(/worker/i);
     } finally {
       if (previous === undefined) delete process.env.WORKER_TYPE;
       else process.env.WORKER_TYPE = previous;
@@ -877,23 +865,13 @@ describe("AiTaskOperationModule scaffolding (Slice 3 prep)", function () {
       expect(first).to.have.length(2);
     });
 
-    it("refuses DB access from a worker process (NFR-03)", async () => {
+    it("refuses DB access from a worker process (NFR-03)", () => {
+      // Guard enforced at BaseDb construction: building under WORKER_TYPE
+      // throws before any model wiring exists.
       const previous = process.env.WORKER_TYPE;
       process.env.WORKER_TYPE = "test-worker";
       try {
-        const mod = new AiTaskOperationModule();
-        let threw = false;
-        try {
-          await mod.findUnresolvedByIntent({
-            toolIdentity: "send_email",
-            domainTarget: "batch:1",
-            intentHash: "sha256:x",
-          });
-        } catch (e) {
-          threw = true;
-          expect(String(e)).to.match(/worker/i);
-        }
-        expect(threw).to.equal(true);
+        expect(() => new AiTaskOperationModule()).to.throw(/worker/i);
       } finally {
         if (previous === undefined) delete process.env.WORKER_TYPE;
         else process.env.WORKER_TYPE = previous;

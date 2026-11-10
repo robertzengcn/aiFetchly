@@ -46,6 +46,7 @@ import {
   REPLY_VALIDATOR_VERSION,
 } from "@/service/emailReply/replyReliabilityVersions";
 import type { EmailReplyApprovalEnvelope } from "@/entityTypes/emailReplyReliabilityTypes";
+import type { ReplyDetectionUnknownCode } from "@/service/emailReceive/EmailReplyDetectionTypes";
 
 /**
  * R09: thrown inside the commit transaction when the final mutation fence
@@ -91,14 +92,17 @@ export interface ReplyDraftListInput {
 }
 
 export class EmailReplyDraftModel extends BaseDb {
-  private repository: Repository<EmailReplyDraftEntity>;
+  /** Resolved per access — BaseDb rebinds the live singleton before every
+   * guarded async call; a construction-time repository could stay bound to a
+   * replaced DataSource (test describe-scope module construction). */
+  private get repository(): Repository<EmailReplyDraftEntity> {
+    return this.sqliteDb.connection.getRepository(EmailReplyDraftEntity);
+  }
 
   constructor(filepath: string) {
     super(filepath);
     rejectDatabaseAccessFromWorker("EmailReplyDraftModel");
-    this.repository = this.sqliteDb.connection.getRepository(
-      EmailReplyDraftEntity
-    );
+
   }
 
   async create(entity: EmailReplyDraftEntity): Promise<EmailReplyDraftEntity> {
@@ -142,6 +146,29 @@ export class EmailReplyDraftModel extends BaseDb {
     entity.status = status;
     entity.sendError = error;
     await this.repository.save(entity);
+  }
+
+  /**
+   * Atomically return an APPROVED draft to `draft` for re-confirmation
+   * (sendEmailReply's approved-retry path). CAS on status='approved': a
+   * concurrent writer that moved the row (renderer approve+send racing this
+   * call, a late delivery finalizing to `sending`/`sent`) makes this a no-op
+   * returning false — the caller must REFUSE rather than overwrite. Without
+   * this fence the stale read→write window could resurrect an in-flight or
+   * already-delivered draft as sendable (duplicate SMTP submission).
+   * Mirrors markApproved's conditional-update shape.
+   */
+  async demoteApprovedToDraft(draftId: number): Promise<boolean> {
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(EmailReplyDraftEntity)
+      .set({ status: "draft", sendError: null })
+      .where("id = :draftId AND status = :status", {
+        draftId,
+        status: "approved" as EmailReplyDraftStatus,
+      })
+      .execute();
+    return (result.affected ?? 0) === 1;
   }
 
   async updateBody(
@@ -1028,39 +1055,50 @@ export class EmailReplyDraftModel extends BaseDb {
       // `replyNegativeCheckAt ?? replyDetectedAt` accepted a fresh positive as
       // "fresh enough" and let the claim proceed to SMTP despite known reply
       // evidence.
-      const observedAt = seedMessage.replyNegativeCheckAt;
-      // R02: an expired owner's negative is not an observation to trust —
-      // treat it exactly like a missing one (fail-closed → freshness_stale
-      // → the delivery service reruns detection outside the transaction).
-      // Legacy rows without owner tracking keep the previous semantics.
-      const ownerUsable = isNegativeObservationUsable({
-        replyNegativeCheckAt: seedMessage.replyNegativeCheckAt,
-        // N01: the staged-but-unconfirmed marker must fail this check —
-        // pass the row's actual context state, never omit it.
-        replyNegativeContextHash: seedMessage.replyNegativeContextHash,
-        replyNegativeOwnerExpiresAt: seedMessage.replyNegativeOwnerExpiresAt,
-      });
-      if (observedAt === null || !ownerUsable) {
-        // Fail-closed: missing negative observation → force the delayed
-        // refresh. A null `replyNegativeCheckAt` means either detection never
-        // ran, its persistence failed silently (D1b), or a positive was
-        // recorded without a prior negative — in all cases the send must NOT
-        // proceed on a missing negative. Treat null as stale → freshness_stale
-        // → the delivery service reruns detection outside the transaction and
-        // re-claims once (§9.3). N07: typed code.
-        return {
-          status: "precondition_failed",
-          reason: FRESHNESS_STALE,
-          code: "probe_failed",
-        };
-      }
-      const ageMs = now.getTime() - observedAt.getTime();
-      if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
-        return {
-          status: "precondition_failed",
-          reason: FRESHNESS_STALE,
-          code: "probe_failed",
-        };
+      // D1a + assisted inconclusive (spec 2026-10-29-email-send-inconclusive-
+      // detection-assisted-design.md): a null observation has THREE legitimate
+      // meanings — detection never ran, its persistence failed silently, OR
+      // the pre-send detection was deliberately INCONCLUSIVE and the delivery
+      // service is proceeding on the local-ledger negative + the human
+      // confirmation (`assistedProbe`). The first two stay fail-closed
+      // (freshness_stale → one delayed refresh outside the transaction); the
+      // third SKIPS only this window check. The transactional sibling check
+      // and every positive-evidence refusal below are ALWAYS enforced.
+      if (!input.assistedProbe) {
+        const observedAt = seedMessage.replyNegativeCheckAt;
+        // R02: an expired owner's negative is not an observation to trust —
+        // treat it exactly like a missing one (fail-closed → freshness_stale
+        // → the delivery service reruns detection outside the transaction).
+        // Legacy rows without owner tracking keep the previous semantics.
+        const ownerUsable = isNegativeObservationUsable({
+          replyNegativeCheckAt: seedMessage.replyNegativeCheckAt,
+          // N01: the staged-but-unconfirmed marker must fail this check —
+          // pass the row's actual context state, never omit it.
+          replyNegativeContextHash: seedMessage.replyNegativeContextHash,
+          replyNegativeOwnerExpiresAt: seedMessage.replyNegativeOwnerExpiresAt,
+        });
+        if (observedAt === null || !ownerUsable) {
+          // Fail-closed: missing negative observation → force the delayed
+          // refresh. A null `replyNegativeCheckAt` means either detection never
+          // ran, its persistence failed silently (D1b), or a positive was
+          // recorded without a prior negative — in all cases the send must NOT
+          // proceed on a missing negative. Treat null as stale → freshness_stale
+          // → the delivery service reruns detection outside the transaction and
+          // re-claims once (§9.3). N07: typed code.
+          return {
+            status: "precondition_failed",
+            reason: FRESHNESS_STALE,
+            code: "probe_failed",
+          };
+        }
+        const ageMs = now.getTime() - observedAt.getTime();
+        if (ageMs > FORCED_FRESHNESS_WINDOW_MS) {
+          return {
+            status: "precondition_failed",
+            reason: FRESHNESS_STALE,
+            code: "probe_failed",
+          };
+        }
       }
 
       // 1. Canonical-cluster sibling check (§8.2) — before ANY write. The
@@ -1946,6 +1984,22 @@ export interface ClaimSendInput {
    * existing audit grouping still works.
    */
   requestCorrelationId?: string;
+  /**
+   * Assisted inconclusive marker (spec
+   * docs/superpowers/specs/2026-10-29-email-send-inconclusive-detection-assisted-design.md):
+   * set by the delivery service when the pre-send mailbox detection returned
+   * a probe-execution unknown (probe_failed / probe_timeout /
+   * probe_limit_exceeded / sent_folder_unavailable) and the send is
+   * human-confirmed. The local ledger already asserted no sent evidence, so
+   * the §9.3 freshness precondition is REPLACED by that local-ledger negative
+   * + the human confirmation; the transactional sibling check and ALL
+   * positive-evidence refusals still run. Positive assertions
+   * (replyDetectedAt / sent status) are never bypassed.
+   */
+  assistedProbe?: {
+    reasonCode: ReplyDetectionUnknownCode;
+    checkedAt: string;
+  } | null;
 }
 
 /**

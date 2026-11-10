@@ -1,3 +1,4 @@
+import { log } from "@/modules/Logger";
 import {
   PLUGIN_MARKETPLACE_LIST,
   PLUGIN_MARKETPLACE_GET,
@@ -26,7 +27,7 @@ import { broadcastAifetchlyConfigChanged } from "@/main-process/communication/ai
  * service (parseMarketplaceSource rejects control chars), not the schema.
  */
 export function registerPluginMarketplaceIpcHandlers(): void {
-  console.log("Plugin Marketplace IPC handlers registered");
+  log.info("Plugin Marketplace IPC handlers registered");
 
   registerAiValidatedHandler(
     PLUGIN_MARKETPLACE_LIST,

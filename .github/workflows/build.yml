@@ -29,7 +29,7 @@ jobs:
           cache: yarn
 
       # Python 3.12+ removed distutils; bundled node-gyp in electron-rebuild still imports it.
-      # Pin 3.11 so gyp (used by sqlite3/bufferutil rebuild) runs. Same issue as macOS setuptools fix.
+      # Pin 3.11 so gyp (used by bufferutil rebuild) runs. Same issue as macOS setuptools fix.
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
         with:
@@ -76,9 +76,20 @@ jobs:
             echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
             exit 1
           fi
+          hub_url="${{ secrets.VITE_PLUGIN_HUB_URL_TEST || vars.VITE_PLUGIN_HUB_URL_TEST || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}"
+          allow_http="${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -100,12 +111,6 @@ jobs:
           else
             echo "lzma-native deps directory not found"
           fi
-      - name: Skip sqlite3 Electron rebuild
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "rebuild-sqlite3 no-op script removed; sqlite3 package is unused. better-sqlite3 is rebuilt via postinstall and the 'Rebuild better sqlite' step."
-
       - name: Rebuild better-sqlite3 for Electron
         shell: bash
         run: yarn rebuild-better-sqlite
@@ -113,16 +118,48 @@ jobs:
       #   run: yarn rebuild-canvas
 
       - name: Build application
+        shell: bash
+        env:
+          # Mirror the macOS leg: run the WiX maker in its own process so the
+          # making phase starts with a fresh, small V8 heap instead of the full
+          # packaging working set, and guard the package phase so a hang shows
+          # diagnostics instead of an opaque cancellation.
+          PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000"
+          PACKAGE_GUARD_STALL_MS: "900000"
         run: |
+          set -euo pipefail
           echo "Current working directory: $(pwd)"
-          # Increase Node.js heap size to prevent out-of-memory errors during build
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          echo "Building with increased heap size (4GB)"
+
+          # Run #383 crashed with V8 "Fatal process out of memory: Zone"
+          # (exit code 0x80000003) inside the Forge Node process while
+          # candle.exe/light.exe compressed the packaged payload for the MSI.
+          # Cap the old-space heap at the level the Linux packaged-smoke leg
+          # uses (test.yml packaged-smoke-github) so the Forge process leaves
+          # memory headroom for the WiX tooling instead of hoarding a 4 GB
+          # old-space ceiling.
+          export NODE_OPTIONS="--max-old-space-size=3072"
+          echo "Building with NODE_OPTIONS=${NODE_OPTIONS}"
+
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
+          node scripts/run-packaging-with-hang-guard.js --platform=win32 --arch=x64
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package end"
+
+          # Forensics for the MSI phase: byte/file totals right before WiX.
+          echo "[$(date -u +%FT%TZ)] packaged app stats:"
+          echo "files: $(find out/aiFetchly-win32-x64 -type f | wc -l)"
+          du -sh out/aiFetchly-win32-x64 2>/dev/null || true
+          du -sh out/aiFetchly-win32-x64/resources/app.asar 2>/dev/null || true
+          du -sh out/aiFetchly-win32-x64/resources/app.asar.unpacked 2>/dev/null || true
+
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package (WiX) start"
           # Windows CI ships WiX MSI only (no Squirrel Setup.exe).
-          yarn make-win:test -- --targets=@electron-forge/maker-wix
+          # --skip-package reuses the package just produced above so the WiX
+          # maker runs with a fresh Node heap.
+          yarn make-win:test -- --targets=@electron-forge/maker-wix --skip-package
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package (WiX) end"
+
           # Fail if unpacked workers require asar-only pure-JS packages.
           yarn verify-packaged-app
-        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -314,9 +351,20 @@ jobs:
             echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
             exit 1
           fi
+          hub_url="${{ secrets.VITE_PLUGIN_HUB_URL_TEST || vars.VITE_PLUGIN_HUB_URL_TEST || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}"
+          allow_http="${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -448,12 +496,9 @@ jobs:
         env:
           # Ensure this is set for the step
           TARGET_ARCH: arm64
-      - name: Rebuild sqlite3 (no-op; sqlite3 unused)
-        run: |
-          echo "rebuild-sqlite3 removed; sqlite3 package is unused. Skipping."
       - name: Rebuild better sqlite
         run: |
-          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite    
+          CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-better-sqlite
       # - name: Rebuild canvas
       #   run: |
       #     CXXFLAGS="-std=c++20" CFLAGS="-std=c11" yarn rebuild-canvas
@@ -466,7 +511,6 @@ jobs:
           echo "=== Native rebuild configuration ==="
           TARGET_ARCH="${TARGET_ARCH:-$(uname -m)}"
           echo "TARGET_ARCH: ${TARGET_ARCH}"
-          echo "rebuild-sqlite3: (removed; sqlite3 package is unused)"
           node -e "console.log('rebuild-better-sqlite: ' + require('./package.json').scripts['rebuild-better-sqlite'])"
       - name: Rebuild C modules specifically
         run: |
@@ -479,16 +523,16 @@ jobs:
       - name: Debug - Check native modules
         run: |
           echo "=== Checking native modules ==="
-          ls -la node_modules/ | grep -E "(better-sqlite3|sqlite3|bufferutil|utf-8-validate)" || echo "Native modules not found"
+          ls -la node_modules/ | grep -E "(better-sqlite3|bufferutil|utf-8-validate)" || echo "Native modules not found"
           echo "=== Checking for build artifacts ==="
-          find node_modules/ -name "*.node" -path "*/better-sqlite3/*" -o -path "*/sqlite3/*" -o -path "*/bufferutil/*" -o -path "*/utf-8-validate/*" || echo "No .node files found"
+          find node_modules/ -name "*.node" -path "*/better-sqlite3/*" -o -path "*/bufferutil/*" -o -path "*/utf-8-validate/*" || echo "No .node files found"
           echo "=== Searching for volume.cc file ==="
           find node_modules/ -name "volume.cc" -type f || echo "volume.cc file not found"
           echo "=== Identifying C vs C++ modules ==="
           echo "C modules (should use CFLAGS):"
           find node_modules/ -name "*.c" -path "*/bufferutil/*" -o -path "*/utf-8-validate/*" || echo "No C files found in C modules"
           echo "C++ modules (should use CXXFLAGS):"
-          find node_modules/ -name "*.cc" -o -name "*.cpp" -path "*/better-sqlite3/*" -o -path "*/sqlite3/*" || echo "No C++ files found in C++ modules"
+          find node_modules/ -name "*.cc" -o -name "*.cpp" -path "*/better-sqlite3/*" || echo "No C++ files found in C++ modules"
       - name: Build application
         shell: bash
         env:

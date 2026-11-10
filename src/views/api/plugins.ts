@@ -1,6 +1,8 @@
 import { windowInvoke } from "@/views/utils/apirequest";
 import {
   PLUGIN_IMPORT,
+  PLUGIN_CANCEL_INSTALL,
+  PLUGIN_GET_INSTALL_CAPABILITIES,
   PLUGIN_INSTALL_FROM_SOURCE,
   PLUGIN_VALIDATE_PACKAGE,
   PLUGIN_LIST,
@@ -53,6 +55,9 @@ export interface PluginSummary {
   sourceUri?: string;
   sourceRef?: string;
   installPath?: string;
+  /** Trusted acquisition metadata (e.g. resolvedCommitSha for GitHub
+   *  archive installs — shown shortened in the overview, US-06). */
+  sourceMeta?: Record<string, unknown>;
 }
 
 export interface PluginSkillComponent {
@@ -134,6 +139,8 @@ export type PluginSourceKind =
   | "url";
 
 export interface PluginInstallSourceRequest {
+  /** Keys the main-process AbortController for cancellation (design §12.2). */
+  operationId: string;
   kind: PluginSourceKind;
   overwrite?: boolean;
   zipPath?: string;
@@ -145,6 +152,22 @@ export interface PluginInstallSourceRequest {
   npmRegistry?: string;
   npmAuthScope?: string;
   npmAuthToken?: string;
+}
+
+/** Typed domain result (design §12.1): expected failures are DATA. */
+export interface PluginInstallErrorView {
+  code: string;
+  message: string;
+  recoverable: boolean;
+}
+
+export type PluginInstallFromSourceResultView =
+  | { success: true; plugin: PluginSummary }
+  | { success: false; errors: PluginInstallErrorView[] };
+
+/** Main-process install capability flags (design §12.4). */
+export interface PluginInstallCapabilitiesView {
+  githubArchiveInstallEnabled: boolean;
 }
 
 export interface PluginValidationResult {
@@ -195,8 +218,20 @@ export async function importPlugin(
 
 export async function installPluginFromSource(
   req: PluginInstallSourceRequest
-): Promise<PluginSummary | null> {
+): Promise<PluginInstallFromSourceResultView | null> {
   return await windowInvoke(PLUGIN_INSTALL_FROM_SOURCE, req);
+}
+
+/** Best-effort cancellation of one active install (idempotent). */
+export async function cancelPluginInstall(
+  operationId: string
+): Promise<boolean | null> {
+  return await windowInvoke(PLUGIN_CANCEL_INSTALL, { operationId });
+}
+
+/** Capability flags for capability-aware dialog copy (design §12.4). */
+export async function getPluginInstallCapabilities(): Promise<PluginInstallCapabilitiesView | null> {
+  return await windowInvoke(PLUGIN_GET_INSTALL_CAPABILITIES);
 }
 
 export async function validatePluginPackage(

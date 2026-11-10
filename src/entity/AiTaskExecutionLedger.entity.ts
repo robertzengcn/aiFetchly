@@ -17,52 +17,52 @@ import type { AiTaskExecutionLedgerStatus } from "@/entityTypes/aiTaskExecutionT
 @Index(["status"])
 export class AiTaskExecutionLedgerEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   /** Opaque ledger identity, e.g. `ledger-<uuid>`. */
   @Column("varchar", { length: 100 })
-  ledger_id: string;
+  ledger_id!: string;
 
   /** Immutable frozen policy limits JSON (BudgetLimits). */
   @Column("text", { default: "{}" })
-  policy_limits_json: string;
+  policy_limits_json!: string;
 
   /** CAS version — reservation/finalization must match the loaded value. */
   @Column("integer", { default: 0 })
-  execution_state_version: number;
+  execution_state_version!: number;
 
   @Column("integer", { default: 0 })
-  consumed_continuations: number;
+  consumed_continuations!: number;
 
   @Column("integer", { default: 0 })
-  consumed_provider_attempts: number;
+  consumed_provider_attempts!: number;
 
   @Column("integer", { default: 0 })
-  consumed_tool_executions: number;
+  consumed_tool_executions!: number;
 
   @Column("integer", { default: 0 })
-  consumed_checker_attempts: number;
+  consumed_checker_attempts!: number;
 
   @Column("integer", { default: 0 })
-  consumed_tokens: number;
+  consumed_tokens!: number;
 
   @Column("integer", { default: 0 })
-  consumed_active_ms: number;
+  consumed_active_ms!: number;
 
   @Column("integer", { default: 0 })
-  consumed_wait_ms: number;
+  consumed_wait_ms!: number;
 
   @Column("integer", { default: 0 })
-  no_progress_streak: number;
+  no_progress_streak!: number;
 
   /** Currently-active execution ID that may reserve against this ledger. */
   @Column("varchar", { length: 100, nullable: true })
-  active_execution_id: string | null;
+  active_execution_id!: string | null;
 
   /** Fenced owner generation — prevents stale ancestor reservations. */
   @Column("integer", { default: 0 })
-  owner_generation: number;
+  owner_generation!: number;
 
   @Column("varchar", { length: 20, default: "active" })
-  status: AiTaskExecutionLedgerStatus;
+  status!: AiTaskExecutionLedgerStatus;
 }

@@ -980,8 +980,9 @@ by the approved product policy.
 
 > **Policy update (2026-10-18):** the `review` severity tier was removed.
 > `EmailReplyValidationSeverity` is now `"block" | "warning"`; the commitment,
-> URL, payment-instruction, recipient, and attachment-claim findings above are
-> demoted to `warning` and do NOT gate approval — they persist in
+> payment-instruction, recipient, and attachment-claim findings above are
+> demoted to `warning` and do NOT gate approval (URL findings were removed
+> entirely — a URL in the body is not a finding) — they persist in
 > `validationFindingsJson` for audit only. The human gate for advisory content
 > is the send tool's `requiresConfirmation` confirmation gesture (or the
 > renderer's explicit approve action); the separately persisted model

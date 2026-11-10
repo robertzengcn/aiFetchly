@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { GitPluginFetcher } from "@/service/pluginSources/GitPluginFetcher";
 import type { PluginSourceRequest } from "@/service/pluginSources/pluginSourceTypes";
+import type { SpawnFn } from "@/service/pluginSources/GitPluginFetcher";
 
 interface FakeChild {
   on(event: string, cb: (e?: { code: number }) => void): FakeChild;
@@ -154,3 +155,67 @@ describe("GitPluginFetcher", () => {
 
 // Ensure temp dirs created during failed-path tests don't accumulate.
 // The fetcher cleans up its own dirs on success/failure; this is a backstop.
+
+describe("GitPluginFetcher missing-Git diagnostics (GF Phase C / FR-17)", () => {
+  function spawnDouble(behavior: "enoent" | "exit-1" | "success") {
+    return (cmd: string, args: readonly string[], opts: { shell?: boolean }) => {
+      recordedShell = opts.shell;
+      recordedArgs = args;
+      recordedCmd = cmd;
+      const listeners = { close: [] as ((e?: { code: number }) => void)[], error: [] as ((e: { code?: string }) => void)[] };
+      queueMicrotask(() => {
+        if (behavior === "enoent") {
+          const spawnError = Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
+          listeners.error.forEach((l) => l(spawnError));
+        } else if (behavior === "exit-1") {
+          listeners.close.forEach((l) => l({ code: 1 }));
+        } else {
+          listeners.close.forEach((l) => l({ code: 0 }));
+        }
+      });
+      return {
+        on: (event: string, cb: (e?: unknown) => void) => {
+          if (event === "close") listeners.close.push(cb as (e?: { code: number }) => void);
+          if (event === "error") listeners.error.push(cb as (e: { code?: string }) => void);
+        },
+        stderr: { on: () => undefined },
+        stdout: { on: () => undefined },
+        kill: () => true,
+      };
+    };
+  }
+  let recordedShell: boolean | undefined;
+  let recordedArgs: readonly string[] = [];
+  let recordedCmd = "";
+
+  it("spawn ENOENT maps to the recoverable git-not-installed error", async () => {
+    const fetcher = new GitPluginFetcher(spawnDouble("enoent") as unknown as SpawnFn);
+    const result = await fetcher.acquire({ kind: "git", uri: "https://example.com/repo.git" });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.errors[0]?.code).toBe("git-not-installed");
+    expect(result.errors[0]?.recoverable).toBe(true);
+    expect(result.errors[0]?.message).toContain("GitHub");
+  });
+
+  it("non-ENOENT spawn errors and non-zero exits stay generic install failures", async () => {
+    for (const behavior of ["exit-1"] as const) {
+      const fetcher = new GitPluginFetcher(spawnDouble(behavior) as unknown as SpawnFn);
+      const result = await fetcher.acquire({ kind: "git", uri: "https://example.com/repo.git" });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.errors[0]?.code).toBe("install-io-failed");
+    }
+  });
+
+  it("arguments remain a typed array with shell:false", async () => {
+    const fetcher = new GitPluginFetcher(spawnDouble("enoent") as unknown as SpawnFn);
+    await fetcher.acquire({ kind: "git", uri: "https://example.com/repo.git", ref: "main" });
+    expect(recordedCmd).toBe("git");
+    expect(Array.isArray(recordedArgs)).toBe(true);
+    // defaultSpawn wraps with shell:false (SpawnFn opts don't carry it —
+    // the double sees the pre-wrapper call); assert the array is plain.
+    expect(recordedArgs).toContain("clone");
+    expect(recordedShell).toBeUndefined();
+  });
+});

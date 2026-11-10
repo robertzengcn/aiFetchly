@@ -406,9 +406,10 @@ Acceptance criteria:
   require review.
 - The validator records machine-readable findings and the validation version.
 
-> **Policy update (2026-10-18):** commitments, URLs, payment instructions,
+> **Policy update (2026-10-18):** commitments, payment instructions,
 > recipients, and attachment claims are recorded as non-blocking `warning`
-> findings (audit-visible, not approval-gating). Only block-severity findings
+> findings (audit-visible, not approval-gating). URLs in the body are NOT a
+> finding at all (they were removed, not demoted). Only block-severity findings
 > (AI/leakage disclosure, forbidden phrases) refuse approval; the send tool's
 > confirmation gesture is the human gate for advisory content. See the
 > technical design §13 policy note for rationale.

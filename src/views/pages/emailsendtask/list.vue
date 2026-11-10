@@ -1,10 +1,15 @@
 <template>
-    <div class="tables_page">
+    <AppPageShell
+      page-id="email-overview"
+      title-key="route.email_marketing"
+      content-width="full"
+    >
        
 <EmailSendtaskTable />
-    </div>
+    </AppPageShell>
 </template>
 <script setup lang="ts">
+import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
 
 // import { ref } from 'vue';
 import EmailSendtaskTable from '@/views/pages/emailsendtask/widgets/EmailSendtaskTable.vue'

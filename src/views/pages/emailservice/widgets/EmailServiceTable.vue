@@ -244,7 +244,7 @@ async function handleTagsChanged(): Promise<void> {
     loadItems({ page: 1, itemsPerPage: itemsPerPage.value, sortBy: [] });
 }
 
-function loadItems({ page, itemsPerPage, sortBy }) {
+function loadItems({ page, itemsPerPage, sortBy }: { page: number; itemsPerPage: number; sortBy: { key: string; order: string }[] }) {
     const request = ++latestRequest;
     loading.value = true
     const fetchitem: Fetchparam = {

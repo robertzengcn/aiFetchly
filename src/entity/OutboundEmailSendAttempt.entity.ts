@@ -26,44 +26,44 @@ import type { OutboundEmailSendAttemptStatus } from "@/entityTypes/outboundEmail
 @Index(["status", "claimedAt"])
 export class OutboundEmailSendAttemptEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("int")
-  batchId: number;
+  batchId!: number;
 
   /** One-time authorization that produced this attempt. */
   @Column("int")
-  authorizationId: number;
+  authorizationId!: number;
 
   /** Verified at claim. */
   @Column("varchar", { length: 64 })
-  batchHash: string;
+  batchHash!: string;
 
   /** Deterministic key: outbound-email:v1:<batchId>:<authorizationId>:<batchHash> */
   @Column("varchar", { length: 128 })
-  idempotencyKey: string;
+  idempotencyKey!: string;
 
   @Column("varchar", { length: 40 })
-  status: OutboundEmailSendAttemptStatus;
+  status!: OutboundEmailSendAttemptStatus;
 
   /** Existing campaign task link. */
   @Column("int", { nullable: true })
-  legacyTaskId: number | null;
+  legacyTaskId!: number | null;
 
   /** Diagnostic only. */
   @Column("int", { nullable: true })
-  workerPid: number | null;
+  workerPid!: number | null;
 
   @Column("datetime")
-  claimedAt: Date;
+  claimedAt!: Date;
 
   @Column("datetime", { nullable: true })
-  workerStartedAt: Date | null;
+  workerStartedAt!: Date | null;
 
   @Column("datetime", { nullable: true })
-  completedAt: Date | null;
+  completedAt!: Date | null;
 
   /** Sanitized reason. */
   @Column("varchar", { length: 100, nullable: true })
-  lastErrorCode: string | null;
+  lastErrorCode!: string | null;
 }

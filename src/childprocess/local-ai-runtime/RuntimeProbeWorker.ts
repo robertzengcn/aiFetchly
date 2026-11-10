@@ -1,3 +1,4 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 "use strict";
 /**
  * Local AI Runtime — disposable probe worker entry.
@@ -125,6 +126,12 @@ export async function dispatchProbeMessage(
 const parentPort = (
   process as unknown as { parentPort?: WorkerParentPort }
 ).parentPort;
+// §7 graceful shutdown (design §7): ack + prompt clean exit; the
+// parent observes exit and force-verifies (ack is not exit proof).
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 
 if (parentPort) {
   const sink: ProbeSink = {
@@ -140,7 +147,18 @@ if (parentPort) {
     exit: (code) => process.exit(code),
   };
 
-  parentPort.on("message", async (event: ParentPortMessageEvent) => {
+  parentPort.on("message", async (event: ParentPortMessageEvent) => {  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    let raw: unknown = event.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return;
+      }
+    }
+    shutdownResponder.handle(raw);
+  });
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(event.data);

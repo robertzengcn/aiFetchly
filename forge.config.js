@@ -203,6 +203,89 @@ function getPackageRootName(packageName) {
   return packageName.split("/")[0];
 }
 
+// Galactus can strip or EMPTY (directory husk, contents destroyed) modules
+// that the packaged main process requires at RUNTIME — typeorm's hoisted
+// tslib/ansis/dayjs boot-crashed Linux package builds ("Cannot find module
+// 'tslib'" from PlatformTools.js). Declaring them in package.json is not
+// enough: galactus walks an intermediate manifest during finalize, AFTER
+// the afterPrune hook.
+//
+// The restore below walks the runtime transitive closure to a fixpoint:
+// start from packages PRESENT with real content, queue each one's own
+// "dependencies", and restore any queued module that is missing or an
+// emptied husk from the project node_modules. Vite-bundled renderer deps
+// (vue, vuetify, pinia, ...) are never in the closure of a main-process
+// package, so they stay pruned — the package does not bloat.
+function restorePrunedRuntimeDependencies(buildPath) {
+  const stagedNodeModules = join(buildPath, "node_modules");
+  const stagedManifestPath = join(buildPath, "package.json");
+  if (!existsSync(stagedManifestPath)) {
+    // Degenerate staged layouts (test fixtures) — the downstream
+    // verifiers fail with the precise missing-package error.
+    console.warn(
+      `[forge] restorePrunedRuntimeDependencies: no staged package.json at ${stagedManifestPath} — skipping`
+    );
+    return;
+  }
+  const stagedManifest = JSON.parse(readFileSync(stagedManifestPath, "utf8"));
+
+  const isRealModule = (name) =>
+    existsSync(join(stagedNodeModules, name, "package.json"));
+
+  const readDeps = (name) => {
+    try {
+      const pkg = JSON.parse(
+        readFileSync(join(stagedNodeModules, name, "package.json"), "utf8")
+      );
+      return Object.keys(pkg.dependencies ?? {});
+    } catch {
+      return [];
+    }
+  };
+
+  // Seed: direct dependencies that survived the prune with content.
+  const queue = Object.keys(stagedManifest.dependencies ?? {}).filter(
+    (name) => isRealModule(name)
+  );
+  if (queue.length === 0) {
+    console.warn(
+      "[forge] restorePrunedRuntimeDependencies: no staged dependencies with content — skipping (verifyGeneratedRuntimeRequires reports the precise breakage)"
+    );
+    return;
+  }
+  const visited = new Set(queue);
+  const restored = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const dep of readDeps(current)) {
+      if (visited.has(dep)) continue;
+      visited.add(dep);
+      if (!isRealModule(dep)) {
+        const source = join(__dirname, "node_modules", dep);
+        if (!existsSync(source)) {
+          // Optional peer deps (e.g. bufferutil on some platforms) may be
+          // legitimately absent from the project tree — skip those.
+          continue;
+        }
+        cpSync(source, join(stagedNodeModules, dep), {
+          recursive: true,
+          dereference: true,
+        });
+        restored.push(dep);
+        console.log(
+          `[forge] restored pruned runtime dependency into the package: ${dep}`
+        );
+      }
+      queue.push(dep);
+    }
+  }
+  if (restored.length > 0) {
+    console.log(
+      `[forge] restored ${restored.length} pruned runtime dependenc${restored.length === 1 ? "y" : "ies"} (runtime transitive closure)`
+    );
+  }
+}
+
 /**
  * Compute the production dependency closure of a set of package roots the way
  * Node's own require resolver would, by walking the on-disk `node_modules`
@@ -941,6 +1024,36 @@ module.exports = {
         language: 1033,
         manufacturer: "Robert Zeng",
         icon: "./src/assets/images/icon.ico",
+        // Run #383: the test-branch Windows MSI build died with V8 "Fatal
+        // process out of memory: Zone" (exit 0x80000003) while light.exe
+        // mszip-compressed the whole packaged payload (electron dist +
+        // app.asar + unpacked bundles, several hundred MB) inside the same
+        // limited CI runner as the Forge Node process. Light's default Media
+        // compression is mszip; skipping compression entirely turns the
+        // cabinet build into an I/O-bound copy with a small, flat memory
+        // footprint. Applying it only to NODE_ENV=test builds keeps
+        // release/store installers compressed as before; a bigger test-only
+        // artifact is the accepted trade-off.
+        beforeCreate: (creator) => {
+          if (process.env.NODE_ENV !== "test") {
+            return;
+          }
+          const mediaTagOpen =
+            '<Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>';
+          const mediaTagNoCompression =
+            '<Media Id="1" Cabinet="product.cab" EmbedCab="yes" CompressionLevel="none"/>';
+          if (!creator.wixTemplate.includes(mediaTagOpen)) {
+            throw new Error(
+              "[forge] maker-wix beforeCreate: expected the electron-wix-msi wix.xml Media tag " +
+                `${mediaTagOpen} but it is absent — the CompressionLevel patch would be a no-op.` +
+                " Update the marker if electron-wix-msi changed its template."
+            );
+          }
+          creator.wixTemplate = creator.wixTemplate.replace(
+            mediaTagOpen,
+            mediaTagNoCompression
+          );
+        },
         // Custom UI template
         ui: {
           chooseDirectory: true,
@@ -1049,14 +1162,6 @@ module.exports = {
             config: "vite.taskCode.config.mjs",
           },
           {
-            entry: "src/childprocess/YellowPagesScraper.ts",
-            config: "vite.yellowPages.config.mjs",
-          },
-          {
-            entry: "src/childprocess/YellowPagesScraperProcess.ts",
-            config: "vite.yellowPagesScraperProcess.config.mjs",
-          },
-          {
             entry: "src/childprocess/websiteContentScraper.ts",
             config: "vite.websiteContentScraper.config.mjs",
           },
@@ -1067,6 +1172,18 @@ module.exports = {
           {
             entry: "src/childprocess/SkillWorker.ts",
             config: "vite.skillWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/computer-use/GroundingWorker.ts",
+            config: "vite.groundingWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/managed-browser/index.ts",
+            config: "vite.managedBrowserWorker.config.mjs",
+          },
+          {
+            entry: "src/childprocess/managed-browser-cache/index.ts",
+            config: "vite.managedBrowserCacheWorker.config.mjs",
           },
           {
             entry: "src/childprocess/PythonRuntimeWorker.ts",
@@ -1085,6 +1202,11 @@ module.exports = {
           {
             entry: "src/childprocess/hook-execution/HookExecutionWorker.ts",
             config: "vite.hookExecutionWorker.config.mjs",
+          },
+          {
+            entry:
+              "src/childprocess/skill-installation/SkillInstallationWorker.ts",
+            config: "vite.skillInstallationWorker.config.mjs",
           },
           {
             entry: "src/childprocess/google-maps/GoogleMapsWorker.ts",
@@ -1215,9 +1337,31 @@ module.exports = {
 
     //  }
     packageAfterPrune: async (_forgeConfig, buildPath) => {
+      restorePrunedRuntimeDependencies(buildPath);
       removeEmptyDirectories(buildPath);
       verifyStagedRendererHtml(buildPath);
       verifyGeneratedRuntimeRequires(buildPath);
+    },
+    // Galactus can empty pruned module CONTENTS during finalize — AFTER the
+    // afterPrune hook ran — leaving directory husks that pass an existsSync
+    // check but crash the packaged main process ("Cannot find module
+    // 'tslib'" from typeorm). postPackage sees the FINAL layout, so the
+    // restore runs once more there and the invariant is verified where it
+    // matters. See also verify-packaged-app (the CI gate) which fails loud
+    // on the same condition.
+    postPackage: async (_forgeConfig, packageResult) => {
+      for (const outputPath of packageResult.outputPaths) {
+        const candidates = [
+          join(outputPath, "resources", "app"),
+          // ASAR builds keep the manifest outside the archive.
+          join(outputPath, "resources", "app.asar.unpacked"),
+        ];
+        for (const appDir of candidates) {
+          if (existsSync(join(appDir, "package.json"))) {
+            restorePrunedRuntimeDependencies(appDir);
+          }
+        }
+      }
     },
   },
 };

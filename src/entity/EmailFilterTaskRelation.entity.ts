@@ -6,22 +6,22 @@ import { EmailFilterEntity } from "./EmailFilter.entity";
 @Entity('email_filter_task_relation')
 export class EmailFilterTaskRelationEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column({ type: 'integer' })
-  emailFilterId: number;
+  emailFilterId!: number;
 
   @Column({ type: 'integer' })
-  buckemailTaskId: number;
+  buckemailTaskId!: number;
 
   @Column({ type: 'integer', default: 1 })
-  status: number;
+  status!: number;
 
   @ManyToOne(() => EmailFilterEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'emailFilterId' })
-  emailFilter: EmailFilterEntity;
+  emailFilter!: EmailFilterEntity;
 
   @ManyToOne(() => BuckemailTaskEntity, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'buckemailTaskId' })
-  buckemailTask: BuckemailTaskEntity;
+  buckemailTask!: BuckemailTaskEntity;
 } 

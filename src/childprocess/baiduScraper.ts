@@ -13,6 +13,7 @@ import {
   isSameRegistrableHost,
   ALLOWED_HOSTS,
 } from "@/modules/lib/urlHostAllowlist";
+import { log } from "@/modules/Logger";
 //import { delay } from "@/modules/lib/function";
 
 // export type googlePlaces = {
@@ -81,7 +82,7 @@ export class BaiduScraper extends SearchScrape {
     );
     //remove duplicate items
     const uniqueArray = Array.from(new Set(searchRes));
-    //console.log(uniqueArray); // Output: [1, 2, 3, 4, 5]
+    //log.info(uniqueArray); // Output: [1, 2, 3, 4, 5]
     for (const seval of uniqueArray) {
       const sevalLink = seval.link;
       const sevalHost = sevalLink ? new URL(sevalLink).hostname : "";
@@ -132,7 +133,7 @@ export class BaiduScraper extends SearchScrape {
             //catch time out error
             if (error instanceof TimeoutError) {
               // Do something if this is a timeout.
-              console.log("Navigation timed out:", error);
+              log.info("Navigation timed out:", error);
             }
           } finally {
             if (!newPage.isClosed()) {
@@ -140,7 +141,7 @@ export class BaiduScraper extends SearchScrape {
             }
           }
         } catch (error) {
-          console.error("Error creating new page:", error);
+          log.error("Error creating new page:", error);
         }
       }
       result.results.push(seval);
@@ -171,7 +172,7 @@ export class BaiduScraper extends SearchScrape {
     return true;
   }
 
-  async search_keyword(keyword: string) {
+  async search_keyword(keyword: string): Promise<void> {
     //wait for full page loading
 
     // First check if chat textarea exists

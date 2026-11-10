@@ -48,6 +48,7 @@ function mountDraft(
   props: {
     draft?: Partial<OutboundEmailDraftView>;
     editMode?: boolean;
+    editable?: boolean;
   } = {}
 ) {
   return mount(OutboundEmailRecipientDraft, {
@@ -77,6 +78,7 @@ function mountDraft(
     props: {
       draft: makeDraft(props.draft),
       editMode: props.editMode ?? false,
+      ...(props.editable === undefined ? {} : { editable: props.editable }),
     },
   });
 }
@@ -98,6 +100,16 @@ describe("OutboundEmailRecipientDraft", () => {
     const wrapper = mountDraft();
     await wrapper.find('[data-testid="outbound-draft-edit"]').trigger("click");
     expect(wrapper.emitted("edit-requested")).toBeTruthy();
+  });
+
+  // R9 review fix (§8.1/FR-OUT-006): an already-attempted batch is a progress
+  // surface — editable=false hides the Edit affordance entirely (an edit
+  // would invalidate the record and reopen the approval path).
+  it("hides the edit button when editable is false", () => {
+    const wrapper = mountDraft({ editable: false });
+    expect(
+      wrapper.find('[data-testid="outbound-draft-edit"]').exists()
+    ).toBe(false);
   });
 
   it("emits save with the edited subject and body in edit mode", async () => {

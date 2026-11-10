@@ -10,7 +10,16 @@
     class="ai-content-report-btn"
     @click="onClick"
   >
-    <v-icon size="small" :start="!compact">mdi-flag-outline</v-icon>
+    <!-- R8 P2-12 (A11Y-001): the Reported state must not be color-only.
+         The compact variant swaps to the filled flag with a distinct
+         marker; the accessible name changes with it (see computed below). -->
+    <v-icon
+      v-if="reported"
+      size="small"
+      :start="!compact"
+      data-testid="ai-content-report-reported-icon"
+    >mdi-flag</v-icon>
+    <v-icon v-else size="small" :start="!compact">mdi-flag-outline</v-icon>
     <template v-if="!compact">{{ reported ? reportedLabel : actionLabel }}</template>
   </v-btn>
 </template>
@@ -52,8 +61,14 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const actionLabel = computed(() => t("aiContentReport.action") || "Report AI output");
 const reportedLabel = computed(() => t("aiContentReport.reported") || "Reported");
-const ariaLabel = computed(
-  () => t("aiContentReport.actionAriaLabel") || "Report this AI-generated output"
+// R8 P2-12 (FR-RPT-009): when the report has been submitted, the accessible
+// name must say so even in the icon-only compact variant — "disabled" alone
+// announces nothing.
+const ariaLabel = computed(() =>
+  props.reported
+    ? t("aiContentReport.reported") || "Reported"
+    : t("aiContentReport.actionAriaLabel") ||
+      "Report this AI-generated output"
 );
 function onClick(): void {
   if (props.reported) return;

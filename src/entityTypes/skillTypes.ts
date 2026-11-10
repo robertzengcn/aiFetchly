@@ -12,6 +12,7 @@ import type {
   ModelArtifact,
   PermissionPreview,
 } from "@/entityTypes/aiImageAttachmentToolTypes";
+import type { HostAuthorizedRecoveryV1 } from "@/entityTypes/pluginExecutionTypes";
 
 /**
  * Result returned by a skill's execute function.
@@ -31,6 +32,14 @@ export interface SkillExecutionResult {
    * renderer, or passed to hooks.
    */
   readonly modelArtifacts?: readonly ModelArtifact[];
+  /**
+   * Transient prompt-skill instruction block (natural-language-skill-
+   * installation design §10.5). A SIBLING of `result` with the same
+   * non-persistence contract as modelArtifacts: the query loop reads it to
+   * append a model-only handoff message; serializers that spread only
+   * `result` never see it.
+   */
+  readonly promptSkillContext?: import("./promptSkillTypes").PromptSkillContextAttachment;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +145,11 @@ export interface SkillDefinition {
   /**
    * When true (or when resolveAsync returns true for the specific call),
    * the tool runs asynchronously via the ToolJobRegistry instead of
-   * blocking the query loop. The loop returns immediately with a
-   * `{ async: true, job_id }` envelope; the model polls for completion
-   * via the companion `check_tool_job_status` tool.
+   * blocking a foreground timeout. This is MANAGED async: the host
+   * registers the job, emits progress, waits locally by polling the
+   * registry, and returns the REAL final tool result to the model — the
+   * model does not poll and never sees a `{ async: true, job_id }`
+   * placeholder for these calls.
    */
   readonly async?: boolean;
 
@@ -227,6 +238,15 @@ export interface SkillExecutionContext {
   readonly model?: string;
 
   /**
+   * FR-24 budget input: the caller's estimate of tokens still available in
+   * the active context window. Prompt-skill invocation uses it to bound the
+   * hidden instruction block against the REAL remaining budget instead of a
+   * fixed default. Optional — older callers omit it and the invocation
+   * falls back to its documented defaults.
+   */
+  readonly remainingContextTokens?: number;
+
+  /**
    * When true, the caller has already obtained user consent (e.g. via
    * resume-after-permission-grant). SkillExecutor should skip the
    * permission check and proceed directly to execution.
@@ -252,6 +272,39 @@ export interface SkillExecutionContext {
    * signal.aborted between long steps to fail fast.
    */
   readonly signal?: AbortSignal;
+
+  /**
+   * Authoritative wall-clock deadline for managed-async tool execution
+   * (HOST-07). Derived from the clamped plugin tool policy maxRunMs (or the
+   * host ceiling) and threaded through SkillExecutor → ToolExecutor →
+   * MCPToolService so every inner timeout derives from the remaining budget.
+   * Foreground callers omit it.
+   */
+  readonly deadlineEpochMs?: number;
+
+  /**
+   * H5: the same deadline on a MONOTONIC clock (performance.now() anchor).
+   * Present whenever `deadlineEpochMs` is set; the MCP execution path derives
+   * every inner timeout from this anchor so wall-clock changes can never
+   * extend or truncate the job. Absent for foreground callers.
+   */
+  readonly deadlinePerfMs?: number;
+
+  /**
+   * Trusted per-job execution id (host registry-generated, never tool args).
+   * One id binds the host context file, the artifact staging directory, the
+   * journal, and post-exit promotion (TODO 2026-10-17 §2 H1). Omitted by
+   * callers with no artifact promotion path.
+   */
+  readonly executionId?: string;
+
+  /**
+   * The recovery attempt the host recovery ledger authorized for this call
+   * (H1/H3). Supplied by the main process from the ledger reservation, never
+   * from model tool arguments; the plugin validates it against its own
+   * bookkeeping and refuses recovery when it is absent.
+   */
+  readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
 
   /**
    * Number of `image_url` content parts already present in the outgoing
@@ -351,6 +404,20 @@ export interface ModuleExecutionContext {
    * and stop work promptly when aborted. Short modules MAY ignore it.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Authoritative wall-clock deadline for managed-async execution (HOST-07).
+   * Set from the plugin tool policy's clamped maxRunMs; when present, the
+   * MCP execution path derives every inner timeout from the remaining budget
+   * instead of applying the foreground 240 s race. Optional — foreground
+   * callers omit it and keep the existing behavior.
+   */
+  readonly deadlineEpochMs?: number;
+  /** H5: monotonic-clock anchor for the same deadline (performance.now). */
+  readonly deadlinePerfMs?: number;
+  /** Trusted per-job execution id shared by context, staging, and promotion (H1). */
+  readonly executionId?: string;
+  /** Recovery attempt the host ledger authorized for this call (H1/H3). */
+  readonly authorizedRecovery?: HostAuthorizedRecoveryV1;
 }
 
 // ---------------------------------------------------------------------------

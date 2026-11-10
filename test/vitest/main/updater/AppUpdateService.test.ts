@@ -148,11 +148,11 @@ describe("AppUpdateService.initializeAppUpdates", () => {
     );
   });
 
-  it("enables the default user restart prompt (notifyUser: true)", () => {
+  it("disables the library prompt so the app owns the restart (design §12)", () => {
     initializeAppUpdates({ isPackaged: true, platform: "win32" });
 
     expect(mocks.updateElectronApp).toHaveBeenCalledWith(
-      expect.objectContaining({ notifyUser: true })
+      expect.objectContaining({ notifyUser: false })
     );
   });
 

@@ -83,7 +83,9 @@
             <v-list-item-subtitle>{{
               t("subagents.field_max_tool_calls")
             }}</v-list-item-subtitle>
-            <div class="text-body-2">{{ agent.maxToolCalls }}</div>
+            <div class="text-body-2" data-testid="agent-max-tool-calls">
+              {{ formatLimit(agent.maxToolCalls) }}
+            </div>
           </v-list-item>
           <v-list-item>
             <v-list-item-subtitle>{{
@@ -97,7 +99,9 @@
             <v-list-item-subtitle>{{
               t("subagents.field_max_continue_calls")
             }}</v-list-item-subtitle>
-            <div class="text-body-2">{{ agent.maxContinueCalls }}</div>
+            <div class="text-body-2" data-testid="agent-max-continue-calls">
+              {{ formatLimit(agent.maxContinueCalls) }}
+            </div>
           </v-list-item>
           <v-list-item v-if="agent.pluginComponentPath">
             <v-list-item-subtitle>{{
@@ -344,6 +348,10 @@ const warnings = computed(() => {
   if (props.agent.lastError) values.push(props.agent.lastError);
   return values;
 });
+
+function formatLimit(value: number | null): string {
+  return value == null ? t("subagents.field_unlimited") : String(value);
+}
 
 function onDelete(): void {
   confirmDelete.value = true;

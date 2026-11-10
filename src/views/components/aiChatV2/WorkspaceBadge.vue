@@ -1,26 +1,75 @@
 <template>
+  <!--
+    Workspace chooser badge (FR-WS-002/003, design §9.2): name, icon-plus-text
+    approval state, clickable shortened path, and a Choose action when unset.
+    When a workspace is set, the path itself is the chooser action (no
+    separate Change/Choose button). Status is never conveyed by color alone
+    (icon + text). While a run is active the Choose/path action is disabled
+    with a visible, localized reason (FR-WS-007 / acceptance criterion 13).
+  -->
   <div
-    v-if="workspace"
+    v-if="loading"
+    class="workspace-badge workspace-badge--loading"
+    role="status"
+    data-testid="workspace-badge-loading"
+  >
+    <v-icon size="small" start>mdi-folder-outline</v-icon>
+    <span>{{ loadingText }}</span>
+  </div>
+
+  <div
+    v-else-if="workspace"
     class="workspace-badge"
     :title="workspace.rootPath"
     role="status"
+    data-testid="workspace-badge"
   >
     <v-icon size="small" start>mdi-folder</v-icon>
-    <span class="workspace-badge__label">{{ labelText }}:</span>
-    <span class="workspace-badge__path">{{ displayPath }}</span>
+    <span class="workspace-badge__name">{{ displayName }}</span>
+    <span
+      class="workspace-badge__status"
+      :data-approval-state="workspace.approvalState"
+    >
+      <v-icon size="x-small">{{ statusIcon }}</v-icon>
+      <span>{{ statusText }}</span>
+    </span>
     <button
       type="button"
-      class="workspace-badge__change"
-      :title="changeFolderText"
-      :aria-label="changeFolderText"
+      class="workspace-badge__path workspace-badge__path--button"
+      :title="busy ? busyReasonText : changeFolderText"
+      :aria-label="busy ? busyReasonText : changeFolderText"
+      :disabled="busy"
+      data-testid="workspace-badge-path"
       @click.stop="requestSetWorkspace"
     >
-      <v-icon size="small" start>mdi-folder-swap-outline</v-icon>
-      <span>{{ changeFolderText }}</span>
+      <v-icon size="x-small">mdi-folder-swap-outline</v-icon>
+      <span>{{ displayPath }}</span>
     </button>
+    <span
+      v-if="busy"
+      class="workspace-badge__busy-reason"
+      role="status"
+      data-testid="workspace-badge-busy-reason"
+    >
+      {{ busyReasonText }}
+    </span>
     <button
       type="button"
+      class="workspace-badge__remove"
+      :title="busy ? busyReasonText : removeText"
+      :aria-label="busy ? busyReasonText : removeText"
+      :disabled="busy"
+      data-testid="workspace-badge-remove"
+      @click.stop="requestRemoveWorkspace"
+    >
+      <v-icon size="x-small">mdi-delete-outline</v-icon>
+      <span class="sr-only">{{ removeText }}</span>
+    </button>
+    <button
+      v-if="showMemory"
+      type="button"
       class="workspace-badge__memory"
+      data-testid="workspace-badge-memory"
       :title="memoryLabel"
       @click.stop="requestOpenMemory"
     >
@@ -31,17 +80,35 @@
       }}</span>
     </button>
   </div>
+
   <div
     v-else
     class="workspace-badge workspace-badge--unset"
-    role="button"
-    tabindex="0"
-    @click="requestSetWorkspace"
-    @keydown.enter.prevent="requestSetWorkspace"
-    @keydown.space.prevent="requestSetWorkspace"
+    data-testid="workspace-badge-unset"
   >
     <v-icon size="small" start>mdi-folder-off</v-icon>
-    <span>{{ notSetText }}</span>
+    <span class="workspace-badge__unset-text">{{ notSetText }}</span>
+    <span class="workspace-badge__unset-hint">{{ chooseHintText }}</span>
+    <button
+      type="button"
+      class="workspace-badge__choose"
+      :title="busy ? busyReasonText : chooseActionText"
+      :aria-label="busy ? busyReasonText : chooseActionText"
+      :disabled="busy"
+      data-testid="workspace-badge-choose"
+      @click.stop="requestSetWorkspace"
+    >
+      <v-icon size="small" start>mdi-folder-plus-outline</v-icon>
+      <span>{{ chooseActionText }}</span>
+    </button>
+    <span
+      v-if="busy"
+      class="workspace-badge__busy-reason"
+      role="status"
+      data-testid="workspace-badge-busy-reason"
+    >
+      {{ busyReasonText }}
+    </span>
   </div>
 </template>
 
@@ -54,20 +121,35 @@ const props = withDefaults(
   defineProps<{
     workspace: WorkspaceSummary | null;
     memoryCount?: number;
+    /** Chooser refresh in flight (FR-WS-002 loading state). */
+    loading?: boolean;
+    /** A run is active: workspace changes are unsafe (FR-WS-007). */
+    busy?: boolean;
+    /** A02 §23.1 voice/memory adapter off: hide the memory surface entry. */
+    showMemory?: boolean;
   }>(),
-  { memoryCount: 0 }
+  { memoryCount: 0, loading: false, busy: false, showMemory: true }
 );
 
 const emit = defineEmits<{
   (e: "request-set-workspace"): void;
   (e: "request-open-memory"): void;
+  (e: "request-remove-workspace"): void;
 }>();
 
 const { t } = useI18n();
 
-const labelText = computed(() => t("workspace.badgeLabel") || "Workspace");
-const notSetText = computed(
-  () => t("workspace.notSet") || "No workspace set"
+const loadingText = computed(
+  () => t("workspace.loading") || "Loading workspace…"
+);
+const notSetText = computed(() => t("workspace.notSet") || "No workspace set");
+const chooseActionText = computed(
+  () => t("workspace.chooseAction") || "Choose workspace"
+);
+const chooseHintText = computed(
+  () =>
+    t("workspace.chooseHint") ||
+    "Pick a folder for this conversation's workspace."
 );
 const memoryLabel = computed(
   () => t("workspaceMemory.memoryAction") || "Memory"
@@ -75,6 +157,46 @@ const memoryLabel = computed(
 const changeFolderText = computed(
   () => t("workspace.changeFolder") || "Change folder"
 );
+const removeText = computed(
+  () => t("workspace.removeAction") || "Remove workspace"
+);
+const busyReasonText = computed(
+  () => t("workspace.busyReason") || "Available after current run"
+);
+const statusText = computed(() => {
+  switch (props.workspace?.approvalState) {
+    case "approved":
+      return t("workspace.statusApproved") || "Approved";
+    case "pending":
+      return t("workspace.statusPending") || "Pending approval";
+    case "revoked":
+      return t("workspace.statusRevoked") || "Access revoked";
+    default:
+      return "";
+  }
+});
+const statusIcon = computed(() => {
+  switch (props.workspace?.approvalState) {
+    case "approved":
+      return "mdi-check-circle-outline";
+    case "pending":
+      return "mdi-clock-outline";
+    case "revoked":
+      return "mdi-alert-outline";
+    default:
+      return "mdi-help-circle-outline";
+  }
+});
+
+/** Human-friendly name: label, else the path's final segment. */
+const displayName = computed(() => {
+  const ws = props.workspace;
+  if (!ws) return "";
+  if (ws.label && ws.label.trim().length > 0) return ws.label;
+  const sep = ws.rootPath.includes("/") ? "/" : "\\";
+  const parts = ws.rootPath.split(sep).filter((p) => p.length > 0);
+  return parts[parts.length - 1] ?? ws.rootPath;
+});
 
 const displayPath = computed(() => {
   const p = props.workspace?.rootPath ?? "";
@@ -87,6 +209,7 @@ const displayPath = computed(() => {
 });
 
 function requestSetWorkspace(): void {
+  if (props.busy) return; // FR-WS-007: blocked while a run is active
   // Allow re-picking even when a workspace is already set, so the user can
   // change folders. The parent decides whether to prompt for a new folder.
   emit("request-set-workspace");
@@ -96,38 +219,93 @@ function requestOpenMemory(): void {
   if (!props.workspace) return;
   emit("request-open-memory");
 }
+
+/** FR-WSP-002 remove leg: drop the workspace binding for this conversation.
+ * The busy guard blocks the action while a run is active (FR-WS-007). */
+function requestRemoveWorkspace(): void {
+  if (props.busy) return;
+  if (!props.workspace) return;
+  emit("request-remove-workspace");
+}
 </script>
 
 <style scoped>
 .workspace-badge {
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
   background: rgba(var(--v-theme-primary), 0.08);
   color: rgb(var(--v-theme-on-surface));
 }
+.workspace-badge--loading,
 .workspace-badge--unset {
   background: rgba(var(--v-theme-warning), 0.12);
+}
+.workspace-badge--unset {
   color: rgb(var(--v-theme-warning));
-  cursor: pointer;
 }
-.workspace-badge--unset:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 2px;
+.workspace-badge__name {
+  font-weight: 500;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.workspace-badge__label {
-  opacity: 0.7;
-  margin-right: 4px;
+.workspace-badge__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0.85;
+  white-space: nowrap;
 }
 .workspace-badge__path {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
 }
-.workspace-badge__change {
+button.workspace-badge__path--button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 6px;
+  /* PRD §16.4: interaction targets at least 40x40 (badge stays one row). */
+  min-height: 40px;
+  min-width: 40px;
+  max-width: 280px;
+}
+button.workspace-badge__path--button:hover:not(:disabled) {
+  background: rgba(var(--v-theme-primary), 0.12);
+  opacity: 1;
+}
+button.workspace-badge__path--button:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+button.workspace-badge__path--button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.workspace-badge__choose,
+.workspace-badge__memory,
+.workspace-badge__remove {
   display: inline-flex;
   align-items: center;
   margin-left: 6px;
+  /* PRD §16.4: interaction targets at least 40x40 (badge stays one row). */
+  min-height: 40px;
+  min-width: 40px;
   padding: 0 6px;
   border: none;
   border-left: 1px solid rgba(var(--v-theme-on-surface), 0.15);
@@ -137,24 +315,57 @@ function requestOpenMemory(): void {
   cursor: pointer;
   border-radius: 0;
 }
-.workspace-badge__change:hover {
+.workspace-badge__choose:hover:not(:disabled),
+.workspace-badge__memory:hover,
+.workspace-badge__remove:hover:not(:disabled) {
   background: rgba(var(--v-theme-primary), 0.12);
 }
-.workspace-badge__memory {
-  display: inline-flex;
-  align-items: center;
+.workspace-badge__choose:focus-visible,
+.workspace-badge__memory:focus-visible,
+.workspace-badge__remove:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 1px;
+}
+.workspace-badge__choose:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.workspace-badge__choose {
+  color: rgb(var(--v-theme-primary));
+  font-weight: 500;
+}
+.workspace-badge__unset-text {
+  font-weight: 500;
+}
+.workspace-badge__unset-hint {
+  color: rgba(var(--v-theme-on-surface), 0.7);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-badge__busy-reason {
   margin-left: 6px;
   padding: 0 6px;
-  border: none;
-  border-left: 1px solid rgba(var(--v-theme-on-surface), 0.15);
-  background: transparent;
-  color: inherit;
-  font-size: 12px;
-  cursor: pointer;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  background: rgba(var(--v-theme-warning), 0.15);
+  color: rgb(var(--v-theme-on-surface), 0.9);
+}
+.workspace-badge__memory {
   border-radius: 0 4px 4px 0;
 }
-.workspace-badge__memory:hover {
-  background: rgba(var(--v-theme-primary), 0.12);
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 .workspace-badge__memory-count {
   margin-left: 4px;

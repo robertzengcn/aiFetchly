@@ -64,7 +64,7 @@ export class UserController {
 
   /**
    * Returns the main BrowserWindow for the desktop-login completion cascade
-   * (navigation to Dashboard, etc). The IPC layer sets this at app startup
+   * (navigation to AI_Chat_Workspace, etc). The IPC layer sets this at app startup
    * via setMainWindowProvider so the controller does not import background.ts
    * (which would create a circular dependency).
    *

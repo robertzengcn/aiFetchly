@@ -1,4 +1,5 @@
 import { Page } from "puppeteer";
+import { log } from "@/modules/Logger";
 import { BasePlatformAdapter } from "@/modules/BasePlatformAdapter";
 import { PlatformConfig } from "@/modules/interface/IPlatformConfig";
 import { BusinessData } from "@/modules/interface/IDataExtractor";
@@ -119,20 +120,20 @@ export class KoreaLocalPagesAdapter extends BasePlatformAdapter {
 
     // Check if pagination is configured and is an object with nextButton property
     if (!selectors.pagination || typeof selectors.pagination !== "object") {
-      console.log("No pagination selector configured for KoreaLocalPages");
+      log.info("No pagination selector configured for KoreaLocalPages");
       return;
     }
 
     // Type guard to check if pagination has nextButton property
     const pagination = selectors.pagination;
     if (!("nextButton" in pagination) || !pagination.nextButton) {
-      console.log("No nextButton selector configured for KoreaLocalPages");
+      log.info("No nextButton selector configured for KoreaLocalPages");
       return;
     }
 
     const nextButton = await page.$(pagination.nextButton);
     if (!nextButton) {
-      console.log("No next page button found on KoreaLocalPages");
+      log.info("No next page button found on KoreaLocalPages");
       return;
     }
 
@@ -144,9 +145,9 @@ export class KoreaLocalPagesAdapter extends BasePlatformAdapter {
 
       // Wait for new results to load
       await page.waitForSelector(selectors.businessList, { timeout: 10000 });
-      console.log("Navigated to next page on KoreaLocalPages");
+      log.info("Navigated to next page on KoreaLocalPages");
     } catch (error) {
-      console.error("Error handling pagination on KoreaLocalPages:", error);
+      log.error("Error handling pagination on KoreaLocalPages:", error);
     }
   }
 
@@ -201,7 +202,7 @@ export class KoreaLocalPagesAdapter extends BasePlatformAdapter {
 
       return details;
     } catch (error) {
-      console.error(
+      log.error(
         `Error extracting detailed info from ${businessUrl}:`,
         error
       );
@@ -232,7 +233,7 @@ export class KoreaLocalPagesAdapter extends BasePlatformAdapter {
           );
           if (acceptButton) {
             await acceptButton.click();
-            console.log("Accepted cookie banner on KoreaLocalPages");
+            log.info("Accepted cookie banner on KoreaLocalPages");
             break;
           }
         }
@@ -253,13 +254,13 @@ export class KoreaLocalPagesAdapter extends BasePlatformAdapter {
           );
           if (closeButton) {
             await closeButton.click();
-            console.log("Closed popup on KoreaLocalPages");
+            log.info("Closed popup on KoreaLocalPages");
             break;
           }
         }
       }
     } catch (error) {
-      console.log("No site-specific features to handle on KoreaLocalPages");
+      log.info("No site-specific features to handle on KoreaLocalPages");
     }
   }
 }

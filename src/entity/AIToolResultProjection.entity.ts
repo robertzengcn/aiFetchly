@@ -26,28 +26,28 @@ import { Order } from "./order.decorator";
 @Index(["profileId", "conversationId", "outputEpoch"])
 export class AIToolResultProjectionEntity extends AuditableEntity {
     @PrimaryGeneratedColumn()
-    id: number;
+    id!: number;
 
     @Order(1)
     @Column("varchar", { length: 100, nullable: false })
-    profileId: string;
+    profileId!: string;
 
     /** Identity of the legacy source row this projection was derived from. */
     @Order(2)
     @Column("varchar", { length: 100, nullable: false })
-    sourceRowKey: string;
+    sourceRowKey!: string;
 
     @Order(3)
     @Column("varchar", { length: 100, nullable: false })
-    conversationId: string;
+    conversationId!: string;
 
     @Order(4)
     @Column("varchar", { length: 64, nullable: false })
-    outputEpoch: string;
+    outputEpoch!: string;
 
     @Order(5)
     @Column("varchar", { length: 64, nullable: false })
-    policyVersion: string;
+    policyVersion!: string;
 
     @Order(6)
     @Column("varchar", { length: 64, nullable: true })
@@ -60,14 +60,14 @@ export class AIToolResultProjectionEntity extends AuditableEntity {
     /** Bounded receipt shown instead of the original bulk row. */
     @Order(8)
     @Column("text", { nullable: false })
-    content: string;
+    content!: string;
 
     @Order(9)
     @Column("text", { nullable: false, default: "{}" })
-    metadataJson: string;
+    metadataJson!: string;
 
     /** Output references this projection points at. */
     @Order(10)
     @Column("text", { nullable: false, default: "[]" })
-    outputRefsJson: string;
+    outputRefsJson!: string;
 }

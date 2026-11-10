@@ -8,6 +8,7 @@ import { RagSearchController } from '@/controller/RagSearchController';
 import * as path from 'path';
 import * as fs from 'fs';
 
+/* eslint-disable @typescript-eslint/no-var-requires */
 describe('RAG Integration Tests', () => {
     let ragModule: RAGModule;
     let documentService: DocumentService;
@@ -395,3 +396,5 @@ describe('RAG Integration Tests', () => {
         });
     });
 });
+
+/* eslint-enable @typescript-eslint/no-var-requires */

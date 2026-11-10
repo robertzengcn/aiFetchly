@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { log } from "@/modules/Logger";
 import { CHECKALLPROXY, CHECKALLPROXYMESSAGE, REMOVEFAILUREPROXY,REMOVEFAILUREPROXY_MESSAGE} from "@/config/channellist";
 import { ProxyParseItem } from '@/entityTypes/proxyType'
 import { ProxyController } from '@/controller/proxy-controller'
@@ -44,7 +45,7 @@ export function registeProxyIpcHandlers() {
         (event as { sender: { send: (channel: string, message: string) => void } }).sender.send(CHECKALLPROXYMESSAGE, JSON.stringify(finmessageData))
       }, timeout, qdata.proxyIds)
     } catch (error) {
-      console.error('Error in checkAllproxy handler:', error)
+      log.error('Error in checkAllproxy handler:', error)
     }
   })
 

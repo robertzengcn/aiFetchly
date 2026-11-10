@@ -1,4 +1,11 @@
+import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
 import { spawn } from "child_process";
+import { log } from "@/modules/Logger";
+import {
+  pythonRuntimeWorkerInboundSchema,
+  type PythonRuntimeWorkerInbound,
+} from "@/schemas/worker/pythonRuntime";
+import { parseWorkerMessage } from "@/schemas/worker/_shared";
 
 interface ExecutePythonMessage {
   type: "EXECUTE_PYTHON";
@@ -36,6 +43,13 @@ interface WorkerParentPort {
 
 const parentPort = (process as unknown as { parentPort?: WorkerParentPort })
   .parentPort;
+// §7 graceful shutdown (design §7): ack, close, exit within the
+// parent's remaining budget. The parent still observes exit and
+// force-verifies — the ack is never treated as exit proof.
+const shutdownResponder = installWorkerShutdownResponder({
+  send: (message) => parentPort?.postMessage(JSON.stringify(message)),
+});
+
 
 const activeRequestIds = new Set<string>();
 const MAX_STDIO = 400_000;
@@ -45,14 +59,16 @@ function trimOutput(text: string): string {
   return `${text.slice(0, MAX_STDIO)}...[truncated]`;
 }
 
-function postMessageSafe(message: PythonResultMessage | PythonErrorMessage): void {
+function postMessageSafe(
+  message: PythonResultMessage | PythonErrorMessage
+): void {
   if (!parentPort) return;
   try {
     parentPort.postMessage(JSON.stringify(message));
   } catch (postError) {
     const errorMessage =
       postError instanceof Error ? postError.message : String(postError);
-    console.error(`[PythonRuntimeWorker] Failed to post message: ${errorMessage}`);
+    log.error(`[PythonRuntimeWorker] Failed to post message: ${errorMessage}`);
   }
 }
 
@@ -67,23 +83,6 @@ function sendFatalErrorToActiveRequests(error: unknown): void {
   }
 }
 
-function validateExecutePythonMessage(parsed: unknown): ExecutePythonMessage {
-  const message = parsed as Partial<ExecutePythonMessage>;
-  if (
-    message.type !== "EXECUTE_PYTHON" ||
-    typeof message.requestId !== "string" ||
-    typeof message.pythonBin !== "string" ||
-    typeof message.scriptPath !== "string" ||
-    !Array.isArray(message.args) ||
-    typeof message.timeoutMs !== "number"
-  ) {
-    throw new Error("Invalid EXECUTE_PYTHON message payload");
-  }
-  if (message.args.some((arg) => typeof arg !== "string")) {
-    throw new Error("EXECUTE_PYTHON args must be string[]");
-  }
-  return message as ExecutePythonMessage;
-}
 
 async function executePython(
   message: ExecutePythonMessage
@@ -154,9 +153,9 @@ async function executePython(
         if (code !== 0) {
           reject(
             new Error(
-              `Python script exited with code ${String(code)}. stderr: ${trimOutput(
-                stderr
-              )}`
+              `Python script exited with code ${String(
+                code
+              )}. stderr: ${trimOutput(stderr)}`
             )
           );
           return;
@@ -168,10 +167,21 @@ async function executePython(
 }
 
 if (parentPort) {
-  console.log(
+  log.info(
     `[PythonRuntimeWorker] Utility process worker online (pid=${process.pid})`
   );
-  parentPort.on("message", async (event: ParentPortMessageEvent) => {
+  parentPort.on("message", async (event: ParentPortMessageEvent) => {  parentPort.on("message", (event: ParentPortMessageEvent) => {
+    let raw: unknown = event.data;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        return; // non-JSON is not a shutdown request
+      }
+    }
+    shutdownResponder.handle(raw);
+  });
+
     let requestId = "unknown";
     try {
       const parsed = JSON.parse(event.data) as unknown;
@@ -183,11 +193,27 @@ if (parentPort) {
       ) {
         requestId = (parsed as { requestId: string }).requestId;
       }
-      const message = validateExecutePythonMessage(parsed);
+      const validation = parseWorkerMessage<PythonRuntimeWorkerInbound>(
+        parsed,
+        pythonRuntimeWorkerInboundSchema()
+      );
+      if (!validation.success) {
+        log.warn(
+          "[PythonRuntimeWorker] dropped malformed EXECUTE_PYTHON:",
+          validation.error
+        );
+        postMessageSafe({
+          type: "PYTHON_ERROR",
+          requestId,
+          error: "Invalid EXECUTE_PYTHON message payload",
+        });
+        return;
+      }
+      const message = validation.data;
       requestId = message.requestId;
       activeRequestIds.add(requestId);
       const scriptLabel = message.scriptPath.split(/[\\/]/).pop() || "unknown";
-      console.log(
+      log.info(
         `[PythonRuntimeWorker] Executing request ${requestId} (script=${scriptLabel}, pid=${process.pid})`
       );
 
@@ -198,12 +224,13 @@ if (parentPort) {
         stdout: result.stdout,
         stderr: result.stderr,
       });
-      console.log(
+      log.info(
         `[PythonRuntimeWorker] Completed request ${requestId} (pid=${process.pid})`
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.warn(
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      log.warn(
         `[PythonRuntimeWorker] Request ${requestId} failed: ${errorMessage}`
       );
       postMessageSafe({
@@ -218,13 +245,13 @@ if (parentPort) {
 }
 
 process.on("uncaughtException", (error: unknown) => {
-  console.error("[PythonRuntimeWorker] Uncaught exception:", error);
+  log.error("[PythonRuntimeWorker] Uncaught exception:", error);
   sendFatalErrorToActiveRequests(error);
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason: unknown) => {
-  console.error("[PythonRuntimeWorker] Unhandled rejection:", reason);
+  log.error("[PythonRuntimeWorker] Unhandled rejection:", reason);
   sendFatalErrorToActiveRequests(reason);
   process.exit(1);
 });

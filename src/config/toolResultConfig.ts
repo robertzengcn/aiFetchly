@@ -30,6 +30,14 @@ export const TOOL_RESULT_DEFAULTS = {
   previewMaxBytes: 2 * 1024,
   previewMaxTokens: 512,
 
+  /**
+   * Preview budget for batch aggregate receipts (`BATCH_PREVIEW_TOOL_NAMES`).
+   * The renderer parses this preview JSON to draw the batch progress card, so
+   * the record must survive whole — this must stay at or below the receipt
+   * schema's `preview.max(8192)` so it is never halved during validation.
+   */
+  batchPreviewMaxBytes: 8 * 1024,
+
   /** One read/search response, envelope included. */
   readMaxBytes: 8 * 1024,
   readMaxTokens: 2000,
@@ -184,3 +192,12 @@ export const TOOL_OUTPUT_MEDIA_TYPES: Readonly<Record<string, string>> = {
 
 /** Maximum output descriptors carried by one receipt (design §5.1). */
 export const MAX_OUTPUT_DESCRIPTORS_PER_RECEIPT = 8;
+
+/**
+ * Tools whose aggregate result record is parsed by the renderer (batch
+ * progress card) — their receipts carry the larger `batchPreviewMaxBytes`
+ * budget instead of the default `previewMaxBytes`.
+ */
+export const BATCH_PREVIEW_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "process_artifact_batch",
+]);

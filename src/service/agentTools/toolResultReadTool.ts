@@ -16,6 +16,7 @@ import {
 import { ToolResultRetrievalService } from "@/service/toolResult/ToolResultRetrievalService";
 import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import {
+  TOOL_RESULT_CURSOR_RECOVERY,
   TOOL_RESULT_DENIAL_RECOVERY,
   toolResultReadFailure,
 } from "@/service/agentTools/toolResultDenialRecovery";
@@ -32,7 +33,20 @@ export async function handleToolResultRead(
 ): Promise<{ success: boolean; result: Record<string, unknown> }> {
   const parsed = toolResultReadInputSchema.safeParse(args);
   if (!parsed.success) {
-    return { success: false, result: { error: "INVALID_OUTPUT_ARGUMENTS" } };
+    return {
+      success: false,
+      result: {
+        error: "INVALID_OUTPUT_ARGUMENTS",
+        // A bare code makes the model retry the same illegal arguments. Tell
+        // it exactly which fields read accepts so the retry is well-formed.
+        recovery:
+          "INVALID_OUTPUT_ARGUMENTS means a read field was invalid. " +
+          "output_id must be copied verbatim from a receipt (out_...). " +
+          "cursor, when present, must be the previous result's next_cursor " +
+          "copied character-for-character. max_tokens must be a positive " +
+          "integer or omitted.",
+      },
+    };
   }
 
   const trusted = getToolResultContext(context);
@@ -54,7 +68,13 @@ export async function handleToolResultRead(
     // one (same class as the `check_tool_job_status` fix 6a25f7b56).
     return {
       success: false,
-      result: { error: target.code, recovery: TOOL_RESULT_DENIAL_RECOVERY },
+      result: {
+        error: target.code,
+        recovery:
+          target.code === "INVALID_OUTPUT_CURSOR"
+            ? TOOL_RESULT_CURSOR_RECOVERY
+            : TOOL_RESULT_DENIAL_RECOVERY,
+      },
     };
   }
 

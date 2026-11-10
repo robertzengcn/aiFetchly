@@ -3,12 +3,19 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
 import AiChatV2 from "@/views/components/aiChatV2/AiChatV2.vue";
+import { installQueueSendBridge } from "./helpers/queueSendBridge";
 import { getChatV2History, streamChatV2Message } from "@/views/api/aiChatV2";
 import type { ChatV2StreamChunk } from "@/entityTypes/aiChatV2Types";
 import { MessageType } from "@/entityTypes/commonType";
 import { AI_CHAT_REASONING_VISIBLE_STORAGE_KEY } from "@/views/utils/aiChatReasoningPreference";
 
 vi.mock("@/views/api/aiChatV2", () => ({
+  denyChatV2ToolPermission: vi.fn().mockResolvedValue({ ok: true }),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
   clearChatV2StreamListeners: vi.fn(),
   clearChatV2Conversation: vi.fn().mockResolvedValue({ deleted: 1 }),
   subscribeAutoCompacted: vi.fn(),
@@ -26,9 +33,26 @@ vi.mock("@/views/api/aiChatV2", () => ({
     runtimeStatus: "idle",
   }),
   streamChatV2Message: vi.fn(),
+  awaitChatV2Turn: vi.fn(),
+  createChatV2PendingMessage: vi.fn().mockImplementation(
+    async (_clientRequestId: string, request: { conversationId: string }) => ({
+      conversationId: request.conversationId,
+      disposition: "dispatch_scheduled",
+      pendingMessage: {
+        pendingMessageId: "pending-1",
+        conversationId: request.conversationId,
+        clientRequestId: "client-1",
+        sequence: 1,
+        content: "hello",
+        status: "dispatching",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        canSteer: false,
+      },
+    })
+  ),
   stopChatV2Stream: vi.fn(),
   getChatV2PlanState: vi.fn().mockResolvedValue(null),
-  compactChatV2Conversation: vi.fn(),
   answerChatV2Question: vi.fn(),
   approveChatV2Plan: vi.fn(),
   rejectChatV2Plan: vi.fn(),
@@ -159,8 +183,6 @@ const i18n = createI18n({
         conversation_history: "Conversation history",
         manage_mcp_tools: "Manage MCP Tools",
         new_conversation: "New conversation",
-        show_reasoning: "Show reasoning",
-        hide_reasoning: "Hide reasoning",
         voice: {
           enable_spoken_responses: "Enable spoken responses",
           disable_spoken_responses: "Disable spoken responses",
@@ -263,12 +285,13 @@ function mountChat() {
 describe("AiChatV2 live reasoning panel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    installQueueSendBridge();
     window.localStorage.setItem(AI_CHAT_REASONING_VISIBLE_STORAGE_KEY, "true");
   });
 
   it("keeps streamed reasoning on the assistant message after tokens arrive", async () => {
     vi.mocked(streamChatV2Message).mockImplementation(
-      async (request, onChunk, onComplete) => {
+      async (request: { conversationId?: string }, onChunk, onComplete) => {
         const conversationId = request.conversationId ?? "v2-test";
         const messageId = "asst-live-1";
         const emit = (chunk: ChatV2StreamChunk): void => {
@@ -305,6 +328,7 @@ describe("AiChatV2 live reasoning panel", () => {
     await wrapper.find('[data-testid="send-first"]').trigger("click");
     await flushPromises();
 
+    expect(streamChatV2Message).toHaveBeenCalledTimes(1);
     expect(streamChatV2Message).toHaveBeenCalledWith(
       expect.objectContaining({
         showReasoning: true,
@@ -324,7 +348,7 @@ describe("AiChatV2 live reasoning panel", () => {
 
   it("recovers reasoning from the complete event when live deltas were missed", async () => {
     vi.mocked(streamChatV2Message).mockImplementation(
-      async (request, onChunk, onComplete) => {
+      async (request: { conversationId?: string }, onChunk, onComplete) => {
         const conversationId = request.conversationId ?? "v2-test";
         onChunk({
           eventType: "start",
@@ -357,9 +381,9 @@ describe("AiChatV2 live reasoning panel", () => {
     );
   });
 
-  it("hides the live reasoning panel when the header toggle is turned off", async () => {
+  it("hides the live reasoning panel when the shared preference is off", async () => {
     vi.mocked(streamChatV2Message).mockImplementation(
-      async (request, onChunk, onComplete) => {
+      async (request: { conversationId?: string }, onChunk, onComplete) => {
         const conversationId = request.conversationId ?? "v2-test";
         onChunk({
           eventType: "start",
@@ -387,13 +411,16 @@ describe("AiChatV2 live reasoning panel", () => {
       }
     );
 
+    // The in-chat "Hide reasoning" button was removed; visibility now
+    // follows the persisted shared preference (AI provider settings).
+    window.localStorage.setItem(AI_CHAT_REASONING_VISIBLE_STORAGE_KEY, "false");
+
     const wrapper = mountChat();
     await flushPromises();
+    expect(wrapper.find('[data-testid="toggle-reasoning"]').exists()).toBe(
+      false
+    );
     await wrapper.find('[data-testid="send-first"]').trigger("click");
-    await flushPromises();
-    expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(true);
-
-    await wrapper.find('[data-testid="toggle-reasoning"]').trigger("click");
     await flushPromises();
     expect(wrapper.find('[data-testid="reasoning"]').exists()).toBe(false);
   });

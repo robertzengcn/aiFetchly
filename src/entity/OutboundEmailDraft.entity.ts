@@ -13,38 +13,38 @@ import type { OutboundEmailDraftStatus } from "@/entityTypes/outboundEmailDelive
 @Index(["currentRevisionId"])
 export class OutboundEmailDraftEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column("int")
-  batchId: number;
+  batchId!: number;
 
   /** Canonicalized (lowercased) recipient email address. */
   @Column("varchar", { length: 320 })
-  recipientAddress: string;
+  recipientAddress!: string;
 
   /** UI-only display name; not part of the hashed envelope. */
   @Column("varchar", { length: 320, nullable: true })
-  recipientDisplayName: string | null;
+  recipientDisplayName!: string | null;
 
   /** Traceability reference without dumping the raw source. */
   @Column("varchar", { length: 200, nullable: true })
-  recipientSourceRef: string | null;
+  recipientSourceRef!: string | null;
 
   @Column("varchar", { length: 30 })
-  status: OutboundEmailDraftStatus;
+  status!: OutboundEmailDraftStatus;
 
   /** Pointer to the current immutable revision. */
   @Column("int", { nullable: true })
-  currentRevisionId: number | null;
+  currentRevisionId!: number | null;
 
   /** Monotonic revision counter. */
   @Column("int")
-  revisionNumber: number;
+  revisionNumber!: number;
 
   /** Current envelope hash (mirror of the current revision's contentHash). */
   @Column("varchar", { length: 64, nullable: true })
-  contentHash: string | null;
+  contentHash!: string | null;
 
   @Column("varchar", { length: 100, nullable: true })
-  lastErrorCode: string | null;
+  lastErrorCode!: string | null;
 }

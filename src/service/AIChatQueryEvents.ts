@@ -4,7 +4,11 @@ import type {
   OpenAIChatMessage,
   OpenAITool,
 } from "@/api/aiChatApi";
-import type { ChatV2StreamRequest } from "@/entityTypes/aiChatV2Types";
+import type {
+  AIChatSafeBoundary,
+  ChatV2DirectionTransition,
+  ChatV2StreamRequest,
+} from "@/entityTypes/aiChatV2Types";
 import type {
   AIChatPlanQuestionView,
   AIChatPlanStateView,
@@ -246,6 +250,13 @@ export interface AIChatQueryErrorEvent {
   conversationId: string;
   messageId?: string;
   errorMessage: string;
+  /** Renderer-safe machine code (e.g. GeneratedImageReferenceErrorCode) for
+   * localized handling; omitted for unclassified errors. */
+  errorCode?: string;
+  /** Stage A §3.3 (FR-006): the affected tool call when the failure is a
+   * required-persistence failure, so the tool card can show "not run /
+   * result not saved" precisely. */
+  toolCallId?: string;
   /**
    * T12: when the failed turn was enrolled in the completion policy, the
    * durable outcome carried into terminal delivery (`failed` /
@@ -342,11 +353,26 @@ export type AIChatQueryEvent =
   | AIChatQueryAskUserQuestionEvent
   | AIChatQueryPlanSubmittedEvent
   | AIChatQueryPlanStateEvent
+  | AIChatQueryDirectionUpdatedEvent
   | AIChatQueryCompleteEvent
   | AIChatQueryCancelledEvent
   | AIChatQueryErrorEvent
   | AIChatQueryUsageUpdateEvent
   | AIChatQueryTaskExecutionStateEvent;
+
+/**
+ * Emitted when a steering batch is applied at a safe boundary. Carries ids
+ * and offsets only — never steering content (the pending-message event and
+ * history already carry the user-visible text).
+ */
+export interface AIChatQueryDirectionUpdatedEvent {
+  type: "direction_updated";
+  conversationId: string;
+  messageId: string;
+  boundary: AIChatSafeBoundary;
+  pendingMessageIds: readonly string[];
+  contentOffset: number;
+}
 
 /**
  * Result returned by AIChatQueryLoop.run().
@@ -377,6 +403,9 @@ export type AIChatQueryLoopResult =
       /** Recovery metadata accumulated during the turn, if any recovery
        * layers were activated. Persisted on the assistant row metadata. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
+      /** Present when steering was applied mid-turn: offsets where the
+       * visible content changed direction (design §11.6). */
+      directionTransitions?: readonly ChatV2DirectionTransition[];
     }
   | {
       type: "cancelled";
@@ -462,12 +491,22 @@ export interface PendingPermissionTurn {
    */
   outboundSendPreAuthorized?: boolean;
   planContext?: AIChatPlanLoopContext;
-  eventSink: AIChatQueryEventSink;
+  /**
+   * Stage B §10: optional — pending data carries no sink; the owner supplies
+   * the destination on resume (legacy engine path keeps a side map).
+   */
+  eventSink?: AIChatQueryEventSink;
   /**
    * Deferred tool catalog snapshot so discovered tools remain exposed after
    * the user grants permission (AC-8). Present only when deferred mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /** Stage A §3.2 (FR-021): copied from the loop input so the engine's
+   * resume path can notify the owner's listener. */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal instead of the engine's onTurnTerminal callback. */
+  ownerNotifiesTerminal?: boolean;
   /**
    * Slice 2 completion-policy binding (technical-design §7/§9). Carried from
    * the originating turn's loopInput so the resumed loop still consults the
@@ -499,7 +538,11 @@ export interface PendingPlanQuestionTurn {
   toolCallId: string;
   questionId: string;
   planId: string;
-  eventSink: AIChatQueryEventSink;
+  /**
+   * Stage B §10: optional — pending data carries no sink; the owner supplies
+   * the destination on resume (legacy engine path keeps a side map).
+   */
+  eventSink?: AIChatQueryEventSink;
   /**
    * Turn association (technical-design §4.3) carried from the originating
    * active turn so resumed-flow tool/assistant saves stay grouped by turn.
@@ -511,6 +554,12 @@ export interface PendingPlanQuestionTurn {
    * mode active.
    */
   toolCatalogState?: ToolCatalogStateSnapshot;
+  /** Stage A §3.2 (FR-021): copied from the loop input so the engine's
+   * resume path can notify the owner's listener. */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): when true, the run owner notifies the queue at
+   * terminal instead of the engine's onTurnTerminal callback. */
+  ownerNotifiesTerminal?: boolean;
   /**
    * Slice 2 completion-policy binding (technical-design §7/§9). Carried from
    * the originating turn's loopInput so the resumed loop still consults the
@@ -660,6 +709,21 @@ export interface AIChatQueryLoopInput {
   toolCatalogState?: ToolCatalogStateSnapshot;
   toolCatalogModeDecision?: ToolCatalogModeDecision;
   /**
+   * Generated/edited image descriptors already produced by a tool that
+   * executed OUTSIDE this loop run — used by the engine's permission-resume
+   * path, which re-executes the approved tool directly. The loop folds them
+   * into the turn's result.images (alongside any images harvested from tools
+   * executed inside this run) so the engine persists + renders them.
+   */
+  seededToolImages?: readonly OpenAIChatImage[];
+  /**
+   * Per-turn steering mailbox. When present the loop checks it at the five
+   * safe boundaries and applies committed instructions between tool calls
+   * (message-queue design §11). The loop never imports a Model or Module —
+   * persistence happens inside the control's `consume()`.
+   */
+  steeringControl?: import("@/service/AIChatTurnControl").AIChatTurnControl;
+  /**
    * Trusted current-turn user message id, supplied by the main process (never
    * by tool arguments). Threads into OutboundEmailIntentResolver so the intent
    * decision is bound to the exact user message that requested the work.
@@ -680,6 +744,15 @@ export interface AIChatQueryLoopInput {
    * or the resolver failed. Supplied by the main process, not tool arguments.
    */
   intentDecisionId?: number | null;
+  /**
+   * Stage A §3.2 (FR-021): owner-supplied lifecycle listener. The engine (not
+   * the loop) calls onAwaiting when it parks a turn; the loop copies this
+   * reference into the pending structures so the resume path can call
+   * onResumed. Synchronous, non-throwing.
+   */
+  lifecycle?: AIChatTurnLifecycleListener;
+  /** Stage A §3.6 (FR-023): see PendingPermissionTurn.ownerNotifiesTerminal. */
+  ownerNotifiesTerminal?: boolean;
   /**
    * Turn association (technical-design §4.3). The engine stamps this when it
    * accepts a user request; the loop threads it into paused-for-permission /
@@ -726,6 +799,111 @@ export interface AIChatQueryLoopInput {
    */
   taskRoute?: TaskExecutionRoute;
 }
+
+/**
+ * Narrow terminal classification returned by
+ * `AIChatQueryEngine.submitPersistedUserMessage()` after persistence and
+ * terminal event emission are complete (design §9.5). The queue service
+ * drains/pauses on this — the engine never imports the queue service.
+ */
+export type AIChatTurnTerminalEvent =
+  | {
+      readonly type: "completed" | "cancelled" | "failed";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      readonly type: "paused_for_permission" | "paused_for_plan_question";
+      readonly conversationId: string;
+      readonly assistantMessageId: string;
+    }
+  | {
+      /** An active/pending turn already owns the conversation (§12.3). */
+      readonly type: "conversation_busy";
+      readonly conversationId: string;
+    };
+
+/**
+ * Stage A §3.1 (generator-streaming PRD FR-022): the explicit outcome of one
+ * execution segment, consumed by its owner. This names the existing terminal
+ * classification rather than adding a second union — completion is never
+ * inferred from the absence of a terminal event.
+ */
+export type AIChatSegmentOutcome = AIChatTurnTerminalEvent;
+
+/**
+ * Stage B §5.2 (generator-streaming PRD FR-001): the loop's incremental event
+ * stream. The loop already publishes no terminal events (the engine's
+ * finalize path owns them), so this narrowing matches current behavior.
+ */
+export type AIChatLoopEvent = Exclude<
+  AIChatQueryEvent,
+  { type: "complete" | "cancelled" | "error" }
+>;
+
+/** The loop as a single generator implementation (Stage B §5.2). */
+export type AIChatQueryGenerator = AsyncGenerator<
+  AIChatLoopEvent,
+  AIChatQueryLoopResult,
+  void
+>;
+
+/** Loop input without the sink — the generator contract (Stage B §5.2). */
+export type AIChatQueryGeneratorInput = Omit<AIChatQueryLoopInput, "eventSink"> & {
+  /**
+   * Auxiliary emission channel for events produced inside awaited helpers
+   * (e.g. the G01-313 task-execution badge during a policy consult), where
+   * the generator itself is suspended and cannot `yield`. Wired by the
+   * engine's runLoopSegment to the turn's real sink; absent on plain
+   * generator construction (emission is then skipped, never fatal).
+   */
+  readonly emitAuxiliary?: (event: AIChatQueryEvent) => void;
+};
+
+/**
+ * Stage A §3.2 (generator-streaming PRD FR-021): explicit internal
+ * waiting/resume notifications. The engine calls `onAwaiting` exactly once
+ * when it parks a turn and `onResumed` exactly once when a claimed resume
+ * starts executing — replacing sampled engine status. Listener methods are
+ * synchronous and non-throwing; the owner serializes its own async work
+ * (persist the run transition first, then broadcast the summary).
+ */
+export interface AIChatTurnLifecycleListener {
+  onAwaiting(event: {
+    readonly kind: "permission" | "user_input";
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+    readonly toolCallId?: string;
+    readonly questionId?: string;
+  }): void;
+  onResumed(event: {
+    readonly conversationId: string;
+    readonly assistantMessageId: string;
+  }): void;
+}
+
+/**
+ * Stage A §3.3 (generator-streaming PRD FR-006/007): a REQUIRED tool
+ * persistence write failed. Thrown by the persisting sink's flush barrier so
+ * the loop stops before executing dependent work; excluded from transient
+ * provider retry and never reduced to an ordinary provider error.
+ */
+export class AIChatRequiredPersistenceError extends Error {
+  constructor(
+    readonly persistenceCode:
+      | "tool_call_persist_failed"
+      | "tool_result_persist_failed",
+    readonly toolCallId: string,
+    readonly cause?: unknown
+  ) {
+    super(
+      `Required persistence failed (${persistenceCode}) for tool call ${toolCallId}`
+    );
+    this.name = "AIChatRequiredPersistenceError";
+  }
+}
+
+/** Request payload for resumeToolAfterPermission. */
 export interface ResumeToolAfterPermissionRequest {
   toolId: string;
   conversationId?: string;

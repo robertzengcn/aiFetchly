@@ -400,7 +400,13 @@ export class AIChatRecoveryClassifier {
   private classifyAuthText(text: string): AIChatRecoveryReason | undefined {
     if (/\b401\b/.test(text) || /\b403\b/.test(text)) return "auth";
     if (/authentication failed/.test(text)) return "auth";
-    if (/refresh\s+token/.test(text) && /(invalid|expired|rejected|not found)/.test(text)) {
+    if (
+      /refresh\s+token/.test(text) &&
+      /(invalid|expired|rejected|not found|failed)/.test(text)
+    ) {
+      return "auth";
+    }
+    if (/failed to refresh (access )?token|token refresh failed/.test(text)) {
       return "auth";
     }
     if (/please login again/.test(text)) return "auth";

@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // --- Mocks ----------------------------------------------------------------
 
 const mockTokenGetValue = vi.hoisted(() =>
-  vi.fn<(key: string) => string>().mockReturnValue("")
+  vi.fn<(...args: [string]) => string>().mockReturnValue("")
 );
 const mockTokenSetValue = vi.hoisted(() =>
   vi.fn<(key: string, value: string) => void>()
@@ -18,24 +18,22 @@ vi.mock("@/modules/token", () => ({
   },
 }));
 
-const mockRemoveToken = vi.hoisted(() => vi.fn<() => void>());
+const mockRemoveToken = vi.hoisted(() => vi.fn<(...args: []) => void>());
+const mockSignout = vi.hoisted(() => vi.fn<(...args: []) => Promise<void>>());
 
 vi.mock("@/modules/user", () => ({
   User: class {
     removeToken = mockRemoveToken;
+    Signout = mockSignout;
   },
 }));
 
 // Mock TokenRefreshService so we can control refresh outcomes without going
 // through real network code in these HttpClient-level tests.
 const mockRefreshOnce = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
-// Hoist the typed error class so the vi.mock factory and the static
-// `import { RefreshTokenInvalidError }` below share one binding. Declaring it
-// inside the mock factory triggers vitest 3's TDZ: the namespace binding
-// (__vi_import_N) is accessed before the async factory initializes, throwing
-// "Cannot access '__vi_import_1__' before initialization".
+
 const MockRefreshTokenInvalidError = vi.hoisted(() => {
-  return class RefreshTokenInvalidError extends Error {
+  return class extends Error {
     constructor(message: string) {
       super(message);
       this.name = "RefreshTokenInvalidError";
@@ -66,7 +64,7 @@ vi.mock("@/modules/fieldCipher", () => ({
 process.env.VITE_LOGIN_URL = "http://localhost:3000";
 
 import { HttpClient } from "@/modules/lib/httpclient";
-import { RefreshTokenInvalidError } from "@/modules/tokenRefresh";
+import { resetAuthSessionExpiryGuardForTests } from "@/service/AuthSessionExpiryGuard";
 
 function jsonResponse(
   payload: unknown,
@@ -89,6 +87,7 @@ describe("HttpClient token-refresh behavior", () => {
     mockTokenGetValue.mockClear();
     mockTokenSetValue.mockClear();
     mockRemoveToken.mockClear();
+    mockSignout.mockClear();
     mockRefreshOnce.mockReset();
 
     // Default: a refresh token is present so refresh is attempted on 401/403.
@@ -99,6 +98,7 @@ describe("HttpClient token-refresh behavior", () => {
     });
     mockTokenSetValue.mockImplementation(() => undefined);
     mockRemoveToken.mockImplementation(() => undefined);
+    mockSignout.mockImplementation(() => Promise.resolve());
 
     fetchSpy = vi.fn() as unknown as typeof fetchSpy;
     vi.stubGlobal("fetch", fetchSpy);
@@ -109,6 +109,7 @@ describe("HttpClient token-refresh behavior", () => {
   afterEach(() => {
     // Do NOT call vi.restoreAllMocks() — it wipes the vi.mock factories.
     vi.unstubAllGlobals();
+    resetAuthSessionExpiryGuardForTests();
   });
 
   it("on 401 attempts refresh and retries the original request with the new token", async () => {
@@ -170,14 +171,14 @@ describe("HttpClient token-refresh behavior", () => {
     expect(mockRefreshOnce).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT sign out when refresh returns an auth-shaped failure", async () => {
+  it("SIGNS OUT when refresh returns an auth-shaped failure", async () => {
     fetchSpy.mockResolvedValueOnce(
       jsonResponse(null, { status: 401, statusText: "Unauthorized" })
     );
 
     // TokenRefreshService throws a message that signals the refresh token
-    // itself was rejected. The client must keep local auth state because
-    // backend/proxy/network instability can produce auth-shaped failures.
+    // itself was rejected. The session cannot recover → the user must be
+    // signed out so they can re-login (session-expiry re-login requirement).
     mockRefreshOnce.mockRejectedValue(
       new Error("invalid or expired refresh token")
     );
@@ -186,23 +187,23 @@ describe("HttpClient token-refresh behavior", () => {
       client._fetchJSON("/api/test", { method: "GET" })
     ).rejects.toThrow(/invalid or expired refresh token/);
 
-    expect(mockRemoveToken).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mockSignout).toHaveBeenCalledTimes(1));
   });
 
-  it("does NOT sign out when refresh endpoint rejects the refresh token with typed error", async () => {
+  it("SIGNS OUT when refresh endpoint rejects the refresh token with typed error", async () => {
     fetchSpy.mockResolvedValueOnce(
       jsonResponse(null, { status: 403, statusText: "Forbidden" })
     );
 
     mockRefreshOnce.mockRejectedValue(
-      new RefreshTokenInvalidError("Refresh token rejected (HTTP 401)")
+      new MockRefreshTokenInvalidError("Refresh token rejected (HTTP 401)")
     );
 
     await expect(
       client._fetchJSON("/api/test", { method: "GET" })
     ).rejects.toThrow(/Refresh token rejected/);
 
-    expect(mockRemoveToken).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mockSignout).toHaveBeenCalledTimes(1));
   });
 
   it("does not loop infinitely when the retried request still 401s", async () => {
@@ -235,7 +236,8 @@ describe("HttpClient token-refresh behavior", () => {
     expect(mockRefreshOnce).toHaveBeenCalledTimes(1);
     // Fetch called exactly twice (initial + one retry), then request failure.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(mockRemoveToken).not.toHaveBeenCalled();
+    // The session cannot recover → the user is signed out for re-login.
+    await vi.waitFor(() => expect(mockSignout).toHaveBeenCalledTimes(1));
   });
 
   it("does NOT sign out when no refresh token is available", async () => {
@@ -254,7 +256,9 @@ describe("HttpClient token-refresh behavior", () => {
     ).rejects.toThrow(/refresh token unavailable/);
 
     expect(mockRefreshOnce).not.toHaveBeenCalled();
-    expect(mockRemoveToken).not.toHaveBeenCalled();
+    // No refresh token stored → the session cannot recover → sign out so
+    // the user can re-login.
+    await vi.waitFor(() => expect(mockSignout).toHaveBeenCalledTimes(1));
   });
 
   it("returns Cloudflare HTTP 520 stream responses instead of throwing", async () => {

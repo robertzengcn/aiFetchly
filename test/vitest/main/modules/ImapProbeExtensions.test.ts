@@ -167,6 +167,29 @@ describe("discoverSentFolders (T04 step 5)", () => {
     expect(folders).toEqual([{ folder: "Sent Items", verified: false }]);
   });
 
+  it("accepts exactly one CJK fallback name (已发送, CJK-only) as unverified", async () => {
+    const fake = fakeImapConnection({
+      folders: [
+        listFolder("INBOX"),
+        listFolder("已发送"), // CJK-only fallback match
+      ],
+    });
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: () => fake });
+
+    const folders = await client.discoverSentFolders(config());
+    expect(folders).toEqual([{ folder: "已发送", verified: false }]);
+  });
+
+  it("stays ambiguous (→ []) when two CJK fallback candidates exist", async () => {
+    const fake = fakeImapConnection({
+      folders: [listFolder("已发送"), listFolder("已发送邮件")],
+    });
+    const client = new ImapEmailReceiveClient({ imapFlowFactory: () => fake });
+
+    const folders = await client.discoverSentFolders(config());
+    expect(folders).toEqual([]);
+  });
+
   it("returns [] when multiple unverified fallback names exist (ambiguous)", async () => {
     const fake = fakeImapConnection({
       folders: [listFolder("Sent"), listFolder("INBOX/Sent")],

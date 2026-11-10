@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import * as path from "path";
+// G01 (design §18): bounded voice capability action counters.
+import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import type { CommonMessage } from "@/entityTypes/commonType";
 import type {
   AiChatVoiceRuntimeStatus,
@@ -152,8 +154,11 @@ export function registerAiChatVoiceIpcHandlers(): void {
         if (!request) {
           return denied("Voice transcribe request is required.");
         }
-        return ok(await voiceModule().transcribe(request));
+        const result = await voiceModule().transcribe(request);
+        aiChatQueueCounters.recordWorkspaceAction("voice", "transcribe", "ok");
+        return ok(result);
       } catch (err) {
+        aiChatQueueCounters.recordWorkspaceAction("voice", "transcribe", "error");
         return denied(err instanceof Error ? err.message : String(err));
       }
     }
@@ -170,8 +175,11 @@ export function registerAiChatVoiceIpcHandlers(): void {
         if (!request) {
           return denied("Voice TTS request is required.");
         }
-        return ok(await voiceModule().synthesize(request));
+        const result = await voiceModule().synthesize(request);
+        aiChatQueueCounters.recordWorkspaceAction("voice", "tts", "ok");
+        return ok(result);
       } catch (err) {
+        aiChatQueueCounters.recordWorkspaceAction("voice", "tts", "error");
         return denied(err instanceof Error ? err.message : String(err));
       }
     }
@@ -184,8 +192,11 @@ export function registerAiChatVoiceIpcHandlers(): void {
         // Accept either { jobId } or a bare jobId string for flexibility.
         const parsed = parseArg<{ jobId?: string } | string>(data);
         const jobId = typeof parsed === "string" ? parsed : parsed?.jobId;
-        return ok(await voiceModule().cancel(jobId));
+        const result = await voiceModule().cancel(jobId);
+        aiChatQueueCounters.recordWorkspaceAction("voice", "cancel_speech", "ok");
+        return ok(result);
       } catch (err) {
+        aiChatQueueCounters.recordWorkspaceAction("voice", "cancel_speech", "error");
         return denied(err instanceof Error ? err.message : String(err));
       }
     }

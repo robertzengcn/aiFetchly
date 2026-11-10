@@ -9,7 +9,9 @@ const {
   subscribeScheduledStreamMock,
   subscribeConversationUpdatedMock,
 } = vi.hoisted(() => ({
-  getChatV2HistoryMock: vi.fn().mockResolvedValue({ messages: [], runtimeStatus: "idle" }),
+  getChatV2HistoryMock: vi
+    .fn()
+    .mockResolvedValue({ messages: [], runtimeStatus: "idle" }),
   subscribeScheduledStreamMock: vi.fn(),
   subscribeConversationUpdatedMock: vi.fn(),
 }));
@@ -42,6 +44,15 @@ vi.mock("@/views/api/aiChatV2", () => ({
   subscribeCompactionProgress: vi.fn(),
   unsubscribeCompactionProgress: vi.fn(),
   denyChatV2ToolPermission: vi.fn(),
+  // Dev-side queue/pending APIs (message-queue PRD): the component subscribes
+  // to pending events and registers the queue send path on mount.
+  awaitChatV2Turn: vi.fn(),
+  createChatV2PendingMessage: vi.fn(),
+  steerChatV2PendingMessage: vi.fn(),
+  cancelChatV2PendingMessage: vi.fn(),
+  resumeChatV2PendingQueue: vi.fn(),
+  subscribeChatV2PendingEvents: vi.fn().mockReturnValue(() => undefined),
+  exportGeneratedImage: vi.fn(),
 }));
 
 vi.mock("@/views/api/aiChatScheduledLoop", async (importOriginal) => {
@@ -178,7 +189,7 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
 
     expect(subscribeScheduledStreamMock).toHaveBeenCalledTimes(1);
     const handler = subscribeScheduledStreamMock.mock.calls[0][0] as (
-      event: ChatV2ScheduledStreamEvent,
+      event: ChatV2ScheduledStreamEvent
     ) => void;
 
     const exposed = wrapper.vm as unknown as {
@@ -239,7 +250,7 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
 
     expect(subscribeScheduledStreamMock).toHaveBeenCalledTimes(1);
     const handler = subscribeScheduledStreamMock.mock.calls[0][0] as (
-      event: ChatV2ScheduledStreamEvent,
+      event: ChatV2ScheduledStreamEvent
     ) => void;
 
     const exposed = wrapper.vm as unknown as {
@@ -277,9 +288,7 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
     expect(chatMessages.text()).toContain("Scheduled reply");
     // The optimistic message must be marked active so it renders with the
     // streaming status (not idle), matching an interactive assistant turn.
-    const activeMsg = chatMessages.find(
-      '[data-active="true"]'
-    );
+    const activeMsg = chatMessages.find('[data-active="true"]');
     expect(activeMsg.exists()).toBe(true);
     expect(activeMsg.attributes("data-message-id")).toBe(
       "scheduled-assistant-running-1"
@@ -302,7 +311,7 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
 
     expect(subscribeScheduledStreamMock).toHaveBeenCalledTimes(1);
     const handler = subscribeScheduledStreamMock.mock.calls[0][0] as (
-      event: ChatV2ScheduledStreamEvent,
+      event: ChatV2ScheduledStreamEvent
     ) => void;
 
     const exposed = wrapper.vm as unknown as {
@@ -328,9 +337,7 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
 
     // An empty assistant message must exist (the bubble), marked active so
     // AiChatV2StreamStatus renders the "Generating…" loading indicator.
-    const activeMsg = chatMessages.find(
-      '[data-active="true"]'
-    );
+    const activeMsg = chatMessages.find('[data-active="true"]');
     expect(activeMsg.exists()).toBe(true);
     expect(activeMsg.attributes("data-message-id")).toBe(
       "scheduled-assistant-start-1"

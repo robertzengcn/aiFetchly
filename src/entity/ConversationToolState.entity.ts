@@ -14,21 +14,21 @@ import { Order } from "./order.decorator";
 @Index(["conversationId"], { unique: true })
 export class ConversationToolStateEntity extends AuditableEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Order(1)
   @Column("varchar", { length: 100, nullable: false })
-  conversationId: string;
+  conversationId!: string;
 
   /** JSON string array of discovered tool names. */
   @Order(2)
   @Column("text", { nullable: false, default: "[]" })
-  discoveredToolNamesJson: string;
+  discoveredToolNamesJson!: string;
 
   /** JSON string array of announced deferred tool names (for delta tracking). */
   @Order(3)
   @Column("text", { nullable: false, default: "[]" })
-  announcedDeferredToolNamesJson: string;
+  announcedDeferredToolNamesJson!: string;
 
   /** Optional hash of the catalog the state was written against. */
   @Order(4)

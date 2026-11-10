@@ -1,6 +1,5 @@
 import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { DataSource, EntitySchema } from "typeorm";
 
@@ -13,9 +12,12 @@ import { DataSource, EntitySchema } from "typeorm";
 // does not depend on the ESM `node:*` import bindings (which are themselves in
 // a temporal dead zone when the hoisted call runs).
 const { directory } = vi.hoisted(() => {
-  const fs = require("node:fs");
-  const os = require("node:os");
-  const path = require("node:path");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires -- vi.hoisted runs before ESM bindings initialize (TDZ); require is the vitest-sanctioned way to use node:* here.
+  const fs = require("node:fs") as typeof import("node:fs");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires -- see above.
+  const os = require("node:os") as typeof import("node:os");
+  // eslint-disable-next-line @typescript-eslint/no-var-requires -- see above.
+  const path = require("node:path") as typeof import("node:path");
   return { directory: fs.mkdtempSync(path.join(os.tmpdir(), "email-tags-")) };
 });
 

@@ -27,7 +27,6 @@ import { ScheduleExecutionLogModule } from "@/modules/ScheduleExecutionLogModule
 import { SearchTaskModule } from "@/modules/SearchTaskModule";
 import { EmailSearchTaskModule } from "@/modules/EmailSearchTaskModule";
 import { BuckEmailTaskModule } from "@/modules/buckEmailTaskModule";
-import { YellowPagesTaskModule } from "@/modules/YellowPagesTaskModule";
 import { GoogleMapsModule } from "@/modules/GoogleMapsModule";
 import { YandexMapsModule } from "@/modules/YandexMapsModule";
 import { AiMessageTaskModule } from "@/modules/AiMessageTaskModule";
@@ -1206,19 +1205,6 @@ describe("ScheduleAiTools", () => {
         expect.fail("Should have thrown");
       } catch (error: unknown) {
         expect((error as Error).message).to.contain("30");
-      }
-    });
-
-    it("should throw for YELLOW_PAGES task when task not found", async () => {
-      sinon
-        .stub(YellowPagesTaskModule.prototype, "getTaskById")
-        .resolves(undefined);
-
-      try {
-        await validateTaskReference(TaskType.YELLOW_PAGES, 40);
-        expect.fail("Should have thrown");
-      } catch (error: unknown) {
-        expect((error as Error).message).to.contain("40");
       }
     });
 

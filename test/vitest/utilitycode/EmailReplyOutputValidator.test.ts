@@ -109,6 +109,25 @@ describe("validateReplyOutput — forbidden phrases (block)", () => {
     });
     expect(r.findings.some((f) => f.code === "forbidden_phrase")).toBe(true);
   });
+
+  it("blocks a forbidden phrase obfuscated with hyphens (regression: hyphen stripping was dropped)", () => {
+    // "f-r-e-e m-o-n-e-y" must normalize to "free money". The 2026-10-20
+    // merge dropped ASCII hyphen from the strip class, silently weakening
+    // the ONLY remaining block tier — this pins the documented contract
+    // ("inserted punctuation ... normalized before matching").
+    const r = validateReplyOutput("Re: x", "Click for f-r-e-e m-o-n-e-y now", {
+      forbiddenPhrases: ["free money"],
+    });
+    expect(r.findings.some((f) => f.code === "forbidden_phrase")).toBe(true);
+  });
+
+  it("blocks hyphen-obfuscated default forbidden phrase", () => {
+    // Phrase matching runs against the normalized form; "unsubscribe m-e"
+    // must normalize to "unsubscribe me" before the phrase check.
+    const r = validateReplyOutput("Re: x", "Please unsubscribe m-e now");
+    expect(r.findings.some((f) => f.code === "forbidden_phrase")).toBe(true);
+    expect(r.sendableAfterApproval).toBe(false);
+  });
 });
 
 /**

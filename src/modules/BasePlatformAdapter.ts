@@ -1,4 +1,5 @@
 import { Page } from 'puppeteer';
+import { log } from "@/modules/Logger";
 import { 
     IBasePlatformAdapter, 
     SearchResult, 
@@ -396,13 +397,13 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
         const selectors = this.getSelectors();
         
         if (!selectors.pagination || typeof selectors.pagination !== 'object' || !('nextButton' in selectors.pagination)) {
-            console.log('No pagination selector configured');
+            log.info('No pagination selector configured');
             return;
         }
 
         const nextButton = await page.$(selectors.pagination.nextButton!);
         if (!nextButton) {
-            console.log('No next page button found');
+            log.info('No next page button found');
             return;
         }
         await nextButton.evaluate((btn) => {
@@ -422,7 +423,7 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
      */
     protected async defaultApplyCookies(page: Page, cookies: any): Promise<void> {
         if (!cookies || !Array.isArray(cookies)) {
-            console.log(`No cookies to apply for ${this.platformName}`);
+            log.info(`No cookies to apply for ${this.platformName}`);
             return;
         }
 
@@ -433,10 +434,10 @@ export class BasePlatformAdapter implements IBasePlatformAdapter {
 
             if (platformCookies.length > 0) {
                 await page.setCookie(...platformCookies);
-                console.log(`Applied ${platformCookies.length} cookies for ${this.platformName}`);
+                log.info(`Applied ${platformCookies.length} cookies for ${this.platformName}`);
             }
         } catch (error) {
-            console.error(`Error applying cookies for ${this.platformName}:`, error);
+            log.error(`Error applying cookies for ${this.platformName}:`, error);
         }
     }
 }

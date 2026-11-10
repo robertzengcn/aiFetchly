@@ -80,8 +80,7 @@ export type SendBindingErrorCode =
   | "sender_mismatch"
   | "recipient_mismatch"
   | "smtp_username_mismatch"
-  | "reply_to_mismatch"
-  | "legacy_reply_identity_requires_review";
+  | "reply_to_mismatch";
 
 /** Thrown when an approved-send envelope binding check fails. */
 export class SendBindingError extends Error {
