@@ -574,6 +574,28 @@ export class ManagedBrowserAiToolService {
   }
 
   /**
+   * P0-6/P-FR-01: map the model-facing proxy zod union into the
+   * discriminated BrowserProxySelection.
+   */
+  private mapProxySelection(
+    raw:
+      | { proxy_id: number }
+      | { auto: true; country_code?: string }
+      | "direct"
+  ): BrowserProxySelection {
+    if (raw === "direct") {
+      return { kind: "direct" };
+    }
+    if ("proxy_id" in raw) {
+      return { kind: "proxy_id", proxyId: raw.proxy_id };
+    }
+    return {
+      kind: "auto",
+      ...(raw.country_code ? { countryCode: raw.country_code } : {}),
+    };
+  }
+
+  /**
    * P0-1: the UNGUARDED core shared by the legacy tool (after its
    * ownership guard) and by the runner (whose lease is the ownership).
    */

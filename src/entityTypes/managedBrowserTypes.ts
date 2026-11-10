@@ -101,7 +101,8 @@ export type ManagedBrowserErrorCode =
   | "cache_maintenance_failed"
   | "cache_limit_invalid"
   | "internal_error"
-  | "session_already_account_bound";
+  | "session_already_account_bound"
+  | "proxy_switch_in_progress";
 
 /** Bounded reason codes for user handoff (technical design §18). */
 export type ManagedBrowserHandoffReason =

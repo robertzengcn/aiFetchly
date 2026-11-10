@@ -279,6 +279,8 @@ export class ManagedBrowserModule {
 
   /** P-FR-05: proxy switches per session lineage (capped at 3). */
   private readonly proxySwitchCounts = new Map<string, number>();
+  /** P0-7: per-session switch serialization. */
+  private readonly proxySwitchInFlight = new Set<string>();
   private readonly runnerOwnedSessions = new Map<string, string>();
   /**
    * P1/S-FR-04: the AUTHORITATIVE per-session redirect ledger — the
@@ -2052,8 +2054,32 @@ record.currentUrl = message.observation.url || record.currentUrl;
     ) {
       throw new ManagedBrowserError("session_not_owned");
     }
+    // P0-7: serialize per session — two concurrent switches could
+    // double-stop or start two sessions.
+    if (this.proxySwitchInFlight.has(sessionId)) {
+      throw new ManagedBrowserError("proxy_switch_in_progress");
+    }
+    this.proxySwitchInFlight.add(sessionId);
+    try {
+      return await this.switchSessionProxyInner(
+        sessionId,
+        record,
+        target,
+        record.conversationId ?? undefined
+      );
+    } finally {
+      this.proxySwitchInFlight.delete(sessionId);
+    }
+  }
+
+  /** P0-7: the serialized switch body (validation BEFORE stop). */
+  private async switchSessionProxyInner(
+    sessionId: string,
+    record: ActiveSessionRecord,
+    target: BrowserProxySelection,
+    conversation: string | undefined
+  ): Promise<SafeManagedBrowserStatus> {
     const accountId = record.accountId;
-    const conversation = record.conversationId ?? undefined;
     // T10/F18: the switch reopens the page the user was on (P-FR-02) —
     // the FULL URL with path/query, not just the origin.
     const lastUrl = record.currentUrl ?? record.currentOrigin ?? undefined;
@@ -2066,8 +2092,39 @@ record.currentUrl = message.observation.url || record.currentUrl;
       throw new ManagedBrowserError("proxy_switch_limit");
     }
     this.proxySwitchCounts.set(lineageKey, priorCount + 1);
-    // P-FR-04: health-check the target BEFORE destroying the working
-    // session — fail-closed so the model can choose another proxy.
+    // P0-7/P-FR-04: prevalidate the TARGET SELECTION before destroying the
+    // working session — selection failures (confirmation required, SOCKS,
+    // unusable credentials, auto with no candidates) run while the old
+    // session is still alive; a refused switch leaves it untouched.
+    const linkedRows = await this.loadProxyRowsForAccount(accountId);
+    const selection = await selectProxyForSession({
+      selection: target,
+      linkedProxies: linkedRows,
+      loadProxyById: async (proxyId) =>
+        (await this.loadProxyRowById(proxyId)) ?? null,
+      isAccountSession: accountId > 0,
+    });
+    if (selection.status === "confirmation_required") {
+      throw new ManagedBrowserError(
+        "proxy_confirmation_required",
+        selection.reasonCode
+      );
+    }
+    if (selection.status === "unresolvable") {
+      throw new ManagedBrowserError(
+        "proxy_no_usable_proxy",
+        selection.reasonCode
+      );
+    }
+    // P0-7: start receives the VALIDATED resolved proxy. The module's
+    // explicitProxy input accepts the {mode,host,port,...} shape
+    // directly (ResolvedSessionProxy minus direct/unresolvable).
+    const validatedTarget =
+      selection.status === "resolved"
+        ? (selection.proxy.mode === "direct"
+            ? target
+            : (selection.proxy as unknown as BrowserProxySelection))
+        : target;
     if (target.kind === "proxy_id") {
       const healthy = await this.checkProxyHealthy(target.proxyId);
       if (!healthy) {
@@ -2075,15 +2132,31 @@ record.currentUrl = message.observation.url || record.currentUrl;
       }
     }
     await this.stop(sessionId, "user_stop");
-    return await this.start({
-      ...(accountId > 0 ? { accountId } : {}),
-      purpose: "proxy_switch",
-      proxy: target,
-      ...(conversation ? { conversationId: conversation } : {}),
-      ...(lastUrl && lastUrl !== "about:blank"
-        ? { requestedStartUrl: lastUrl }
-        : {}),
-    });
+    try {
+      return await this.start({
+        ...(accountId > 0 ? { accountId } : {}),
+        purpose: "proxy_switch",
+        proxy: validatedTarget,
+        ...(conversation ? { conversationId: conversation } : {}),
+        ...(lastUrl && lastUrl !== "about:blank"
+          ? { requestedStartUrl: lastUrl }
+          : {}),
+      });
+    } catch (startError) {
+      // P0-7: a start failure after a validated switch must not leave the
+      // user session-less — restore a session on the same lineage.
+      try {
+        await this.start({
+          ...(accountId > 0 ? { accountId } : {}),
+          purpose: "proxy_switch_restore",
+          proxy: validatedTarget,
+          ...(conversation ? { conversationId: conversation } : {}),
+        });
+      } catch {
+        // restoration failed — the original error is surfaced
+      }
+      throw startError;
+    }
   }
 
   /**
