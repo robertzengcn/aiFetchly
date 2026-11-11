@@ -84,6 +84,8 @@ export type SendForwardOutcome =
   | {
       readonly status: "outcome_unknown";
       readonly operationId: string;
+      /** R6-05: the Sent-copy result when it was computed before the throw. */
+      readonly sentCopyStatus?: EmailSentCopyStatus;
       readonly requestCorrelationId: string;
     }
   | {
@@ -291,6 +293,13 @@ export class EmailForwardDeliveryService extends BaseModule {
     // may only transition the draft when we actually hold the fence (a
     // pre-fence throw leaves the draft in `ready`, untouched).
     let fenceHeld = false;
+    // R6-04: tracks whether sendMail was ENTERED — the catch splits on it
+    // (pre-dispatch local failure vs possible on-wire outcome).
+    let sendMailEntered = false;
+    // R6-05: the Sent-copy status computed in the try survives into the
+    // unknown return and the catch's finalize (hoisted, "unknown" default).
+    let sentCopyComputed = false;
+    let sentCopyStatus: EmailSentCopyStatus = "unknown";
     try {
       // ---- Recheck sending identity against the frozen revision ----
       const service = await this.serviceModule.getEmailService(revision.sendingAccountId);
@@ -414,6 +423,11 @@ export class EmailForwardDeliveryService extends BaseModule {
       // dispatched attempt claiming the old content was on the wire.
       await this.operationModule.markAttemptDispatched(claim.attemptId);
 
+      // R6-04: the socket-attempt boundary. A throw BEFORE this point is a
+      // local failure (attempt-row update, transport construction, bad
+      // options) — provably pre-dispatch, retryable. A throw after it may
+      // have reached the wire — stays unknown, never replayed.
+      sendMailEntered = true;
       const info = await sender.sendMail(mailOptions);
       const { accepted, rejected, unknown } = classifyRecipients(info, envelopeRecipients);
 
@@ -422,7 +436,11 @@ export class EmailForwardDeliveryService extends BaseModule {
       // never changes submission state and never triggers a resend.
       // R5-02: the append targets the SENDING account's mailbox (where the
       // provider's Sent folder lives), not the source message's account.
-      const sentCopyStatus: EmailSentCopyStatus = await (async () => {
+      // R6-05: the value is tracked in a hoisted binding so the
+      // outcome_unknown return and the catch's durable row keep carrying
+      // it — the user's warning must not vanish on the unknown path.
+      sentCopyComputed = true;
+      sentCopyStatus = await (async () => {
         if (accepted.length === 0) return "not_requested";
         if (info.raw == null || info.raw.length === 0) {
           // R5-02: the submission was requested with a copy expectation and
@@ -549,7 +567,15 @@ export class EmailForwardDeliveryService extends BaseModule {
       });
 
       if (outcome === "outcome_unknown") {
-        return { status: "outcome_unknown", operationId: operation.operationId, requestCorrelationId };
+        // R6-05: the unknown envelope carries the Sent-copy status so the
+        // detail page and the tool envelope can warn (AC-22) even though
+        // the submission itself is unresolved.
+        return {
+          status: "outcome_unknown",
+          operationId: operation.operationId,
+          sentCopyStatus,
+          requestCorrelationId,
+        };
       }
       if (outcome === "failed") {
         // R10: an all-rejected submission is a definitive failure, never a
@@ -574,10 +600,59 @@ export class EmailForwardDeliveryService extends BaseModule {
         requestCorrelationId,
       };
     } catch (error) {
-      // Post-claim unexpected failure: the submission may or may not have
-      // happened. Never auto-retry — record unknown and let reconciliation
-      // decide (design §10.3).
       const sanitized = error instanceof Error ? error.message.slice(0, 240) : String(error);
+
+      // R6-04: the pre-dispatch split. A throw BEFORE sendMail was entered
+      // is provably local (attempt-row update, transport build, bad
+      // options) — a retryable failure, never a claimed success: the item
+      // finalizes failed with a pre-dispatch code and the fence releases
+      // into the editable `failed` state. Only a throw after sendMail has
+      // been entered keeps the honest unknown + submitted pair.
+      if (fenceHeld && !sendMailEntered) {
+        await this.operationModule
+          .finalizeItem({
+            itemId: claim.itemId,
+            operationId: operation.operationId,
+            status: "failed",
+            errorCode: "NETWORK_BEFORE_DISPATCH",
+            sanitizedError: `Pre-dispatch local failure (SMTP never started): ${sanitized}`,
+            attemptId: claim.attemptId,
+          })
+          .catch((finalizeError: unknown) => {
+            log.error("[EmailForwardDeliveryService] pre-dispatch finalize failed:", finalizeError);
+          });
+        const released = await this.draftModule
+          .markSendFailed(draft.id, revision.id)
+          .catch(() => false);
+        if (!released) {
+          await this.draftModule
+            .forceTerminalFromDispatching(draft.id, "failed")
+            .catch(() => undefined);
+        }
+        await this.operationModule
+          .recordAudit({
+            operationId: operation.operationId,
+            itemId: claim.itemId,
+            messageId: draft.messageId,
+            emailServiceId: draft.emailServiceId,
+            action: "forward_failed",
+            status: "failed",
+            reasonCode: "NETWORK_BEFORE_DISPATCH",
+            detail: { requestCorrelationId, preDispatch: true },
+          })
+          .catch(() => undefined);
+        return {
+          status: "failed",
+          operationId: operation.operationId,
+          code: "NETWORK_BEFORE_DISPATCH",
+          error: `Forward could not start (SMTP never ran): ${sanitized}`,
+          requestCorrelationId,
+        };
+      }
+
+      // Post-claim unexpected failure past the socket boundary: the
+      // submission may or may not have happened. Never auto-retry — record
+      // unknown and let reconciliation decide (design §10.3).
       await this.operationModule
         .finalizeItem({
           itemId: claim.itemId,
@@ -586,6 +661,9 @@ export class EmailForwardDeliveryService extends BaseModule {
           errorCode: "OUTCOME_UNKNOWN",
           sanitizedError: `Submission interrupted: ${sanitized}`,
           attemptId: claim.attemptId,
+          // R6-05: a throw after a successful Sent append must not drop the
+          // status from the durable row.
+          ...(sentCopyComputed ? { resultJson: JSON.stringify({ sentCopyStatus }) } : {}),
         })
         .catch((finalizeError: unknown) => {
           log.error("[EmailForwardDeliveryService] finalize-after-error failed:", finalizeError);
@@ -603,7 +681,12 @@ export class EmailForwardDeliveryService extends BaseModule {
             .catch(() => undefined);
         }
       }
-      return { status: "outcome_unknown", operationId: operation.operationId, requestCorrelationId };
+      return {
+        status: "outcome_unknown",
+        operationId: operation.operationId,
+        ...(sentCopyComputed ? { sentCopyStatus } : {}),
+        requestCorrelationId,
+      };
     }
   }
 

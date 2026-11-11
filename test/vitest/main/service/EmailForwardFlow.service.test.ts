@@ -1217,4 +1217,66 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
     const items = await delivery["operationModule"].listItems(op?.operationId ?? "");
     expect(items[0].resultJson).toContain('"sentCopyStatus":"failed"');
   });
+
+  // ---- R6-04: a pre-sendMail local failure releases the draft (retryable) ----
+
+  it("R6-04: a throw from the attempt-row update (before sendMail) fails the send AND releases the draft to editable", async () => {
+    const preview = await draftService.createDraft({
+      messageId: SOURCE_EMAIL_ID,
+      to: ["finance@example.test"],
+      note: null,
+      attachmentSelection: { mode: "none" },
+      provenance: "user",
+      origin: "ui_action",
+    });
+    const issued = await authorizationModule.issue({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      payloadHash: preview.composedHash,
+      origin: "ui_action",
+      expiresAt: new Date(Date.now() + EMAIL_ORGANIZATION_LIMITS.authorizationTtlMs),
+    });
+    const delivery = new EmailForwardDeliveryService({
+      adapter: new FakeAdapter(() => ({
+        status: "fetched",
+        source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
+        uidValidity: "4242",
+      })),
+      artifactStore: artifacts,
+      senderFactory: makeSenderFactory(() => {
+        throw new Error("SMTP must never be reached");
+      }, []),
+    });
+    // The local attempt-row update fails AFTER the fence wins but BEFORE
+    // sendMail is entered — the audit's exact pre-dispatch window.
+    const operationModule = delivery["operationModule"];
+    (operationModule as unknown as { markAttemptDispatched: () => Promise<void> }).markAttemptDispatched =
+      () => Promise.reject(new Error("attempt row update failed"));
+
+    const outcome = await delivery.sendApprovedForward({
+      draftId: preview.draftId,
+      revisionId: preview.revisionId,
+      authorizationId: issued.id,
+    });
+    // A pre-dispatch local failure is a RETRYABLE failure, not a claimed
+    // success: the item is failed with a pre-dispatch code.
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.code).toBe("NETWORK_BEFORE_DISPATCH");
+    const op = await delivery["operationModule"].findByIdempotencyKey(
+      `fwv1:${preview.draftId}:${preview.revisionId}:${preview.composedHash}`
+    );
+    expect(op?.status).toBe("failed");
+    const items = await delivery["operationModule"].listItems(op?.operationId ?? "");
+    expect(items[0].errorCode).toBe("NETWORK_BEFORE_DISPATCH");
+    // The draft is EDITABLE again (failed state) — not stranded, not submitted.
+    const draftModule = new EmailForwardDraftModule();
+    const draft = await draftModule.readDraft(preview.draftId);
+    expect(draft?.status).toBe("failed");
+    const updated = await draftService.updateDraft({
+      draftId: preview.draftId,
+      expectedRevisionId: preview.revisionId,
+      note: "retry after the local failure",
+    });
+    expect(updated.revisionNumber).toBe(2);
+  });
 });

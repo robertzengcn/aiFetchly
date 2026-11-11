@@ -1163,6 +1163,13 @@ export default {
       SOURCE_FETCH_FAILED: "Error al obtener el origen",
       ATTACHMENT_TOO_LARGE: "Adjunto demasiado grande",
     },
+    sent_copy_status: {
+      not_requested: 'copia no solicitada',
+      pending: 'copia pendiente',
+      saved: 'copiada a Enviados',
+      failed: 'copia fallida',
+      unknown: 'copia sin verificar',
+    },
     sent_copy_warning: 'El mensaje se envió, pero no se pudo verificar la copia en Enviados ({status}).',
     history_title: 'Historial de organización',
     history_load_failed: 'No se pudo cargar el historial de operaciones.',

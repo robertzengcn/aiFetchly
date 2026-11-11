@@ -451,3 +451,153 @@ export function isUnambiguousDirectSendPayload(
       return false;
   }
 }
+
+// ---- R6-01: verb- and payload-bound direct send (AC-01/AC-03/AC-13) ----
+
+/** The action verb a `send_now` sentence actually names. */
+export type DirectSendVerb = "forward" | "trash" | "restore";
+
+const FORWARD_VERB_PHRASES: PhraseSet = [
+  "forward it", "forward this", "forward that", "forward the email",
+  "forward the message", "forward this email", "forward this message",
+  "send it now", "send this now", "send it", "send now",
+  "转发给", "转发这封", "转发一下", "现在发送", "立即发送", "发送它",
+  "reenví", "envíalo",
+  "transfè", "envoie-le",
+  "leite es", "weiterleit", "schick es", "sende es",
+  "転送し", "送って",
+];
+
+const TRASH_VERB_PHRASES: PhraseSet = [
+  "delete it", "delete this", "delete that", "delete the email",
+  "delete the message", "move it to trash", "move this to trash",
+  "move that to trash", "move it to the trash", "move this to the trash",
+  "trash it", "trash this", "trash that",
+  "删掉它", "删除这封", "删除它", "移到废纸篓", "移入废纸篓",
+  "elimínalo", "bórralo", "muévelo a la papelera",
+  "supprime-le", "mets-le à la corbeille",
+  "lösche es", "in den papierkorb",
+  "削除し", "ゴミ箱へ移動",
+];
+
+const RESTORE_VERB_PHRASES: PhraseSet = [
+  "restore it", "restore this", "restore that", "undo that deletion",
+  "undo the deletion", "undo that", "undo this",
+  "撤销删除", "恢复它",
+  "restáuralo", "deshaz la eliminación",
+  "restaure-le", "annule la suppression",
+  "stelle es wieder her", "mache das rückgängig",
+  "元に戻し",
+];
+
+/** The tool each direct-send verb is allowed to skip the card for. */
+const VERB_TO_TOOL: Readonly<Record<DirectSendVerb, readonly string[]>> = {
+  forward: ["send_email_forward"],
+  trash: ["move_email_to_trash"],
+  restore: ["restore_email"],
+};
+
+/**
+ * R6-01: resolves WHICH action the send-now sentence names. A sentence that
+ * mixes verbs ("forward it" + "delete this") is ambiguous → null (review).
+ * The generic send phrases map to `forward` — "send it now" after a review
+ * follow-up authorizes a forward, never a Trash or restore.
+ */
+export function resolveDirectSendVerb(userText: string): DirectSendVerb | null {
+  const text = normalizeText(userText);
+  const forward = matchesAny(text, FORWARD_VERB_PHRASES) !== null;
+  const trash = matchesAny(text, TRASH_VERB_PHRASES) !== null;
+  const restore = matchesAny(text, RESTORE_VERB_PHRASES) !== null;
+  const matched = [forward, trash, restore].filter(Boolean).length;
+  if (matched !== 1) return null;
+  if (forward) return "forward";
+  if (trash) return "trash";
+  return "restore";
+}
+
+/** True when the tool the model called is the verb the user named. */
+export function isDirectSendVerbBound(toolName: string, verb: DirectSendVerb | null): boolean {
+  if (verb === null) return false;
+  return (VERB_TO_TOOL[verb] ?? []).includes(toolName);
+}
+
+const EMAIL_ADDRESS_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+/** Lowercased, deduplicated email addresses mentioned in the sentence. */
+export function extractSentenceAddresses(userText: string): string[] {
+  const matches = userText.match(EMAIL_ADDRESS_PATTERN) ?? [];
+  return Array.from(new Set(matches.map((entry) => entry.trim().toLowerCase())));
+}
+
+/** True when both sets are non-empty, equal, and fully named. */
+export function sentenceAddressesBindEnvelope(
+  sentenceAddresses: readonly string[],
+  envelopeAddresses: readonly string[]
+): boolean {
+  if (sentenceAddresses.length === 0 || envelopeAddresses.length === 0) return false;
+  const sentence = new Set(sentenceAddresses.map((entry) => entry.trim().toLowerCase()));
+  const envelope = new Set(envelopeAddresses.map((entry) => entry.trim().toLowerCase()));
+  if (sentence.size !== envelope.size) return false;
+  for (const entry of sentence) {
+    if (!envelope.has(entry)) return false;
+  }
+  return true;
+}
+
+/**
+ * R6-01: the full host-owned direct-send binding — shape, verb, and payload.
+ * `sentenceAddresses` come from the trusted user turn; `envelopeAddresses`
+ * from the frozen revision the tool references; `singleRestoreCandidateId`
+ * is the ONLY restorable operation when the verb is restore (null when 0 or
+ * several exist — "undo that" with more than one possible operation asks
+ * which one).
+ */
+export function isDirectSendPayloadBound(input: {
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly userText: string;
+  /**
+   * Trusted payload addresses: the frozen revision's full envelope
+   * (to+cc+bcc) for a forward, or the target message's sender for Trash.
+   */
+  readonly trustedPayloadAddresses?: readonly string[];
+  /** The single restorable succeeded Trash operation id, when exactly one. */
+  readonly singleRestoreCandidateId?: string | null;
+}): boolean {
+  if (!isUnambiguousDirectSendPayload(input.toolName, input.args)) return false;
+  const verb = resolveDirectSendVerb(input.userText);
+  if (!isDirectSendVerbBound(input.toolName, verb)) return false;
+  const record = (typeof input.args === "object" && input.args !== null
+    ? input.args
+    : {}) as Record<string, unknown>;
+  const sentenceAddresses = extractSentenceAddresses(input.userText);
+  switch (input.toolName) {
+    case "send_email_forward": {
+      // The sentence must NAME the recipients the frozen revision carries:
+      // "forward this to finance@example.com now" authorizes exactly that
+      // envelope, never a draft addressed to someone else (AC-01/AC-03).
+      return sentenceAddressesBindEnvelope(
+        sentenceAddresses,
+        input.trustedPayloadAddresses ?? []
+      );
+    }
+    case "move_email_to_trash": {
+      // Bind the target identity: the message's sender must be named in the
+      // sentence. A bare "delete this email" without any address in the
+      // trusted text stays on the review path (the host cannot bind "this").
+      if (sentenceAddresses.length === 0) return false;
+      return (input.trustedPayloadAddresses ?? []).some((entry) =>
+        sentenceAddresses.includes(entry.trim().toLowerCase())
+      );
+    }
+    case "restore_email": {
+      // "Undo that" is direct ONLY when exactly one succeeded Trash
+      // operation exists AND it is the one the model references.
+      const candidate = input.singleRestoreCandidateId ?? null;
+      if (candidate === null) return false;
+      return record.operation_id === candidate;
+    }
+    default:
+      return false;
+  }
+}

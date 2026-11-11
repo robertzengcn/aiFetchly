@@ -337,10 +337,13 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
       if (uids === false) {
         return { status: "failed", reasonCode: "PROVIDER_REJECTED", sanitizedError: "search unsupported" };
       }
-      const capped = uids.length >= input.cap;
-      // T09: continue within the folder from the caller's uid offset.
+      // R6-02: `capped` means the returned WINDOW was cut before the end of
+      // this SEARCH's match list — NOT that the window size was reached
+      // (a full window on the final page would have lied about a 1000-
+      // candidate stop). The caller's own candidate ceiling is separate.
       const offset = input.uidOffset ?? 0;
       const window = uids.slice(offset, offset + input.cap);
+      const capped = offset + window.length < uids.length;
       // Envelope fetches are the expensive part: only the caller-requested
       // page worth are materialized; the rest stay counted but unnamed.
       const page = window.slice(0, Math.min(window.length, input.metadataLimit ?? input.cap));
@@ -351,7 +354,20 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
           COMMAND_TIMEOUT_MS,
           "search metadata fetch"
         );
-        if (!message) continue;
+        if (!message) {
+          // R6-02: a dropped envelope fetch must NOT shorten the candidate
+          // list — the caller's offset advances by the slice length, so an
+          // omitted UID would shift the next page and repeat a row. Keep
+          // the UID with unknown metadata.
+          candidates.push({
+            uid: String(uid),
+            fromAddress: null,
+            subject: null,
+            date: null,
+            seen: null,
+          });
+          continue;
+        }
         const envelope = (message as { envelope?: { from?: Array<{ address?: string }>; subject?: string; date?: Date | null } }).envelope;
         const flags = (message as { flags?: Set<string> }).flags;
         // R15: system flags are case-insensitive per RFC 3501 (\\Seen vs \seen).

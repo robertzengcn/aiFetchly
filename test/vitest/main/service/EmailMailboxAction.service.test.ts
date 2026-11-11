@@ -695,6 +695,74 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     expect(location?.providerUid).toBe("3112T");
   });
 
+  // ---- R6-03: a failed obligation INSERT keeps reply sending closed ----
+
+  it("R6-03: a non-durable obligation INSERT surfaces on the audit and the reply gate's item marker stays closed", async () => {
+    await seedMessage(3114);
+    await seedApprovedReplyDraft(3114);
+    const adapter = new ActionFakeAdapter({
+      presence: () => ({ status: "present" }),
+      moveResult: () => ({ status: "moved", destinationUidValidity: "99", destinationUid: "57" }),
+      trashFolder: "Trash",
+    });
+    const service = new EmailMailboxActionService({ adapter });
+    const replyModule = service as unknown as {
+      replyDraftModule: {
+        invalidateUnsentDraftsForMessage: (id: number, reason: string) => Promise<number>;
+        resolveInvalidationObligations: (id: number) => Promise<void>;
+        hasOpenInvalidationObligation: (id: number) => Promise<boolean>;
+        recordInvalidationObligation: (input: { messageId: number; emailServiceId: number; destinationFolder: string }) => Promise<void>;
+      };
+    };
+    const realModule = replyModule.replyDraftModule;
+    // BOTH the invalidation AND the guard-row insert fail (the same DB fault).
+    replyModule.replyDraftModule = {
+      invalidateUnsentDraftsForMessage: () => Promise.reject(new Error("invalidation failed")),
+      resolveInvalidationObligations: () => Promise.resolve(),
+      hasOpenInvalidationObligation: () => Promise.resolve(false),
+      recordInvalidationObligation: () => Promise.reject(new Error("obligation insert failed")),
+    };
+    const result = await service.trashMessage({ messageId: 3114, origin: "ui_action" });
+    // The move is honestly unknown (never a clean success).
+    expect(result.success).toBe(false);
+    expect(result.status).toBe("needs_reconciliation");
+    // The guard ROW is missing — but the ITEM's REPLY_INVALIDATION_PENDING
+    // marker is the fail-closed fallback the reply gate reads.
+    expect(await realModule.hasOpenInvalidationObligation(3114)).toBe(false);
+    const { EmailOrganizationOperationModule } = await import(
+      "@/modules/EmailOrganizationOperationModule"
+    );
+    expect(
+      await new EmailOrganizationOperationModule().hasUnresolvedInvalidationPendingItem(3114)
+    ).toBe(true);
+    replyModule.replyDraftModule = realModule;
+  });
+
+  it("R6-03: the reply-gate fallback clears when the repair resolves the move item", async () => {
+    const { EmailOrganizationOperationModule } = await import(
+      "@/modules/EmailOrganizationOperationModule"
+    );
+    // The previous test's unresolved marker must NOT leak into a clean state.
+    const openBefore = await new EmailOrganizationOperationModule().hasUnresolvedInvalidationPendingItem(3114);
+    expect(openBefore).toBe(true);
+    // Repair: resolve the item (the reconcile path does this once the
+    // invalidation finally lands).
+    const opModel = new EmailOrganizationOperationModel(dbpath);
+    const operations = await opModel.listRecentOperations({ messageId: 3114, limit: 10 });
+    const pendingOp = operations.find((operation) => operation.status === "needs_reconciliation");
+    expect(pendingOp).toBeDefined();
+    const items = await opModel.listItems(pendingOp!.operationId);
+    await opModel.finalizeItem({
+      itemId: items[0].id,
+      operationId: pendingOp!.operationId,
+      status: "succeeded",
+      resultJson: JSON.stringify({ reconciled: true, repaired: true }),
+    });
+    expect(
+      await new EmailOrganizationOperationModule().hasUnresolvedInvalidationPendingItem(3114)
+    ).toBe(false);
+  });
+
   it("fault injection: an attempt-evidence WRITE FAILURE never breaks the honest move outcome", async () => {
     await seedMessage(3113);
     const adapter = new ActionFakeAdapter({

@@ -452,20 +452,22 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
 
   it("runs a bounded server search with honest incompleteness and failure accounting (FR-17)", async () => {
     const adapter = new BulkFakeAdapter();
-    adapter.searchUids = async (_c, _folder, input) => ({
-      status: "listed" as const,
-      candidates: [
-        {
-          uid: "11",
-          fromAddress: "a@b.test",
-          subject: "September",
-          date: "2026-09-15T10:00:00Z",
-          seen: false,
-        },
-      ],
-      // The adapter reports it hit its bound (incomplete scan).
-      capped: true,
-    });
+    // The SEARCH matches 1600 UIDs of which only every 50th falls inside
+    // the exact date window: candidates are CONSUMED but rejected, so the
+    // page never fills and the service's own 1000-candidate ceiling stops
+    // the scan (R6-02: the adapter's per-window `capped` bit no longer
+    // fakes a ceiling).
+    adapter.searchUids = async (_c, _folder, input) => {
+      const offset = input.uidOffset ?? 0;
+      const all = Array.from({ length: 1600 }, (_, i) => ({
+        uid: String(i + 1),
+        fromAddress: "a@b.test",
+        subject: "September",
+        date: i % 50 === 0 ? "2026-09-15T10:00:00Z" : "2020-01-01T00:00:00Z",
+        seen: false,
+      }));
+      return { status: "listed" as const, candidates: all.slice(offset, offset + 200), capped: offset + 200 < 1600 };
+    };
     const serverService = new EmailOrganizationSearchService({
       adapter,
       capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
@@ -475,10 +477,11 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
       source: "server",
       folderPaths: ["INBOX"],
       subject: "September",
+      receivedFrom: "2026-01-01T00:00:00Z",
     });
     expect(result.source).toBe("server");
     expect(result.complete).toBe(false);
-    expect(result.rows.length).toBe(1);
+    expect(result.rows.length).toBeGreaterThan(0);
     expect(result.rows[0].messageId).toBeNull();
     expect(result.limitation).toContain("1000");
     // Envelope fetches are bounded to the page, not the candidate cap.
@@ -716,6 +719,159 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     await expect(
       serverSearchWith(encode({ v: 1, q: "deadbeefdeadbeef", folderIndex: 0, uidOffset: 0 }))
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("R6-02: a 250-match folder pages to an EXHAUSTED end — complete:true, nextCursor:null", async () => {
+    const adapter = new BulkFakeAdapter();
+    adapter.searchUids = async (_c, _folder, input) => {
+      const offset = input.uidOffset ?? 0;
+      const all = Array.from({ length: 250 }, (_, i) => ({
+        uid: String(i + 1),
+        fromAddress: "a@b.test",
+        subject: "many matches",
+        date: "2026-09-15T10:00:00Z",
+        seen: false,
+      }));
+      return { status: "listed" as const, candidates: all.slice(offset, offset + 200), capped: offset + 200 < 250 };
+    };
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+    const input = {
+      emailServiceId: ACCOUNT_ID,
+      source: "server" as const,
+      folderPaths: ["INBOX"],
+      subject: "many matches",
+      pageSize: 100,
+    };
+    const page1 = await serverService.search(input);
+    expect(page1.rows.length).toBe(100);
+    expect(page1.nextCursor).not.toBeNull();
+    const page2 = await serverService.search({ ...input, cursor: page1.nextCursor ?? undefined });
+    expect(page2.rows.length).toBe(100);
+    expect(page2.nextCursor).not.toBeNull();
+    const page3 = await serverService.search({ ...input, cursor: page2.nextCursor ?? undefined });
+    // The final 50 rows: the folder is exhausted and the scan honestly
+    // completes — no phantom 1000-candidate stop.
+    expect(page3.rows.length).toBe(50);
+    expect(page3.nextCursor).toBeNull();
+    expect(page3.complete).toBe(true);
+    expect(page3.limitation).not.toContain("1000");
+    const subjects = [...page1.rows, ...page2.rows, ...page3.rows].map((row) => row.providerUid);
+    expect(new Set(subjects).size).toBe(250);
+  });
+
+  it("R6-02: a local cursor minted for one folder scope is refused for another", async () => {
+    const page1 = await searchService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "local",
+      subject: "cursor page test",
+      pageSize: 2,
+      folderPaths: ["INBOX"],
+    });
+    expect(page1.nextCursor).not.toBeNull();
+    // The SAME query but a DIFFERENT folder scope must not replay the cursor.
+    await expect(
+      searchService.search({
+        emailServiceId: ACCOUNT_ID,
+        source: "local",
+        subject: "cursor page test",
+        pageSize: 2,
+        folderPaths: ["Archive"],
+        cursor: page1.nextCursor ?? undefined,
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+
+  it("R6-02: a failed folder is RESUMABLE — next page retries it instead of dead-ending", async () => {
+    const adapter = new BulkFakeAdapter();
+    let firstCall = true;
+    adapter.searchUids = async (_c, _folder, input) => {
+      if (firstCall) {
+        firstCall = false;
+        return { status: "failed" as const, reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: "drop" };
+      }
+      const offset = input.uidOffset ?? 0;
+      return {
+        status: "listed" as const,
+        candidates: [
+          { uid: String(offset + 1), fromAddress: "a@b.test", subject: "retry ok", date: "2026-09-15T10:00:00Z", seen: false },
+        ],
+        capped: false,
+      };
+    };
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+    const page1 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX"],
+      subject: "retry ok",
+    });
+    // The failed folder is disclosed AND a resumable cursor exists.
+    expect(page1.failedFolders).toHaveLength(1);
+    expect(page1.complete).toBe(false);
+    expect(page1.nextCursor).not.toBeNull();
+    const page2 = await serverService.search({
+      emailServiceId: ACCOUNT_ID,
+      source: "server",
+      folderPaths: ["INBOX"],
+      subject: "retry ok",
+      cursor: page1.nextCursor ?? undefined,
+    });
+    expect(page2.rows.map((row) => row.subject)).toEqual(["retry ok"]);
+  });
+
+  it("R6-02: a dropped envelope fetch does not shift the next page (no repeats, no gaps)", async () => {
+    const adapter = new BulkFakeAdapter();
+    const droppedFetches = new Set(["2"]);
+    adapter.searchUids = async (_c, _folder, input) => {
+      const offset = input.uidOffset ?? 0;
+      const all = Array.from({ length: 300 }, (_, i) => ({
+        uid: String(i + 1),
+        fromAddress: "a@b.test",
+        subject: "dropped fetch",
+        date: "2026-09-15T10:00:00Z",
+        seen: false,
+      }));
+      const window = all.slice(offset, offset + 200);
+      const candidates = [];
+      for (const candidate of window) {
+        if (droppedFetches.has(candidate.uid)) {
+          // R6-02: the UID STAYS in the list with unknown metadata — the
+          // offset stays aligned.
+          candidates.push({ uid: candidate.uid, fromAddress: null, subject: null, date: null, seen: null });
+        } else {
+          candidates.push(candidate);
+        }
+      }
+      return { status: "listed" as const, candidates, capped: offset + window.length < 300 };
+    };
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+    const input = {
+      emailServiceId: ACCOUNT_ID,
+      source: "server" as const,
+      folderPaths: ["INBOX"],
+      subject: "dropped fetch",
+      pageSize: 100,
+    };
+    const page1 = await serverService.search(input);
+    expect(page1.rows.length).toBe(100);
+    const page2 = await serverService.search({ ...input, cursor: page1.nextCursor ?? undefined });
+    const uids1 = page1.rows.map((row) => row.providerUid);
+    const uids2 = page2.rows.map((row) => row.providerUid);
+    expect(new Set(uids1).size).toBe(uids1.length);
+    expect(new Set(uids2).size).toBe(uids2.length);
+    // No overlap between pages even though UID 2 carried unknown metadata.
+    for (const uid of uids1) {
+      expect(uids2).not.toContain(uid);
+    }
   });
 
   it("R5-09: an exact attachment filter is refused on server search instead of silently broadening", async () => {

@@ -1,4 +1,5 @@
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
@@ -934,6 +935,16 @@ export class EmailReplyDeliveryService {
       // hasOpenInvalidationObligation already fails closed (true), but a
       // thrown connection error must also refuse.
       obligationOpen = true;
+    }
+    // R6-03: the row itself can be MISSING — the same DB failure that broke
+    // the invalidation also broke the obligation insert. The fail-closed
+    // fallback is the move item's durable REPLY_INVALIDATION_PENDING marker
+    // on a nonterminal operation: it is written even when the guard row is
+    // not, so the send stays refused until a repair resolves the move.
+    if (!obligationOpen) {
+      obligationOpen = await new EmailOrganizationOperationModule().hasUnresolvedInvalidationPendingItem(
+        message.id
+      );
     }
     if (obligationOpen) {
       const code: EmailReplyPolicyCode = "reply_invalidation_pending";

@@ -1120,6 +1120,13 @@ export default {
       SOURCE_FETCH_FAILED: "源邮件获取失败",
       ATTACHMENT_TOO_LARGE: "附件过大",
     },
+    sent_copy_status: {
+      not_requested: '未请求副本',
+      pending: '副本待处理',
+      saved: '已保存到已发送',
+      failed: '副本保存失败',
+      unknown: '副本未确认',
+    },
     sent_copy_warning: '邮件已提交，但无法确认已保存到已发送（{status}）。',
     history_title: '整理历史',
     history_load_failed: '无法加载操作历史。',

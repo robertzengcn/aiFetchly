@@ -1163,6 +1163,13 @@ export default {
       SOURCE_FETCH_FAILED: "Source fetch failed",
       ATTACHMENT_TOO_LARGE: "Attachment too large",
     },
+    sent_copy_status: {
+      not_requested: 'no copy requested',
+      pending: 'copy pending',
+      saved: 'copied to Sent',
+      failed: 'copy failed',
+      unknown: 'copy unverified',
+    },
     sent_copy_warning: 'The message was submitted, but the Sent copy could not be verified ({status}).',
     history_title: 'Organization history',
     history_load_failed: 'The operation history could not be loaded.',

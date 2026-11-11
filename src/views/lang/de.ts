@@ -1162,6 +1162,13 @@ export default {
       SOURCE_FETCH_FAILED: "Quellabruf fehlgeschlagen",
       ATTACHMENT_TOO_LARGE: "Anhang zu groß",
     },
+    sent_copy_status: {
+      not_requested: 'keine Kopie angefordert',
+      pending: 'Kopie ausstehend',
+      saved: 'in Gesendet kopiert',
+      failed: 'Kopie fehlgeschlagen',
+      unknown: 'Kopie unbestätigt',
+    },
     sent_copy_warning: 'Die Nachricht wurde gesendet, aber die Gesendet-Kopie konnte nicht bestätigt werden ({status}).',
     history_title: 'Organisationsverlauf',
     history_load_failed: 'Der Verlauf konnte nicht geladen werden.',

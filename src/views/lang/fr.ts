@@ -1152,6 +1152,13 @@ export default {
       SOURCE_FETCH_FAILED: "Échec de récupération de la source",
       ATTACHMENT_TOO_LARGE: "Pièce jointe trop volumineuse",
     },
+    sent_copy_status: {
+      not_requested: 'copie non demandée',
+      pending: 'copie en attente',
+      saved: 'copiée vers Éléments envoyés',
+      failed: 'échec de la copie',
+      unknown: 'copie non vérifiée',
+    },
     sent_copy_warning: 'Le message a été envoyé, mais la copie dans Éléments envoyés n\'a pas pu être vérifiée ({status}).',
     history_title: 'Historique d\'organisation',
     history_load_failed: 'Impossible de charger l\'historique des opérations.',

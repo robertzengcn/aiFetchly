@@ -607,6 +607,29 @@ export class EmailOrganizationOperationModel extends BaseDb {
   }
 
   /**
+   * R6-03 (design §10.4): TRUE while a nonterminal operation carries an
+   * `outcome_unknown` item whose failure code is REPLY_INVALIDATION_PENDING
+   * for this message. The reply gate uses this as the fail-closed fallback
+   * when the durable obligation ROW could not be inserted: the item marker
+   * is written even when the guard row is missing, so a move whose reply
+   * invalidation never landed keeps reply sending refused until a repair
+   * resolves it.
+   */
+  async hasUnresolvedInvalidationPendingItem(messageId: number): Promise<boolean> {
+    const count = await this.itemRepository
+      .createQueryBuilder("item")
+      .innerJoin(EmailOrganizationOperationEntity, "op", "op.operationId = item.operationId")
+      .where("item.messageId = :messageId", { messageId })
+      .andWhere("item.errorCode = :code", { code: "REPLY_INVALIDATION_PENDING" })
+      .andWhere("item.status = :status", { status: "outcome_unknown" })
+      .andWhere("op.status IN (:...statuses)", {
+        statuses: ["prepared", "awaiting_approval", "authorized", "running", "needs_reconciliation"],
+      })
+      .getCount();
+    return count > 0;
+  }
+
+  /**
    * R12: persistent operation history for discovery after navigation or
    * restart. Newest first, optionally filtered by account or message.
    */

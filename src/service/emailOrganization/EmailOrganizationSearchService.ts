@@ -128,8 +128,15 @@ export class EmailOrganizationSearchService extends BaseModule {
         false
       );
     }
+    // R6-02: the cursor binds to the EFFECTIVE folder scope — the explicit
+    // folderPaths when given, otherwise ALL-LOCAL plus the resolved Trash
+    // exclusion. Hashing null (R5-09) let an Inbox cursor replay against
+    // Archive and skip or repeat rows.
+    const localScope = input.folderPaths
+      ? [...input.folderPaths]
+      : ["__ALL_LOCAL__", ...(excludedFolder !== null ? [`exclude:${excludedFolder}`] : [])];
     // R5-09: the continuation cursor feeds the model's keyset predicate.
-    const keysetBefore = decodeLocalCursor(input.cursor, searchQueryHash(input, null));
+    const keysetBefore = decodeLocalCursor(input.cursor, searchQueryHash(input, localScope));
     const result = await this.messageModule.searchForOrganization({
       emailServiceId: input.emailServiceId,
       excludeFolderPath: excludedFolder ?? undefined,
@@ -170,7 +177,7 @@ export class EmailOrganizationSearchService extends BaseModule {
         result.truncated && lastRow !== undefined
           ? encodeCursor({
               v: 1,
-              q: searchQueryHash(input, null),
+              q: searchQueryHash(input, localScope),
               receivedAt: lastRow.receivedAt.toISOString(),
               id: lastRow.id,
             })
@@ -280,11 +287,19 @@ export class EmailOrganizationSearchService extends BaseModule {
         // "no matches" result — it is disclosed and forces complete:false.
         if (result.status !== "listed") {
           failedFolders.push({ folderPath: folder, reasonCode: result.reasonCode });
+          // R6-02: a failed folder is RESUMABLE — the emitted cursor points
+          // back at this folder's consumed offset, so "next page" retries
+          // the failed folder instead of leaving complete:false with no
+          // continuation.
+          resumePosition = { folderIndex, uidOffset };
+          foldersExhausted = false;
           continue outer;
         }
         searchedFolders.push(folder);
-        // The adapter's own truncation claim always forces incomplete.
-        capped = capped || result.capped;
+        // R6-02: the adapter's per-window `capped` bit is NOT ORed here —
+        // during a windowed scan every non-final window reports "cut before
+        // the end", and the service's own counters (candidatesSeen ceiling,
+        // unfinished folder scan) are what honestly force incomplete.
         candidatesSeen += result.candidates.length;
         // R15: exact UTC post-filter over the coarse IMAP date search.
         // R5-09: the cursor advances by the candidates actually CONSUMED —
@@ -356,6 +371,14 @@ export class EmailOrganizationSearchService extends BaseModule {
     if (!capped && !budgetExhausted && failedFolders.length === 0) {
       limitationParts.push(
         "Server metadata is a bounded scan, not an exact total; attachment presence is not server-filtered and reports unknown."
+      );
+    }
+
+    if (!capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && foldersExhausted) {
+      // complete scan — no extra label needed
+    } else {
+      limitationParts.push(
+        "rows is the current page, not a matched total."
       );
     }
 

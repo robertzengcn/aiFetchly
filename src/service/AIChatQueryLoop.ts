@@ -176,10 +176,14 @@ import {
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
 import {
-  isUnambiguousDirectSendPayload,
+  isDirectSendPayloadBound,
   prepareTrustedIntentText,
   resolveEmailOrganizationIntent,
 } from "@/service/emailOrganization/EmailOrganizationIntentResolver";
+import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { parseStringArrayJson } from "@/utils/jsonArray";
 import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
@@ -4383,13 +4387,14 @@ export class AIChatQueryLoop {
               extractUserMessageText(lastUserMessage)
             );
             const organizationDecision = resolveEmailOrganizationIntent(userText);
-            // R03 (review hardening) + R5-07: review/draft/negation intents
-            // refuse the mutation. A trusted current-turn `send_now` skips
-            // the second card ONLY when the proposed payload is unambiguous
-            // (one exact message/revision/operation, explicit recipients) —
-            // the host parses the arguments itself; anything ambiguous
-            // degrades to the review path (safe default, AC-13).
-            let payloadUnambiguous = false;
+            // R03 (review hardening) + R5-07 + R6-01: review/draft/negation
+            // intents refuse the mutation. A trusted current-turn `send_now`
+            // skips the card ONLY when the host binds the FULL payload: the
+            // VERB the sentence names must be the tool being called, the
+            // frozen payload's addresses must be the addresses the sentence
+            // names, and "undo" must reference the single restorable
+            // operation. Anything unbound degrades to the review path.
+            let payloadBound = false;
             if (organizationDecision.mode === "send_now") {
               let parsedArgs: unknown = undefined;
               try {
@@ -4400,9 +4405,13 @@ export class AIChatQueryLoop {
               } catch {
                 parsedArgs = undefined;
               }
-              payloadUnambiguous = isUnambiguousDirectSendPayload(call.name, parsedArgs);
+              payloadBound = await this.resolveDirectSendPayloadBinding({
+                toolName: call.name,
+                args: parsedArgs,
+                userText,
+              });
             }
-            if (organizationDecision.mode === "send_now" && payloadUnambiguous) {
+            if (organizationDecision.mode === "send_now" && payloadBound) {
               // PRD §5.1/AC-01: the explicit user request IS the
               // confirmation, bound to this turn and this frozen payload;
               // the tool still runs entitlement, validation, durable
@@ -6821,6 +6830,70 @@ export class AIChatQueryLoop {
    * Fail-closed: any unreadable intent, missing turn identity, or resolver
    * failure yields a blocking code — a send is never authorized on error.
    */
+  /**
+   * R6-01: host-owned direct-send binding (design §8.1, FR-12). Resolves the
+   * trusted payload for the model's tool call from durable state — the
+   * frozen revision's envelope, the target message's sender, or the single
+   * restorable Trash operation — and hands it to the pure binding check
+   * together with the trusted sentence. The model's ids alone never
+   * authorize a card skip.
+   */
+  private async resolveDirectSendPayloadBinding(input: {
+    readonly toolName: string;
+    readonly args: unknown;
+    readonly userText: string;
+  }): Promise<boolean> {
+    const record = (typeof input.args === "object" && input.args !== null
+      ? input.args
+      : {}) as Record<string, unknown>;
+    let trustedPayloadAddresses: string[] = [];
+    let singleRestoreCandidateId: string | null = null;
+    try {
+      if (input.toolName === "send_email_forward") {
+        // The frozen revision the model references carries the envelope.
+        const revisionId = Number(record.revision_id);
+        if (!Number.isInteger(revisionId) || revisionId <= 0) return false;
+        const revision = await new EmailForwardDraftModule().readRevision(revisionId);
+        if (!revision) return false;
+        trustedPayloadAddresses = [
+          ...parseStringArrayJson(revision.toRecipientsJson),
+          ...parseStringArrayJson(revision.ccRecipientsJson),
+          ...parseStringArrayJson(revision.bccRecipientsJson),
+        ];
+      } else if (input.toolName === "move_email_to_trash") {
+        const messageId = Number(record.message_id);
+        if (!Number.isInteger(messageId) || messageId <= 0) return false;
+        const message = await new EmailReceivedMessageModule().read(messageId);
+        if (!message) return false;
+        // Bind the target identity: the sender the sentence must name.
+        trustedPayloadAddresses = [message.fromAddress.trim().toLowerCase()];
+      } else if (input.toolName === "restore_email") {
+        // "Undo that" is direct only with exactly ONE succeeded Trash
+        // operation to restore, and it must be the referenced one.
+        const operations = await new EmailOrganizationOperationModule().listRecentOperations({
+          limit: 50,
+        });
+        const succeededTrash = operations.filter(
+          (operation) => operation.kind === "trash" && operation.status === "succeeded"
+        );
+        if (succeededTrash.length !== 1) return false;
+        singleRestoreCandidateId = succeededTrash[0].operationId;
+      } else {
+        return false;
+      }
+    } catch {
+      // Any durable-state read failure fails closed to the review path.
+      return false;
+    }
+    return isDirectSendPayloadBound({
+      toolName: input.toolName,
+      args: input.args,
+      userText: input.userText,
+      trustedPayloadAddresses,
+      singleRestoreCandidateId,
+    });
+  }
+
   private async evaluateOutboundEmailGate(
     input: AIChatQueryGeneratorInput,
     toolArguments?: Record<string, unknown>

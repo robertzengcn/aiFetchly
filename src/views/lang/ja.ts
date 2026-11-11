@@ -1143,6 +1143,13 @@ export default {
       SOURCE_FETCH_FAILED: "元メールの取得に失敗しました",
       ATTACHMENT_TOO_LARGE: "添付ファイルが大きすぎます",
     },
+    sent_copy_status: {
+      not_requested: 'コピー未要求',
+      pending: 'コピー保留',
+      saved: '送信済みに保存',
+      failed: 'コピー失敗',
+      unknown: 'コピー未確認',
+    },
     sent_copy_warning: 'メッセージは送信されましたが、送信済みコピーを確認できませんでした（{status}）。',
     history_title: '整理履歴',
     history_load_failed: '操作履歴を読み込めませんでした。',

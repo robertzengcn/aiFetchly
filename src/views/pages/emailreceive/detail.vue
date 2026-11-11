@@ -335,12 +335,16 @@ function onForwardSent(result: SendForwardResultDto): void {
   if (result.status === "submitted" || result.status === "already_processed") {
     openDraftId.value = null;
   }
-  // R5-02 (AC-22): surface the Sent-copy warning separately when present.
-  if (result.status === "submitted" && result.sentCopyStatus !== undefined) {
-    if (result.sentCopyStatus === "failed" || result.sentCopyStatus === "unknown") {
+  // R5-02/R6-05 (AC-22): surface the Sent-copy warning separately whenever
+  // the delivery returned one — submitted AND outcome_unknown alike — with
+  // a translated status word (never the raw token).
+  const sentCopy = result.sentCopyStatus;
+  if ((result.status === "submitted" || result.status === "outcome_unknown") && sentCopy !== undefined) {
+    if (sentCopy === "failed" || sentCopy === "unknown") {
+      const statusWord = sentCopyStatusLabel(sentCopy);
       setActionMessage(
-        t("emailOrganization.sent_copy_warning", { status: result.sentCopyStatus }) ||
-          `The message was submitted, but the Sent copy could not be verified (${result.sentCopyStatus}).`,
+        t("emailOrganization.sent_copy_warning", { status: statusWord }) ||
+          `The message was submitted, but the Sent copy could not be verified (${statusWord}).`,
         "warning"
       );
       return;
@@ -410,6 +414,12 @@ function orgErrorCode(code: string | null | undefined): string {
   if (!code) return "";
   const key = `emailOrganization.error_code.${code}`;
   return te(key) ? t(key) : code;
+}
+
+/** R6-05: the Sent-copy status word is translated, never a raw token. */
+function sentCopyStatusLabel(status: string): string {
+  const key = `emailOrganization.sent_copy_status.${status}`;
+  return te(key) ? t(key) : status;
 }
 </script>
 <style scoped>

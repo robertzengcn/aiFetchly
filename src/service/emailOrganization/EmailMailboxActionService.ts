@@ -821,10 +821,24 @@ export class EmailMailboxActionService extends BaseModule {
         error instanceof Error ? error.message : String(error)
       );
       // R5-04: the obligation survives the process — reply admission checks
-      // it before every send until a repair resolves it.
-      await this.replyDraftModule
-        .recordInvalidationObligation({ messageId, emailServiceId, destinationFolder })
-        .catch(() => undefined);
+      // it before every send until a repair resolves it. R6-03: a failed
+      // obligation INSERT must not be swallowed — the reply gate's fallback
+      // (the item's REPLY_INVALIDATION_PENDING row) is what then keeps the
+      // send closed, and the audit records that the guard row is missing.
+      let obligationDurable = true;
+      try {
+        await this.replyDraftModule.recordInvalidationObligation({
+          messageId,
+          emailServiceId,
+          destinationFolder,
+        });
+      } catch (obligationError) {
+        obligationDurable = false;
+        log.error(
+          `[EmailMailboxActionService] obligation INSERT also failed for message ${messageId}; reply admission falls back to the item marker:`,
+          obligationError instanceof Error ? obligationError.message : String(obligationError)
+        );
+      }
       await this.operationModule
         .recordAudit({
           operationId,
@@ -833,7 +847,7 @@ export class EmailMailboxActionService extends BaseModule {
           action: "reply_invalidation_failed",
           status: "failed",
           reasonCode: "LOCAL_COMMIT_PENDING",
-          detail: { destinationFolder },
+          detail: { destinationFolder, obligationDurable },
         })
         .catch(() => undefined);
       return false;

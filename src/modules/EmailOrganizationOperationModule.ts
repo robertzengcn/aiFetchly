@@ -133,6 +133,19 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
+  /** R6-03: reply-gate fallback marker query (design §10.4). */
+  async hasUnresolvedInvalidationPendingItem(messageId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.hasUnresolvedInvalidationPendingItem(messageId);
+    } catch (error) {
+      log.error("Error checking invalidation-pending item:", error);
+      // Fail closed: an unreadable marker state must not let a reply send
+      // past the §10.4 gate.
+      return true;
+    }
+  }
+
   async findMovedAwayOccurrence(input: {
     readonly emailServiceId: number;
     readonly folderPath: string;

@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  extractSentenceAddresses,
+  isDirectSendPayloadBound,
   isUnambiguousDirectSendPayload,
   prepareTrustedIntentText,
+  resolveDirectSendVerb,
   resolveEmailOrganizationIntent,
+  sentenceAddressesBindEnvelope,
 } from "@/service/emailOrganization/EmailOrganizationIntentResolver";
 
 describe("resolveEmailOrganizationIntent", () => {
@@ -167,5 +171,169 @@ describe("isUnambiguousDirectSendPayload (R5-07 host-owned payload gate)", () =>
 
   it("refuses unknown tools", () => {
     expect(isUnambiguousDirectSendPayload("run_arbitrary_tool", { message_id: 1 })).toBe(false);
+  });
+});
+
+describe("resolveDirectSendVerb (R6-01: the sentence names ONE action)", () => {
+  it("resolves forward from send phrases in every UI language", () => {
+    expect(resolveDirectSendVerb("Forward this to finance@example.com now")).toBe("forward");
+    expect(resolveDirectSendVerb("send it now")).toBe("forward");
+    expect(resolveDirectSendVerb("把这封邮件转发给 finance@example.com")).toBe("forward");
+    expect(resolveDirectSendVerb("Leite es jetzt weiter")).toBe("forward");
+    expect(resolveDirectSendVerb("finance@example.com に転送して")).toBe("forward");
+  });
+
+  it("resolves trash and restore verbs", () => {
+    expect(resolveDirectSendVerb("Delete this email.")).toBe("trash");
+    expect(resolveDirectSendVerb("移到废纸篓")).toBe("trash");
+    expect(resolveDirectSendVerb("Elimínalo ahora")).toBe("trash");
+    expect(resolveDirectSendVerb("Undo that deletion.")).toBe("restore");
+    expect(resolveDirectSendVerb("元に戻して")).toBe("restore");
+  });
+
+  it("returns null when the sentence mixes verbs (ambiguous → review)", () => {
+    expect(resolveDirectSendVerb("forward it now, and also delete this")).toBeNull();
+    expect(resolveDirectSendVerb("")).toBeNull();
+  });
+
+  it("returns null for non-action text", () => {
+    expect(resolveDirectSendVerb("what does the button do?")).toBeNull();
+  });
+});
+
+describe("sentenceAddressesBindEnvelope (R6-01: the sentence names the recipients)", () => {
+  it("binds an equal, fully-named set", () => {
+    expect(
+      sentenceAddressesBindEnvelope(["finance@example.com"], ["finance@example.com"])
+    ).toBe(true);
+    expect(
+      sentenceAddressesBindEnvelope(
+        ["Finance@Example.com", "cc@example.com"],
+        ["finance@example.com", "cc@example.com"]
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a substituted or partial envelope", () => {
+    expect(sentenceAddressesBindEnvelope(["finance@example.com"], ["attacker@evil.test"])).toBe(false);
+    expect(sentenceAddressesBindEnvelope([], ["finance@example.com"])).toBe(false);
+    expect(sentenceAddressesBindEnvelope(["finance@example.com"], [])).toBe(false);
+    expect(
+      sentenceAddressesBindEnvelope(
+        ["finance@example.com"],
+        ["finance@example.com", "hidden@example.com"]
+      )
+    ).toBe(false);
+  });
+
+  it("extracts addresses from the trusted sentence", () => {
+    expect(extractSentenceAddresses("Forward this to Finance@Example.com and ops@x.test")).toEqual([
+      "finance@example.com",
+      "ops@x.test",
+    ]);
+  });
+});
+
+describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
+  const forwardArgs = { draft_id: 12, revision_id: 3 };
+
+  it("binds the audit scenario: sentence recipient matches the frozen envelope", () => {
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "send_email_forward",
+        args: forwardArgs,
+        userText: "forward this to finance@example.com now",
+        trustedPayloadAddresses: ["finance@example.com"],
+      })
+    ).toBe(true);
+  });
+
+  it("REFUSES when the draft is addressed to someone else than the sentence", () => {
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "send_email_forward",
+        args: forwardArgs,
+        userText: "forward this to finance@example.com now",
+        trustedPayloadAddresses: ["attacker@evil.test"],
+      })
+    ).toBe(false);
+  });
+
+  it("refuses a send_now Trash sentence that calls the forward tool (verb binding)", () => {
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "send_email_forward",
+        args: forwardArgs,
+        userText: "delete this email now",
+        trustedPayloadAddresses: ["finance@example.com"],
+      })
+    ).toBe(false);
+    // And the inverse: a forward sentence may not skip the card for Trash.
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "forward this to alice@example.com now",
+        trustedPayloadAddresses: ["alice@example.com"],
+      })
+    ).toBe(false);
+  });
+
+  it("trash binds only when the sentence names the target message's sender", () => {
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "delete this email from alice@example.com",
+        trustedPayloadAddresses: ["alice@example.com"],
+      })
+    ).toBe(true);
+    // A bare "delete this email" carries no bindable identity → review.
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "delete this email",
+        trustedPayloadAddresses: ["alice@example.com"],
+      })
+    ).toBe(false);
+    // A substituted id whose sender is NOT in the sentence → review.
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "move_email_to_trash",
+        args: { message_id: 999 },
+        userText: "delete this email from alice@example.com",
+        trustedPayloadAddresses: ["someoneelse@example.com"],
+      })
+    ).toBe(false);
+  });
+
+  it("restore is direct only with exactly one restorable candidate, and it must match", () => {
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "restore_email",
+        args: { operation_id: "op-solo-123456" },
+        userText: "undo that deletion",
+        singleRestoreCandidateId: "op-solo-123456",
+      })
+    ).toBe(true);
+    // More than one possible operation → the host supplies no candidate.
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "restore_email",
+        args: { operation_id: "op-solo-123456" },
+        userText: "undo that deletion",
+        singleRestoreCandidateId: null,
+      })
+    ).toBe(false);
+    // A substituted operation id → review.
+    expect(
+      isDirectSendPayloadBound({
+        toolName: "restore_email",
+        args: { operation_id: "op-other-99999" },
+        userText: "undo that deletion",
+        singleRestoreCandidateId: "op-solo-123456",
+      })
+    ).toBe(false);
   });
 });
