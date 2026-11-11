@@ -49,9 +49,19 @@ jobs:
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Install Linux system dependencies for native modules
+        # P1: apt indexes flake during runner-image migrations (exit 100
+        # "unable to locate package") — retry update+install together.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if sudo apt-get update && sudo apt-get install -y libsecret-1-dev xvfb; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep $((attempt * 20))
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Use HTTPS for GitHub dependencies
         run: |
