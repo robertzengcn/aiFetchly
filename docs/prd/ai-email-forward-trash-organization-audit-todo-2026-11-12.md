@@ -90,6 +90,20 @@ AC-22: a failed or unverified Sent copy shows a warning and does not cause a res
 
 Repair: render `sentCopyStatus` from the operation projection on the operation card, and surface the same warning from the chat tool result when the status is `failed` or `unknown`.
 
+## Remediation status
+
+**Remediated on this branch (commit `41a8b334a`), re-read at the production callers.** Every fix landed at the caller the audit flagged, with the audit's own scenarios as tests.
+
+| Item | Status | Evidence on the production path |
+| --- | --- | --- |
+| R7-01 payload identity | **Fixed** | The direct path now requires the draft to belong to the conversation where the review happened (the host compares `draft.conversationId` to the turn's conversation; UI-page drafts, other conversations and other accounts always take the card). Addresses that name the SOURCE message's sender are provenance, not recipients: the gate loads the draft's source message, filters its address out of the sentence set, refuses an envelope that CONTAINS the source address, and requires `revision.sendingAccountId === sourceMessage.emailServiceId`. "Send it now" with no addresses binds the conversation-shown revision (the R7-01 dead-end is fixed). Trash is direct only when `countBySender` returns exactly ONE message for the named sender on that account — two bob messages must ask. "Undo that" is direct only when `countRestorableTrashOperations` (account-wide, no window, partial successes included) returns exactly ONE restorable operation and it is the referenced one. Chat-side selection trash stays on review: no UI selection exists in chat, and the PRD's 12-message flow runs in the UI bulk dialog where the frozen set is shown before executing. Tests: 30 resolver cases including the audit's exact alice-source refusal, the different-message conversation refusal, envelope-contains-source, unique-sender, and send-now-after-review. |
+| R7-02 hole and total | **Fixed** | A non-`listed` folder now STOPS the scan (`break outer`): rows on the page come only from folders before the hole, `nextCursor` points AT the failed folder, and the retry walks the hole first — the audit's `[failing, inbox, archive]` scenario is a test (page 1: no inbox/archive rows, cursor at the hole, `totalMatched: null`; page 2: hole retried once, then inbox+archive exactly once, `complete: true, totalMatched: 5`). `totalMatched` is `number \| null` on the service result and the renderer DTO: a number ONLY when the scan completed, otherwise null — never the page length as a total. The bulk dialog renders a dash for null and passes the previously missing `{selected}` placeholder into `bulk_result_line`. |
+| R7-03 warning surfaces | **Fixed** | `EmailOrganizationOperationCard` renders the Sent-copy warning from the item projection (`org-op-sent-copy-warning`, translated status word via `sent_copy_status.*`) for failed/unknown — a user who leaves the send toast still sees it. The chat send envelope carries `warning` + `code: "SENT_COPY_UNVERIFIED"` when the copy is failed/unknown, so the transcript surface can key off it. Card tests cover the warning and the saved-copy no-warning pair. |
+
+**Verification run on this branch:** `yarn typecheck` 0 errors; `yarn vue-typecheck` 0 errors; component suite 184 files / 1616 tests; organization service suites 7 files / 91 tests (incl. the audit's server-search scenario and the resolver bindings); `emailOrganizationJourneys.test.ts` 4/4 re-run at the remediation commit.
+
+**Still open (operator/CI, unchanged):** live test-mailbox validation, Forge packaged proof in CI (`yarn package` stays off developer machines per AGENTS.md), and the residual IMAP index-vs-UID-offset note (mail arriving between pages can shift a fresh SEARCH — a resume-UID design remains the follow-up if that matters in practice).
+
 ## Requirement scorecard
 
 | ID | Stage | This pass |
