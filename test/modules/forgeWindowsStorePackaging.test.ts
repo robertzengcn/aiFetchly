@@ -181,7 +181,9 @@ describe("Windows Store packaging", (): void => {
 
     expect(workflow).to.include("github.event_name == 'push' && 'store'");
     expect(workflow).to.include("WINDOWS_STORE_PACKAGE_IDENTITY");
-    expect(workflow).to.include("yarn make-win:store");
+    expect(workflow).to.include(
+      "cross-env NODE_ENV=production WINDOWS_DISTRIBUTION=store yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-msix"
+    );
     expect(workflow).to.include("out/make/**/*.msix");
     // Windows signing is optional (forge.config.js resolveWindowsSignConfig()
     // signs only when cert.pfx + CERTIFICATE_PASSWORD are present). Master
