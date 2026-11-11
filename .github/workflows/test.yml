@@ -183,14 +183,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-2022, macos-latest]
+        # ubuntu-22.04 pinned (not -latest): eviction shutdown-signals
+        # ~2 min into electron-packager on the -latest pool (Ubuntu 26);
+        # the pinned image runs a different, stable runner pool (mirrors
+        # the windows-2022 pin).
+        os: [ubuntu-22.04, windows-2022, macos-latest]
         # Per-OS limits live in the matrix. The job-level env block may NOT
         # use the `runner` context (only github/inputs/matrix/needs/secrets/
         # strategy/vars are allowed there), so the previous
         # `runner.os == 'Linux' && ...` expressions broke workflow parsing
         # (Test Suite #117). The `matrix` context IS allowed in job env.
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             node_options: --max-old-space-size=3072
             guard_timeout_ms: "900000"
           - os: windows-2022
