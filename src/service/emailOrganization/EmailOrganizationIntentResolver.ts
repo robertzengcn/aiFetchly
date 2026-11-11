@@ -458,6 +458,10 @@ export function isUnambiguousDirectSendPayload(
 export type DirectSendVerb = "forward" | "trash" | "restore";
 
 const FORWARD_VERB_PHRASES: PhraseSet = [
+  // The bare verb: "forward the invoice from a@x to b@y now" names no
+  // canned phrase — the earlier negation/review/question checks gate the
+  // dangerous shapes before this table runs.
+  "forward",
   "forward it", "forward this", "forward that", "forward the email",
   "forward the message", "forward this email", "forward this message",
   "send it now", "send this now", "send it", "send now",
@@ -469,6 +473,7 @@ const FORWARD_VERB_PHRASES: PhraseSet = [
 ];
 
 const TRASH_VERB_PHRASES: PhraseSet = [
+  "delete",
   "delete it", "delete this", "delete that", "delete the email",
   "delete the message", "move it to trash", "move this to trash",
   "move that to trash", "move it to the trash", "move this to the trash",
@@ -481,6 +486,7 @@ const TRASH_VERB_PHRASES: PhraseSet = [
 ];
 
 const RESTORE_VERB_PHRASES: PhraseSet = [
+  "restore", "undo",
   "restore it", "restore this", "restore that", "undo that deletion",
   "undo the deletion", "undo that", "undo this",
   "撤销删除", "恢复它",
@@ -563,6 +569,26 @@ export function isDirectSendPayloadBound(input: {
   readonly trustedPayloadAddresses?: readonly string[];
   /** The single restorable succeeded Trash operation id, when exactly one. */
   readonly singleRestoreCandidateId?: string | null;
+  /**
+   * R7-01: the draft was created in THIS conversation (the review the user
+   * is answering with "send it now"). A draft from anywhere else — the UI
+   * detail page, another conversation, another account — is never a direct
+   * payload: it takes the review card.
+   */
+  readonly draftBelongsToConversation?: boolean;
+  /**
+   * R7-01: the SOURCE message's sender address. Addresses in the sentence
+   * that match it name the SOURCE, not a recipient — they are excluded
+   * from the recipient comparison, and an envelope that CONTAINS the source
+   * address is refused.
+   */
+  readonly sourceAddress?: string | null;
+  /**
+   * R7-01: how many stored messages from the target sender exist on the
+   * target account. Trash is direct only with exactly ONE matching message
+   * — "delete the email from bob" with two bob messages must ask.
+   */
+  readonly senderMessageCount?: number | null;
 }): boolean {
   if (!isUnambiguousDirectSendPayload(input.toolName, input.args)) return false;
   const verb = resolveDirectSendVerb(input.userText);
@@ -571,28 +597,58 @@ export function isDirectSendPayloadBound(input: {
     ? input.args
     : {}) as Record<string, unknown>;
   const sentenceAddresses = extractSentenceAddresses(input.userText);
+  // R7-01: EVERY direct payload must belong to the conversation where the
+  // review happened — a UI-page draft, another conversation's draft, or a
+  // draft of another account is never a direct-send target.
+  if (input.draftBelongsToConversation !== true) return false;
+
   switch (input.toolName) {
     case "send_email_forward": {
-      // The sentence must NAME the recipients the frozen revision carries:
-      // "forward this to finance@example.com now" authorizes exactly that
-      // envelope, never a draft addressed to someone else (AC-01/AC-03).
-      return sentenceAddressesBindEnvelope(
-        sentenceAddresses,
-        input.trustedPayloadAddresses ?? []
+      const source = (input.sourceAddress ?? "").trim().toLowerCase();
+      const envelope = (input.trustedPayloadAddresses ?? []).map((entry) =>
+        entry.trim().toLowerCase()
       );
+      if (sentenceAddresses.length === 0) {
+        // "send it now" after a review: no addresses to compare — the
+        // conversation-scoped draft IS the revision the review showed.
+        // The envelope must still be non-empty (the delivery enforces the
+        // recipient minimum separately).
+        return envelope.length > 0;
+      }
+      // The sentence names addresses. Addresses that match the SOURCE
+      // message's sender name the SOURCE, not a recipient ("forward the
+      // invoice from alice@vendor.com to finance@example.com" names alice
+      // as provenance). Remove them before comparing, and refuse an
+      // envelope that CONTAINS the source address.
+      const namedRecipients = sentenceAddresses.filter(
+        (entry) => source === "" || entry !== source
+      );
+      if (source !== "" && envelope.includes(source)) return false;
+      if (namedRecipients.length === 0) return false;
+      const envelopeSet = new Set(envelope);
+      if (envelopeSet.size !== namedRecipients.length) return false;
+      for (const entry of namedRecipients) {
+        if (!envelopeSet.has(entry)) return false;
+      }
+      return true;
     }
     case "move_email_to_trash": {
-      // Bind the target identity: the message's sender must be named in the
-      // sentence. A bare "delete this email" without any address in the
-      // trusted text stays on the review path (the host cannot bind "this").
+      // R7-01: bind the target identity — the sender must be named AND be
+      // UNIQUE on the account. Two bob@example.com messages plus "delete
+      // the email from bob@example.com" must ask which one (the host's
+      // senderMessageCount is the durable answer), and a bare "delete this
+      // email" (no address in the trusted text, no UI selection in chat)
+      // stays on the review path.
       if (sentenceAddresses.length === 0) return false;
+      if (input.senderMessageCount !== 1) return false;
       return (input.trustedPayloadAddresses ?? []).some((entry) =>
         sentenceAddresses.includes(entry.trim().toLowerCase())
       );
     }
     case "restore_email": {
-      // "Undo that" is direct ONLY when exactly one succeeded Trash
-      // operation exists AND it is the one the model references.
+      // "Undo that" is direct ONLY when exactly one restorable Trash
+      // operation exists on the account (account-wide count, including
+      // partial successes) AND it is the one the model references.
       const candidate = input.singleRestoreCandidateId ?? null;
       if (candidate === null) return false;
       return record.operation_id === candidate;

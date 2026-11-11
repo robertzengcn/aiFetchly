@@ -234,7 +234,8 @@ export interface OrganizationSearchResultDto {
   }>;
   /** Folders whose server search failed; completeness is false when set. */
   failedFolders: Array<{ folderPath: string; reasonCode: string }>;
-  totalMatched: number;
+  /** R7-02: the matched total ONLY when complete; null otherwise. */
+  totalMatched: number | null;
   complete: boolean;
   truncated: boolean;
   nextCursor: string | null;

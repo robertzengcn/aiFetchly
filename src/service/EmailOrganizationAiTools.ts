@@ -401,6 +401,17 @@ export async function sendEmailForward(
         result: { ...outcome } as unknown as Record<string, unknown>,
       };
     }
+    // R7-03 (AC-22): the Sent-copy warning surfaces in the CHAT transcript
+    // too — the status rides the envelope with a machine-readable code, so
+    // a user who never opens the detail page still sees it.
+    if (outcome.status === "submitted" && (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")) {
+      return {
+        success: true,
+        warning: `The forward was submitted, but the Sent copy could not be verified (${outcome.sentCopyStatus}).`,
+        code: "SENT_COPY_UNVERIFIED",
+        result: { ...outcome } as unknown as Record<string, unknown>,
+      };
+    }
     return { success: true, result: { ...outcome } };
   } catch (error) {
     return failure(error);

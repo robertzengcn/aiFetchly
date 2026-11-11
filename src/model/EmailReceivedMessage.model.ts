@@ -552,6 +552,18 @@ export class EmailReceivedMessageModel extends BaseDb {
    * subject semantics (escapeLikePattern); caller decides folder coverage.
    * Returns matched rows plus honest total/truncation information.
    */
+  /**
+   * R7-01: how many stored messages exist from ONE sender on ONE account.
+   * The chat direct-send gate uses this to refuse Trash when several
+   * messages match the sender the sentence named — "delete the email from
+   * bob@example.com" with two bob messages must ask, not guess.
+   */
+  async countBySender(emailServiceId: number, fromAddress: string): Promise<number> {
+    return await this.repository.count({
+      where: { emailServiceId, fromAddress },
+    });
+  }
+
   async searchForOrganization(input: {
     emailServiceId: number;
     folderPaths?: readonly string[];

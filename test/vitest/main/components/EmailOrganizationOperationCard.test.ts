@@ -28,6 +28,8 @@ const i18n = createI18n({
         count_completed: "{n} completed",
         recipient_outcome: { accepted: "Accepted", rejected: "Rejected", unknown: "Unknown" },
         error_code: { CAPABILITY_UNSUPPORTED: "Not supported by this account" },
+        sent_copy_warning: "The forward was submitted, but the Sent copy could not be verified ({status}).",
+        sent_copy_status: { failed: "copy failed", unknown: "copy unverified" },
       },
     },
   },
@@ -244,6 +246,60 @@ describe("EmailOrganizationOperationCard", () => {
     expect(mockGet).not.toHaveBeenCalled();
     expect(wrapper.find("[data-testid='org-op-undo']").exists()).toBe(false);
   });
-});
 
-void mockReconcile;
+  it("R7-03/AC-22: a forward item with an unverified Sent copy renders the warning on the card", async () => {
+    mockGet.mockResolvedValue({
+      operation: operationFixture({
+        kind: "forward",
+        status: "succeeded",
+        items: [
+          {
+            itemId: 1,
+            messageId: 42,
+            status: "succeeded",
+            beforeFolderPath: null,
+            destinationFolderPath: null,
+            errorCode: null,
+            sanitizedError: null,
+            recipientOutcomes: [
+              { address: "finance@example.com", outcome: "accepted" },
+            ],
+            sentCopyStatus: "failed",
+          },
+        ],
+      }),
+    });
+    const wrapper = mountCard();
+    await flushPromises();
+    const warning = wrapper.find("[data-testid='org-op-sent-copy-warning']");
+    expect(warning.exists()).toBe(true);
+    // The status word is translated, never the raw token.
+    expect(warning.text()).toContain("copy failed");
+    expect(warning.text()).not.toContain("(failed)");
+  });
+
+  it("R7-03: a saved Sent copy renders no warning", async () => {
+    mockGet.mockResolvedValue({
+      operation: operationFixture({
+        kind: "forward",
+        status: "succeeded",
+        items: [
+          {
+            itemId: 1,
+            messageId: 42,
+            status: "succeeded",
+            beforeFolderPath: null,
+            destinationFolderPath: null,
+            errorCode: null,
+            sanitizedError: null,
+            recipientOutcomes: [],
+            sentCopyStatus: "saved",
+          },
+        ],
+      }),
+    });
+    const wrapper = mountCard();
+    await flushPromises();
+    expect(wrapper.find("[data-testid='org-op-sent-copy-warning']").exists()).toBe(false);
+  });
+});

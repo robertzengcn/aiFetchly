@@ -76,6 +76,16 @@
             {{ outcome.address }} ·
             {{ tOrRaw(`emailOrganization.recipient_outcome.${outcome.outcome}`, outcome.outcome) }}
           </div>
+          <!-- R7-03/AC-22: the Sent-copy warning lives on the operation too —
+               a user who leaves the send toast still sees it here. -->
+          <div
+            v-if="item.sentCopyStatus === 'failed' || item.sentCopyStatus === 'unknown'"
+            class="text-caption text-warning ml-4"
+            data-testid="org-op-sent-copy-warning"
+          >
+            <v-icon size="x-small" class="mr-1">mdi-content-copy-off</v-icon>
+            {{ t("emailOrganization.sent_copy_warning", { status: sentCopyStatusLabel(item.sentCopyStatus ?? "unknown") }) || `Sent copy could not be verified (${item.sentCopyStatus}).` }}
+          </div>
         </div>
       </div>
     </v-card-text>
@@ -290,6 +300,12 @@ async function onCancel(): Promise<void> {
 /** T15: te() guard — a missing key falls back to a readable value, not the key. */
 function tOrRaw(key: string, fallback: string): string {
   return te(key) ? t(key) : fallback;
+}
+
+/** R7-03: the Sent-copy status word is translated, never a raw token. */
+function sentCopyStatusLabel(status: string): string {
+  const key = `emailOrganization.sent_copy_status.${status}`;
+  return te(key) ? t(key) : status;
 }
 
 function itemStatusText(status: string): string {

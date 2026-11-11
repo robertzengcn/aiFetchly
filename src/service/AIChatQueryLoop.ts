@@ -4409,6 +4409,7 @@ export class AIChatQueryLoop {
                 toolName: call.name,
                 args: parsedArgs,
                 userText,
+                conversationId: input.conversationId,
               });
             }
             if (organizationDecision.mode === "send_now" && payloadBound) {
@@ -6839,12 +6840,16 @@ export class AIChatQueryLoop {
     readonly toolName: string;
     readonly args: unknown;
     readonly userText: string;
+    readonly conversationId?: number | string | null;
   }): Promise<boolean> {
     const record = (typeof input.args === "object" && input.args !== null
       ? input.args
       : {}) as Record<string, unknown>;
     let trustedPayloadAddresses: string[] = [];
     let singleRestoreCandidateId: string | null = null;
+    let draftBelongsToConversation = false;
+    let sourceAddress: string | null = null;
+    let senderMessageCount: number | null = null;
     try {
       if (input.toolName === "send_email_forward") {
         // The frozen revision the model references carries the envelope.
@@ -6857,24 +6862,59 @@ export class AIChatQueryLoop {
           ...parseStringArrayJson(revision.ccRecipientsJson),
           ...parseStringArrayJson(revision.bccRecipientsJson),
         ];
+        // R7-01: the payload must be THIS conversation's review — a UI-page
+        // draft or another conversation's draft takes the review card.
+        const draft = await new EmailForwardDraftModule().readDraft(revision.draftId);
+        const conversationNumber =
+          typeof input.conversationId === "number"
+            ? input.conversationId
+            : Number(input.conversationId);
+        draftBelongsToConversation =
+          draft !== null &&
+          draft.conversationId !== null &&
+          Number.isFinite(conversationNumber) &&
+          draft.conversationId === conversationNumber;
+        // R7-01: source identity — the sending account must be the source
+        // message's account, and the source sender is excluded from the
+        // sentence's recipient set (named provenance is not a recipient).
+        const sourceMessage = await new EmailReceivedMessageModule().read(
+          draft?.messageId ?? 0
+        );
+        if (!sourceMessage) return false;
+        if (revision.sendingAccountId !== sourceMessage.emailServiceId) return false;
+        sourceAddress = sourceMessage.fromAddress.trim().toLowerCase();
       } else if (input.toolName === "move_email_to_trash") {
         const messageId = Number(record.message_id);
         if (!Number.isInteger(messageId) || messageId <= 0) return false;
         const message = await new EmailReceivedMessageModule().read(messageId);
         if (!message) return false;
-        // Bind the target identity: the sender the sentence must name.
+        // Bind the target identity: the sender the sentence must name, and
+        // it must be UNIQUE on the account (R7-01) — two messages from the
+        // same sender make the request ambiguous.
         trustedPayloadAddresses = [message.fromAddress.trim().toLowerCase()];
-      } else if (input.toolName === "restore_email") {
-        // "Undo that" is direct only with exactly ONE succeeded Trash
-        // operation to restore, and it must be the referenced one.
-        const operations = await new EmailOrganizationOperationModule().listRecentOperations({
-          limit: 50,
-        });
-        const succeededTrash = operations.filter(
-          (operation) => operation.kind === "trash" && operation.status === "succeeded"
+        senderMessageCount = await new EmailReceivedMessageModule().countBySender(
+          message.emailServiceId,
+          message.fromAddress
         );
-        if (succeededTrash.length !== 1) return false;
-        singleRestoreCandidateId = succeededTrash[0].operationId;
+        // Chat has no UI selection: a frozen bulk selection always takes
+        // the review path (the PRD's 12-message flow runs in the UI bulk
+        // dialog, which shows the exact frozen set before executing).
+        if (record.selection_id !== undefined) return false;
+      } else if (input.toolName === "restore_email") {
+        // R7-01: "undo that" is direct only with exactly ONE restorable
+        // Trash operation on the REFERENCED operation's account — an
+        // account-wide count (no 50-row window), including partial
+        // successes that still have moved items.
+        const operationId = typeof record.operation_id === "string" ? record.operation_id : "";
+        if (operationId === "") return false;
+        const referenced = await new EmailOrganizationOperationModule().readOperation(operationId);
+        if (!referenced || referenced.kind !== "trash") return false;
+        const restorableCount =
+          await new EmailOrganizationOperationModule().countRestorableTrashOperations(
+            referenced.emailServiceId
+          );
+        if (restorableCount !== 1) return false;
+        singleRestoreCandidateId = referenced.operationId;
       } else {
         return false;
       }
@@ -6888,6 +6928,9 @@ export class AIChatQueryLoop {
       userText: input.userText,
       trustedPayloadAddresses,
       singleRestoreCandidateId,
+      draftBelongsToConversation,
+      sourceAddress,
+      senderMessageCount,
     });
   }
 

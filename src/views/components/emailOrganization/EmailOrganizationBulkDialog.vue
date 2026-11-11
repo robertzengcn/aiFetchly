@@ -75,7 +75,7 @@
         <div v-if="searchRows.length > 0" class="mb-3">
           <div class="d-flex align-center mb-2">
             <span class="text-body-2">
-              {{ t("emailOrganization.bulk_result_line", { count: searchRows.length, total: searchTotal }) || `${selectedIds.size} of ${searchRows.length} selected` }}
+              {{ t("emailOrganization.bulk_result_line", { count: searchRows.length, total: searchTotal ?? "—", selected: selectedIds.size }) || `${selectedIds.size} of ${searchRows.length} selected` }}
             </span>
             <v-spacer></v-spacer>
             <v-btn
@@ -220,7 +220,7 @@ const fromFilter = ref("");
 const searching = ref(false);
 const searchError = ref<string | null>(null);
 const searchRows = ref<OrganizationSearchResultDto["rows"]>([]);
-const searchTotal = ref(0);
+const searchTotal = ref<number | null>(0);
 const searchIncomplete = ref(false);
 const selectedIds = ref(new Set<string>());
 const preparing = ref(false);
@@ -292,7 +292,9 @@ async function runSearch(): Promise<void> {
       pageSize: 100,
     });
     searchRows.value = result.rows;
-    searchTotal.value = result.totalMatched;
+    // R7-02: an incomplete scan has no matched total — render a dash, not
+    // the page length.
+    searchTotal.value = result.totalMatched ?? null;
     searchIncomplete.value = !result.complete;
   } catch (error) {
     searchError.value = error instanceof Error ? error.message : String(error);

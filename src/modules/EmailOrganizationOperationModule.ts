@@ -133,6 +133,17 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
+  /** R7-01: account-wide restorable Trash candidate count (direct undo). */
+  async countRestorableTrashOperations(emailServiceId: number): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.operationModel.countRestorableTrashOperations(emailServiceId);
+    } catch (error) {
+      log.error("Error counting restorable trash operations:", error);
+      throw error;
+    }
+  }
+
   /** R6-03: reply-gate fallback marker query (design §10.4). */
   async hasUnresolvedInvalidationPendingItem(messageId: number): Promise<boolean> {
     try {

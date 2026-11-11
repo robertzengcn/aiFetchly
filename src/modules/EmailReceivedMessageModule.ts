@@ -146,6 +146,17 @@ export class EmailReceivedMessageModule extends BaseModule {
   }
 
   /** Loads stored messages by exact ids, preserving the requested order. */
+  /** R7-01: stored-message count for one sender on one account (gate input). */
+  async countBySender(emailServiceId: number, fromAddress: string): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.countBySender(emailServiceId, fromAddress);
+    } catch (error) {
+      log.error("Error counting messages by sender:", error);
+      throw error;
+    }
+  }
+
   async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
     try {
       await this.ensureConnection();

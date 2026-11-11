@@ -630,6 +630,29 @@ export class EmailOrganizationOperationModel extends BaseDb {
   }
 
   /**
+   * R7-01: the number of DISTINCT succeeded/partially-succeeded Trash
+   * operations on ONE account that still carry a successfully moved item —
+   * the restorable candidate set for a direct "undo that". No recency
+   * window and no cross-account rows: a second restorable Trash anywhere on
+   * the account makes direct undo ambiguous (review path).
+   */
+  async countRestorableTrashOperations(emailServiceId: number): Promise<number> {
+    const rows = await this.operationRepository
+      .createQueryBuilder("op")
+      .innerJoin(EmailOrganizationOperationItemEntity, "item", "item.operationId = op.operationId")
+      .where("op.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere("op.kind = :kind", { kind: "trash" })
+      .andWhere("op.status IN (:...statuses)", {
+        statuses: ["succeeded", "partially_succeeded"],
+      })
+      .andWhere("item.status = :itemStatus", { itemStatus: "succeeded" })
+      .select("op.operationId", "operationId")
+      .distinct(true)
+      .getRawMany<{ operationId: string }>();
+    return rows.length;
+  }
+
+  /**
    * R12: persistent operation history for discovery after navigation or
    * restart. Newest first, optionally filtered by account or message.
    */

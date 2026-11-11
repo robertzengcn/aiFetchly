@@ -66,7 +66,8 @@ export interface OrganizationSearchResult {
   /** Folders whose server search failed; completeness is false when set. */
   readonly failedFolders: ReadonlyArray<{ readonly folderPath: string; readonly reasonCode: string }>;
   readonly rows: readonly OrganizationSearchResultRow[];
-  readonly totalMatched: number;
+  /** R7-02: the matched total ONLY when complete; null otherwise. */
+  readonly totalMatched: number | null;
   readonly complete: boolean;
   readonly truncated: boolean;
   readonly lastSyncAt: string | null;
@@ -287,13 +288,14 @@ export class EmailOrganizationSearchService extends BaseModule {
         // "no matches" result — it is disclosed and forces complete:false.
         if (result.status !== "listed") {
           failedFolders.push({ folderPath: folder, reasonCode: result.reasonCode });
-          // R6-02: a failed folder is RESUMABLE — the emitted cursor points
-          // back at this folder's consumed offset, so "next page" retries
-          // the failed folder instead of leaving complete:false with no
-          // continuation.
+          // R7-02: STOP at the hole. The rows already returned come from
+          // folders BEFORE the failure; the cursor points AT the failed
+          // folder so the next page retries it and then walks forward.
+          // Scanning past the hole (R6-02) either replaced the resume point
+          // with a later folder or re-served the later folders' rows twice.
           resumePosition = { folderIndex, uidOffset };
           foldersExhausted = false;
-          continue outer;
+          break outer;
         }
         searchedFolders.push(folder);
         // R6-02: the adapter's per-window `capped` bit is NOT ORed here —
@@ -387,7 +389,9 @@ export class EmailOrganizationSearchService extends BaseModule {
       searchedFolders: searchedFolders,
       failedFolders,
       rows,
-      totalMatched: rows.length,
+      // R7-02: the page length is not a matched total — publish a number
+      // ONLY when the scan completed; otherwise null (never a fake total).
+      totalMatched: scanFinished ? rows.length : null,
       complete: !capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && foldersExhausted,
       truncated: rows.length >= pageSize,
       lastSyncAt: null,

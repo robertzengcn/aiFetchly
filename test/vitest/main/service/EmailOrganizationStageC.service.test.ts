@@ -784,7 +784,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
-  it("R6-02: a failed folder is RESUMABLE — next page retries it instead of dead-ending", async () => {
+  it("R6-02/R7-02: a failed folder is RESUMABLE — next page retries it instead of dead-ending", async () => {
     const adapter = new BulkFakeAdapter();
     let firstCall = true;
     adapter.searchUids = async (_c, _folder, input) => {
@@ -811,9 +811,12 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
       folderPaths: ["INBOX"],
       subject: "retry ok",
     });
-    // The failed folder is disclosed AND a resumable cursor exists.
+    // The failed folder is disclosed AND a resumable cursor exists; the
+    // page carries NO rows past the hole (R7-02: stop at the hole).
     expect(page1.failedFolders).toHaveLength(1);
     expect(page1.complete).toBe(false);
+    expect(page1.rows).toEqual([]);
+    expect(page1.totalMatched).toBeNull();
     expect(page1.nextCursor).not.toBeNull();
     const page2 = await serverService.search({
       emailServiceId: ACCOUNT_ID,
@@ -823,6 +826,75 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
       cursor: page1.nextCursor ?? undefined,
     });
     expect(page2.rows.map((row) => row.subject)).toEqual(["retry ok"]);
+    // The retry completed the scan — a real total is published now.
+    expect(page2.complete).toBe(true);
+    expect(page2.totalMatched).toBe(1);
+  });
+
+  it("R7-02: the scan STOPS at a failed folder — later folders are not served on this page", async () => {
+    // The audit's exact scenario: folders [failing, inbox, archive] where
+    // inbox and archive each return a few rows. The first page must NOT
+    // include inbox/archive while nextCursor points at the failing folder;
+    // the following page must not repeat inbox.
+    const adapter = new BulkFakeAdapter();
+    const failingCalls = new Set<number>();
+    let failingAttempts = 0;
+    adapter.searchUids = async (_c, folder, input) => {
+      const offset = input.uidOffset ?? 0;
+      if (folder === "Failing") {
+        failingAttempts += 1;
+        if (failingAttempts === 1) {
+          return { status: "failed" as const, reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: "hole" };
+        }
+        return {
+          status: "listed" as const,
+          candidates: [{ uid: "1", fromAddress: "a@b.test", subject: "hole folder", date: "2026-09-15T10:00:00Z", seen: false }],
+          capped: false,
+        };
+      }
+      const subject = folder === "INBOX" ? "inbox row" : "archive row";
+      return {
+        status: "listed" as const,
+        candidates: [
+          { uid: String(offset + 1), fromAddress: "a@b.test", subject, date: "2026-09-16T10:00:00Z", seen: false },
+          { uid: String(offset + 2), fromAddress: "a@b.test", subject, date: "2026-09-17T10:00:00Z", seen: false },
+        ],
+        capped: false,
+      };
+    };
+    void failingCalls;
+    const serverService = new EmailOrganizationSearchService({
+      adapter,
+      capabilityService: new BulkCapabilityStub() as unknown as EmailOrganizationCapabilityService,
+    });
+    const input = {
+      emailServiceId: ACCOUNT_ID,
+      source: "server" as const,
+      folderPaths: ["Failing", "INBOX", "Archive"],
+      subject: "row",
+      pageSize: 100,
+    };
+    const page1 = await serverService.search(input);
+    // Nothing past the hole is served, and the numeric field is null.
+    expect(page1.rows).toEqual([]);
+    expect(page1.totalMatched).toBeNull();
+    expect(page1.failedFolders).toEqual([
+      { folderPath: "Failing", reasonCode: "NETWORK_BEFORE_DISPATCH" },
+    ]);
+    expect(page1.nextCursor).not.toBeNull();
+    // The retry walks the hole first, then the later folders — inbox rows
+    // appear exactly once across the two pages.
+    const page2 = await serverService.search({ ...input, cursor: page1.nextCursor ?? undefined });
+    const subjects = page2.rows.map((row) => row.subject);
+    expect(subjects).toEqual([
+      "hole folder",
+      "inbox row",
+      "inbox row",
+      "archive row",
+      "archive row",
+    ]);
+    expect(page2.complete).toBe(true);
+    expect(page2.totalMatched).toBe(5);
   });
 
   it("R6-02: a dropped envelope fetch does not shift the next page (no repeats, no gaps)", async () => {

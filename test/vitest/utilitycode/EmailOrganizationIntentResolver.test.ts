@@ -241,6 +241,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "send_email_forward",
+        draftBelongsToConversation: true,
         args: forwardArgs,
         userText: "forward this to finance@example.com now",
         trustedPayloadAddresses: ["finance@example.com"],
@@ -252,6 +253,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "send_email_forward",
+        draftBelongsToConversation: true,
         args: forwardArgs,
         userText: "forward this to finance@example.com now",
         trustedPayloadAddresses: ["attacker@evil.test"],
@@ -263,6 +265,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "send_email_forward",
+        draftBelongsToConversation: true,
         args: forwardArgs,
         userText: "delete this email now",
         trustedPayloadAddresses: ["finance@example.com"],
@@ -272,6 +275,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "move_email_to_trash",
+        draftBelongsToConversation: true,
         args: { message_id: 41 },
         userText: "forward this to alice@example.com now",
         trustedPayloadAddresses: ["alice@example.com"],
@@ -283,15 +287,18 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "move_email_to_trash",
+        draftBelongsToConversation: true,
         args: { message_id: 41 },
         userText: "delete this email from alice@example.com",
         trustedPayloadAddresses: ["alice@example.com"],
+        senderMessageCount: 1,
       })
     ).toBe(true);
     // A bare "delete this email" carries no bindable identity → review.
     expect(
       isDirectSendPayloadBound({
         toolName: "move_email_to_trash",
+        draftBelongsToConversation: true,
         args: { message_id: 41 },
         userText: "delete this email",
         trustedPayloadAddresses: ["alice@example.com"],
@@ -301,6 +308,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "move_email_to_trash",
+        draftBelongsToConversation: true,
         args: { message_id: 999 },
         userText: "delete this email from alice@example.com",
         trustedPayloadAddresses: ["someoneelse@example.com"],
@@ -312,6 +320,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "restore_email",
+        draftBelongsToConversation: true,
         args: { operation_id: "op-solo-123456" },
         userText: "undo that deletion",
         singleRestoreCandidateId: "op-solo-123456",
@@ -321,6 +330,7 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "restore_email",
+        draftBelongsToConversation: true,
         args: { operation_id: "op-solo-123456" },
         userText: "undo that deletion",
         singleRestoreCandidateId: null,
@@ -330,9 +340,133 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
     expect(
       isDirectSendPayloadBound({
         toolName: "restore_email",
+        draftBelongsToConversation: true,
         args: { operation_id: "op-other-99999" },
         userText: "undo that deletion",
         singleRestoreCandidateId: "op-solo-123456",
+      })
+    ).toBe(false);
+  });
+});
+
+describe("R7-01 — conversation-scoped, source-aware direct binding", () => {
+  const conversationBound = { draftBelongsToConversation: true } as const;
+
+  it("a draft from OUTSIDE the conversation never takes the direct path (any tool)", () => {
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        draftBelongsToConversation: false,
+        toolName: "send_email_forward",
+        args: { draft_id: 12, revision_id: 3 },
+        userText: "forward this to finance@example.com now",
+        trustedPayloadAddresses: ["finance@example.com"],
+      })
+    ).toBe(false);
+    expect(
+      isDirectSendPayloadBound({
+        draftBelongsToConversation: false,
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "delete this email from alice@example.com",
+        trustedPayloadAddresses: ["alice@example.com"],
+        senderMessageCount: 1,
+      })
+    ).toBe(false);
+    expect(
+      isDirectSendPayloadBound({
+        draftBelongsToConversation: false,
+        toolName: "restore_email",
+        args: { operation_id: "op-solo-123456" },
+        userText: "undo that deletion",
+        singleRestoreCandidateId: "op-solo-123456",
+      })
+    ).toBe(false);
+  });
+
+  it("addresses that name the SOURCE are provenance, not recipients (audit test)", () => {
+    // "forward the invoice from alice@vendor.com to finance@example.com now"
+    // with a revision whose envelope is BOTH addresses must REFUSE: alice
+    // was named as the source, and the gate does not treat her as an
+    // authorized recipient.
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "send_email_forward",
+        args: { draft_id: 12, revision_id: 3 },
+        userText: "forward the invoice from alice@vendor.com to finance@example.com now",
+        trustedPayloadAddresses: ["alice@vendor.com", "finance@example.com"],
+        sourceAddress: "alice@vendor.com",
+      })
+    ).toBe(false);
+    // The legitimate shape: the chat created a draft of the alice message
+    // addressed only to finance — alice is the named source, finance the
+    // only recipient → binds.
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "send_email_forward",
+        args: { draft_id: 12, revision_id: 3 },
+        userText: "forward the invoice from alice@vendor.com to finance@example.com now",
+        trustedPayloadAddresses: ["finance@example.com"],
+        sourceAddress: "alice@vendor.com",
+      })
+    ).toBe(true);
+    // An envelope that CONTAINS the source address is refused outright.
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "send_email_forward",
+        args: { draft_id: 12, revision_id: 3 },
+        userText: "forward this to finance@example.com now",
+        trustedPayloadAddresses: ["finance@example.com", "alice@vendor.com"],
+        sourceAddress: "alice@vendor.com",
+      })
+    ).toBe(false);
+  });
+
+  it("'send it now' after a review binds the conversation-shown revision (no addresses)", () => {
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "send_email_forward",
+        args: { draft_id: 12, revision_id: 3 },
+        userText: "send it now",
+        trustedPayloadAddresses: ["finance@example.com"],
+      })
+    ).toBe(true);
+  });
+
+  it("Trash is direct only when the named sender has EXACTLY one message", () => {
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "delete the email from bob@example.com",
+        trustedPayloadAddresses: ["bob@example.com"],
+        senderMessageCount: 1,
+      })
+    ).toBe(true);
+    // Two bob messages on the account → must ask, never guess.
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "delete the email from bob@example.com",
+        trustedPayloadAddresses: ["bob@example.com"],
+        senderMessageCount: 2,
+      })
+    ).toBe(false);
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "move_email_to_trash",
+        args: { message_id: 41 },
+        userText: "delete the email from bob@example.com",
+        trustedPayloadAddresses: ["bob@example.com"],
+        senderMessageCount: null,
       })
     ).toBe(false);
   });
