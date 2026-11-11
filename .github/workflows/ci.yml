@@ -223,15 +223,18 @@ jobs:
         run: |
           set -euo pipefail
           echo "Memory/swap before:"; free -h
-          # Use a path the runner image does not pre-mount.
-          sudo fallocate -l 4G /swapfile-ci
+          # Use a path the runner image does not pre-mount. P1: doubled
+          # from 4G to 8G after two consecutive package-smoke runs lost
+          # the runner mid-packaging (memory starvation kills the agent
+          # process, not the build).
+          sudo fallocate -l 8G /swapfile-ci
           sudo chmod 600 /swapfile-ci
           sudo mkswap /swapfile-ci >/dev/null
           sudo swapon /swapfile-ci
           echo "Memory/swap after:"; free -h
           # Hard-fail if swap did not actually increase: a no-op mitigation is
           # worse than an explicit failure because it hides the OOM root cause.
-          # Runner ships ~3 GB swap; the 4 GB addition should bring total > 6 GB.
+          # Runner ships ~3 GB swap; the 8 GB addition should bring total > 10 GB.
           AFTER_SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
           if [ "$AFTER_SWAP_KB" -lt 6000000 ]; then
             echo "::error::Swap was not increased (Swap total=${AFTER_SWAP_KB} kB < 6 GB). The finalize OOM mitigation is not active; aborting before the packaging step OOM-kills the runner."
