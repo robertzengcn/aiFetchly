@@ -137,6 +137,20 @@ export interface ChatV2HistorySelectionMetadata {
 /** Metadata stored on v2 chat rows in the existing ai_chat_messages table. */
 export interface ChatV2MessageMetadata {
   source: "chat-v2" | "slash-command" | "scheduled-loop";
+  /**
+   * Chat-titles design §7.2 (B01): the RAW visible typed text exactly as the
+   * user entered it, before attachment enrichment, mention expansion, or
+   * injected context. Bounded to 2,000 characters. Titles and navigation
+   * excerpts read ONLY this — persisted `content` may mix in non-typed
+   * context that must never reach a title request or the sidebar.
+   */
+  safeTypedText?: string;
+  /**
+   * r3 G01: the provider config version that EXECUTED this exchange. Title
+   * selection uses it to refuse sending one provider's excerpt under a
+   * different provider's job. Absent on legacy rows (treated as compatible).
+   */
+  sourceProviderVersion?: number;
   openaiResponseId?: string;
   finishReason?: string | null;
   cancelled?: boolean;

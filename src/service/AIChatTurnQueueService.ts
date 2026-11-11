@@ -1,3 +1,4 @@
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import type {
   AIChatPendingCreateResult,
   AIChatPendingMessageEvent,
@@ -102,6 +103,16 @@ export interface AIChatTurnQueueServiceDeps {
   readonly engine: AIChatTurnQueueEngine;
   readonly pendingModule: AIChatPendingMessageModule;
   readonly eventSink: AIChatPendingEventSink;
+  /**
+   * Chat-titles design §6: nonblocking notification after a queue-drained
+   * interactive turn durably completes. Fire-and-forget.
+   */
+  readonly onInteractiveTurnCompleted?: (input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+    /** F01: provider version captured at drained-turn execution start. */
+    sourceProviderVersion: number;
+  }) => void;
   /**
    * Builds the renderer-facing stream sink for queue-dispatched turns.
    * B06: receives the bridge's durable run id + conversation so detail
@@ -499,6 +510,16 @@ export class AIChatTurnQueueService {
       pendingMessageId: parked.pendingMessageId,
       status: outcome,
     });
+    // r3 G02: a parked/resumed turn that durably completes reaches the SAME
+    // title trigger as the normal drain path — cancelled/failed outcomes
+    // never notify (FR-02 exclusions).
+    if (outcome === "completed") {
+      this.deps.onInteractiveTurnCompleted?.({
+        conversationId,
+        assistantMessageId: `assistant-pending-${parked.pendingMessageId}`,
+        sourceProviderVersion: currentProviderConfigVersion(),
+      });
+    }
     return true;
   }
 
@@ -1009,6 +1030,8 @@ export class AIChatTurnQueueService {
     );
 
     const drainStartedAt = Date.now();
+    // Titles F01: bind this drained execution to the current provider.
+    const sourceProviderVersion = currentProviderConfigVersion();
     const enqueueStartedAt = row.createdAt
       ? new Date(row.createdAt).getTime()
       : NaN;
@@ -1279,6 +1302,13 @@ export class AIChatTurnQueueService {
           pendingMessageId: row.pendingMessageId,
           status: "completed",
           assistantMessageId: terminal.assistantMessageId,
+        });
+        // Chat-titles FR-02: queued interactive path reaches the common
+        // title trigger exactly once (durable completion first).
+        this.deps.onInteractiveTurnCompleted?.({
+          conversationId,
+          assistantMessageId: terminal.assistantMessageId ?? null,
+          sourceProviderVersion,
         });
         await terminalGate.flush();
         // B06: background summary — terminal success (bounded, no bodies).

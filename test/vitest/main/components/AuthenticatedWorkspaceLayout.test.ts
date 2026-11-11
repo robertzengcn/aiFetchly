@@ -19,6 +19,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: (...args: unknown[]) => bootstrapWorkspaceMock(...args),
   subscribeSummaryEvents: (...args: unknown[]) =>
     subscribeSummaryEventsMock(...args),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   setWorkspaceRedesignEnabled: (...args: unknown[]) =>
     setWorkspaceRedesignEnabledMock(...args),
   fetchWorkspaceRedesignPreference: (...args: unknown[]) =>
@@ -115,6 +116,7 @@ beforeEach(() => {
   localStorage.clear();
   bootstrapWorkspaceMock.mockResolvedValue({ workspaces: [], unassigned: [] });
   subscribeSummaryEventsMock.mockReturnValue(() => undefined);
+  vi.fn().mockReturnValue(() => undefined),
   setWorkspaceRedesignEnabledMock.mockResolvedValue(undefined);
   // A02 default: the preference is UNSET (mount persists the default).
   fetchWorkspaceRedesignPreferenceMock.mockResolvedValue({

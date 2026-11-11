@@ -5,6 +5,7 @@ import { SkillInstallation00011788088148864 } from "../migrations/1788088148864-
 import { SkillInstallationSessionIdempotency00021788192000000 } from "../migrations/1788192000000-0002-skill-install-session-idempotency";
 import { SkillInstallationSessionRequestIdentity00031788326400000 } from "../migrations/1788326400000-0003-skill-install-session-request-identity";
 import { SkillDependencyBindings00041788400000000 } from "../migrations/1788400000000-0004-skill-dependency-bindings";
+import { ChatTitleLifecycle0005178848000000 } from "../migrations/1788480000000-0005-chat-title-lifecycle";
 
 /**
  * Registered schema migrations — UNION of both branches. NOTE (2026-10-09
@@ -23,4 +24,5 @@ export const DB_MIGRATIONS: Array<new () => MigrationInterface> = [
   SkillInstallationSessionIdempotency00021788192000000,
   SkillInstallationSessionRequestIdentity00031788326400000,
   SkillDependencyBindings00041788400000000,
+  ChatTitleLifecycle0005178848000000,
 ];

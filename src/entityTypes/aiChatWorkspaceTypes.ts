@@ -60,6 +60,8 @@ export interface WorkspaceConversationSummary {
   readonly conversationId: string;
   readonly workspaceKey: string | null;
   readonly title: string;
+  /** Monotonic title version; guards renderer reconciliation (titles §10.3). */
+  readonly titleRevision: number;
   readonly preview: string;
   readonly lastActivityAt: string;
   readonly unread: boolean;
@@ -113,6 +115,11 @@ export interface ConversationSummaryEvent {
    */
   readonly runOwner?: ChatRunOwner;
   readonly title?: string;
+  /**
+   * Chat-titles design §10.3: version of `title`. Once a versioned title is
+   * known, unversioned title fields cannot replace it.
+   */
+  readonly titleRevision?: number;
   readonly reason:
     | "run_queued"
     | "run_started"

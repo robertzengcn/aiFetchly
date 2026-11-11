@@ -1,12 +1,14 @@
 import {
   AI_CHAT_WORKSPACE_DETAIL_EVENT,
   AI_CHAT_WORKSPACE_SUMMARY_EVENT,
+  AI_CHAT_WORKSPACE_TITLE_UPDATED,
 } from "@/config/channellist";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import type {
   ChatRunDetailEvent,
   ConversationSummaryEvent,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import type { ChatTitleUpdatedEvent } from "@/service/aiChatTitle/AIChatTitleTypes";
 
 /** Numeric Electron webContents id. */
 export type WebContentsId = number;
@@ -153,6 +155,20 @@ export class AIChatEventRouter {
    * ensure the event contains status metadata only — never prompts, assistant
    * bodies, tool results, secrets, or artifact bodies (PRD §18.3, §29).
    */
+  /**
+   * Title-only update (chat-titles design §10.2): carries no run/attention/
+   * unread metadata so a name change can never disturb activity state.
+   */
+  broadcastTitleUpdate(event: ChatTitleUpdatedEvent): void {
+    this.pruneDestroyed();
+    for (const sub of this.subscriptions.values()) {
+      sub.webContents.send(
+        AI_CHAT_WORKSPACE_TITLE_UPDATED,
+        JSON.stringify(event)
+      );
+    }
+  }
+
   broadcastSummary(event: ConversationSummaryEvent): void {
     this.pruneDestroyed();
     for (const sub of this.subscriptions.values()) {

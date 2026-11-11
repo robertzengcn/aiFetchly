@@ -160,6 +160,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   }),
   subscribeDetailEvents: vi.fn().mockReturnValue(() => undefined),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   unsubscribeDetail: vi.fn(),
   loadHistoryPage: vi.fn(),
   markConversationRead: vi.fn().mockResolvedValue(undefined),
@@ -338,12 +339,16 @@ const HeaderStub = defineComponent({
     "runtimeStatus",
     "recovering",
     "activeToolCount",
+    "reportEnabled",
+    "reportLoading",
+    "reportDisabledReason",
   ],
-  emits: ["compact", "open-agent-tasks"],
+  emits: ["compact", "open-agent-tasks", "report"],
   template:
     '<header data-testid="conversation-header-stub">' +
     '<button data-testid="header-compact-stub" @click="$emit(\'compact\')" />' +
     '<button data-testid="header-agent-tasks-stub" @click="$emit(\'open-agent-tasks\')" />' +
+    '<button data-testid="header-report-stub" @click="$emit(\'report\')" />' +
     "<slot /></header>",
 });
 
@@ -380,7 +385,13 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         WorkspaceBadge: defineComponent({
           name: "WorkspaceBadge",
-          props: ["workspace", "memoryCount", "loading", "busy"],
+          props: [
+            "workspace",
+            "memoryCount",
+            "loading",
+            "busy",
+            "showMemory",
+          ],
           template:
             '<div data-testid="workspace-badge-stub">{{ workspace ? workspace.rootPath || "unset" : "none" }}</div>',
         }),
@@ -1768,9 +1779,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       const transcript = wrapper.findComponent({
         name: "AiChatWorkspaceTranscript",
       });
+      // Report entry moved into the header overflow menu: emit the same
+      // event the real menu item emits.
       wrapper
-        .findComponent({ name: "AIConversationReportButton" })
-        .vm.$emit("open");
+        .findComponent({ name: "AiChatConversationHeader" })
+        .vm.$emit("report");
       await flushPromises();
       const dialog = wrapper.findComponent({
         name: "AIConversationReportDialog",
@@ -1793,9 +1806,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
      */
     it("preserves reported markers across a center remount (AD-005 B04)", async () => {
       const first = await mountWithSelection();
+      // Report entry moved into the header overflow menu: emit the same
+      // event the real menu item emits.
       first
-        .findComponent({ name: "AIConversationReportButton" })
-        .vm.$emit("open");
+        .findComponent({ name: "AiChatConversationHeader" })
+        .vm.$emit("report");
       await flushPromises();
       first.findComponent({ name: "AIConversationReportDialog" }).vm.$emit(
         "submitted",
@@ -1816,6 +1831,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(transcript.props("reportedMessageIds")?.has("m-other")).toBe(
         false
       );
+    });
+
+    it("exposes the report entry only through the header menu (strip button removed)", async () => {
+      const wrapper = await mountWithSelection();
+      // The strip-level flag button is gone; the header item is the sole entry.
+      expect(wrapper.find('[data-testid="report-conversation"]').exists()).toBe(
+        false
+      );
+      const header = wrapper.findComponent({ name: "AiChatConversationHeader" });
+      // Harness leaves the capabilities channel unmocked → fail-closed
+      // disabled state with an announced reason.
+      expect(header.props("reportEnabled")).toBe(false);
+      expect(
+        String(header.props("reportDisabledReason")).length
+      ).toBeGreaterThan(0);
+      // Opening flows through the header's report event.
+      header.vm.$emit("report");
+      await flushPromises();
+      expect(
+        wrapper.findComponent({ name: "AIConversationReportDialog" }).exists()
+      ).toBe(true);
     });
 
     it("saves a generated image to the trusted workspace (FR-IMG-013)", async () => {
@@ -3604,6 +3640,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
     const badge = wrapper.get('[data-testid="workspace-badge-stub"]');
     expect(badge.text()).toBe("/tmp/project");
+  });
+
+  it("never shows the memory entry in the composer-strip workspace badge", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    // Product decision: the bottom-of-chat-area workspace strip shows no
+    // memory icon button. Workspace memory stays reachable through the
+    // Context-inspector entry (same store-owned overlay), so the badge is
+    // pinned to showMemory=false regardless of the adapter answer.
+    const badge = wrapper.findComponent({ name: "WorkspaceBadge" });
+    expect(badge.props("showMemory")).toBe(false);
   });
 
   it("removes the approved workspace through the canonical revoke channel then refreshes (FR-WSP-002)", async () => {

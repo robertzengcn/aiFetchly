@@ -3,7 +3,7 @@
  * conflicts / stale edit / Auto Dream through the default surface).
  *
  * These drive the WorkspaceMemoryPanel through the DEFAULT AiChatV2 surface
- * (workspace badge → memory dialog), on top of the real portable memory
+ * (Context inspector → memory dialog), on top of the real portable memory
  * pipeline (renderer → preload → IPC → PortableWorkspaceMemoryService →
  * file store + SQLite projection):
  *
@@ -134,9 +134,20 @@ async function portableInvoke(
   );
 }
 
-/** Open the memory panel through the badge and wait until it is interactive. */
+/** Open the memory panel through the Context inspector and wait until it is interactive. */
 async function openMemoryPanel(app: LaunchedApp): Promise<void> {
-  await app.mainWindow.getByTestId("workspace-badge-memory").click();
+  // The default chat workspace no longer renders the memory icon entry in
+  // the composer strip (workspace badge), so the shared panel opens through
+  // the Context-inspector entry instead. The visibility guard keeps this
+  // idempotent: reopen flows call it while the inspector is already open.
+  const inspector = app.mainWindow.getByTestId("workspace-inspector");
+  if (!(await inspector.isVisible())) {
+    await app.mainWindow.getByTestId("workspace-inspector-toggle").click();
+  }
+  await app.mainWindow.getByTestId("workspace-inspector-tab-context").click();
+  const memoryEntry = app.mainWindow.getByTestId("workspace-context-memory");
+  await expect(memoryEntry).toBeVisible({ timeout: 30_000 });
+  await memoryEntry.click();
   await expect(app.mainWindow.locator(".wm-panel").first()).toBeVisible({
     timeout: 30_000,
   });

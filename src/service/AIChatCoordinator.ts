@@ -1,4 +1,5 @@
 import { AIChatEventRouter } from "@/service/AIChatEventRouter";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { AIChatExecutionScheduler } from "@/service/AIChatExecutionScheduler";
 import { AIChatRunEventAdapter } from "@/service/AIChatRunEventAdapter";
 import { createChatV2StreamSink } from "@/service/aiChatV2StreamSink";
@@ -104,6 +105,22 @@ export interface AIChatCoordinatorDeps {
     conversationId: string,
     status: ChatRunStatus
   ) => void;
+  /**
+   * Chat-titles design §6: nonblocking notification after an interactive
+   * exchange has been durably completed (assistant result persisted + run
+   * terminal state written). Fire-and-forget; title failures never
+   * propagate into the run pipeline.
+   */
+  readonly onInteractiveTurnCompleted?: (input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+    /**
+     * F01 (titles design §6/§8.3): provider config version captured at TURN
+     * EXECUTION — the identity that produced the exchange, not the version
+     * at completion time.
+     */
+    sourceProviderVersion: number;
+  }) => void;
   /**
    * Busy-conversation send delegation (message-queue PRD §9.2): when the
    * conversation already has a live/running turn, a new send is routed into
@@ -706,6 +723,8 @@ export class AIChatCoordinator {
     }
 
     // Same-conversation turn coordination at dispatch time (design §10.3).
+    // Titles F01: bind this execution to the current provider identity.
+    const sourceProviderVersion = currentProviderConfigVersion();
     const lease = this.deps.turnCoordinator.tryAcquire({
       conversationId,
       owner: "interactive",
@@ -945,6 +964,15 @@ export class AIChatCoordinator {
           isResult: finalStatus === "completed",
           previewText: terminal.fullContent,
           timestamp: new Date(),
+        });
+      }
+      // Chat-titles FR-02: trigger only from durable completion of an
+      // interactive exchange (never cancelled/failed/paused paths).
+      if (finalStatus === "completed" && terminal) {
+        this.deps.onInteractiveTurnCompleted?.({
+          conversationId,
+          assistantMessageId: terminal.messageId ?? null,
+          sourceProviderVersion,
         });
       }
       if (terminal) {
@@ -1276,6 +1304,7 @@ export class AIChatCoordinator {
     // them too), so this stays within the status-metadata-only contract.
     // The lookup must never block the status broadcast itself.
     let title: string | undefined;
+    let titleRevision: number | undefined;
     try {
       const projection =
         await this.deps.conversationModule.getConversationProjection(
@@ -1283,6 +1312,7 @@ export class AIChatCoordinator {
         );
       if (projection?.title) {
         title = projection.title;
+        titleRevision = projection.titleRevision;
       }
     } catch (err) {
       console.warn("[ai-chat-workspace] summary title lookup failed:", err);
@@ -1299,6 +1329,9 @@ export class AIChatCoordinator {
       // fact so the selected store treats these as bindable.
       runOwner: "interactive",
       ...(title !== undefined ? { title } : {}),
+      ...(title !== undefined && titleRevision !== undefined
+        ? { titleRevision }
+        : {}),
       reason,
     });
   }

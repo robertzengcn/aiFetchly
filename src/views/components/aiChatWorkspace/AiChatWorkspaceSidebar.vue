@@ -173,7 +173,11 @@
           </span>
         </button>
         <ul v-if="!group.collapsed" class="conversation-list">
-          <li v-for="conversation in group.conversations" :key="conversation.conversationId">
+          <li
+            v-for="conversation in group.conversations"
+            :key="conversation.conversationId"
+            class="conversation-item"
+          >
             <button
               type="button"
               class="conversation-row"
@@ -206,6 +210,29 @@
                 :aria-label="t('workspaceChat.status.completedUnread') || 'Completed, unread'"
               />
             </button>
+            <v-menu>
+              <template #activator="{ props: menuProps }">
+                <button
+                  type="button"
+                  class="row-menu-button"
+                  v-bind="menuProps"
+                  :data-testid="`workspace-row-menu-${conversation.conversationId}`"
+                  :aria-label="t('workspaceChat.renameDialog.menuButtonLabel') || 'Conversation actions'"
+                  @click.stop
+                >
+                  <v-icon icon="mdi-dots-horizontal" size="16" aria-hidden="true" />
+                </button>
+              </template>
+              <v-list density="compact" role="menu">
+                <v-list-item
+                  role="menuitem"
+                  :title="t('workspaceChat.renameDialog.renameAction') || 'Rename chat'"
+                  prepend-icon="mdi-pencil-outline"
+                  :data-testid="`workspace-row-rename-${conversation.conversationId}`"
+                  @click="emit('rename', conversation.conversationId)"
+                />
+              </v-list>
+            </v-menu>
           </li>
         </ul>
       </section>
@@ -247,7 +274,11 @@
           </span>
         </button>
         <ul v-if="!unassignedCollapsed" class="conversation-list">
-          <li v-for="conversation in visibleUnassigned" :key="conversation.conversationId">
+          <li
+            v-for="conversation in visibleUnassigned"
+            :key="conversation.conversationId"
+            class="conversation-item"
+          >
             <button
               type="button"
               class="conversation-row"
@@ -269,13 +300,36 @@
                 class="row-indicator"
               />
               <span class="row-main">
-                <span class="row-title">
+                <span class="row-title" :title="conversation.title">
                   {{ conversation.title || (t('workspaceChat.newChat') || 'New chat') }}
                 </span>
                 <span class="row-preview">{{ conversation.preview }}</span>
               </span>
               <span v-if="conversation.unread" class="unread-dot" />
             </button>
+            <v-menu>
+              <template #activator="{ props: menuProps }">
+                <button
+                  type="button"
+                  class="row-menu-button"
+                  v-bind="menuProps"
+                  :data-testid="`workspace-row-menu-${conversation.conversationId}`"
+                  :aria-label="t('workspaceChat.renameDialog.menuButtonLabel') || 'Conversation actions'"
+                  @click.stop
+                >
+                  <v-icon icon="mdi-dots-horizontal" size="16" aria-hidden="true" />
+                </button>
+              </template>
+              <v-list density="compact" role="menu">
+                <v-list-item
+                  role="menuitem"
+                  :title="t('workspaceChat.renameDialog.renameAction') || 'Rename chat'"
+                  prepend-icon="mdi-pencil-outline"
+                  :data-testid="`workspace-row-rename-${conversation.conversationId}`"
+                  @click="emit('rename', conversation.conversationId)"
+                />
+              </v-list>
+            </v-menu>
           </li>
         </ul>
       </section>
@@ -304,6 +358,8 @@ const emit = defineEmits<{
   (e: "select", conversationId: string): void;
   (e: "new-chat"): void;
   (e: "retry"): void;
+  /** Chat-titles FR-06: row-scoped rename (targets THIS row's conversation). */
+  (e: "rename", conversationId: string): void;
 }>();
 
 const { t, te } = useI18n();
@@ -467,6 +523,35 @@ function onTreeKeydown(event: KeyboardEvent): void {
 </script>
 
 <style scoped>
+/* Chat-titles FR-06/§7.4: sibling actions control — never inside the nav
+   button, never part of the data-nav-row roving-focus chain. */
+.conversation-item {
+  position: relative;
+}
+.row-menu-button {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+}
+.row-menu-button:hover,
+.row-menu-button:focus-visible,
+.conversation-item:hover .row-menu-button,
+.conversation-item:focus-within .row-menu-button {
+  opacity: 1;
+}
+
 .workspace-sidebar {
   display: flex;
   flex-direction: column;
