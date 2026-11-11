@@ -2116,15 +2116,11 @@ record.currentUrl = message.observation.url || record.currentUrl;
         selection.reasonCode
       );
     }
-    // P0-7: start receives the VALIDATED resolved proxy. The module's
-    // explicitProxy input accepts the {mode,host,port,...} shape
-    // directly (ResolvedSessionProxy minus direct/unresolvable).
-    const validatedTarget =
-      selection.status === "resolved"
-        ? (selection.proxy.mode === "direct"
-            ? target
-            : (selection.proxy as unknown as BrowserProxySelection))
-        : target;
+    // P0-7: pass the ORIGINAL validated selection to start — start()
+    // re-resolves the same selection (for proxy_id it is the exact
+    // health-checked id). Do NOT cast the resolved {mode,host,port}
+    // shape into a BrowserProxySelection: it has no `kind`, so start's
+    // own selection switch would misroute it into the auto branch.
     if (target.kind === "proxy_id") {
       const healthy = await this.checkProxyHealthy(target.proxyId);
       if (!healthy) {
@@ -2136,7 +2132,7 @@ record.currentUrl = message.observation.url || record.currentUrl;
       return await this.start({
         ...(accountId > 0 ? { accountId } : {}),
         purpose: "proxy_switch",
-        proxy: validatedTarget,
+        proxy: target,
         ...(conversation ? { conversationId: conversation } : {}),
         ...(lastUrl && lastUrl !== "about:blank"
           ? { requestedStartUrl: lastUrl }
@@ -2149,7 +2145,7 @@ record.currentUrl = message.observation.url || record.currentUrl;
         await this.start({
           ...(accountId > 0 ? { accountId } : {}),
           purpose: "proxy_switch_restore",
-          proxy: validatedTarget,
+          proxy: target,
           ...(conversation ? { conversationId: conversation } : {}),
         });
       } catch {

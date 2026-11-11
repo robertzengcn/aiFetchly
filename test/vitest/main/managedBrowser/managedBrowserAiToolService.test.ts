@@ -816,15 +816,16 @@ describe("awaitRunnerApproval (F06)", () => {
       service as unknown as {
         pendingRunnerApprovals: Map<string, unknown>;
       }
-    ).pendingRunnerApprovals.set("mb_app1", {
+    ).pendingRunnerApprovals.set("req-app1", {
       programDigest: "digest-1",
       pageRevision: 3,
-      requestId: "tc-1",
+      sessionId: "mb_app1",
     });
     const control = getDefaultAgentTaskControlService();
     control.register("f06-approve", "conv-1");
     const resolution = await service.awaitRunnerApproval({
       sessionId: "mb_app1",
+      requestId: "req-app1",
       taskId: "f06-approve",
       pollIntervalMs: 1,
       waitWindowMs: 2_000,
@@ -844,13 +845,14 @@ describe("awaitRunnerApproval (F06)", () => {
       service as unknown as {
         pendingRunnerApprovals: Map<string, unknown>;
       }
-    ).pendingRunnerApprovals.set("mb_app2", {
+    ).pendingRunnerApprovals.set("req-app2", {
       programDigest: "digest-2",
       pageRevision: 3,
-      requestId: "tc-2",
+      sessionId: "mb_app2",
     });
     const resolution = await service.awaitRunnerApproval({
       sessionId: "mb_app2",
+      requestId: "req-app2",
       taskId: "f06-deny",
       pollIntervalMs: 1,
       waitWindowMs: 2_000,
@@ -862,6 +864,7 @@ describe("awaitRunnerApproval (F06)", () => {
     const service = makeApprovalService({});
     const resolution = await service.awaitRunnerApproval({
       sessionId: "mb_app_missing",
+      requestId: "req-app-none",
       taskId: "f06-none",
       pollIntervalMs: 1,
     });
@@ -874,13 +877,14 @@ describe("awaitRunnerApproval (F06)", () => {
       service as unknown as {
         pendingRunnerApprovals: Map<string, unknown>;
       }
-    ).pendingRunnerApprovals.set("mb_app3", {
+    ).pendingRunnerApprovals.set("req-app3", {
       programDigest: "digest-3",
       pageRevision: 3,
-      requestId: "tc-3",
+      sessionId: "mb_app3",
     });
     const resolution = await service.awaitRunnerApproval({
       sessionId: "mb_app3",
+      requestId: "req-app3",
       taskId: "f06-window",
       pollIntervalMs: 1,
       waitWindowMs: 30,

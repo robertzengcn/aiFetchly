@@ -272,13 +272,14 @@ export type RunnerAuthorizedOutcome =
 export class ManagedBrowserAiToolService {
   private readonly browserModule: BrowserModuleLike;
   /**
-   * F06: the approval request LAST notified for a session (digest +
-   * revision bound) — the runner's in-job approval wait polls the
-   * decision against exactly this binding.
+   * F06: the approval request LAST notified, keyed by REQUEST ID
+   * (X2: session-keyed entries let a legacy tool's pending approval
+   * bind to a later runner on the same session, and never-awaiting
+   * legacy calls leak the entry).
    */
   private readonly pendingRunnerApprovals = new Map<
     string,
-    { programDigest: string; pageRevision: number; requestId: string }
+    { programDigest: string; pageRevision: number; sessionId: string }
   >();
   /**
    * F16: session-long RUNNER ownership — while a decision runner is
@@ -742,10 +743,10 @@ export class ManagedBrowserAiToolService {
         });
         // F06: the runner's in-job approval wait polls the decision
         // against exactly this digest+revision binding.
-        this.pendingRunnerApprovals.set(parsed.data.session_id, {
+        this.pendingRunnerApprovals.set(context.toolCallId, {
           programDigest,
           pageRevision: parsed.data.page_revision,
-          requestId: context.toolCallId,
+          sessionId: parsed.data.session_id,
         });
         throw new ManagedBrowserAiToolError(
           "approval_required",
@@ -984,6 +985,8 @@ export class ManagedBrowserAiToolService {
    */
   public async awaitRunnerApproval(input: {
     readonly sessionId: string;
+    /** X2: the approving request's id — the map key. */
+    readonly requestId: string;
     readonly taskId: string;
     readonly jobId?: string | null;
     readonly signal?: AbortSignal;
@@ -991,8 +994,8 @@ export class ManagedBrowserAiToolService {
     /** Test/override for the 10-minute approval window. */
     readonly waitWindowMs?: number;
   }): Promise<"approved" | "denied" | "expired"> {
-    const entry = this.pendingRunnerApprovals.get(input.sessionId);
-    if (!entry) {
+    const entry = this.pendingRunnerApprovals.get(input.requestId);
+    if (!entry || entry.sessionId !== input.sessionId) {
       return "expired";
     }
     const control = getDefaultAgentTaskControlService();
@@ -1037,7 +1040,7 @@ export class ManagedBrowserAiToolService {
       }
       return "expired";
     } finally {
-      this.pendingRunnerApprovals.delete(input.sessionId);
+      this.pendingRunnerApprovals.delete(input.requestId);
       if (input.jobId) {
         getDefaultToolJobRegistry().setUserWait(input.jobId, false);
       }
@@ -1487,6 +1490,7 @@ export class ManagedBrowserAiToolService {
         awaitApproval: async (approvalInput) => {
           return this.awaitRunnerApproval({
             sessionId: parsed.data.session_id,
+            requestId: context.toolCallId,
             taskId: approvalInput.taskId,
             jobId: context.jobId ?? null,
             signal: context.signal,

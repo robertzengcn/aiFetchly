@@ -644,11 +644,28 @@ export class BrowserTaskRunner {
         observation
       );
     } catch (error) {
+      // X4: a control-gate error (renderer Stop / cancel while the
+      // gate is closed) is a CANCELLED terminal — the user asked for
+      // it; recording failed would be untruthful.
+      const gateMessage =
+        error instanceof Error ? error.message : "unknown";
+      if (
+        gateMessage === "task_cancelled" ||
+        gateMessage.startsWith("task_")
+      ) {
+        return this.terminal(
+          "cancelled",
+          "task_cancelled",
+          evidence,
+          extracted,
+          observation
+        );
+      }
       // F07: an execution exception is a FAILED terminal — never a
       // completed overwrite from the finally below.
       return this.terminal(
         "failed",
-        `runner_error:${error instanceof Error ? error.message : "unknown"}`,
+        `runner_error:${gateMessage}`,
         evidence,
         extracted,
         observation

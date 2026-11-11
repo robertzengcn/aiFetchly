@@ -408,7 +408,9 @@ export class SocialAccountModule extends BaseModule {
    */
   public async getCredentialForLogin(
     accountId: number,
-    currentRegistrableDomain: string
+    /** X1: the LIVE page hostname — suffix checks are hostname-exact,
+     * so host-specific allowlists (accounts.google.com) can match. */
+    currentHostname: string
   ): Promise<
     | { ok: true; username: string; password: string }
     | {
@@ -443,7 +445,7 @@ export class SocialAccountModule extends BaseModule {
       await import("@/service/browserDecision/RegistrableDomain");
     if (
       !hostnameAllowedBySuffixes(
-        currentRegistrableDomain,
+        currentHostname,
         site.allowedDomainSuffixes
       )
     ) {

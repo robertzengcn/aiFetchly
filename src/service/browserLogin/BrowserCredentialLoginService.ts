@@ -379,11 +379,24 @@ export class BrowserCredentialLoginService {
     if (input.signal?.aborted) {
       return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
     }
-    // A-FR-07: the ONLY decrypting read, gated on the live page's domain.
-    const registrableDomain = site.registrableDomain;
+    // A-FR-07: the ONLY decrypting read, gated on the LIVE page
+    // hostname (X1: the DB record's registrable domain made the gate
+    // tautological and broke host-specific allowlists).
+    // X1: the LIVE page origin, re-read from the session status at the
+    // moment of the read — never the DB record's registrable domain.
+    const liveOrigin =
+      getDefaultManagedBrowserModule().getStatus(input.sessionId)
+        ?.currentOrigin ?? "";
+    const liveHostname = (() => {
+      try {
+        return new URL(liveOrigin).hostname;
+      } catch {
+        return "";
+      }
+    })();
     const credentialResult = await accountModule.getCredentialForLogin(
       chosen.id,
-      registrableDomain
+      liveHostname || site.registrableDomain
     );
     if (!credentialResult.ok) {
       // F12: domain refusal / missing account / missing site are
