@@ -183,18 +183,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-22.04 pinned (not -latest): 9 consecutive eviction
-        # shutdown-signals ~2 min into the vite builds on the -latest
-        # pool; the pinned image runs a different runner pool (mirrors
-        # the windows-2022 pin).
-        os: [ubuntu-22.04, windows-2022, macos-latest]
+        os: [ubuntu-latest, windows-2022, macos-latest]
         # Per-OS limits live in the matrix. The job-level env block may NOT
         # use the `runner` context (only github/inputs/matrix/needs/secrets/
         # strategy/vars are allowed there), so the previous
         # `runner.os == 'Linux' && ...` expressions broke workflow parsing
         # (Test Suite #117). The `matrix` context IS allowed in job env.
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             node_options: --max-old-space-size=3072
             guard_timeout_ms: "900000"
           - os: windows-2022
@@ -208,10 +204,7 @@ jobs:
     env:
       FORGE_DISABLE_ASAR: "1"
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      # Match ci.yml on Linux. Test Suite #116 set a 4096 MB heap on the
-      # job and the ubuntu-22.04 runner lost communication during packaging
-      # (no log blob). The same commit's CI package step, at 3072 for the
-      # whole job, finished in ~90s. Windows and macOS keep 4096.
+      # Match ci.yml on Linux. Windows and macOS keep 4096.
       NODE_OPTIONS: ${{ matrix.node_options }}
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
@@ -229,6 +222,19 @@ jobs:
         with:
           node-version: 22.19.0
           cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6

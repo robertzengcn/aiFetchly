@@ -32,6 +32,7 @@ jobs:
       # production MSI builds remain available through workflow_dispatch.
       BUILD_MODE: ${{ github.event_name == 'push' && 'store' || inputs.build_mode }}
       WINDOWS_DISTRIBUTION: ${{ (github.event_name == 'push' || inputs.build_mode == 'store') && 'store' || 'direct' }}
+      NODE_OPTIONS: --max-old-space-size=3072
       WINDOWS_STORE_PACKAGE_IDENTITY: ${{ vars.WINDOWS_STORE_PACKAGE_IDENTITY }}
       WINDOWS_STORE_PUBLISHER: ${{ vars.WINDOWS_STORE_PUBLISHER }}
       WINDOWS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.WINDOWS_STORE_PUBLISHER_DISPLAY_NAME }}
@@ -51,6 +52,19 @@ jobs:
           # undici@8 requires Node >=22.19.0; keep aligned with build.yml
           node-version: 22.19.0
           cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
@@ -154,24 +168,44 @@ jobs:
 
       - name: Build application
         shell: bash
+        env:
+          PACKAGE_GUARD_HARD_TIMEOUT_MS: "14400000"
+          PACKAGE_GUARD_STALL_MS: "900000"
         run: |
           set -euo pipefail
-          export NODE_OPTIONS="--max-old-space-size=4096"
-          if [ "$BUILD_MODE" = "store" ]; then
-            yarn make-win:store
-          elif [ "$BUILD_MODE" = "production" ]; then
-            yarn make-win:prod
+          export NODE_OPTIONS="--max-old-space-size=3072"
+          echo "Building with NODE_OPTIONS=${NODE_OPTIONS}"
+
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
+          if [ "$BUILD_MODE" = "production" ] || [ "$BUILD_MODE" = "store" ]; then
+            NODE_ENV=production node scripts/run-packaging-with-hang-guard.js --platform=win32 --arch=x64
           else
-            yarn make-win:test
+            NODE_ENV=test node scripts/run-packaging-with-hang-guard.js --platform=win32 --arch=x64
           fi
+          echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package end"
+
+          echo "[$(date -u +%FT%TZ)] phase: verify-packaged-app start"
           # Fail if unpacked workers require asar-only pure-JS packages.
           yarn verify-packaged-app
+          echo "[$(date -u +%FT%TZ)] phase: verify-packaged-app end"
+
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package start"
+          # Reuses the package created above in a fresh Node process to avoid V8 Zone OOM.
+          if [ "$BUILD_MODE" = "store" ]; then
+            cross-env NODE_ENV=production WINDOWS_DISTRIBUTION=store yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-msix
+          elif [ "$BUILD_MODE" = "production" ]; then
+            cross-env NODE_ENV=production yarn electron-forge make --skip-package --platform=win32
+          else
+            cross-env NODE_ENV=test yarn electron-forge make --skip-package --platform=win32
+          fi
+          echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package end"
 
       - name: Build MSI for local testing
         if: ${{ github.event_name == 'push' }}
         shell: bash
         run: |
           set -euo pipefail
+          export NODE_OPTIONS="--max-old-space-size=3072"
           yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-wix
 
       - name: Build EXE for local testing
@@ -179,6 +213,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export NODE_OPTIONS="--max-old-space-size=3072"
           yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-squirrel
 
       - name: Validate master Windows installers

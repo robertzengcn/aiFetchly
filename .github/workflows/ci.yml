@@ -118,9 +118,7 @@ jobs:
   package-smoke:
     name: Package smoke test
     needs: lint-and-test
-    # ubuntu-22.04 pinned: evictions on the -latest pool (see the
-    # packaged-smoke-github matrix note in test.yml).
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       # Unpacked layout avoids ASAR finalize OOM on GHA (see forge.config.js).
@@ -133,14 +131,8 @@ jobs:
       # too. Post-package verify checks workers + renderer HTML layout, not
       # runtime native loading.
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      # ubuntu-latest has ~7 GB RAM. An 8 GB heap (the previous value) exceeds
-      # physical RAM and causes the kernel to OOM-kill electron-packager's
-      # finalize/prune phase silently — the runner then "loses communication"
-      # mid-"Finalizing package" with no error. 4096 matches build.yml/release.yml
-      # and stays safely under RAM. Pair with the swap setup step below so
+      # Cap the old-space heap at 3072 MB and pair with swap setup below so
       # transient allocation spikes during galactus prune don't get us killed.
-      # Leave kernel headroom on the 7 GB ubuntu runner (evictions
-      # mid-prune; mac/win green with the same pipeline).
       NODE_OPTIONS: --max-old-space-size=3072
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
@@ -154,6 +146,18 @@ jobs:
         with:
           node-version: 22.19.0
           cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
@@ -172,7 +176,7 @@ jobs:
       - name: Install Linux system dependencies for native modules
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev
+          sudo apt-get install -y libsecret-1-dev xvfb
 
       - name: Use HTTPS for GitHub dependencies
         run: |
