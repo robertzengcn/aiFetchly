@@ -6826,9 +6826,6 @@ export class AIChatQueryLoop {
    * pre-allowlist is the trusted authorization AD-003 requires in that
    * unattended context, so the gate treats it as an honor-skip-review signal.
    * Never true for interactive chat (the renderer cannot forge scheduledContext).
-   *
-   * Fail-closed: any unreadable intent, missing turn identity, or resolver
-   * failure yields a blocking code — a send is never authorized on error.
    */
   /**
    * R6-01: host-owned direct-send binding (design §8.1, FR-12). Resolves the
@@ -6894,6 +6891,10 @@ export class AIChatQueryLoop {
     });
   }
 
+  /**
+   * Fail-closed: any unreadable intent, missing turn identity, or resolver
+   * failure yields a blocking code — a send is never authorized on error.
+   */
   private async evaluateOutboundEmailGate(
     input: AIChatQueryGeneratorInput,
     toolArguments?: Record<string, unknown>

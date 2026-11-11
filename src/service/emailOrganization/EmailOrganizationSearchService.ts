@@ -374,12 +374,11 @@ export class EmailOrganizationSearchService extends BaseModule {
       );
     }
 
-    if (!capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && foldersExhausted) {
-      // complete scan — no extra label needed
-    } else {
-      limitationParts.push(
-        "rows is the current page, not a matched total."
-      );
+    const scanFinished = !capped && !budgetExhausted && failedFolders.length === 0 && !pageCutShort && foldersExhausted;
+    if (!scanFinished) {
+      // R6-02: the numeric field is the page size, never a matched total
+      // when the scan stopped early.
+      limitationParts.push("rows is the current page, not a matched total.");
     }
 
     return {
