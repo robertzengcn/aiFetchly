@@ -148,6 +148,7 @@
           density="comfortable"
           :aria-label="t('emailOrganization.trash_button') || 'Trash'"
           :title="t('emailOrganization.trash_button') || 'Trash'"
+          :data-testid="`org-row-trash-${item.id}`"
           :disabled="trashingRowId === item.id"
           @click="trashRow(item.id)"
         >

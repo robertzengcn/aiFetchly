@@ -282,6 +282,67 @@ test.describe("Email organization journeys (Trash/Undo after navigation, bulk)",
     }
   });
 
+  test("R6-05: list-row Trash, then leaving the list, still finds Undo (detail history)", async ({
+    aiApp,
+  }) => {
+    test.setTimeout(180_000);
+    const imap = await startFakeImapServer({
+      user: SENDER,
+      pass: IMAP_PASS,
+      folders: {
+        INBOX: {
+          uidValidity: IMAP_UID_VALIDITY,
+          messages: [
+            { uid: 21, flags: ["\\Seen"], source: rawSource("org list row trash") },
+          ],
+        },
+        Trash: { uidValidity: 99, messages: [] },
+      },
+    });
+    try {
+      const serviceId = await seedImapService(aiApp, imap.port);
+      const messageId = await seedOrgMessage(aiApp, {
+        emailServiceId: serviceId,
+        uid: 21,
+        subject: "org list row trash",
+      });
+
+      // Trash from the LIST ROW (not the detail page).
+      await navigate(aiApp, `/emailmarketing/emailreceive/list?emailServiceId=${serviceId}`);
+      const rowTrash = aiApp.mainWindow.locator(
+        `[data-testid='org-row-trash-${messageId}']`
+      );
+      await expect(rowTrash).toBeVisible({ timeout: 30_000 });
+      await rowTrash.click();
+
+      // The row action confirms and the server saw the move.
+      await expect(
+        aiApp.mainWindow.locator("[data-testid='org-row-message']")
+      ).toContainText(/Moved to Trash|已移动/i, { timeout: 45_000 });
+      await expect
+        .poll(async () => imap.moveLog.length, { timeout: 30_000 })
+        .toBe(1);
+
+      // LEAVE the list for the detail page — the Undo must still be found
+      // through the DURABLE history (never page-local state).
+      await navigate(
+        aiApp,
+        `/emailmarketing/emailreceive/detail/${messageId}?emailServiceId=${serviceId}`
+      );
+      const history = aiApp.mainWindow.locator("[data-testid='email-org-history']");
+      await expect(history).toBeVisible({ timeout: 30_000 });
+      const undoButton = history.locator("[data-testid='email-org-history-restore']");
+      await expect(undoButton).toBeVisible({ timeout: 30_000 });
+      await undoButton.click();
+      await expect
+        .poll(async () => imap.moveLog.length, { timeout: 45_000 })
+        .toBe(2);
+      expect(imap.moveLog[1]).toMatchObject({ from: "Trash", to: "INBOX" });
+    } finally {
+      await imap.close();
+    }
+  });
+
   test("bulk journey: search → frozen preview → execute through the real bulk loop", async ({
     aiApp,
   }) => {
