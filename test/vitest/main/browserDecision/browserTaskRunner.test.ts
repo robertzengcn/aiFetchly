@@ -1234,3 +1234,59 @@ describe("BrowserTaskRunner P0 durable intent before input", () => {
     expect(result.reason).toBe("intent_persistence_failed:SQLITE_BUSY");
   });
 });
+
+describe("BrowserTaskRunner N03 typed gate errors", () => {
+  function makeGateThrowing(deps: ReturnType<typeof makeRunnerDeps>, message: string) {
+    // Wrap the control gate wait to throw the given gate error mid-loop.
+    const control = deps.control;
+    const originalGetGate = control.getGate.bind(control);
+    (control as { getGate: typeof control.getGate }).getGate = (
+      taskId: string
+    ) => {
+      const gate = originalGetGate(taskId);
+      return {
+        ...gate,
+        waitUntilOpen: async (): Promise<void> => {
+          throw new Error(message);
+        },
+      };
+    };
+    return control;
+  }
+
+  it("task_failed gate errors stay failed (never user cancellation)", async () => {
+    const deps = makeRunnerDeps([]);
+    makeGateThrowing(deps, "task_failed");
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_n03a", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("task_failed");
+  });
+
+  it("task_interrupted gate errors map to partial/interrupted", async () => {
+    const deps = makeRunnerDeps([]);
+    makeGateThrowing(deps, "task_interrupted");
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_n03b", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("task_interrupted");
+  });
+
+  it("task_cancelled gate errors map to cancelled", async () => {
+    const deps = makeRunnerDeps([]);
+    makeGateThrowing(deps, "task_cancelled");
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_n03c", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("cancelled");
+    expect(result.reason).toBe("task_cancelled");
+  });
+});

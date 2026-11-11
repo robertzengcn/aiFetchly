@@ -23,6 +23,7 @@ import {
   GOOGLE_MAPS_HISTORY_DETAIL,
   GOOGLE_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
+import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
 import type { GoogleMapsSearchResult } from "@/entityTypes/googleMapsTypes";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
@@ -82,15 +83,31 @@ export function registerGoogleMapsHandlers(): void {
         try {
           const proxyModel = new ProxyModel(module["dbpath"]);
           const resolved: YellowPagesTaskProxyConfig[] = [];
+          // N04/P-FR-08: entity.pass is ENCRYPTED at rest — decrypt in
+          // the main process before the worker ever sees it, migrating
+          // legacy plaintext rows in passing. Never forward ciphertext.
           for (const pid of input.proxy_ids) {
             const entity = await proxyModel.getProxyById(pid);
             if (entity) {
+              const decrypted =
+                await ProxyCredentialCodec.decryptForUse(entity.pass);
+              if (decrypted.needsMigration && decrypted.password) {
+                await proxyModel.migratePlaintextPass(
+                  entity.id,
+                  decrypted.password
+                );
+              }
+              if (!decrypted.password) {
+                // Undecryptable row: skip it — ciphertext as a proxy
+                // password breaks auth silently.
+                continue;
+              }
               resolved.push({
                 host: entity.host,
                 port: parseInt(entity.port, 10),
                 protocol: entity.protocol ?? "http",
                 username: entity.user || undefined,
-                password: entity.pass || undefined,
+                password: decrypted.password,
               });
             }
           }

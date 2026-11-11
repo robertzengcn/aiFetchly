@@ -129,7 +129,8 @@ export class ProxyModel extends BaseDb {
   }
 
   /** One-time lazy migration of a legacy plaintext pass (P-FR-08). */
-  private async migratePlaintextPass(
+  /** N04: migrate a legacy plaintext row to encrypted at rest. */
+  public async migratePlaintextPass(
     id: number,
     plaintext: string
   ): Promise<void> {

@@ -172,6 +172,11 @@ interface ActiveSessionRecord {
   lastObservation: BrowserObservation | null;
   /** Challenge ids that consumed their single resolution attempt (§18.3). */
   readonly challengeAttempts: Set<string>;
+  /**
+   * N02: the proxy selection this session was STARTED with — the
+   * restore snapshot for a failed proxy switch.
+   */
+  readonly startProxySelection: BrowserProxySelection | null;
 }
 
 /**
@@ -697,6 +702,7 @@ export class ManagedBrowserModule {
         state: "starting",
         currentOrigin: null,
         currentUrl: null,
+        startProxySelection: input.proxy ?? null,
         pageTitle: null,
         pageRevision: 0,
         authenticated: null,
@@ -2121,12 +2127,47 @@ record.currentUrl = message.observation.url || record.currentUrl;
     // health-checked id). Do NOT cast the resolved {mode,host,port}
     // shape into a BrowserProxySelection: it has no `kind`, so start's
     // own selection switch would misroute it into the auto branch.
-    if (target.kind === "proxy_id") {
+    // N02: health-check AUTO-resolved proxies too — match the resolved
+    // host/port back to a proxy row and verify it before the stop.
+    if (selection.status === "resolved") {
+      const resolvedProxy = selection.proxy;
+      if (
+        resolvedProxy.mode === "http" ||
+        resolvedProxy.mode === "https"
+      ) {
+        const matchedRow = linkedRows.find(
+          (row) =>
+            row.host === resolvedProxy.host &&
+            String(row.port) === String(resolvedProxy.port)
+        );
+        if (matchedRow) {
+          const healthy = await this.checkProxyHealthy(matchedRow.id);
+          if (!healthy) {
+            throw new ManagedBrowserError(
+              "proxy_no_usable_proxy",
+              "proxy_check_failed"
+            );
+          }
+        }
+      }
+    } else if (target.kind === "proxy_id") {
       const healthy = await this.checkProxyHealthy(target.proxyId);
       if (!healthy) {
         throw new ManagedBrowserError("proxy_no_usable_proxy", "proxy_check_failed");
       }
     }
+    // N02: charge the switch allowance only AFTER validation succeeded —
+    // rejected requests never consume it.
+    this.proxySwitchCounts.set(lineageKey, priorCount + 1);
+    // N02: snapshot the OLD session's proxy selection + URL + ownership
+    // BEFORE the stop — the restore must rebuild the OLD session, not
+    // retry the failed NEW target.
+    const restoreSnapshot = {
+      accountId: accountId > 0 ? accountId : undefined,
+      conversation,
+      proxySelection: record.startProxySelection,
+      lastUrl: lastUrl !== "about:blank" ? lastUrl : undefined,
+    };
     await this.stop(sessionId, "user_stop");
     try {
       return await this.start({
@@ -2139,14 +2180,24 @@ record.currentUrl = message.observation.url || record.currentUrl;
           : {}),
       });
     } catch (startError) {
-      // P0-7: a start failure after a validated switch must not leave the
-      // user session-less — restore a session on the same lineage.
+      // N02: restore the OLD session from the snapshot — the OLD proxy
+      // selection (account default when none), the full URL, and the
+      // task ownership. Never retry the failed new target.
       try {
         await this.start({
-          ...(accountId > 0 ? { accountId } : {}),
+          ...(restoreSnapshot.accountId
+            ? { accountId: restoreSnapshot.accountId }
+            : {}),
           purpose: "proxy_switch_restore",
-          proxy: target,
-          ...(conversation ? { conversationId: conversation } : {}),
+          ...(restoreSnapshot.proxySelection
+            ? { proxy: restoreSnapshot.proxySelection }
+            : {}),
+          ...(restoreSnapshot.conversation
+            ? { conversationId: restoreSnapshot.conversation }
+            : {}),
+          ...(restoreSnapshot.lastUrl
+            ? { requestedStartUrl: restoreSnapshot.lastUrl }
+            : {}),
         });
       } catch {
         // restoration failed — the original error is surfaced

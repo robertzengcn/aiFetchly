@@ -644,18 +644,26 @@ export class BrowserTaskRunner {
         observation
       );
     } catch (error) {
-      // X4: a control-gate error (renderer Stop / cancel while the
-      // gate is closed) is a CANCELLED terminal — the user asked for
-      // it; recording failed would be untruthful.
+      // N03: control-gate errors are TYPED by their exact reason —
+      // AgentTaskControlService throws task_not_found and task_<state>
+      // (task_interrupted, task_failed, ...). Only a real cancellation
+      // maps to cancelled; interrupted maps to partial/interrupted;
+      // everything else stays failed with the originating reason.
       const gateMessage =
         error instanceof Error ? error.message : "unknown";
-      if (
-        gateMessage === "task_cancelled" ||
-        gateMessage.startsWith("task_")
-      ) {
+      if (gateMessage === "task_cancelled") {
         return this.terminal(
           "cancelled",
           "task_cancelled",
+          evidence,
+          extracted,
+          observation
+        );
+      }
+      if (gateMessage === "task_interrupted") {
+        return this.terminal(
+          "partial",
+          "task_interrupted",
           evidence,
           extracted,
           observation
@@ -665,7 +673,9 @@ export class BrowserTaskRunner {
       // completed overwrite from the finally below.
       return this.terminal(
         "failed",
-        `runner_error:${gateMessage}`,
+        gateMessage.startsWith("task_")
+          ? gateMessage
+          : `runner_error:${gateMessage}`,
         evidence,
         extracted,
         observation

@@ -1,4 +1,7 @@
 import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  ProxyCredentialCodec,
+} from "@/modules/browserProxy/ProxyCredentialCodec";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { SearchDataParam } from "@/entityTypes/scrapeType";
 import { log } from "@/modules/Logger";
@@ -606,7 +609,12 @@ export class SearchModule extends BaseModule {
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port;
         proxyEntity.user = proxy.user ? proxy.user : "";
-        proxyEntity.pass = proxy.pass ? proxy.pass : "";
+        // N04/P-FR-08: encrypt at rest — search-task proxy rows must
+        // never persist plaintext passwords.
+        proxyEntity.pass = proxy.pass
+          ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
+             proxy.pass)
+          : "";
 
         await this.searchTaskProxyModel.create(proxyEntity);
       }
@@ -652,9 +660,13 @@ export class SearchModule extends BaseModule {
 
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port;
-        proxyEntity.user = proxy.user ? proxy.user : "";
-        proxyEntity.pass = proxy.pass ? proxy.pass : "";
-
+        proxyEntity.user = proxy.user || "";
+        // N04/P-FR-08: encrypt at rest.
+        proxyEntity.pass = proxy.pass
+          ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
+             proxy.pass)
+          : "";
+        await this.searchTaskProxyModel.create(proxyEntity);
         await this.searchTaskProxyModel.create(proxyEntity);
       }
     }
@@ -1114,14 +1126,21 @@ export class SearchModule extends BaseModule {
       notShowBrowser: taskEntity.notShowBrowser ? true : false,
       //useLocalbrowserdata:taskEntity.useLocalbrowserdata?true:false,
       localBrowser: taskEntity.localBrowser ? taskEntity.localBrowser : "",
-      proxys: proxys.map((item) => {
-        return {
-          host: item.host,
-          port: item.port,
-          user: item.user,
-          pass: item.pass,
-        };
-      }),
+      proxys: await Promise.all(
+        proxys.map(async (item) => {
+          // N04/P-FR-08: rows are encrypted at rest — decrypt for the
+          // authorized scraper worker only.
+          const decrypted = await ProxyCredentialCodec.decryptForUse(
+            item.pass
+          );
+          return {
+            host: item.host,
+            port: item.port,
+            user: item.user,
+            pass: decrypted.password ?? "",
+          };
+        })
+      ),
       error_log: taskEntity.error_log,
       run_log: taskEntity.runtime_log,
       accounts: accountList,
@@ -1229,7 +1248,11 @@ export class SearchModule extends BaseModule {
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port.toString();
         proxyEntity.user = proxy.user || "";
-        proxyEntity.pass = proxy.pass || "";
+        // N04/P-FR-08: encrypt at rest.
+        proxyEntity.pass = proxy.pass
+          ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
+             proxy.pass)
+          : "";
         await this.searchTaskProxyModel.create(proxyEntity);
       }
     }

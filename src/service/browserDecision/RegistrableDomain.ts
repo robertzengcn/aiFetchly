@@ -108,7 +108,24 @@ const MULTI_LABEL_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
   "com.ai", "net.ai", "org.ai", "off.ai", "n.om",
   "co.mz", "org.mz", "net.mz", "gov.mz", "edu.mz",
   "co.hu", "2000.hu", "erotika.hu", "jogasz.hu", "otters.hu",
-  "org.net.cn", "edu.cn", "ac.cn", "mil.cn", ]);
+  "org.net.cn",
+]);
+
+/**
+ * X1/N01: PSL wildcard rules (`*.ck`) — ANY label + the base is a public
+ * suffix. Stored WITH the leading `*.` marker.
+ */
+const WILDCARD_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
+  "*.ck", "*.km", "*.jm", "*.kh", "*.mm",
+  "*.ni", "*.pg", "*.pw",
+]);
+
+/**
+ * X1/N01: PSL exception rules (`!www.ck`) — the named host is itself the
+ * registrable domain, overriding a wildcard. Stored WITH the leading `!`
+ * marker.
+ */
+const EXCEPTION_RULES: ReadonlySet<string> = new Set(["!www.ck"]);
 
 /** Single-label public suffixes too broad to be a registrable domain. */
 const SINGLE_LABEL_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
@@ -119,6 +136,25 @@ const SINGLE_LABEL_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
   "za", "ng", "eg", "pk", "bd", "id", "my", "sg", "hk", "tw", "vn", "th",
   "ph", "il", "sa", "ae", "ca", "ir", "ro", "hu", "ie", "nz", "eu", "cat",
 ]);
+
+/** N01: the longest rule tail in any set (computed once at module load). */
+const maxRuleLabelCount: number = (() => {
+  let max = 2;
+  for (const set of [
+    MULTI_LABEL_PUBLIC_SUFFIXES,
+    SINGLE_LABEL_PUBLIC_SUFFIXES,
+    WILDCARD_PUBLIC_SUFFIXES,
+    EXCEPTION_RULES,
+  ]) {
+    for (const rule of set) {
+      const isWildcard = rule.startsWith("*.");
+      const cleaned = isWildcard ? rule.slice(2) : rule.replace(/^[!]/, "");
+      const labelCount = cleaned.split(".").length;
+      max = Math.max(max, labelCount + (isWildcard ? 1 : 0));
+    }
+  }
+  return max;
+})();
 
 export interface ParsedUrlIdentity {
   readonly registrableDomain: string;
@@ -159,19 +195,38 @@ export function registrableDomainOf(hostname: string | null | undefined): string
   if (labels.length < 2) {
     return null;
   }
-  const lastTwo = labels.slice(-2).join(".");
-  if (MULTI_LABEL_PUBLIC_SUFFIXES.has(lastTwo)) {
-    if (labels.length < 3) {
-      return null; // e.g. "co.uk" itself
+  // N01: LONGEST-MATCH rule traversal — compare the longest tails first
+  // so multi-label rules (s3.amazonaws.com) and wildcards (*.ck) actually
+  // match; the previous two-label comparison silently ignored every 3+
+  // label rule (alice.s3.amazonaws.com → amazonaws.com).
+  const maxRuleLabels = maxRuleLabelCount;
+  for (let k = Math.min(labels.length, maxRuleLabels); k >= 1; k--) {
+    const tail = labels.slice(-k).join(".");
+    // Exception rule: the named tail is itself the registrable domain.
+    if (EXCEPTION_RULES.has(`!${tail}`)) {
+      return tail;
     }
-    return labels.slice(-3).join(".");
+    // Wildcard rule: any single label + the base is a public suffix.
+    if (k >= 2 && WILDCARD_PUBLIC_SUFFIXES.has(`*.${tail}`)) {
+      if (labels.length < k + 1) {
+        return null; // the wildcard suffix itself
+      }
+      return labels.slice(-(k + 1)).join(".");
+    }
+    // Normal rule (multi- or single-label): the tail is a public suffix;
+    // one more label is the registrable domain.
+    if (
+      MULTI_LABEL_PUBLIC_SUFFIXES.has(tail) ||
+      (k === 1 && SINGLE_LABEL_PUBLIC_SUFFIXES.has(tail))
+    ) {
+      if (labels.length < k + 1) {
+        return null; // the public suffix itself (e.g. "co.uk")
+      }
+      return labels.slice(-(k + 1)).join(".");
+    }
   }
-  const tld = labels[labels.length - 1];
-  if (SINGLE_LABEL_PUBLIC_SUFFIXES.has(tld)) {
-    return labels.slice(-2).join(".");
-  }
-  // Unknown TLD: require at least two labels, use last two conservatively.
-  return lastTwo;
+  // No rule matched: conservative last-two rule for unknown TLDs.
+  return labels.slice(-2).join(".");
 }
 
 /** Full identity of a URL string: null when the URL is not valid HTTPS/HTTP. */

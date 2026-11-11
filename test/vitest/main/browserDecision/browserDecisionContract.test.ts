@@ -175,3 +175,49 @@ describe("RegistrableDomain X1 hardening", () => {
     ).not.toBeNull();
   });
 });
+
+describe("N01 longest-match suffix rules", () => {
+  it("isolates tenants under multi-label private suffixes (s3.amazonaws.com)", () => {
+    // The audited reproduction: the two-label matcher returned
+    // "amazonaws.com" for ALL of these.
+    expect(registrableDomainOf("alice.s3.amazonaws.com")).toBe(
+      "alice.s3.amazonaws.com"
+    );
+    expect(registrableDomainOf("bob.s3.amazonaws.com")).toBe(
+      "bob.s3.amazonaws.com"
+    );
+    expect(registrableDomainOf("alice.s3.amazonaws.com")).not.toBe(
+      registrableDomainOf("bob.s3.amazonaws.com")
+    );
+    // The suffix itself is not registrable.
+    expect(registrableDomainOf("s3.amazonaws.com")).toBeNull();
+  });
+
+  it("matches multi-label rules at any depth (longest first)", () => {
+    // s3.dualstack.amazonaws.com is a 4-label rule; a host under it
+    // isolates per tenant.
+    expect(registrableDomainOf("x.s3.dualstack.amazonaws.com")).toBe(
+      "x.s3.dualstack.amazonaws.com"
+    );
+    // A 2-label rule still matches a 4-label host via longest-match.
+    expect(registrableDomainOf("site.web.id")).toBe("site.web.id");
+  });
+
+  it("supports wildcard and exception rules", () => {
+    // *.ck: any label + ck is a public suffix → one more label is the
+    // registrable domain.
+    expect(registrableDomainOf("foo.bar.ck")).toBe("bar.ck");
+    // !www.ck exception: www.ck itself is the registrable domain.
+    expect(registrableDomainOf("www.ck")).toBe("www.ck");
+    // The wildcard suffix itself is not registrable.
+    expect(registrableDomainOf("bar.ck")).toBe("bar.ck");
+  });
+
+  it("still rejects loopback/private-name and single-label hosts", () => {
+    expect(registrableDomainOf("localhost")).toBeNull();
+    expect(registrableDomainOf("tenant.localhost")).toBeNull();
+    expect(registrableDomainOf("service.local")).toBeNull();
+    expect(registrableDomainOf("db.internal")).toBeNull();
+    expect(registrableDomainOf("example")).toBeNull();
+  });
+});

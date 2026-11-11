@@ -25,6 +25,7 @@ import {
   YANDEX_MAPS_HISTORY_DETAIL,
   YANDEX_MAPS_HISTORY_DELETE,
 } from "@/config/channellist";
+import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
 import type { YandexMapsSearchResult } from "@/entityTypes/yandexMapsTypes";
 import { YANDEX_MAPS_HARD_CAP } from "@/entityTypes/yandexMapsTypes";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
@@ -90,15 +91,29 @@ export function registerYandexMapsHandlers(): void {
         try {
           const proxyModel = new ProxyModel(module["dbpath"]);
           const resolved: YellowPagesTaskProxyConfig[] = [];
+          // N04/P-FR-08: decrypt in the main process before the worker
+          // sees the proxy — never forward ciphertext, skip undecryptable
+          // rows, migrate legacy plaintext in passing.
           for (const pid of input.proxy_ids) {
             const entity = await proxyModel.getProxyById(pid);
             if (entity) {
+              const decrypted =
+                await ProxyCredentialCodec.decryptForUse(entity.pass);
+              if (decrypted.needsMigration && decrypted.password) {
+                await proxyModel.migratePlaintextPass(
+                  entity.id,
+                  decrypted.password
+                );
+              }
+              if (!decrypted.password) {
+                continue;
+              }
               resolved.push({
                 host: entity.host,
                 port: parseInt(entity.port, 10),
                 protocol: entity.protocol ?? "http",
                 username: entity.user || undefined,
-                password: entity.pass || undefined,
+                password: decrypted.password,
               });
             }
           }
