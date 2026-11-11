@@ -50,14 +50,22 @@ jobs:
 
       - name: Install Linux system dependencies for native modules
         # P1: apt indexes flake during runner-image migrations (exit 100
-        # "unable to locate package") — retry update+install together.
+        # "unable to locate package" on update or install). Strategy:
+        #   1. skip entirely when the deps are already present;
+        #   2. retry install up to 3x, tolerating `apt-get update`
+        #      failures (the pre-seeded cache is better than nothing).
         run: |
           set -euo pipefail
+          if pkg-config --exists libsecret-1 && command -v Xvfb >/dev/null 2>&1; then
+            echo "libsecret-1-dev and xvfb already present; skipping apt"
+            exit 0
+          fi
           for attempt in 1 2 3; do
-            if sudo apt-get update && sudo apt-get install -y libsecret-1-dev xvfb; then
+            echo "apt attempt $attempt"
+            sudo apt-get update || echo "apt-get update failed; using stale index"
+            if sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb; then
               exit 0
             fi
-            echo "apt attempt $attempt failed; retrying"
             sleep $((attempt * 20))
           done
           echo "apt install failed after 3 attempts" >&2
