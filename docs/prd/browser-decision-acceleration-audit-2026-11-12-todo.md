@@ -4,6 +4,19 @@ Reviewed HEAD `11689f401` and the existing uncommitted changes to ManagedBrowser
 
 The review includes source tracing, comparison with previous audits and a direct execution of the production domain-normalization function. Findings marked source-confirmed still need targeted runtime regression tests. Existing untracked temporary JSON files belong to the starting worktree.
 
+## 0. Fix round 2026-11-12 (implementation HEAD: `9569878a2`)
+
+The November 12 audit's defects closed with targeted fixes and regression tests:
+
+| Defect | Fix and evidence | Commit |
+| --- | --- | --- |
+| **N01 — multi-label suffix entries never match** | `registrableDomainOf` rewritten as a LONGEST-MATCH traversal: tails are compared longest-first against the rule sets, so 3+ label rules (`s3.amazonaws.com`, `s3.dualstack.amazonaws.com`) actually match; PSL wildcard (`*.ck`) and exception (`!www.ck`) rules are supported. The audited reproduction now isolates tenants: `alice.s3.amazonaws.com` ≠ `bob.s3.amazonaws.com`, and the bare suffix is null. The audited functional intent is closed with the curated list (the `tldts` dependency remains uninstallable on this host + CI frozen-lockfile — noted as the formal swap when a yarn-capable host is available). Tests: tenant isolation, depth traversal, wildcard/exception, loopback rejection. | `9569878a2` |
+| **N03 — terminal gate errors all classified as cancellation** | The runner's outer catch maps EXACT gate reasons: `task_cancelled` → cancelled; `task_interrupted` → partial/interrupted; every other `task_*` (task_failed, task_not_found, task_paused...) stays FAILED preserving the originating reason. Tests: three typed gate errors → three distinct truthful terminals. | `9569878a2` |
+| **N04 — proxy encryption migration inconsistent** | `googleMaps-ipc` and `yandexMaps-ipc` decrypt `entity.pass` in the main process before the scraper worker sees it (`decryptForUse` + legacy-plaintext migration, undecryptable rows skipped instead of silently breaking auth); `SearchModule` encrypts search-task proxy rows at all three write sites and decrypts at the worker-read site — plaintext never persists in `search_task_proxy` and ciphertext never reaches proxy auth. `migratePlaintextPass` made public for the IPC boundary. | `9569878a2` |
+| **N02 — proxy rollback retries the failed target** | The switch snapshots the OLD session (proxy selection from `startProxySelection` on the record, full URL, account/conversation) BEFORE the stop; the restore rebuilds THAT session instead of retrying the failed new target, and includes `requestedStartUrl`. The switch allowance is charged only AFTER validation succeeded (rejected requests no longer consume it). Auto-resolved proxies are health-checked by host/port row match before the stop. Still keyed by lineage (per-task keying needs task-identity threading — N08). | `9569878a2` |
+
+Validation: `tsc --noEmit` exit 0; browserDecision + browserAgents + managedBrowser + browserLogin **500 tests pass**; utility managedBrowser **150 pass**.
+
 ## Current correctness defects and related cases
 
 ### N01 — P0 — multi-label suffix entries never match
