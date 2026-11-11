@@ -85,8 +85,13 @@ async function startFakeServer(): Promise<FakeServer> {
         res.end(JSON.stringify(modelsBody));
         return;
       }
+      if (!handlers.has(recorded.path)) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "no_handler" } }));
+        return;
+      }
       const handler = handlers.get(recorded.path);
-      if (!handler) {
+      if (typeof handler !== "function") {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { code: "no_handler" } }));
         return;
