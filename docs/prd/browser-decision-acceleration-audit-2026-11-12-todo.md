@@ -42,6 +42,10 @@ Validation: `tsc --noEmit` exit 0; 500 main + 118 targeted utility tests pass.
 
 Still open in N09: candidate-shortlist omission evidence beyond all scan windows; legacy/runner command concurrency at worker boundaries (X2 last item).
 
+**CI final status (2026-11-13, run `43260891074` on `d57beaebd`): all three jobs GREEN** — Lint and unit tests ✓, Electron E2E (Playwright) ✓, Package smoke test ✓ (Linux packaging + packaged app smoke). The two earlier package-job failures were intermittent infra (runner lost communication mid-packaging); the identical source tree passed packaging on retrigger. The branch is landable from the CI standpoint.
+
+Remaining open work (tracked above): N06 hosted client/planner, N07 card mounting journeys, N08 root-conversation threading, and the N09 residual boundary evidence.
+
 ## Current correctness defects and related cases
 
 ### N01 — P0 — multi-label suffix entries never match
