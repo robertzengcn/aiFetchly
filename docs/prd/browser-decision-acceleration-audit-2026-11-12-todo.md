@@ -17,6 +17,20 @@ The November 12 audit's defects closed with targeted fixes and regression tests:
 
 Validation: `tsc --noEmit` exit 0; browserDecision + browserAgents + managedBrowser + browserLogin **500 tests pass**; utility managedBrowser **150 pass**.
 
+## 0. Fix round 2026-11-12b (implementation HEAD: `0e44d0e18`)
+
+**N05 closed** — all four reservation/identity races:
+
+| Item | Fix and evidence | Commit |
+| --- | --- | --- |
+| Site-ID allocation | `upsertSite` now uses INSERT-ONLY allocation (`insertSiteWithId`) with bounded conflict retry: on a PK collision the domain is re-checked (the concurrent winner may be the same domain) and the allocation retried up to 3x. A conflicting save can never re-point a credentialed site. | `0e44d0e18` |
+| Sign-in reservation | `signIn` reserves BOTH `account:<id>` AND `session:<id>` synchronously before the awaited cooldown check — two calls on one session with different accounts serialize instead of running concurrent FILL_LOGIN_FORM. | `0e44d0e18` |
+| Edited-username identity | the password-only card's username edit re-reserves the switched account synchronously and re-checks ITS cooldown before save/bind; the extra reservation is released on every path. | `0e44d0e18` |
+| Lease task binding | `ManagedBrowserLeaseService.acquire` returns `account_in_use` when the conversation matches but BOTH owner task ids are set and differ — two tasks in one conversation no longer share a session. | `0e44d0e18` |
+| Per-domain site cap | the capacity check counts registered sessions PLUS a synchronously-reserved in-flight per-domain counter, released in a start() finally (converts to the registered session on success, released on failure) — three parallel starts on one domain can no longer all pass. | `0e44d0e18` |
+
+Validation: `tsc --noEmit` exit 0; 500 main + 118 targeted utility tests pass.
+
 ## Current correctness defects and related cases
 
 ### N01 — P0 — multi-label suffix entries never match
