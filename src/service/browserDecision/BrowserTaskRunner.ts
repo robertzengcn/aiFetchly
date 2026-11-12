@@ -139,6 +139,8 @@ export interface RunnerObservation {
     /** F14: observed SELECT options (positional ids + real values). */
     readonly option_ids?: readonly string[] | null;
     readonly option_values?: readonly string[] | null;
+    /** N09/D-FR-16: observed LINK origin — NAVIGATE provenance. */
+    readonly hrefOrigin?: string | null;
   }>;
   readonly visibleText: string;
 }
@@ -424,6 +426,32 @@ export class BrowserTaskRunner {
                 currentIdentity.registrableDomain
             ) {
               evidence.push("navigate_not_same_site");
+              continue;
+            }
+            // N09/D-FR-16: provenance — a cross-ORIGIN target on the
+            // same registrable domain must have been OBSERVED as a link
+            // (or be the current origin itself). The model cannot invent
+            // deep links it never saw.
+            let targetOrigin: string | null = null;
+            try {
+              targetOrigin = new URL(action.url).origin;
+            } catch {
+              targetOrigin = null;
+            }
+            const currentOrigin = (() => {
+              try {
+                return new URL(observation.url).origin;
+              } catch {
+                return null;
+              }
+            })();
+            const originObserved =
+              targetOrigin === currentOrigin ||
+              observation.elements.some(
+                (el) => el.hrefOrigin != null && el.hrefOrigin === targetOrigin
+              );
+            if (!originObserved) {
+              evidence.push("navigate_unobserved_origin");
               continue;
             }
           }
@@ -1013,12 +1041,21 @@ export class BrowserTaskRunner {
         if (!element?.option_ids?.includes(action.option_id)) {
           return null; // unsupported: the option is not in the observed list
         }
+        // N09: bind the token to the OBSERVED value — the worker
+        // verifies the live option value still matches before selecting
+        // (options reordered/changed after the observation fail the
+        // step instead of silently choosing another option).
+        const optionIndex = Number(/^o_(\d+)$/.exec(action.option_id)?.[1] ?? -1);
+        const expectedValue = element.option_values?.[optionIndex];
         return {
           type: "select",
           ref: target.candidate_id,
           pageRevision: observation.pageRevision,
           ...expected,
           values: [action.option_id],
+          ...(expectedValue !== undefined
+            ? { expected_values: [expectedValue] }
+            : {}),
         };
       }
       case "HOVER":

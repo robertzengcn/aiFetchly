@@ -50,6 +50,7 @@ class FakeHandle implements ExecutorElementHandle {
     this.typed = text;
   }
   public resolvedSelectValues: string[] = [];
+  public expectedSelectValue: string | null = null;
   public lastSelectedValues: string[] | null = null;
   async select(...values: string[]): Promise<string[]> {
     this.lastSelectedValues = values;
@@ -82,7 +83,16 @@ class FakeHandle implements ExecutorElementHandle {
       // P1/D-FR-17: the live option resolution — the fake returns the
       // values the test configured for the o_N token mapping.
       if (fnName === "resolveSelectOptionsFn") {
-        return this.resolvedSelectValues as T;
+        // N09: verify the LIVE value against the OBSERVED value bound
+        // at decision time — mismatch = stale option.
+        const resolved = this.resolvedSelectValues;
+        if (this.expectedSelectValue !== null) {
+          const expected = this.expectedSelectValue;
+          if (resolved[0] !== expected) {
+            throw new Error("stale_select_option");
+          }
+        }
+        return resolved as T;
       }
       return undefined as T;
     }
@@ -1038,6 +1048,26 @@ describe("BrowserActionExecutor select token resolution (P1)", () => {
     expect(handle.lastSelectedValues).toEqual([
       "livingstonedaily-9f3a-exact-native-value",
     ]);
+  });
+
+  it("a reordered option fails the step instead of silently choosing another", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "combobox", "Country");
+    // The live option at index 1 changed after the observation — the
+    // resolved value no longer matches the OBSERVED value bound at
+    // decision time.
+    handle.resolvedSelectValues = ["jp-new"];
+    handle.expectedSelectValue = "fr";
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "select", ref, pageRevision: 1, values: ["o_1"], expected_values: ["fr"] },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.results[0].success).toBe(false);
+    expect(handle.lastSelectedValues).toBeNull();
   });
 
   it("a plain value passes through the resolution untouched", async () => {

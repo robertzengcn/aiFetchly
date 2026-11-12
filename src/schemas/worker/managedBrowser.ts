@@ -352,6 +352,11 @@ export const leafBrowserActionSchema = z.discriminatedUnion("type", [
     expectedRole: z.string().min(1).max(48).optional(),
     expectedName: z.string().max(200).optional(),
     values: z.array(z.string().max(512)).min(1).max(32),
+    // N09/D-FR-17: the OBSERVED values bound at decision time — the
+    // worker verifies the live option value still matches before
+    // selecting (options reordering/changing after the observation
+    // fails the step instead of silently choosing another option).
+    expected_values: z.array(z.string().max(512)).min(1).max(32).optional(),
   }),
   z.strictObject({
     type: z.literal("press_key"),

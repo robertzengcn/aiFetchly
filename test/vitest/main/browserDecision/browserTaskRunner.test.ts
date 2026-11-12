@@ -1290,3 +1290,92 @@ describe("BrowserTaskRunner N03 typed gate errors", () => {
     expect(result.reason).toBe("task_cancelled");
   });
 });
+
+describe("BrowserTaskRunner N09 NAVIGATE provenance", () => {
+  const navDecision = (url: string): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+    status: "decided",
+    action: { operation: "NAVIGATE", target_id: null, option_id: null, key: null, url, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  });
+
+  function makeNavDeps(
+    elements: Array<Record<string, unknown>>,
+    seen: RunnerAction[]
+  ) {
+    let navigated = false;
+    const deps = makeRunnerDeps(
+      [navDecision("https://mail.example.test/inbox"), doneEntry()],
+      observation({
+        url: "https://accounts.example.test/settings",
+        elements: elements as never,
+      })
+    );
+    // N09: the navigate dispatch MOVES the page — the re-observation
+    // reflects the new origin so the DONE criteria can verify.
+    deps.observe = async (): Promise<RunnerObservation | null> =>
+      observation({
+        url: navigated
+          ? "https://mail.example.test/inbox"
+          : "https://accounts.example.test/settings",
+        elements: elements as never,
+      });
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      if (input.actions.some((a) => a.type === "navigate")) {
+        navigated = true;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    return deps;
+  }
+
+  it("rejects a same-registrable-domain navigation whose origin was never observed", async () => {
+    // Current page: accounts.example.test. The model invents a deep link
+    // on mail.example.test — same registrable domain, but the origin was
+    // NEVER observed as a link: no provenance, no navigation.
+    const seen: RunnerAction[] = [];
+    const deps = makeNavDeps(
+      [{ ref: "e_nav", role: "link", name: "Mail" }],
+      seen
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09a",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).toContain("navigate_unobserved_origin");
+    // Nothing navigated — the unobserved origin never dispatched.
+    expect(seen).toEqual([]);
+  });
+
+  it("allows navigation when the origin WAS observed as a link", async () => {
+    const seen: RunnerAction[] = [];
+    const deps = makeNavDeps(
+      [
+        { ref: "e_nav", role: "link", name: "Mail" },
+        { ref: "e_link", role: "link", name: "Mail home", hrefOrigin: "https://mail.example.test" },
+      ],
+      seen
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09b",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "mail.example.test" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen.map((a) => a.type)).toContain("navigate");
+    expect(result.status).toBe("completed");
+  });
+});

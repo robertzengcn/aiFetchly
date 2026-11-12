@@ -145,15 +145,25 @@ function clearElementWithEventFn(el: HTMLInputElement): void {
  */
 function resolveSelectOptionsFn(
   el: HTMLSelectElement,
-  values: string[]
+  values: string[],
+  expectedValues: string[] | null
 ): string[] {
-  return values.map((value) => {
+  return values.map((value, index) => {
     const match = /^o_(\d+)$/.exec(value);
     if (!match) {
       return value;
     }
     const option = el.options?.[Number(match[1])];
-    return option ? option.value : value;
+    const liveValue = option ? option.value : value;
+    // N09: the LIVE option value must still match the value OBSERVED
+    // when the decision was made — options reordering or changing after
+    // the observation fails the step instead of silently choosing
+    // another option.
+    const expected = expectedValues?.[index];
+    if (expected !== undefined && expected !== null && liveValue !== expected) {
+      throw new Error("stale_select_option");
+    }
+    return liveValue;
   });
 }
 
@@ -392,7 +402,8 @@ export class BrowserActionExecutor {
             // element's native options before the selection.
             const resolved = await entry.element.evaluate<string[]>(
               resolveSelectOptionsFn,
-              action.values
+              action.values,
+              action.expected_values ?? null
             );
             await entry.element.select(...resolved);
             return { success: true };
