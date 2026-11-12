@@ -206,10 +206,20 @@ export function registrableDomainOf(hostname: string | null | undefined): string
     if (EXCEPTION_RULES.has(`!${tail}`)) {
       return tail;
     }
-    // Wildcard rule: any single label + the base is a public suffix.
-    if (k >= 2 && WILDCARD_PUBLIC_SUFFIXES.has(`*.${tail}`)) {
+    // Wildcard rule `*.base`: the base is the tail MINUS its leftmost
+    // label — e.g. `*.ck` matches host a.ck (tail a.ck, base ck). The
+    // previous check looked up `*.${tail}` (the whole tail as base),
+    // which never matched a one-label base.
+    if (
+      k >= 2 &&
+      WILDCARD_PUBLIC_SUFFIXES.has(
+        `*.${labels.slice(-(k - 1)).join(".")}`
+      )
+    ) {
+      // The public suffix is the tail itself (any label + base); the
+      // registrable domain is one more label.
       if (labels.length < k + 1) {
-        return null; // the wildcard suffix itself
+        return null; // the host IS the wildcard public suffix
       }
       return labels.slice(-(k + 1)).join(".");
     }

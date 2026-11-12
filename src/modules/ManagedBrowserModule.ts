@@ -635,6 +635,23 @@ export class ManagedBrowserModule {
       );
       siteCapReserved = requestedSiteDomain;
     }
+    // R03: every operation after the synchronous reservation is inside
+    // this cleanup scope — early exits (already_active, account_in_use,
+    // global_session_limit, lease_without_record) and failures release
+    // the per-domain in-flight count.
+    const releaseSiteCap = (): void => {
+      if (siteCapReserved) {
+        const remaining =
+          (this.siteCapInFlight.get(siteCapReserved) ?? 1) - 1;
+        if (remaining <= 0) {
+          this.siteCapInFlight.delete(siteCapReserved);
+        } else {
+          this.siteCapInFlight.set(siteCapReserved, remaining);
+        }
+        siteCapReserved = null;
+      }
+    };
+    try {
     // Setting-backed global limit (PRD M-FR-06). Defensive for injected
     // fakes in tests: apply only when the service and setting exist.
     const settingsForLimit = await this.settings.getEffectiveSettings();
@@ -739,6 +756,9 @@ export class ManagedBrowserModule {
       });
       record.client = client;
       this.sessions.set(sessionId, record);
+      // R03: the registered session now occupies the per-site cap —
+      // convert the in-flight reservation so startup is counted once.
+      releaseSiteCap();
       this.supervisor.register({
         sessionId,
         accountId,
@@ -867,18 +887,12 @@ export class ManagedBrowserModule {
         null,
         error instanceof Error ? error.message : String(error)
       );
+    }
     } finally {
-      // N05: the in-flight reservation converts to the registered
-      // session (counted by the cap) or is released on failure —
-      // either way it must not linger.
-      if (siteCapReserved) {
-        const remaining = (this.siteCapInFlight.get(siteCapReserved) ?? 1) - 1;
-        if (remaining <= 0) {
-          this.siteCapInFlight.delete(siteCapReserved);
-        } else {
-          this.siteCapInFlight.set(siteCapReserved, remaining);
-        }
-      }
+      // R03: every exit from start releases the per-domain in-flight
+      // reservation (early exits, failures, or conversion at
+      // registration — releaseSiteCap is idempotent).
+      releaseSiteCap();
     }
   }
 
@@ -2121,7 +2135,6 @@ record.currentUrl = message.observation.url || record.currentUrl;
     if (priorCount >= 3) {
       throw new ManagedBrowserError("proxy_switch_limit");
     }
-    this.proxySwitchCounts.set(lineageKey, priorCount + 1);
     // P0-7/P-FR-04: prevalidate the TARGET SELECTION before destroying the
     // working session — selection failures (confirmation required, SOCKS,
     // unusable credentials, auto with no candidates) run while the old
@@ -2146,14 +2159,14 @@ record.currentUrl = message.observation.url || record.currentUrl;
         selection.reasonCode
       );
     }
-    // P0-7: pass the ORIGINAL validated selection to start — start()
-    // re-resolves the same selection (for proxy_id it is the exact
-    // health-checked id). Do NOT cast the resolved {mode,host,port}
-    // shape into a BrowserProxySelection: it has no `kind`, so start's
-    // own selection switch would misroute it into the auto branch.
-    // N02: health-check AUTO-resolved proxies too — match the resolved
-    // host/port back to a proxy row and verify it before the stop.
-    if (selection.status === "resolved") {
+    // R04: health-check by the AUTHORITATIVE ID — an explicit proxy
+    // (linked or unlinked, public or account) is checked by its own id;
+    // an auto-resolved concrete proxy is matched by host/port against
+    // the loaded rows.
+    let healthCheckId: number | null = null;
+    if (target.kind === "proxy_id") {
+      healthCheckId = target.proxyId;
+    } else if (selection.status === "resolved") {
       const resolvedProxy = selection.proxy;
       if (
         resolvedProxy.mode === "http" ||
@@ -2165,23 +2178,18 @@ record.currentUrl = message.observation.url || record.currentUrl;
             String(row.port) === String(resolvedProxy.port)
         );
         if (matchedRow) {
-          const healthy = await this.checkProxyHealthy(matchedRow.id);
-          if (!healthy) {
-            throw new ManagedBrowserError(
-              "proxy_no_usable_proxy",
-              "proxy_check_failed"
-            );
-          }
+          healthCheckId = matchedRow.id;
         }
       }
-    } else if (target.kind === "proxy_id") {
-      const healthy = await this.checkProxyHealthy(target.proxyId);
+    }
+    if (healthCheckId !== null) {
+      const healthy = await this.checkProxyHealthy(healthCheckId);
       if (!healthy) {
         throw new ManagedBrowserError("proxy_no_usable_proxy", "proxy_check_failed");
       }
     }
-    // N02: charge the switch allowance only AFTER validation succeeded —
-    // rejected requests never consume it.
+    // R04/N02: the switch allowance is charged only AFTER validation and
+    // the health check succeeded — rejected switches never consume it.
     this.proxySwitchCounts.set(lineageKey, priorCount + 1);
     // N02: snapshot the OLD session's proxy selection + URL + ownership
     // BEFORE the stop — the restore must rebuild the OLD session, not

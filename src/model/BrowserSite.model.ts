@@ -65,11 +65,24 @@ export class BrowserSiteModel extends BaseDb {
    */
   async insertSiteWithId(site: BrowserSiteEntity): Promise<BrowserSiteEntity> {
     const repository = await this.getRepository();
-    const existing = await repository.findOne({ where: { id: site.id } });
-    if (existing) {
-      throw new Error("browser_site_id_collision");
+    // R02: a plain INSERT — never an upsert. The previous precheck
+    // (findOne then save) let two parallel requests both see no row and
+    // the later save UPDATE the first row, re-pointing a possibly
+    // credentialed site to another domain. The database primary key is
+    // the serialization point: a concurrent duplicate throws here.
+    try {
+      await repository.insert(site);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        /UNIQUE|PRIMARY KEY|duplicate/i.test(message) ||
+        (await repository.findOne({ where: { id: site.id } }))
+      ) {
+        throw new Error("browser_site_id_collision");
+      }
+      throw error;
     }
-    return await repository.save(site);
+    return site;
   }
 
   /**

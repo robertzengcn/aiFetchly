@@ -204,13 +204,19 @@ describe("N01 longest-match suffix rules", () => {
   });
 
   it("supports wildcard and exception rules", () => {
-    // *.ck: any label + ck is a public suffix → one more label is the
-    // registrable domain.
-    expect(registrableDomainOf("foo.bar.ck")).toBe("bar.ck");
+    // *.ck: the public suffix of foo.bar.ck is bar.ck (any label + ck);
+    // the registrable domain is one more label — foo.bar.ck itself.
+    expect(registrableDomainOf("foo.bar.ck")).toBe("foo.bar.ck");
+    // Sibling tenants under the wildcard are DIFFERENT registrable
+    // domains (the audited R01 collision).
+    expect(registrableDomainOf("other.bar.ck")).toBe("other.bar.ck");
+    expect(registrableDomainOf("foo.bar.ck")).not.toBe(
+      registrableDomainOf("other.bar.ck")
+    );
     // !www.ck exception: www.ck itself is the registrable domain.
     expect(registrableDomainOf("www.ck")).toBe("www.ck");
-    // The wildcard suffix itself is not registrable.
-    expect(registrableDomainOf("bar.ck")).toBe("bar.ck");
+    // The wildcard public suffix a.ck is not registrable.
+    expect(registrableDomainOf("a.ck")).toBeNull();
   });
 
   it("still rejects loopback/private-name and single-label hosts", () => {
