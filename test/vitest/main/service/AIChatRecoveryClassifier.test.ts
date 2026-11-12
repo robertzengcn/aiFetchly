@@ -198,6 +198,27 @@ describe("AIChatRecoveryClassifier", () => {
       expect(classifier.classifyThrown(err).reason).toBe("server_error");
     });
 
+    it("classifies AI server tool_loop_failed error containing 401 as server_error (not auth)", () => {
+      const err = new Error(
+        'AI server error code=tool_loop_failed: OpenAI streaming API error: 401: Error code: 401 - {"error": {"message": "Invalid API key", "type": "authentication_error"}}'
+      );
+      expect(classifier.classifyThrown(err).reason).toBe("server_error");
+    });
+
+    it("classifies AI server stream envelope 401 as server_error (never auth)", () => {
+      const err = new Error(
+        'AI server error code=401: Unauthorized'
+      );
+      expect(classifier.classifyThrown(err).reason).toBe("server_error");
+    });
+
+    it("classifies direct OpenAI streaming API error: 401 as server_error", () => {
+      const err = new Error(
+        "OpenAI streaming API error: 401"
+      );
+      expect(classifier.classifyThrown(err).reason).toBe("server_error");
+    });
+
     it("classifies a thrown HTTP 520 envelope as server_error", () => {
       const err = new Error("HTTP 520: <none>");
       const result = classifier.classifyThrown(err);

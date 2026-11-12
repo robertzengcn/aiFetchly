@@ -71,6 +71,26 @@ describe("AIChatErrorMapper - userSafeError", () => {
     );
   });
 
+  it("does not treat AI server envelope errors or upstream streaming 401 as hosted session expiry", () => {
+    const envelopeErr = new Error(
+      'AI server error code=tool_loop_failed: OpenAI streaming API error: 401: Error code: 401 - {"error": {"message": "Invalid API key", "type": "authentication_error"}}'
+    );
+    expect(isAuthExpiredError(envelopeErr)).toBe(false);
+    expect(userSafeError(envelopeErr)).not.toBe(AUTH_EXPIRED_SENTINEL);
+
+    const streamErr = new Error("OpenAI streaming API error: 401");
+    expect(isAuthExpiredError(streamErr)).toBe(false);
+    expect(userSafeError(streamErr)).not.toBe(AUTH_EXPIRED_SENTINEL);
+
+    const recoverableServerError = new AIChatRecoverableError({
+      reason: "server_error",
+      message: "AI server error code=401: Unauthorized",
+      status: 401,
+    });
+    expect(isAuthExpiredError(recoverableServerError)).toBe(false);
+    expect(userSafeError(recoverableServerError)).not.toBe(AUTH_EXPIRED_SENTINEL);
+  });
+
   it("surfaces AIProviderError messages directly instead of the generic fallback", () => {
     const auth = new AIProviderError(
       "AI provider authentication failed. Check your API key.",
