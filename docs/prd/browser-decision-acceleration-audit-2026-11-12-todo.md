@@ -31,6 +31,17 @@ Validation: `tsc --noEmit` exit 0; browserDecision + browserAgents + managedBrow
 
 Validation: `tsc --noEmit` exit 0; 500 main + 118 targeted utility tests pass.
 
+## 0. Fix round 2026-11-12c (implementation HEAD: `d4bed37c3`)
+
+**N09 boundary evidence partially closed:**
+
+| Item | Fix and evidence | Commit |
+| --- | --- | --- |
+| SELECT live identity | The runner binds each `o_N` token to the OBSERVED value (`expected_values` rides the action schema); the executor's live resolution verifies the live option value still matches the observed value — options reordering or changing after the observation FAIL the step (`stale_select_option`) instead of silently choosing another option. Tests: matching live value selects; reordered live value fails the step. | `d4bed37c3` |
+| NAVIGATE provenance | A cross-ORIGIN target on the same registrable domain is allowed ONLY when its origin was OBSERVED as a link (`hrefOrigin` on the observation) or IS the current origin — the model can no longer invent deep links it never saw. Tests: unobserved same-domain origin rejected with `navigate_unobserved_origin` and nothing dispatched; observed link origin navigates and completes. | `d4bed37c3` |
+
+Still open in N09: candidate-shortlist omission evidence beyond all scan windows; legacy/runner command concurrency at worker boundaries (X2 last item).
+
 ## Current correctness defects and related cases
 
 ### N01 — P0 — multi-label suffix entries never match
