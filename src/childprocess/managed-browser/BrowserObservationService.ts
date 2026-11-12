@@ -166,7 +166,9 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       for (let oi = 0; oi < opts.length && options.length < 20; oi++) {
         const opt = opts[oi];
         options.push({
-          v: String(opt.value ?? '').slice(0, 200),
+          // R05: exact native value (bounded by the wire schema's 512)
+          // — the value IS the option identity used for verification.
+          v: String(opt.value ?? '').slice(0, 512),
           l: String(opt.text ?? '').replace(/\\s+/g, ' ').trim().slice(0, 200),
         });
       }
@@ -288,8 +290,11 @@ export function shapeElementRecord(
           option_labels: record.options.map((o) =>
             redactSecretsInText(o.l || o.v || "")
           ),
+          // R05: option VALUES stay EXACT (bounded) — they are the
+          // identity verified against the live element at dispatch;
+          // only the display LABELS are redacted.
           option_values: record.options.map((o) =>
-            redactSecretsInText(o.v || "")
+            (o.v || "").slice(0, 512)
           ),
         }
       : {}),

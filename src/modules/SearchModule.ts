@@ -666,7 +666,8 @@ export class SearchModule extends BaseModule {
           ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
              proxy.pass)
           : "";
-        await this.searchTaskProxyModel.create(proxyEntity);
+        // R07: ONE save per intended row — the duplicate create could
+        // update the same entity or double-insert.
         await this.searchTaskProxyModel.create(proxyEntity);
       }
     }
