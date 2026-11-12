@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { setLocationBackfillReady } from "@/service/emailOrganization/emailOrganizationReadiness";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
 // R16/R03/R10 review coverage: entitlement gate before parse, scheduled
@@ -59,6 +60,10 @@ describe("R16 — entitlement gate before parsing (review)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     aiEnabled.value = true;
+    // R6-10: the readiness gate runs BEFORE entitlement (host infra state).
+    // The startup backfill completed in this simulated process, so the
+    // AI_DISABLED assertion tests the entitlement gate specifically.
+    setLocationBackfillReady(true);
   });
 
   for (const [name, call] of [

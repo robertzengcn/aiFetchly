@@ -275,7 +275,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
     expect(query["from"]).toBe("a@b.test");
   });
 
-  it("searchUids marks the result capped at exactly the candidate bound", async () => {
+  it("searchUids reports capped only when the window was cut before the SEARCH end (R7-02)", async () => {
     const state = makeState();
     const adapter = new ImapEmailMailboxAdapter({
       connectionFactory: () => {
@@ -285,14 +285,25 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
       },
     });
     const connection = { value: null };
-    const result = await adapter.searchUids(config, "INBOX", {
+    // A window that reaches the END of the match list is NOT capped — even
+    // at exactly the window size (R7-02: window size never lied about a
+    // ceiling).
+    const exhausted = await adapter.searchUids(config, "INBOX", {
       cap: 3,
       metadataLimit: 0,
     });
-    expect(result.status).toBe("listed");
-    if (result.status !== "listed") return;
-    expect(result.capped).toBe(true);
-    expect(result.candidates.length).toBe(0);
+    expect(exhausted.status).toBe("listed");
+    if (exhausted.status !== "listed") return;
+    expect(exhausted.capped).toBe(false);
+    // A window cut before the end IS capped.
+    const cut = await adapter.searchUids(config, "INBOX", {
+      cap: 2,
+      metadataLimit: 0,
+    });
+    expect(cut.status).toBe("listed");
+    if (cut.status !== "listed") return;
+    expect(cut.capped).toBe(true);
+    expect(cut.candidates.length).toBe(0);
   });
 
   it("searchUids reports PROVIDER_REJECTED when the server cannot search", async () => {

@@ -423,6 +423,21 @@ describe("R7-01 — conversation-scoped, source-aware direct binding", () => {
         sourceAddress: "alice@vendor.com",
       })
     ).toBe(false);
+    // The audit's second test: the SAME sentence with a revision of a
+    // DIFFERENT message (from bob@vendor.test, not the named source alice)
+    // and envelope finance@example.com only — source identity is required,
+    // so the named-source address lands back in the recipient set and the
+    // comparison refuses.
+    expect(
+      isDirectSendPayloadBound({
+        ...conversationBound,
+        toolName: "send_email_forward",
+        args: { draft_id: 12, revision_id: 3 },
+        userText: "forward the invoice from alice@vendor.com to finance@example.com now",
+        trustedPayloadAddresses: ["finance@example.com"],
+        sourceAddress: "bob@vendor.test",
+      })
+    ).toBe(false);
   });
 
   it("'send it now' after a review binds the conversation-shown revision (no addresses)", () => {

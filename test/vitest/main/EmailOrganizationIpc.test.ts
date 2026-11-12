@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { setLocationBackfillReady } from "@/service/emailOrganization/emailOrganizationReadiness";
 
 // Email organization IPC contract tests: exercise the REAL registration +
 // dispatch wrapper end-to-end (pattern from EmailReplyIpcStructuredFailure).
@@ -63,6 +64,10 @@ beforeEach(() => {
   tokenGetValue.mockImplementation((key: string) =>
     key === "user_ai_enabled" ? "true" : "false"
   );
+  // R6-10: the mutating channels gate on the startup readiness flag. The
+  // production app opens it when the location backfill completes; these
+  // contract tests simulate a completed startup.
+  setLocationBackfillReady(true);
   registerEmailOrganizationIpcHandlers();
 });
 
