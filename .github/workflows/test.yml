@@ -256,8 +256,21 @@ jobs:
       - name: Install Linux system dependencies for native modules
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev xvfb
+          set -euo pipefail
+          if pkg-config --exists libsecret-1 && command -v Xvfb >/dev/null 2>&1; then
+            echo "libsecret-1-dev and xvfb already present; skipping apt"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            echo "apt attempt $attempt"
+            sudo apt-get update || echo "apt-get update failed; using stale index"
+            if sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb; then
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Use HTTPS for GitHub dependencies
         run: |
@@ -307,7 +320,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Memory/swap before:"; free -h
-          sudo fallocate -l 4G /swapfile-ci
+          sudo fallocate -l 8G /swapfile-ci
           sudo chmod 600 /swapfile-ci
           sudo mkswap /swapfile-ci >/dev/null
           sudo swapon /swapfile-ci

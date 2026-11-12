@@ -26,6 +26,16 @@ const minimatch = ((
 interface ForgeConfigForTest {
   readonly packagerConfig: {
     readonly ignore: (file: string) => boolean;
+    readonly prune?: boolean;
+    readonly afterCopy?: ReadonlyArray<
+      (
+        buildPath: string,
+        electronVersion: string,
+        platform: string,
+        arch: string,
+        callback: (err?: unknown) => void
+      ) => void
+    >;
     readonly asar?:
       | boolean
       | {
@@ -268,5 +278,119 @@ describe("Forge packaging dependencies", () => {
         process.env.FORGE_DISABLE_ASAR = previousDisableAsar;
       }
     }
+  });
+
+  it("disables galactus prune by default and runs staged package verification in packagerConfig.afterCopy", async () => {
+    const forgeConfig = await loadForgeConfig();
+    expect(forgeConfig.packagerConfig.prune).toBe(false);
+    expect(Array.isArray(forgeConfig.packagerConfig.afterCopy)).toBe(true);
+
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "aifetchly-package-after-copy-")
+    );
+    try {
+      const afterCopyFn = forgeConfig.packagerConfig.afterCopy?.[0];
+      expect(typeof afterCopyFn).toBe("function");
+
+      const err = await new Promise<unknown>((resolve) => {
+        afterCopyFn?.(tempRoot, "43.0.0", "linux", "x64", (cbErr) =>
+          resolve(cbErr)
+        );
+      });
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/missing renderer HTML/i);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("patches VitePlugin.js idempotently to isolate production Vite builds in child processes", async () => {
+    const patchModulePath = path.resolve(
+      process.cwd(),
+      "scripts",
+      "patch-remote-rebuild.js"
+    );
+    const patchModule = (await import(pathToFileURL(patchModulePath).href)) as {
+      patchVitePlugin: (filePath: string) => boolean;
+      findVitePluginPath: () => string | null;
+    };
+
+    const sampleFixture = `"use strict";
+const ViteConfig_1 = __importDefault(require("./ViteConfig"));
+class VitePlugin {
+  constructor() {
+    this.getHooks = () => ({
+      prePackage: [
+        namedHookWithTaskFn(async (task) => {
+          return task?.newListr([
+                            {
+                                title: 'Building renderer targets...',
+                                task: async (_ctx, subtask) => {
+                                    const results = await this.buildRenderer(subtask);
+                                    return results;
+                                },
+                            },
+                        ], { concurrent: true });
+                    }, 'Building production Vite bundles'),
+      ],
+    });
+    this.build = async (task) => {
+            const configs = await this.configGenerator.getBuildConfigs();
+            return configs;
+    };
+    this.buildRenderer = async (task) => {
+            const rendererConfigs = await this.configGenerator.getRendererConfig();
+            return rendererConfigs;
+    };
+  }
+}
+`;
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "aifetchly-vite-plugin-patch-")
+    );
+    const tempPluginPath = path.join(tempDir, "VitePlugin.js");
+    try {
+      fs.writeFileSync(tempPluginPath, sampleFixture, "utf-8");
+      expect(patchModule.patchVitePlugin(tempPluginPath)).toBe(true);
+      expect(patchModule.patchVitePlugin(tempPluginPath)).toBe(false);
+
+      const patchedContent = fs.readFileSync(tempPluginPath, "utf-8");
+      expect(patchedContent).toContain("AIFETCHLY-ISOLATED-VITE-BUILD-GUARD");
+      expect(patchedContent).toContain(
+        "runAifetchlyIsolatedViteBuildListr(this, task, 'build')"
+      );
+      expect(patchedContent).toContain(
+        "runAifetchlyIsolatedViteBuildListr(this, task, 'renderer')"
+      );
+      expect(patchedContent).toContain("], { concurrent: false });");
+
+      const installedVitePluginPath = patchModule.findVitePluginPath();
+      expect(installedVitePluginPath).toBeTruthy();
+      if (installedVitePluginPath) {
+        const installedContent = fs.readFileSync(
+          installedVitePluginPath,
+          "utf-8"
+        );
+        expect(installedContent).toContain(
+          "AIFETCHLY-ISOLATED-VITE-BUILD-GUARD"
+        );
+      }
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allocates 8G swap in ci.yml and test.yml for Linux packaging runners", () => {
+    const ciWorkflow = fs.readFileSync(
+      path.resolve(process.cwd(), ".github", "workflows", "ci.yml"),
+      "utf-8"
+    );
+    const testWorkflow = fs.readFileSync(
+      path.resolve(process.cwd(), ".github", "workflows", "test.yml"),
+      "utf-8"
+    );
+
+    expect(ciWorkflow).toContain("sudo fallocate -l 8G /swapfile-ci");
+    expect(testWorkflow).toContain("sudo fallocate -l 8G /swapfile-ci");
   });
 });

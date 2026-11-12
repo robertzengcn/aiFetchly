@@ -138,6 +138,8 @@ jobs:
           # memory headroom for the WiX tooling instead of hoarding a 4 GB
           # old-space ceiling.
           export NODE_OPTIONS="--max-old-space-size=3072"
+          export FORGE_SKIP_NATIVE_REBUILD=1
+          export ELECTRON_FORGE_VITE_CONCURRENT=1
           echo "Building with NODE_OPTIONS=${NODE_OPTIONS}"
 
           echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
@@ -545,6 +547,8 @@ jobs:
           export NODE_ENV=test
           export MAKE_MAC_DMG=false
           export NODE_OPTIONS="--max-old-space-size=4096"
+          export FORGE_SKIP_NATIVE_REBUILD=1
+          export ELECTRON_FORGE_VITE_CONCURRENT=1
           rm -rf out/
 
           echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
