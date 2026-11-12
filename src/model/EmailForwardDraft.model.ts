@@ -121,6 +121,20 @@ export class EmailForwardDraftModel extends BaseDb {
    * drafts do not match, so a finished forward frees the message for a new
    * draft and a saved draft survives page remounts and app restarts.
    */
+  /**
+   * R8-01: every still-open draft in ONE conversation. The "send it now"
+   * binding requires exactly one — a second open draft makes the target
+   * ambiguous and the send stays on the review path.
+   */
+  async findOpenDraftsForConversation(conversationId: number): Promise<EmailForwardDraftEntity[]> {
+    return await this.draftRepository
+      .createQueryBuilder("draft")
+      .where("draft.conversationId = :conversationId", { conversationId })
+      .andWhere("draft.status IN (:...open)", { open: ["draft", "ready", "failed"] })
+      .orderBy("draft.id", "DESC")
+      .getMany();
+  }
+
   async findOpenDraftForMessage(messageId: number): Promise<EmailForwardDraftEntity | null> {
     return await this.draftRepository
       .createQueryBuilder("draft")

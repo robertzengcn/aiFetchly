@@ -559,9 +559,14 @@ export class EmailReceivedMessageModel extends BaseDb {
    * bob@example.com" with two bob messages must ask, not guess.
    */
   async countBySender(emailServiceId: number, fromAddress: string): Promise<number> {
-    return await this.repository.count({
-      where: { emailServiceId, fromAddress },
-    });
+    // R8-01: the sentence comparison lowercases, so the count must too —
+    // SQLite `=` is case-sensitive and would treat Bob@x.com and bob@x.com
+    // as two people, letting direct Trash move one and leave the other.
+    return await this.repository
+      .createQueryBuilder("msg")
+      .where("msg.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere("LOWER(msg.fromAddress) = LOWER(:fromAddress)", { fromAddress })
+      .getCount();
   }
 
   async searchForOrganization(input: {

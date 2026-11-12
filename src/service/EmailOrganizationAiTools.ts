@@ -23,6 +23,7 @@ import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes"
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { log } from "@/modules/Logger";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
+import enMessages from "@/views/lang/en";
 import { parseStringArrayJson } from "@/utils/jsonArray";
 
 /**
@@ -156,9 +157,36 @@ export type EmailOrganizationToolResult<T> =
       error: string;
       code?: string;
       retryable?: boolean;
+      /** R8-03: separate AC-22 sentence (Sent copy unverified) for chat. */
+      warning?: string;
       /** R10: structured partial/failed outcome payload (inspectable). */
       result?: Record<string, unknown>;
     };
+
+/**
+ * R8-03 (AC-22): the Sent-copy status WORD comes from the same
+ * `sent_copy_status.*` map the operation card renders (en source; the tool
+ * layer has no renderer locale — the envelope also carries the code so any
+ * UI can localize). Never a raw status token.
+ */
+function sentCopyStatusLabel(status: EmailSentCopyStatus): string {
+  const table = (enMessages as {
+    emailOrganization?: {
+      sent_copy_status?: Record<string, string>;
+    };
+  }).emailOrganization?.sent_copy_status;
+  return table?.[status] ?? status;
+}
+
+function sentCopyWarningSentence(
+  submitted: boolean,
+  status: EmailSentCopyStatus
+): string {
+  const label = sentCopyStatusLabel(status);
+  return submitted
+    ? `The forward was submitted, but the Sent copy could not be verified (${label}).`
+    : `The forward outcome is unknown, and the Sent copy could not be verified (${label}).`;
+}
 
 /**
  * R16: AI-serving organization tools gate entitlement BEFORE parsing,
@@ -380,6 +408,15 @@ export async function sendEmailForward(
       };
     }
     if (outcome.status === "failed" || outcome.status === "outcome_unknown") {
+      // R8-03 (AC-22): the UNKNOWN return carries the Sent-copy warning too
+      // — the status rides inside `result`, and the transcript sentence
+      // uses the shared translated label instead of the raw token.
+      const unknownCopyWarning =
+        outcome.status === "outcome_unknown" &&
+        outcome.sentCopyStatus !== undefined &&
+        (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")
+          ? sentCopyWarningSentence(false, outcome.sentCopyStatus)
+          : undefined;
       return {
         success: false,
         error:
@@ -390,6 +427,7 @@ export async function sendEmailForward(
           outcome.status === "failed"
             ? outcome.code
             : "OUTCOME_UNKNOWN",
+        ...(unknownCopyWarning !== undefined ? { warning: unknownCopyWarning } : {}),
         result: { ...outcome } as unknown as Record<string, unknown>,
       };
     }
@@ -407,7 +445,7 @@ export async function sendEmailForward(
     if (outcome.status === "submitted" && (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")) {
       return {
         success: true,
-        warning: `The forward was submitted, but the Sent copy could not be verified (${outcome.sentCopyStatus}).`,
+        warning: sentCopyWarningSentence(true, outcome.sentCopyStatus),
         code: "SENT_COPY_UNVERIFIED",
         result: { ...outcome } as unknown as Record<string, unknown>,
       };

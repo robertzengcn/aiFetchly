@@ -636,7 +636,11 @@ export class EmailOrganizationOperationModel extends BaseDb {
    * window and no cross-account rows: a second restorable Trash anywhere on
    * the account makes direct undo ambiguous (review path).
    */
-  async countRestorableTrashOperations(emailServiceId: number): Promise<number> {
+  async findRestorableTrashOperationIds(emailServiceId: number): Promise<string[]> {
+    // R8-01: returns the IDS, not a count — the direct-undo candidate is
+    // the operation the count query actually found, so a model-supplied
+    // failed Trash id on an account with one OTHER restorable operation
+    // can never slip past the gate.
     const rows = await this.operationRepository
       .createQueryBuilder("op")
       .innerJoin(EmailOrganizationOperationItemEntity, "item", "item.operationId = op.operationId")
@@ -649,7 +653,7 @@ export class EmailOrganizationOperationModel extends BaseDb {
       .select("op.operationId", "operationId")
       .distinct(true)
       .getRawMany<{ operationId: string }>();
-    return rows.length;
+    return rows.map((row) => row.operationId);
   }
 
   /**

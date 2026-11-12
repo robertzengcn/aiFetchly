@@ -337,13 +337,15 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
       if (uids === false) {
         return { status: "failed", reasonCode: "PROVIDER_REJECTED", sanitizedError: "search unsupported" };
       }
+      // R8-02: resume strictly AFTER resumeUid — a UID high-water mark is
+      // stable when the mailbox changes between pages (new mail gets higher
+      // UIDs; an index into a fresh SEARCH would shift and repeat rows).
       // R6-02: `capped` means the returned WINDOW was cut before the end of
-      // this SEARCH's match list — NOT that the window size was reached
-      // (a full window on the final page would have lied about a 1000-
-      // candidate stop). The caller's own candidate ceiling is separate.
-      const offset = input.uidOffset ?? 0;
-      const window = uids.slice(offset, offset + input.cap);
-      const capped = offset + window.length < uids.length;
+      // this SEARCH's match list — NOT that the window size was reached.
+      const resumeUid = input.resumeUid ?? 0;
+      const matched = resumeUid > 0 ? uids.filter((uid) => uid > resumeUid) : uids;
+      const window = matched.slice(0, input.cap);
+      const capped = matched.length > window.length;
       // Envelope fetches are the expensive part: only the caller-requested
       // page worth are materialized; the rest stay counted but unnamed.
       const page = window.slice(0, Math.min(window.length, input.metadataLimit ?? input.cap));

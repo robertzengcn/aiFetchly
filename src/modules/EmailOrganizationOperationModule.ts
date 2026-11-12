@@ -133,13 +133,13 @@ export class EmailOrganizationOperationModule extends BaseModule {
     }
   }
 
-  /** R7-01: account-wide restorable Trash candidate count (direct undo). */
-  async countRestorableTrashOperations(emailServiceId: number): Promise<number> {
+  /** R7-01/R8-01: the account-wide restorable Trash operation IDS. */
+  async findRestorableTrashOperationIds(emailServiceId: number): Promise<string[]> {
     try {
       await this.ensureConnection();
-      return await this.operationModel.countRestorableTrashOperations(emailServiceId);
+      return await this.operationModel.findRestorableTrashOperationIds(emailServiceId);
     } catch (error) {
-      log.error("Error counting restorable trash operations:", error);
+      log.error("Error finding restorable trash operation ids:", error);
       throw error;
     }
   }

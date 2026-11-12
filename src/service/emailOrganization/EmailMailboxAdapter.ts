@@ -134,8 +134,13 @@ export interface ServerSearchInput {
    * caller typically needs only a page worth; fetching the rest is waste.
    */
   readonly metadataLimit?: number;
-  /** T09: skip the first N matched UIDs (continuation within a folder). */
-  readonly uidOffset?: number;
+  /**
+   * R8-02: resume strictly AFTER this UID (UID high-water mark). A fresh
+   * IMAP SEARCH is run per page; an INDEX into its result list shifts when
+   * mail arrives between pages — a UID filter does not, because UIDs are
+   * monotonically increasing and immutable within a UIDVALIDITY epoch.
+   */
+  readonly resumeUid?: number;
 }
 
 export type ServerSearchResult =

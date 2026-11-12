@@ -80,6 +80,17 @@ export class EmailForwardDraftModule extends BaseModule {
    * R5-08: durable resume anchor — newest still-open draft for a message
    * (survives page remounts and restarts; terminal states never match).
    */
+  /** R8-01: the conversation's open drafts (direct-send ambiguity check). */
+  async findOpenDraftsForConversation(conversationId: number): Promise<EmailForwardDraftEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.findOpenDraftsForConversation(conversationId);
+    } catch (error) {
+      log.error("Error finding open drafts for conversation:", error);
+      throw error;
+    }
+  }
+
   async findOpenDraftForMessage(messageId: number): Promise<EmailForwardDraftEntity | null> {
     try {
       await this.ensureConnection();

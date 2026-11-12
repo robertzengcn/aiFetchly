@@ -458,7 +458,6 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     // the scan (R6-02: the adapter's per-window `capped` bit no longer
     // fakes a ceiling).
     adapter.searchUids = async (_c, _folder, input) => {
-      const offset = input.uidOffset ?? 0;
       const all = Array.from({ length: 1600 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -466,7 +465,9 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: i % 50 === 0 ? "2026-09-15T10:00:00Z" : "2020-01-01T00:00:00Z",
         seen: false,
       }));
-      return { status: "listed" as const, candidates: all.slice(offset, offset + 200), capped: offset + 200 < 1600 };
+      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
+      const win = matched.slice(0, input.cap);
+      return { status: "listed" as const, candidates: win, capped: matched.length > win.length };
     };
     const serverService = new EmailOrganizationSearchService({
       adapter,
@@ -498,7 +499,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         { uid: "1", fromAddress: "a@b.test", subject: "September 1", date: "2026-09-15T10:00:00Z", seen: false },
         { uid: "2", fromAddress: "a@b.test", subject: "September 2", date: "2026-09-16T10:00:00Z", seen: false },
         { uid: "3", fromAddress: "a@b.test", subject: "September 3", date: "2026-09-17T10:00:00Z", seen: true },
-      ].slice(input.uidOffset ?? 0),
+      ].filter((c) => Number(c.uid) > (input.resumeUid ?? 0)),
       capped: false,
     });
     const serverService = new EmailOrganizationSearchService({
@@ -632,8 +633,11 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
               { uid: "1", fromAddress: "a@b.test", subject: "cross 3", date: "2026-09-17T10:00:00Z", seen: false },
               { uid: "2", fromAddress: "a@b.test", subject: "cross 4", date: "2026-09-18T10:00:00Z", seen: false },
             ];
-      const offset = input.uidOffset ?? 0;
-      return { status: "listed" as const, candidates: all.slice(offset), capped: false };
+      return {
+        status: "listed" as const,
+        candidates: all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0)),
+        capped: false,
+      };
     };
     const serverService = new EmailOrganizationSearchService({
       adapter,
@@ -672,7 +676,11 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         { uid: "3", fromAddress: "a@b.test", subject: "filtered 3", date: "2026-09-20T10:00:00Z", seen: false },
         { uid: "4", fromAddress: "a@b.test", subject: "filtered 4", date: "2026-09-21T10:00:00Z", seen: false },
       ];
-      return { status: "listed" as const, candidates: all.slice(input.uidOffset ?? 0), capped: false };
+      return {
+        status: "listed" as const,
+        candidates: all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0)),
+        capped: false,
+      };
     };
     const serverService = new EmailOrganizationSearchService({
       adapter,
@@ -724,7 +732,6 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
   it("R6-02: a 250-match folder pages to an EXHAUSTED end — complete:true, nextCursor:null", async () => {
     const adapter = new BulkFakeAdapter();
     adapter.searchUids = async (_c, _folder, input) => {
-      const offset = input.uidOffset ?? 0;
       const all = Array.from({ length: 250 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -732,7 +739,9 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: "2026-09-15T10:00:00Z",
         seen: false,
       }));
-      return { status: "listed" as const, candidates: all.slice(offset, offset + 200), capped: offset + 200 < 250 };
+      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
+      const win = matched.slice(0, input.cap);
+      return { status: "listed" as const, candidates: win, capped: matched.length > win.length };
     };
     const serverService = new EmailOrganizationSearchService({
       adapter,
@@ -792,11 +801,10 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         firstCall = false;
         return { status: "failed" as const, reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: "drop" };
       }
-      const offset = input.uidOffset ?? 0;
       return {
         status: "listed" as const,
         candidates: [
-          { uid: String(offset + 1), fromAddress: "a@b.test", subject: "retry ok", date: "2026-09-15T10:00:00Z", seen: false },
+          { uid: "7", fromAddress: "a@b.test", subject: "retry ok", date: "2026-09-15T10:00:00Z", seen: false },
         ],
         capped: false,
       };
@@ -840,7 +848,6 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const failingCalls = new Set<number>();
     let failingAttempts = 0;
     adapter.searchUids = async (_c, folder, input) => {
-      const offset = input.uidOffset ?? 0;
       if (folder === "Failing") {
         failingAttempts += 1;
         if (failingAttempts === 1) {
@@ -853,11 +860,12 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         };
       }
       const subject = folder === "INBOX" ? "inbox row" : "archive row";
+      const base = folder === "INBOX" ? 10 : 20;
       return {
         status: "listed" as const,
         candidates: [
-          { uid: String(offset + 1), fromAddress: "a@b.test", subject, date: "2026-09-16T10:00:00Z", seen: false },
-          { uid: String(offset + 2), fromAddress: "a@b.test", subject, date: "2026-09-17T10:00:00Z", seen: false },
+          { uid: String(base + 1), fromAddress: "a@b.test", subject, date: "2026-09-16T10:00:00Z", seen: false },
+          { uid: String(base + 2), fromAddress: "a@b.test", subject, date: "2026-09-17T10:00:00Z", seen: false },
         ],
         capped: false,
       };
@@ -901,7 +909,6 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const adapter = new BulkFakeAdapter();
     const droppedFetches = new Set(["2"]);
     adapter.searchUids = async (_c, _folder, input) => {
-      const offset = input.uidOffset ?? 0;
       const all = Array.from({ length: 300 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -909,7 +916,8 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: "2026-09-15T10:00:00Z",
         seen: false,
       }));
-      const window = all.slice(offset, offset + 200);
+      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
+      const window = matched.slice(0, input.cap);
       const candidates = [];
       for (const candidate of window) {
         if (droppedFetches.has(candidate.uid)) {
@@ -920,7 +928,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
           candidates.push(candidate);
         }
       }
-      return { status: "listed" as const, candidates, capped: offset + window.length < 300 };
+      return { status: "listed" as const, candidates, capped: matched.length > window.length };
     };
     const serverService = new EmailOrganizationSearchService({
       adapter,

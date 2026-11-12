@@ -246,27 +246,30 @@ export class EmailOrganizationSearchService extends BaseModule {
     const cursorState = decodeServerCursor(input.cursor, queryHash, folders.length);
     const fromMs = input.receivedFrom ? new Date(input.receivedFrom).getTime() : null;
     const toMs = input.receivedTo ? new Date(input.receivedTo).getTime() : null;
-    let resumePosition: { folderIndex: number; uidOffset: number } | null = null;
+    // R8-02: the resume position is a UID high-water mark per folder —
+    // stable when the mailbox changes between pages (an index into a fresh
+    // SEARCH shifts and repeats rows).
+    let resumePosition: { folderIndex: number; resumeUid: number } | null = null;
     let foldersExhausted = true;
 
     outer: for (let folderIndex = cursorState.folderIndex; folderIndex < folders.length; folderIndex += 1) {
       const folder = folders[folderIndex];
-      let uidOffset = folderIndex === cursorState.folderIndex ? cursorState.uidOffset : 0;
+      let resumeUid = folderIndex === cursorState.folderIndex ? cursorState.resumeUid : 0;
       for (;;) {
         if (rows.length >= pageSize) {
-          resumePosition = { folderIndex, uidOffset };
+          resumePosition = { folderIndex, resumeUid };
           foldersExhausted = false;
           break outer;
         }
         if (candidatesSeen >= SERVER_SCAN_CANDIDATE_CAP) {
           capped = true;
-          resumePosition = { folderIndex, uidOffset };
+          resumePosition = { folderIndex, resumeUid };
           foldersExhausted = false;
           break outer;
         }
         if (Date.now() >= deadline) {
           budgetExhausted = true;
-          resumePosition = { folderIndex, uidOffset };
+          resumePosition = { folderIndex, resumeUid };
           foldersExhausted = false;
           break outer;
         }
@@ -281,7 +284,7 @@ export class EmailOrganizationSearchService extends BaseModule {
             before: input.receivedTo ? new Date(input.receivedTo) : undefined,
             unreadOnly: input.unreadOnly,
             cap: windowCap,
-            uidOffset,
+            resumeUid,
           }
         );
         // Review (false completeness): a failed folder search is never a
@@ -293,7 +296,7 @@ export class EmailOrganizationSearchService extends BaseModule {
           // folder so the next page retries it and then walks forward.
           // Scanning past the hole (R6-02) either replaced the resume point
           // with a later folder or re-served the later folders' rows twice.
-          resumePosition = { folderIndex, uidOffset };
+          resumePosition = { folderIndex, resumeUid };
           foldersExhausted = false;
           break outer;
         }
@@ -309,12 +312,20 @@ export class EmailOrganizationSearchService extends BaseModule {
         // page fills, so the next page resumes at the first unprocessed UID.
         let consumedInWindow = 0;
         let pageFilled = false;
+        let lastConsumedUid = resumeUid;
         for (const candidate of result.candidates) {
           if (rows.length >= pageSize) {
             pageFilled = true;
             break;
           }
           consumedInWindow += 1;
+          // R8-02: the high-water mark advances over every CONSUMED
+          // candidate — date-filtered ones included (they were seen and
+          // must not be re-served).
+          const candidateUid = Number(candidate.uid);
+          if (Number.isFinite(candidateUid) && candidateUid > lastConsumedUid) {
+            lastConsumedUid = candidateUid;
+          }
           const rowMs = candidate.date !== null ? new Date(candidate.date).getTime() : null;
           if (fromMs !== null && (rowMs === null || rowMs < fromMs)) continue;
           if (toMs !== null && (rowMs === null || rowMs >= toMs)) continue;
@@ -329,20 +340,21 @@ export class EmailOrganizationSearchService extends BaseModule {
             hasAttachments: null,
           });
         }
-        uidOffset += consumedInWindow;
+        void consumedInWindow;
+        resumeUid = lastConsumedUid;
         if (pageFilled) {
-          resumePosition = { folderIndex, uidOffset };
+          resumePosition = { folderIndex, resumeUid };
           foldersExhausted = false;
           break outer;
         }
         if (result.candidates.length < windowCap) {
-          // Folder exhausted: continue with the next folder at offset 0.
+          // Folder exhausted: continue with the next folder at resume 0.
           break;
         }
       }
     }
-    // R5-09: the cursor points at the exact consumed position — the folder
-    // being scanned and its matched-UID offset (dropped candidates included).
+    // R8-02: the cursor points at the folder being scanned and the last
+    // consumed UID — the page-stable resume point.
     const pageCutShort = rows.length >= pageSize;
     const nextCursor =
       !foldersExhausted && resumePosition !== null
@@ -350,7 +362,7 @@ export class EmailOrganizationSearchService extends BaseModule {
             v: 1,
             q: queryHash,
             folderIndex: resumePosition.folderIndex,
-            uidOffset: resumePosition.uidOffset,
+            resumeUid: resumePosition.resumeUid,
           })
         : null;
 
@@ -493,35 +505,35 @@ function decodeLocalCursor(
   return { receivedAt: new Date(receivedAt), id };
 }
 
-/** R5-09: server cursor → validated (folderIndex, uidOffset) position. */
+/** R5-09/R8-02: server cursor → validated (folderIndex, resumeUid) position. */
 function decodeServerCursor(
   cursor: string | undefined,
   expectedQueryHash: string,
   folderCount: number
-): { folderIndex: number; uidOffset: number } {
+): { folderIndex: number; resumeUid: number } {
   if (cursor === undefined) {
-    return { folderIndex: 0, uidOffset: 0 };
+    return { folderIndex: 0, resumeUid: 0 };
   }
   const record = decodeCursorBase(cursor, expectedQueryHash);
   const folderIndex = record.folderIndex;
-  const uidOffset = record.uidOffset;
+  const resumeUid = record.resumeUid;
   if (
     typeof folderIndex !== "number" ||
     !Number.isInteger(folderIndex) ||
     folderIndex < 0 ||
     folderIndex >= folderCount ||
-    typeof uidOffset !== "number" ||
-    !Number.isInteger(uidOffset) ||
-    uidOffset < 0
+    typeof resumeUid !== "number" ||
+    !Number.isInteger(resumeUid) ||
+    resumeUid < 0
   ) {
-    // Negative offsets would slice from the END of the UID list; an
-    // out-of-range folder index would scan zero folders and report a
-    // bogus empty complete page — both rejected outright.
+    // An out-of-range folder index would scan zero folders and report a
+    // bogus empty complete page; a negative or missing resume UID (e.g. a
+    // pre-R8-02 index cursor) is refused — start a fresh search.
     throw new EmailOrganizationActionError(
       "VALIDATION_FAILED",
       "Invalid continuation cursor; start a fresh search.",
       false
     );
   }
-  return { folderIndex, uidOffset };
+  return { folderIndex, resumeUid };
 }

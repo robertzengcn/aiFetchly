@@ -176,10 +176,12 @@ import {
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
 import {
-  isDirectSendPayloadBound,
   prepareTrustedIntentText,
   resolveEmailOrganizationIntent,
 } from "@/service/emailOrganization/EmailOrganizationIntentResolver";
+import {
+  resolveDirectSendPayloadBinding as resolveDirectSendPayload,
+} from "@/service/emailOrganization/EmailOrganizationDirectSendBinding";
 import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
 import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
 import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
@@ -6829,12 +6831,9 @@ export class AIChatQueryLoop {
    * Never true for interactive chat (the renderer cannot forge scheduledContext).
    */
   /**
-   * R6-01: host-owned direct-send binding (design §8.1, FR-12). Resolves the
-   * trusted payload for the model's tool call from durable state — the
-   * frozen revision's envelope, the target message's sender, or the single
-   * restorable Trash operation — and hands it to the pure binding check
-   * together with the trusted sentence. The model's ids alone never
-   * authorize a card skip.
+   * R8-01: the direct-send binding is the PRODUCTION resolution in
+   * EmailOrganizationDirectSendBinding — durable reads and the pure check
+   * together, testable without this loop.
    */
   private async resolveDirectSendPayloadBinding(input: {
     readonly toolName: string;
@@ -6842,96 +6841,31 @@ export class AIChatQueryLoop {
     readonly userText: string;
     readonly conversationId?: number | string | null;
   }): Promise<boolean> {
-    const record = (typeof input.args === "object" && input.args !== null
-      ? input.args
-      : {}) as Record<string, unknown>;
-    let trustedPayloadAddresses: string[] = [];
-    let singleRestoreCandidateId: string | null = null;
-    let draftBelongsToConversation = false;
-    let sourceAddress: string | null = null;
-    let senderMessageCount: number | null = null;
-    try {
-      if (input.toolName === "send_email_forward") {
-        // The frozen revision the model references carries the envelope.
-        const revisionId = Number(record.revision_id);
-        if (!Number.isInteger(revisionId) || revisionId <= 0) return false;
-        const revision = await new EmailForwardDraftModule().readRevision(revisionId);
-        if (!revision) return false;
-        trustedPayloadAddresses = [
-          ...parseStringArrayJson(revision.toRecipientsJson),
-          ...parseStringArrayJson(revision.ccRecipientsJson),
-          ...parseStringArrayJson(revision.bccRecipientsJson),
-        ];
-        // R7-01: the payload must be THIS conversation's review — a UI-page
-        // draft or another conversation's draft takes the review card.
-        const draft = await new EmailForwardDraftModule().readDraft(revision.draftId);
-        const conversationNumber =
-          typeof input.conversationId === "number"
-            ? input.conversationId
-            : Number(input.conversationId);
-        draftBelongsToConversation =
-          draft !== null &&
-          draft.conversationId !== null &&
-          Number.isFinite(conversationNumber) &&
-          draft.conversationId === conversationNumber;
-        // R7-01: source identity — the sending account must be the source
-        // message's account, and the source sender is excluded from the
-        // sentence's recipient set (named provenance is not a recipient).
-        const sourceMessage = await new EmailReceivedMessageModule().read(
-          draft?.messageId ?? 0
-        );
-        if (!sourceMessage) return false;
-        if (revision.sendingAccountId !== sourceMessage.emailServiceId) return false;
-        sourceAddress = sourceMessage.fromAddress.trim().toLowerCase();
-      } else if (input.toolName === "move_email_to_trash") {
-        const messageId = Number(record.message_id);
-        if (!Number.isInteger(messageId) || messageId <= 0) return false;
-        const message = await new EmailReceivedMessageModule().read(messageId);
-        if (!message) return false;
-        // Bind the target identity: the sender the sentence must name, and
-        // it must be UNIQUE on the account (R7-01) — two messages from the
-        // same sender make the request ambiguous.
-        trustedPayloadAddresses = [message.fromAddress.trim().toLowerCase()];
-        senderMessageCount = await new EmailReceivedMessageModule().countBySender(
-          message.emailServiceId,
-          message.fromAddress
-        );
-        // Chat has no UI selection: a frozen bulk selection always takes
-        // the review path (the PRD's 12-message flow runs in the UI bulk
-        // dialog, which shows the exact frozen set before executing).
-        if (record.selection_id !== undefined) return false;
-      } else if (input.toolName === "restore_email") {
-        // R7-01: "undo that" is direct only with exactly ONE restorable
-        // Trash operation on the REFERENCED operation's account — an
-        // account-wide count (no 50-row window), including partial
-        // successes that still have moved items.
-        const operationId = typeof record.operation_id === "string" ? record.operation_id : "";
-        if (operationId === "") return false;
-        const referenced = await new EmailOrganizationOperationModule().readOperation(operationId);
-        if (!referenced || referenced.kind !== "trash") return false;
-        const restorableCount =
-          await new EmailOrganizationOperationModule().countRestorableTrashOperations(
-            referenced.emailServiceId
-          );
-        if (restorableCount !== 1) return false;
-        singleRestoreCandidateId = referenced.operationId;
-      } else {
-        return false;
+    return await resolveDirectSendPayload(
+      input,
+      {
+        readRevision: (revisionId) =>
+          new EmailForwardDraftModule().readRevision(revisionId),
+        readDraft: (draftId) => new EmailForwardDraftModule().readDraft(draftId),
+        readMessage: (messageId) => new EmailReceivedMessageModule().read(messageId),
+        countBySender: (emailServiceId, fromAddress) =>
+          new EmailReceivedMessageModule().countBySender(emailServiceId, fromAddress),
+        readOperation: async (operationId) => {
+          const operation = await new EmailOrganizationOperationModule().readOperation(operationId);
+          return operation
+            ? {
+                kind: operation.kind as string,
+                operationId: operation.operationId,
+                emailServiceId: operation.emailServiceId,
+              }
+            : null;
+        },
+        findRestorableTrashOperationIds: (emailServiceId) =>
+          new EmailOrganizationOperationModule().findRestorableTrashOperationIds(emailServiceId),
+        findOpenDraftsForConversation: (conversationId) =>
+          new EmailForwardDraftModule().findOpenDraftsForConversation(conversationId),
       }
-    } catch {
-      // Any durable-state read failure fails closed to the review path.
-      return false;
-    }
-    return isDirectSendPayloadBound({
-      toolName: input.toolName,
-      args: input.args,
-      userText: input.userText,
-      trustedPayloadAddresses,
-      singleRestoreCandidateId,
-      draftBelongsToConversation,
-      sourceAddress,
-      senderMessageCount,
-    });
+    );
   }
 
   /**

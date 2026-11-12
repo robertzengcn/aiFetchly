@@ -589,6 +589,12 @@ export function isDirectSendPayloadBound(input: {
    * — "delete the email from bob" with two bob messages must ask.
    */
   readonly senderMessageCount?: number | null;
+  /**
+   * R8-01: display names of the manifest entries the revision DESELECTED.
+   * A direct send must not silently drop content: every dropped attachment
+   * must be named in the sentence, or the draft takes the review card.
+   */
+  readonly droppedAttachmentNames?: readonly string[];
 }): boolean {
   if (!isUnambiguousDirectSendPayload(input.toolName, input.args)) return false;
   const verb = resolveDirectSendVerb(input.userText);
@@ -597,13 +603,36 @@ export function isDirectSendPayloadBound(input: {
     ? input.args
     : {}) as Record<string, unknown>;
   const sentenceAddresses = extractSentenceAddresses(input.userText);
-  // R7-01: EVERY direct payload must belong to the conversation where the
-  // review happened — a UI-page draft, another conversation's draft, or a
-  // draft of another account is never a direct-send target.
-  if (input.draftBelongsToConversation !== true) return false;
+  // R8-01: the attachment verdict applies to BOTH forward shapes. A
+  // revision that deselected content may only go direct when the sentence
+  // NAMES what was dropped ("without the PDF") — a silent drop takes the
+  // review card (AC-12: a changed attachment selection invalidates the
+  // prior approval).
+  const dropped = (input.droppedAttachmentNames ?? []).map((entry) =>
+    entry.trim().toLowerCase()
+  );
+  if (dropped.length > 0) {
+    const text = normalizeText(input.userText);
+    for (const name of dropped) {
+      if (name === "") continue;
+      // R8-01: full name OR stem — users say "without the logo", not
+      // "without the logo.png".
+      const stem = name.replace(/\.[A-Za-z0-9]{1,8}$/, "");
+      if (text.includes(name) || (stem !== "" && text.includes(stem))) {
+        continue;
+      }
+      return false;
+    }
+  }
 
   switch (input.toolName) {
     case "send_email_forward": {
+      // R7-01/R8-01: the conversation binding is a FORWARD property — the
+      // review happened in this conversation. Trash and restore bind to
+      // mailbox/operation state, not to a draft, so the flag does not
+      // apply to them (R8-01: applying it there kept chat direct-delete
+      // and direct-undo permanently on the review path).
+      if (input.draftBelongsToConversation !== true) return false;
       const source = (input.sourceAddress ?? "").trim().toLowerCase();
       const envelope = (input.trustedPayloadAddresses ?? []).map((entry) =>
         entry.trim().toLowerCase()

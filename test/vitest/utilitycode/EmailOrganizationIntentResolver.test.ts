@@ -352,10 +352,10 @@ describe("isDirectSendPayloadBound (R6-01: full host-owned binding)", () => {
 describe("R7-01 — conversation-scoped, source-aware direct binding", () => {
   const conversationBound = { draftBelongsToConversation: true } as const;
 
-  it("a draft from OUTSIDE the conversation never takes the direct path (any tool)", () => {
+  it("a draft from OUTSIDE the conversation never takes the direct FORWARD path (R8-01: the flag is forward-scoped)", () => {
+    // Forward binds to the conversation where the review happened.
     expect(
       isDirectSendPayloadBound({
-        ...conversationBound,
         draftBelongsToConversation: false,
         toolName: "send_email_forward",
         args: { draft_id: 12, revision_id: 3 },
@@ -363,25 +363,27 @@ describe("R7-01 — conversation-scoped, source-aware direct binding", () => {
         trustedPayloadAddresses: ["finance@example.com"],
       })
     ).toBe(false);
+    // Trash and restore bind to durable MAILBOX state (unique sender,
+    // single restorable operation) — the draft-conversation flag is not
+    // part of their payload, so the production caller can never strand
+    // them on review by forgetting a draft flag (R8-01).
     expect(
       isDirectSendPayloadBound({
-        draftBelongsToConversation: false,
         toolName: "move_email_to_trash",
         args: { message_id: 41 },
         userText: "delete this email from alice@example.com",
         trustedPayloadAddresses: ["alice@example.com"],
         senderMessageCount: 1,
       })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isDirectSendPayloadBound({
-        draftBelongsToConversation: false,
         toolName: "restore_email",
         args: { operation_id: "op-solo-123456" },
         userText: "undo that deletion",
         singleRestoreCandidateId: "op-solo-123456",
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("addresses that name the SOURCE are provenance, not recipients (audit test)", () => {
