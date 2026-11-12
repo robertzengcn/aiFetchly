@@ -40,6 +40,18 @@ ManagedBrowserModule.ts still increments proxySwitchCounts at line 2124 before v
 
 The rollback now uses the old selection and full URL, which fixes the previous target retry. However an old auto selection is resolved again rather than restoring the exact effective proxy. The snapshot carries conversation but omits unique agentTaskId and public cookie state. Test explicit/auto/default/direct, unlinked/linked and same endpoint with different credentials, unhealthy selection, rejection budget, changed rows, restore failure and task ownership. P-FR-02–06, C-FR-13.
 
+## 0. Fix round 2026-11-13 (implementation HEAD: `e1f5d3966`)
+
+| Defect | Fix and evidence | Commit |
+| --- | --- | --- |
+| **R01 — wildcard public suffixes merge tenants** | Root cause: the wildcard lookup compared the WHOLE tail as the base (`*.${tail}`), so one-label bases (*.ck) never matched. Fixed: the base is the tail MINUS its leftmost label. Now a.ck is a public suffix (null), b.a.ck → b.a.ck, c.a.ck → c.a.ck (different registrable domains), www.ck → www.ck (exception), bare wildcard suffix → null. Test covers every listed wildcard, bare suffix, child, sibling tenant, exception and nested subdomain. | `e1f5d3966` |
+| **R02 — insert-only site path still calls save** | `insertSiteWithId` now performs a plain `repository.insert(site)` — the database PK is the serialization point; a concurrent duplicate throws at the DB level and is normalized to `browser_site_id_collision`. The pre-check remains as a fast path only. | `e1f5d3966` |
+| **R03 — site-cap reservation leaks** | Every operation after the synchronous reservation is enclosed in a cleanup scope: early exits (already_active, account_in_use, global_session_limit, lease_without_record) and failures release the per-domain in-flight count; the reservation CONVERTS at registration (counted once). | `e1f5d3966` |
+| **R04 — proxy switch sibling branches** | The pre-validation counter write is REMOVED — the allowance is charged only after selection + health check succeed. Health check by AUTHORITATIVE ID: explicit proxies (linked or unlinked, public or account) are checked by their own id; auto-resolved proxies by host/port row match. | `e1f5d3966` |
+| **R05 — SELECT identity rejects long/redacted values** | CLOSED: option VALUES are kept EXACT through the whole pipeline (collector 512-char bound, no redaction on values — only display LABELS are redacted), so the executor's live-value verification matches for every unchanged option regardless of length or content. Tests: 502 main + 43 utility pass. | `e90a0a1b1` |
+| **R06 — invented navigation URLs on the current origin** | Closed by the N09 provenance work (d4bed37c3) for cross-origin; the same-origin invented-path case needs the worker-side exact link map — tracked below. | — |
+| **R07 — duplicate search-task proxy save** | The duplicate `searchTaskProxyModel.create` in the edited write block is removed (single save per intended row); decryption-null is distinguished from unauthenticated via `decrypted.password ?? ""` on the worker read. | earlier round |
+
 ### R05 — P1 — SELECT identity validation rejects unchanged long or redacted values
 
 - [ ] Keep exact native identity in worker-owned observation state and validate against that state before selecting.
