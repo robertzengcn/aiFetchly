@@ -23,6 +23,7 @@ import {
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+  MANAGED_BROWSER_CREDENTIAL_REQUEST,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_RESUME,
   BROWSER_TASK_STOP,
@@ -280,6 +281,27 @@ export async function browserBatchReturnNow(input: {
   batchId: string;
 }): Promise<{ ok: boolean }> {
   return await windowInvoke(BROWSER_BATCH_RETURN_NOW, input);
+}
+
+export interface BrowserCredentialRequestEvent {
+  readonly requestId: string;
+  readonly sessionId: string;
+  readonly siteDomain: string;
+  readonly mode: "login" | "register";
+  readonly prefillUsername: string | null;
+}
+
+/** N07: live credential-card requests (no-account sign-in path). */
+export function onManagedBrowserCredentialRequest(
+  callback: (request: BrowserCredentialRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserCredentialRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_CREDENTIAL_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_CREDENTIAL_REQUEST, handler);
+  };
 }
 
 export function onManagedBrowserChatNotice(

@@ -10,6 +10,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const batchListeners = new Set<(event: unknown) => void>();
 const invokeMock = vi.fn();
 
+const credentialListeners = new Set<(request: unknown) => void>();
+
 vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/views/api/managedBrowser")>();
   return {
@@ -17,6 +19,10 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
     onManagedBrowserBatchEvent: (cb: (event: unknown) => void) => {
       batchListeners.add(cb);
       return () => batchListeners.delete(cb);
+    },
+    onManagedBrowserCredentialRequest: (cb: (request: unknown) => void) => {
+      credentialListeners.add(cb);
+      return () => credentialListeners.delete(cb);
     },
     browserBatchReturnNow: (input: { batchId: string }) => {
       invokeMock("BROWSER_BATCH_RETURN_NOW", input);
@@ -44,6 +50,18 @@ const i18n = createI18n({
   locale: "en",
   messages: {
     en: {
+      browserSignIn: {
+        cardTitle: "Sign in",
+        username: "Username",
+        password: "Password",
+        saveForFuture: "Save",
+        submit: "Sign in",
+        signMyself: "I'll sign in myself",
+        createAccount: "Create account",
+        missingFields: "Enter a username and password.",
+        expired: "Expired",
+        disclosure: "Disclosure",
+      },
       browserTasks: {
         batchTitle: "Parallel browser tasks",
         returnResultsNow: "Return results now",
@@ -73,8 +91,15 @@ function mountCard() {
   });
 }
 
+function emitCredential(request: unknown): void {
+  for (const listener of credentialListeners) {
+    listener(request);
+  }
+}
+
 beforeEach(() => {
   batchListeners.clear();
+  credentialListeners.clear();
   invokeMock.mockClear();
 });
 
@@ -200,5 +225,52 @@ describe("BrowserControlCards P1 conversation routing", () => {
     // A conversation that owns neither shows nothing.
     const wrapperC = mountWith("conv-other");
     expect(wrapperC.findComponent({ name: "BrowserTaskBatchCard" }).exists()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N07: credential card mounting (no-account / username-only sign-in)
+// ---------------------------------------------------------------------------
+
+describe("BrowserControlCards credential card (N07)", () => {
+  it("mounts the credential card for a live sign-in request", async () => {
+    const wrapper = mount(BrowserControlCards, {
+      global: { plugins: [i18n] },
+    });
+    expect(wrapper.findComponent({ name: "BrowserCredentialCard" }).exists()).toBe(
+      false
+    );
+    emitCredential({
+      requestId: "cred-1",
+      sessionId: "mb_cred0000001",
+      siteDomain: "example.test",
+      mode: "login",
+      prefillUsername: null,
+    });
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserCredentialCard" });
+    expect(card.exists()).toBe(true);
+    expect(card.props("requestId")).toBe("cred-1");
+    expect(card.props("siteDomain")).toBe("example.test");
+  });
+
+  it("clears the card after submission", async () => {
+    const wrapper = mount(BrowserControlCards, {
+      global: { plugins: [i18n] },
+    });
+    emitCredential({
+      requestId: "cred-2",
+      sessionId: "mb_cred0000001",
+      siteDomain: "example.test",
+      mode: "login",
+      prefillUsername: null,
+    });
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserCredentialCard" });
+    card.vm.$emit("submitted");
+    await flushPromises();
+    expect(wrapper.findComponent({ name: "BrowserCredentialCard" }).exists()).toBe(
+      false
+    );
   });
 });

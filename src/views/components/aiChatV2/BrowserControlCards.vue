@@ -10,18 +10,35 @@
     @resume="onResume"
     @stop="onStop"
   />
+
+  <!-- N07: live credential card (no-account / username-only sign-in).
+       Renders while a sign-in request is pending for this conversation. -->
+  <BrowserCredentialCard
+    v-if="credentialRequest !== null"
+    :request-id="credentialRequest.requestId"
+    :conversation-id="credentialRequest.conversationId"
+    :site-domain="credentialRequest.siteDomain"
+    :mode="credentialRequest.mode"
+    :prefill-username="credentialRequest.prefillUsername"
+    @submitted="credentialRequest = null"
+    @handoff="credentialRequest = null"
+    @cancelled="credentialRequest = null"
+  />
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import BrowserTaskBatchCard from "./BrowserTaskBatchCard.vue";
+import BrowserCredentialCard from "./BrowserCredentialCard.vue";
 import {
   browserBatchReturnNow,
   onManagedBrowserBatchEvent,
+  onManagedBrowserCredentialRequest,
   pauseBrowserTask,
   resumeBrowserTask,
   stopBrowserTask,
   type BrowserBatchEvent,
+  type BrowserCredentialRequestEvent,
 } from "@/views/api/managedBrowser";
 import { useI18n } from "vue-i18n";
 
@@ -72,6 +89,8 @@ const activeBatch = computed<BatchState | null>(() => {
   return newest;
 });
 const finishedBatches = new Map<string, number>();
+// N07: the live credential-card request (null = none pending).
+const credentialRequest = ref<BrowserCredentialRequestEvent | null>(null);
 
 const LABEL_FALLBACK = "Browser task";
 
@@ -116,10 +135,16 @@ function applyEvent(event: BrowserBatchEvent): void {
 }
 
 let unsubscribe: (() => void) | null = null;
+let unsubscribeCredential: (() => void) | null = null;
 let pruneTimer: number | null = null;
 
 onMounted(() => {
   unsubscribe = onManagedBrowserBatchEvent(applyEvent);
+  unsubscribeCredential = onManagedBrowserCredentialRequest(
+    (request) => {
+      credentialRequest.value = request;
+    }
+  );
   pruneTimer = window.setInterval(() => {
     // Finished batches linger 30s for review, then the card disappears.
     for (const [batchId, finishedAt] of finishedBatches) {
@@ -133,6 +158,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   unsubscribe?.();
+  unsubscribeCredential?.();
   if (pruneTimer !== null) {
     window.clearInterval(pruneTimer);
   }
