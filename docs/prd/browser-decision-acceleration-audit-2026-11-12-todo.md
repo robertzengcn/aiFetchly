@@ -99,6 +99,8 @@ Completion criteria now reach the model, and recovery has a deadline. Preserve t
 
 ### N07 — P1 — credential, account-picker and domain-confirmation journeys remain disconnected
 
+**Partially closed (2026-11-13, `8c98503ca`):** the CREDENTIAL card is now mounted live in the owning conversation — `AiChatV2` renders `BrowserControlCards`, which subscribes to `MANAGED_BROWSER_CREDENTIAL_REQUEST` (new `onManagedBrowserCredentialRequest` view API) and mounts `BrowserCredentialCard` with validated submit/cancel through `submitBrowserLoginCredential`. Component tests cover mounting + clearing. Remaining: the account-picker request flow, the domain-confirmation journey, per-account AI opt-in.
+
 - [ ] Mount the credential, account-picker and site-confirmation cards in the owning conversation with validated submit/cancel IPC and live waiting state.
 - [ ] Use the observed redirect ledger in an actual one-time domain approval workflow.
 - [ ] Replace static account labels/platform lookups with BrowserSite consumers.
