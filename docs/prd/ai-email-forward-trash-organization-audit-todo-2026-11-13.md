@@ -73,6 +73,21 @@ AC-22: a failed or unverified Sent copy shows a warning on the surface the user 
 
 Repair: add the translated warning on the unknown return when `sentCopyStatus` is `failed` or `unknown`, and use `sent_copy_status.*` for the status word in the tool string the same way the card does.
 
+## Remediation status
+
+**Remediated on this branch (commit `07ef412f9`), re-read at the production callers.** The audit's own verification tests are implemented, including the production-method requirement.
+
+| Item | Status | Evidence on the production path |
+| --- | --- | --- |
+| R8-01 direct Trash/Undo dead + loose "send it now" | **Fixed** | The conversation flag is FORWARD-scoped (`isDirectSendPayloadBound` reads it only in the send_email_forward case), so chat direct Trash and direct Undo run when their durable checks pass. "Send it now" binds the review-shown revision: the conversation must contain exactly ONE open draft, the referenced draft must be it, and the revision must be its CURRENT one — two open drafts refuse both revision ids (test), a superseded revision refuses (test). Attachments joined the binding: every deselected manifest entry must be named in the sentence (full name or stem — "without the logo" matches logo.png), or the send takes review (tests: silent drop refuses, named drop runs). `countBySender` is case-insensitive (LOWER(); test: Bob@x.com + bob@x.com → count 2 → refuse). The restore candidate is `findRestorableTrashOperationIds`'s id — never the model's id (test: a failed id on an account with one OTHER restorable operation refuses). |
+| R8-01 architecture | **Fixed** | The binding resolution moved to `EmailOrganizationDirectSendBinding.ts` — the production function (durable reads + pure check) is called by the loop AND by the new test file, satisfying the audit's "the production method, not the pure check with the flag forced true" requirement (tests: Trash single sender, restore single candidate, both through the production resolution with in-memory durable fakes). |
+| R8-02 resume index | **Fixed** | `ServerSearchInput.resumeUid` replaces the index: the adapter filters matched UIDs strictly greater than the high-water mark, the cursor payload carries `{folderIndex, resumeUid}`, and the consumed-UID mark advances over every consumed candidate (date-filtered included). Pre-R8-02 index cursors fail validation to a fresh search. Stage C + adapter fakes migrated; the full Stage C + adapter suites pass (39 tests). |
+| R8-03 unknown-return warning | **Fixed** | The OUTCOME_UNKNOWN return carries `warning` (and the failure variant type gains the field) when the Sent copy is failed/unknown; both chat warning sentences use the shared `sent_copy_status.*` map (the same source the card renders) instead of the raw token. |
+
+**Verification run on this branch:** `yarn typecheck` 0 errors; `yarn vue-typecheck` 0 errors; binding tests 7/7; resolver 30/30; Stage C + adapter 39/39; component suite 184/1616; `emailOrganizationJourneys.test.ts` 4/4 re-run at the remediation commit.
+
+**Still open (operator/CI, unchanged):** live test-mailbox validation and Forge packaged proof (`yarn package` stays off developer machines per AGENTS.md).
+
 ## Requirement scorecard
 
 | ID | Stage | This pass |
