@@ -82,6 +82,20 @@ The sentences that do exist are built from `enMessages`. `sentCopyStatusLabel` n
 
 Repair: when `sentCopyStatus` is `failed` or `unknown`, attach the warning on the partial return and on the all-rejected return as well. Build the chat sentence from the active locale’s `sent_copy_status` table, the same way the card does.
 
+## Remediation status
+
+**Remediated on this branch (commit `d47eb8339`), re-read at the production binding.** The audit's four verification scenarios are implemented as tests, including the two addressed-draft refusal and the two attachment refusals.
+
+| Item | Status | Evidence on the production path |
+| --- | --- | --- |
+| R9-01 single-draft rule scope | **Fixed** | The single-open-draft + current-revision checks are UNCONDITIONAL in the forward branch of `resolveDirectSendPayloadBinding` — the `extractHasNoAddresses` gate is gone (deleted). The audit's test: two open drafts both enveloped to finance@example.com with user text "forward this to finance@example.com now" refuse BOTH revision ids. |
+| R9-01 attachment exclusion | **Fixed** | `sentenceExcludesAttachment` (exported, pure) requires an EXCLUSION PHRASE from a six-language table (without/except/drop/text only, 除了/去掉/排除/仅正文/不带, sin el/excepto/solo texto, sans le/sauf/texte seul, ohne/außer/nur text, 添付なし/除いて/本文のみ) applying to the dropped name's stem as a WHOLE WORD (latin boundary regex tolerating CJK neighbors; the full filename also matches for CJK-neighbor shapes like "logo.pngを除いて"). Tests: "forward this invoice" + invoice.pdf deselected → refuse; "keep the logo" → refuse; a.pdf/e.pdf/o.pdf stems inside "forward" → refuse; "without the logo" → allow; 除了logo / sin el logo / ohne das logo / logo.pngを除いて → allow. |
+| R9-02 warning coverage + locale | **Fixed** | The delivery's all-rejected `failed` return now carries `sentCopyStatus` (matching the item row's resultJson), so the tool's failed branch warns. The partial-acceptance return — which previously returned before the warning branch — now attaches `warning` when the copy is failed/unknown. Every chat warning sentence resolves the ACTIVE UI locale via `SystemSettingController.getLanguagePreference()` and reads that locale's `sent_copy_status` table (en fallback), the same source the card renders through `t()`. |
+
+**Verification run on this branch:** `yarn typecheck` 0 errors; `yarn vue-typecheck` 0 errors; binding tests 12/12 (incl. all four audit scenarios); resolver 35/35 (incl. six pure exclusion cases); main org suites 12 files / 133 tests; component suite 184/1616; `emailOrganizationJourneys.test.ts` 4/4 re-run at the remediation commit.
+
+**Still open (operator/CI, unchanged):** live test-mailbox validation and Forge packaged proof (`yarn package` stays off developer machines per AGENTS.md).
+
 ## Requirement scorecard
 
 | ID | Stage | This pass |
