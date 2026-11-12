@@ -84,6 +84,16 @@ export class ManagedBrowserLeaseService {
         input.ownerConversationId != null &&
         existing.ownerConversationId === input.ownerConversationId
       ) {
+        // N05/M-FR-06: bind reuse to the unique owning task when BOTH are
+        // known — two tasks in one conversation (main chat plus runner,
+        // or two sub-agents) must not share a session.
+        if (
+          existing.ownerAgentTaskId != null &&
+          input.ownerAgentTaskId != null &&
+          existing.ownerAgentTaskId !== input.ownerAgentTaskId
+        ) {
+          return { status: "account_in_use" };
+        }
         return { status: "already_active", sessionId: existing.sessionId };
       }
       return { status: "account_in_use" };

@@ -224,29 +224,65 @@ export class BrowserSiteModule extends BaseModule {
         created: false,
       };
     }
-    const entity = new BrowserSiteEntity();
-    entity.id = await model.nextAiSiteId();
-    entity.name = input.name.slice(0, 200);
-    entity.homepageUrl = input.url;
-    entity.registrableDomain = identity.registrableDomain;
-    entity.allowedDomainSuffixes = JSON.stringify([
-      identity.registrableDomain,
-    ]);
-    entity.requiredDomainSuffixes = JSON.stringify([]);
-    entity.loginUrl = input.url;
-    entity.source = input.source ?? "ai";
-    entity.status = "unverified";
-    entity.createdInConversationId = input.createdInConversationId ?? null;
-    const saved = await model.saveSite(entity);
-    log.info(
-      `[BrowserSiteModule] site created id=${saved.id} domain=${identity.registrableDomain}`
-    );
-    return {
-      siteId: saved.id,
-      registrableDomain: saved.registrableDomain,
-      status: saved.status,
-      created: true,
-    };
+    // N05/S-AC-01: INSERT-ONLY allocation with conflict retry — the old
+    // flow (nextAiSiteId → saveSite) let two parallel upserts with
+    // different domains allocate the same ID, and the second save became
+    // an UPDATE that re-pointed an existing (possibly credentialed) site
+    // to another domain. On a PK collision, re-check the domain (the
+    // concurrent winner may be the SAME domain) and retry the allocation
+    // a bounded number of times.
+    const maxAllocationAttempts = 3;
+    for (let attempt = 1; attempt <= maxAllocationAttempts; attempt++) {
+      const conflictDomain = await model.getSiteByRegistrableDomain(
+        identity.registrableDomain
+      );
+      if (conflictDomain) {
+        return {
+          siteId: conflictDomain.id,
+          registrableDomain: conflictDomain.registrableDomain,
+          status: conflictDomain.status,
+          created: false,
+        };
+      }
+      const entity = new BrowserSiteEntity();
+      entity.id = await model.nextAiSiteId();
+      entity.name = input.name.slice(0, 200);
+      entity.homepageUrl = input.url;
+      entity.registrableDomain = identity.registrableDomain;
+      entity.allowedDomainSuffixes = JSON.stringify([
+        identity.registrableDomain,
+      ]);
+      entity.requiredDomainSuffixes = JSON.stringify([]);
+      entity.loginUrl = input.url;
+      entity.source = input.source ?? "ai";
+      entity.status = "unverified";
+      entity.createdInConversationId = input.createdInConversationId ?? null;
+      try {
+        const saved = await model.insertSiteWithId(entity);
+        log.info(
+          `[BrowserSiteModule] site created id=${saved.id} domain=${identity.registrableDomain}`
+        );
+        return {
+          siteId: saved.id,
+          registrableDomain: saved.registrableDomain,
+          status: saved.status,
+          created: true,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt === maxAllocationAttempts) {
+          throw error;
+        }
+        if (message.includes("browser_site_id_collision")) {
+          // Another request won the allocated ID with a DIFFERENT
+          // domain — retry the allocation; the domain re-check at the
+          // top of the loop handles the same-domain winner.
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("browser_site_allocation_exhausted");
   }
 
   /**

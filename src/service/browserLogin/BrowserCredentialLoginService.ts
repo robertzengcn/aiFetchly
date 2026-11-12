@@ -296,13 +296,20 @@ export class BrowserCredentialLoginService {
       };
     }
 
-    // A-FR-10/F12: reserve FIRST (synchronously), then the awaited
-    // cooldown check — the check-then-act window can no longer admit two
-    // concurrent attempts for one account.
+    // A-FR-10/N05: reserve FIRST (synchronously) — BOTH the account and
+    // the SESSION — then the awaited cooldown check. Two calls on one
+    // session with different accounts would otherwise run concurrent
+    // FILL_LOGIN_FORM on one page.
     const attemptKey = BrowserCredentialLoginService.accountAttemptKey(
       chosen.id
     );
-    if (this.inFlightAccounts.has(attemptKey)) {
+    const sessionKey = BrowserCredentialLoginService.sessionAttemptKey(
+      input.sessionId
+    );
+    if (
+      this.inFlightAccounts.has(attemptKey) ||
+      this.inFlightAccounts.has(sessionKey)
+    ) {
       return {
         status: "failed",
         accountId: chosen.id,
@@ -311,6 +318,7 @@ export class BrowserCredentialLoginService {
       };
     }
     this.inFlightAccounts.add(attemptKey);
+    this.inFlightAccounts.add(sessionKey);
     try {
       if (await accountModule.isSignInCoolingDown(chosen.id)) {
         return {
@@ -329,6 +337,7 @@ export class BrowserCredentialLoginService {
       );
     } finally {
       this.inFlightAccounts.delete(attemptKey);
+      this.inFlightAccounts.delete(sessionKey);
     }
   }
 
@@ -412,6 +421,9 @@ export class BrowserCredentialLoginService {
       }
       // T16: a username-only account (saved without a password) asks for
       // the password through the card instead of failing.
+      // N05: capture the pre-card identity — the password-only card may
+      // edit the username, which switches the account reservation.
+      const initialChosenUser = chosen.user;
       const { request, promise: cardPromise } = registry.create({
         conversationId: input.conversationId,
         sessionId: input.sessionId,
@@ -480,7 +492,31 @@ export class BrowserCredentialLoginService {
           });
         }
         chosen = { id: edited.id, user: edited.user };
+        // N05: the reservation and cooldown checked the ORIGINAL account —
+        // re-reserve the switched account synchronously and re-check its
+        // cooldown; a held or cooling new account refuses the attempt.
+        const editedKey = BrowserCredentialLoginService.accountAttemptKey(
+          chosen.id
+        );
+        if (this.inFlightAccounts.has(editedKey)) {
+          return {
+            status: "failed",
+            accountId: chosen.id,
+            siteId: site.siteId,
+            reasonCode: "cooldown",
+          };
+        }
+        this.inFlightAccounts.add(editedKey);
+        if (await accountModule.isSignInCoolingDown(chosen.id)) {
+          return {
+            status: "failed",
+            accountId: chosen.id,
+            siteId: site.siteId,
+            reasonCode: "cooldown",
+          };
+        }
       }
+      try {
       if (submitted.save) {
         // R21: update the EXISTING account's password, not a new row.
         await accountModule.updatePasswordForAccount(
@@ -493,6 +529,14 @@ export class BrowserCredentialLoginService {
         password: submitted.password,
         accountId: chosen.id,
       });
+      } finally {
+        // N05: release the switched account's extra reservation.
+        if (submitted.username !== initialChosenUser) {
+          this.inFlightAccounts.delete(
+            BrowserCredentialLoginService.accountAttemptKey(chosen.id)
+          );
+        }
+      }
     }
     return this.fillAndAssess(input, site, {
       username: credentialResult.username,

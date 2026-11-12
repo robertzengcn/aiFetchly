@@ -286,6 +286,8 @@ export class ManagedBrowserModule {
   private readonly proxySwitchCounts = new Map<string, number>();
   /** P0-7: per-session switch serialization. */
   private readonly proxySwitchInFlight = new Set<string>();
+  /** N05: per-domain in-flight start reservations (site-cap race guard). */
+  private readonly siteCapInFlight = new Map<string, number>();
   private readonly runnerOwnedSessions = new Map<string, string>();
   /**
    * P1/S-FR-04: the AUTHORITATIVE per-session redirect ledger — the
@@ -608,20 +610,30 @@ export class ManagedBrowserModule {
     if (freeMemoryBytes < MANAGED_BROWSER_SESSION_FREE_MEMORY_MIN_BYTES) {
       throw new ManagedBrowserError("insufficient_memory");
     }
+    let siteCapReserved: string | null = null;
     // Per-site cap (PRD M-FR-06): at most maxSessionsPerSite sessions per
     // registrable domain to limit rate-limit and CAPTCHA exposure.
+    // N05: the capacity is RESERVED synchronously (counting registered
+    // sessions AND in-flight starts) before any subsequent await — three
+    // parallel starts on one domain can no longer all pass the check.
     const requestedSiteDomain = this.deriveSessionSiteDomain(
       account.platformId,
       input.requestedStartUrl
     );
     if (requestedSiteDomain) {
       const effectiveSettings = await this.settings.getEffectiveSettings();
-      const activeForSite = [...this.sessions.values()].filter(
-        (existing) => existing.siteDomain === requestedSiteDomain
-      ).length;
+      const activeForSite =
+        [...this.sessions.values()].filter(
+          (existing) => existing.siteDomain === requestedSiteDomain
+        ).length + (this.siteCapInFlight.get(requestedSiteDomain) ?? 0);
       if (activeForSite >= effectiveSettings.maxSessionsPerSite) {
         throw new ManagedBrowserError("site_limit_reached");
       }
+      this.siteCapInFlight.set(
+        requestedSiteDomain,
+        (this.siteCapInFlight.get(requestedSiteDomain) ?? 0) + 1
+      );
+      siteCapReserved = requestedSiteDomain;
     }
     // Setting-backed global limit (PRD M-FR-06). Defensive for injected
     // fakes in tests: apply only when the service and setting exist.
@@ -855,6 +867,18 @@ export class ManagedBrowserModule {
         null,
         error instanceof Error ? error.message : String(error)
       );
+    } finally {
+      // N05: the in-flight reservation converts to the registered
+      // session (counted by the cap) or is released on failure —
+      // either way it must not linger.
+      if (siteCapReserved) {
+        const remaining = (this.siteCapInFlight.get(siteCapReserved) ?? 1) - 1;
+        if (remaining <= 0) {
+          this.siteCapInFlight.delete(siteCapReserved);
+        } else {
+          this.siteCapInFlight.set(siteCapReserved, remaining);
+        }
+      }
     }
   }
 
