@@ -550,6 +550,74 @@ export function sentenceAddressesBindEnvelope(
   return true;
 }
 
+/** Exclusion phrases per UI language (R9-01): "the sentence names the drop". */
+const DROP_EXCLUSION_PHRASES: readonly string[] = [
+  // en
+  "without", "except", "drop", "exclude", "excluding", "text only",
+  "don't include", "do not include", "no need for", "omit",
+  // zh
+  "除了", "去掉", "排除", "仅正文", "只要正文", "不带", "不包含", "不包括",
+  // es
+  "sin el", "sin la", "sin los", "sin las", "excepto", "excluye",
+  "excluyendo", "deja fuera", "solo texto",
+  // fr
+  "sans le", "sans la", "sans les", "sans l'", "sauf", "excepté",
+  "texte seul",
+  // de
+  "ohne", "außer", "ausgenommen", "nur text",
+  // ja
+  "添付なし", "除いて", "除く", "本文のみ",
+];
+
+/**
+ * R9-01: TRUE when the sentence excludes the dropped file — an exclusion
+ * phrase must be present AND the dropped name's stem must appear as a
+ * whole word (latin boundary check tolerates CJK neighbors). A bare
+ * mention of the filename ("forward this invoice" with invoice.pdf
+ * deselected), a stem inside another word ("keep the logo" has no
+ * exclusion; "forward" contains the a/e/o stems of one-letter file names)
+ * is NOT an exclusion.
+ */
+export function sentenceExcludesAttachment(
+  userText: string,
+  droppedName: string
+): boolean {
+  const text = normalizeText(userText);
+  if (text === "") return false;
+  const hasExclusion = DROP_EXCLUSION_PHRASES.some((phrase) => {
+    const normalized = normalizeText(phrase);
+    if (normalized === "") return false;
+    // Latin phrases need word boundaries; CJK phrases are plain substrings.
+    if (/^[a-z0-9' ]+$/.test(normalized)) {
+      const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(
+        "(?:^|[^a-z0-9])" + escaped + "(?:[^a-z0-9]|$)",
+        "i"
+      ).test(text);
+    }
+    return text.includes(normalized);
+  });
+  if (!hasExclusion) return false;
+  const fullName = droppedName.trim().toLowerCase();
+  const stem = fullName.replace(/\.[a-z0-9]{1,8}$/, "");
+  if (stem === "") return false;
+  // The stem as a whole word, or the full filename as a whole word — a
+  // Japanese/Chinese user often keeps the latin filename in the sentence
+  // ("logo.pngを除いて送信"), where the CJK neighbors satisfy the boundary.
+  for (const candidate of [stem, fullName]) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (
+      new RegExp(
+        "(?:^|[^a-z0-9])" + escaped + "(?:[^a-z0-9]|$)",
+        "i"
+      ).test(text)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * R6-01: the full host-owned direct-send binding — shape, verb, and payload.
  * `sentenceAddresses` come from the trusted user turn; `envelopeAddresses`
@@ -612,16 +680,9 @@ export function isDirectSendPayloadBound(input: {
     entry.trim().toLowerCase()
   );
   if (dropped.length > 0) {
-    const text = normalizeText(input.userText);
     for (const name of dropped) {
       if (name === "") continue;
-      // R8-01: full name OR stem — users say "without the logo", not
-      // "without the logo.png".
-      const stem = name.replace(/\.[A-Za-z0-9]{1,8}$/, "");
-      if (text.includes(name) || (stem !== "" && text.includes(stem))) {
-        continue;
-      }
-      return false;
+      if (!sentenceExcludesAttachment(input.userText, name)) return false;
     }
   }
 

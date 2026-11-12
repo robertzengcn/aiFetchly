@@ -264,6 +264,168 @@ describe("resolveDirectSendPayloadBinding — production resolution (R8-01)", ()
     expect(stale).toBe(false);
   });
 
+  // ---- R9-01: the single-draft rule is unconditional; drops need exclusion ----
+
+  it("R9-01: two open drafts BOTH enveloped to finance refuse the addressed sentence (audit test)", async () => {
+    const draftA = makeDraft({ id: 1, currentRevisionId: 11 });
+    const draftB = makeDraft({ id: 2, currentRevisionId: 22 });
+    const state: HarnessState = {
+      revisions: new Map([
+        [11, makeRevision({ id: 11, draftId: 1 })],
+        [22, makeRevision({ id: 22, draftId: 2 })],
+      ]),
+      drafts: new Map([
+        [1, draftA],
+        [2, draftB],
+      ]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const refusedA = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this to finance@example.com now",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    const refusedB = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 2, revision_id: 22 },
+        userText: "forward this to finance@example.com now",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(refusedA).toBe(false);
+    expect(refusedB).toBe(false);
+  });
+
+  it("R9-01: 'forward this invoice' with invoice.pdf deselected REFUSES (stem is the request noun, not an exclusion)", async () => {
+    const draft = makeDraft({ id: 1, currentRevisionId: 11 });
+    const revision = makeRevision({
+      id: 11,
+      draftId: 1,
+      attachmentsJson: JSON.stringify([
+        { displayName: "invoice.pdf", selected: false, partId: "p1" },
+      ]),
+    });
+    const state: HarnessState = {
+      revisions: new Map([[11, revision]]),
+      drafts: new Map([[1, draft]]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const refused = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this invoice to finance@example.com now",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(refused).toBe(false);
+  });
+
+  it("R9-01: 'keep the logo' with logo.png deselected REFUSES (no exclusion phrase)", async () => {
+    const draft = makeDraft({ id: 1, currentRevisionId: 11 });
+    const revision = makeRevision({
+      id: 11,
+      draftId: 1,
+      attachmentsJson: JSON.stringify([
+        { displayName: "logo.png", selected: false, partId: "p2" },
+      ]),
+    });
+    const state: HarnessState = {
+      revisions: new Map([[11, revision]]),
+      drafts: new Map([[1, draft]]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const refused = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this to finance@example.com now and keep the logo",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(refused).toBe(false);
+  });
+
+  it("R9-01: one-letter stems inside 'forward' never authorize a drop (a.pdf)", async () => {
+    const draft = makeDraft({ id: 1, currentRevisionId: 11 });
+    const revision = makeRevision({
+      id: 11,
+      draftId: 1,
+      attachmentsJson: JSON.stringify([
+        { displayName: "a.pdf", selected: false, partId: "p1" },
+      ]),
+    });
+    const state: HarnessState = {
+      revisions: new Map([[11, revision]]),
+      drafts: new Map([[1, draft]]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const refused = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this to finance@example.com now",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(refused).toBe(false);
+  });
+
+  it("R9-01: an exclusion phrase with the whole-word stem still allows the drop", async () => {
+    const draft = makeDraft({ id: 1, currentRevisionId: 11 });
+    const revision = makeRevision({
+      id: 11,
+      draftId: 1,
+      attachmentsJson: JSON.stringify([
+        { displayName: "logo.png", selected: false, partId: "p2" },
+      ]),
+    });
+    const state: HarnessState = {
+      revisions: new Map([[11, revision]]),
+      drafts: new Map([[1, draft]]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const allowed = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this to finance@example.com now without the logo",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(allowed).toBe(true);
+  });
+
   it("a revision that dropped an attachment refuses unless the sentence names it", async () => {
     const draft = makeDraft({ id: 1, currentRevisionId: 11 });
     const revision = makeRevision({

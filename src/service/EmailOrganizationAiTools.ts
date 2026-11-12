@@ -24,6 +24,12 @@ import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 import { log } from "@/modules/Logger";
 import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
 import enMessages from "@/views/lang/en";
+import zhMessages from "@/views/lang/zh";
+import esMessages from "@/views/lang/es";
+import frMessages from "@/views/lang/fr";
+import deMessages from "@/views/lang/de";
+import jaMessages from "@/views/lang/ja";
+import { SystemSettingController } from "@/controller/SystemSettingController";
 import { parseStringArrayJson } from "@/utils/jsonArray";
 
 /**
@@ -169,23 +175,57 @@ export type EmailOrganizationToolResult<T> =
  * layer has no renderer locale — the envelope also carries the code so any
  * UI can localize). Never a raw status token.
  */
-function sentCopyStatusLabel(status: EmailSentCopyStatus): string {
-  const table = (enMessages as {
+const LOCALE_MESSAGE_TABLES: Record<string, unknown> = {
+  en: enMessages,
+  zh: zhMessages,
+  es: esMessages,
+  fr: frMessages,
+  de: deMessages,
+  ja: jaMessages,
+};
+
+/** R9-02: the active UI locale from the system-setting store (main side). */
+async function resolveUiLocale(): Promise<string> {
+  try {
+    const controller = new SystemSettingController();
+    await controller.ensureConnection();
+    return await controller.getLanguagePreference();
+  } catch {
+    return "en";
+  }
+}
+
+/** R9-02: the label from the ACTIVE locale's sent_copy_status map. */
+function sentCopyStatusLabelFor(locale: string, status: EmailSentCopyStatus): string {
+  const table = (LOCALE_MESSAGE_TABLES[locale.slice(0, 2).toLowerCase()] as
+    | {
+        emailOrganization?: {
+          sent_copy_status?: Record<string, string>;
+        };
+      }
+    | undefined)?.emailOrganization?.sent_copy_status;
+  const fallback = (enMessages as {
     emailOrganization?: {
       sent_copy_status?: Record<string, string>;
     };
   }).emailOrganization?.sent_copy_status;
-  return table?.[status] ?? status;
+  return table?.[status] ?? fallback?.[status] ?? status;
 }
 
-function sentCopyWarningSentence(
-  submitted: boolean,
+/** R9-02: the chat warning sentence in the active locale's label. */
+async function sentCopyWarningSentence(
+  variant: "submitted" | "unknown" | "failed",
   status: EmailSentCopyStatus
-): string {
-  const label = sentCopyStatusLabel(status);
-  return submitted
-    ? `The forward was submitted, but the Sent copy could not be verified (${label}).`
-    : `The forward outcome is unknown, and the Sent copy could not be verified (${label}).`;
+): Promise<string> {
+  const locale = await resolveUiLocale();
+  const label = sentCopyStatusLabelFor(locale, status);
+  if (variant === "submitted") {
+    return `The forward was submitted, but the Sent copy could not be verified (${label}).`;
+  }
+  if (variant === "unknown") {
+    return `The forward outcome is unknown, and the Sent copy could not be verified (${label}).`;
+  }
+  return `The forward was rejected by the server, and the Sent copy could not be verified (${label}).`;
 }
 
 /**
@@ -408,6 +448,24 @@ export async function sendEmailForward(
       };
     }
     if (outcome.status === "failed" || outcome.status === "outcome_unknown") {
+      // R9-02: the all-rejected delivery return now carries sentCopyStatus
+      // — the failed branch warns from it (AC-22 covers this surface too).
+      if (
+        outcome.status === "failed" &&
+        (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")
+      ) {
+        const failedCopyWarning = await sentCopyWarningSentence(
+          "failed",
+          outcome.sentCopyStatus
+        );
+        return {
+          success: false,
+          error: outcome.error,
+          code: outcome.code,
+          warning: failedCopyWarning,
+          result: { ...outcome } as unknown as Record<string, unknown>,
+        };
+      }
       // R8-03 (AC-22): the UNKNOWN return carries the Sent-copy warning too
       // — the status rides inside `result`, and the transcript sentence
       // uses the shared translated label instead of the raw token.
@@ -415,7 +473,7 @@ export async function sendEmailForward(
         outcome.status === "outcome_unknown" &&
         outcome.sentCopyStatus !== undefined &&
         (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")
-          ? sentCopyWarningSentence(false, outcome.sentCopyStatus)
+          ? await sentCopyWarningSentence("unknown", outcome.sentCopyStatus)
           : undefined;
       return {
         success: false,
@@ -432,10 +490,17 @@ export async function sendEmailForward(
       };
     }
     if (outcome.status === "submitted" && outcome.outcome === "partially_succeeded") {
+      // R9-02 (AC-22): partial acceptance carries the Sent-copy sentence on
+      // the surface the user is looking at — this turn's tool result.
+      const partialCopyWarning =
+        outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown"
+          ? await sentCopyWarningSentence("submitted", outcome.sentCopyStatus)
+          : undefined;
       return {
         success: false,
         error: "Partial recipient acceptance: not all recipients were accepted.",
         code: "PARTIAL_RECIPIENT_ACCEPTANCE",
+        ...(partialCopyWarning !== undefined ? { warning: partialCopyWarning } : {}),
         result: { ...outcome } as unknown as Record<string, unknown>,
       };
     }
@@ -445,7 +510,7 @@ export async function sendEmailForward(
     if (outcome.status === "submitted" && (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")) {
       return {
         success: true,
-        warning: sentCopyWarningSentence(true, outcome.sentCopyStatus),
+        warning: await sentCopyWarningSentence("submitted", outcome.sentCopyStatus),
         code: "SENT_COPY_UNVERIFIED",
         result: { ...outcome } as unknown as Record<string, unknown>,
       };

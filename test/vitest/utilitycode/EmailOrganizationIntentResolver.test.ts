@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   extractSentenceAddresses,
   isDirectSendPayloadBound,
+  sentenceExcludesAttachment,
   isUnambiguousDirectSendPayload,
   prepareTrustedIntentText,
   resolveDirectSendVerb,
@@ -486,5 +487,36 @@ describe("R7-01 — conversation-scoped, source-aware direct binding", () => {
         senderMessageCount: null,
       })
     ).toBe(false);
+  });
+});
+
+describe("sentenceExcludesAttachment (R9-01: exclusion phrase + whole-word stem)", () => {
+  it("accepts an exclusion phrase with the whole-word stem", () => {
+    expect(sentenceExcludesAttachment("send it now without the logo", "logo.png")).toBe(true);
+    expect(sentenceExcludesAttachment("forward this except the invoice to a@b.test", "invoice.pdf")).toBe(true);
+    expect(sentenceExcludesAttachment("drop the signature image and send", "signature.png")).toBe(true);
+  });
+
+  it("refuses a bare mention of the filename (the request noun)", () => {
+    expect(sentenceExcludesAttachment("forward this invoice to a@b.test now", "invoice.pdf")).toBe(false);
+  });
+
+  it("refuses 'keep the logo' — stem present, no exclusion phrase", () => {
+    expect(sentenceExcludesAttachment("keep the logo and send", "logo.png")).toBe(false);
+  });
+
+  it("refuses a one-letter stem inside another word", () => {
+    // "forward" contains a, e, and o — a one-letter stem must not match.
+    expect(sentenceExcludesAttachment("forward this to a@b.test", "a.pdf")).toBe(false);
+    expect(sentenceExcludesAttachment("forward this to a@b.test", "e.pdf")).toBe(false);
+    expect(sentenceExcludesAttachment("forward this to a@b.test", "o.pdf")).toBe(false);
+  });
+
+  it("accepts non-English exclusion phrases", () => {
+    expect(sentenceExcludesAttachment("除了logo都转发到a@b.test", "logo.png")).toBe(true);
+    expect(sentenceExcludesAttachment("reenvíalo a a@b.test sin el logo", "logo.png")).toBe(true);
+    expect(sentenceExcludesAttachment("ohne das logo senden", "logo.png")).toBe(true);
+    // Japanese users keep the latin filename in the sentence.
+    expect(sentenceExcludesAttachment("logo.pngを除いて送信して", "logo.png")).toBe(true);
   });
 });

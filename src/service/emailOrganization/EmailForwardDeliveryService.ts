@@ -79,6 +79,8 @@ export type SendForwardOutcome =
       readonly operationId: string | null;
       readonly code: string;
       readonly error: string;
+      /** R9-02: the Sent-copy result when the SMTP round ran (AC-22). */
+      readonly sentCopyStatus?: EmailSentCopyStatus;
       readonly requestCorrelationId: string;
     }
   | {
@@ -579,12 +581,14 @@ export class EmailForwardDeliveryService extends BaseModule {
       }
       if (outcome === "failed") {
         // R10: an all-rejected submission is a definitive failure, never a
-        // generic 'submitted' success envelope.
+        // generic 'submitted' success envelope. R9-02: the Sent-copy status
+        // the item row stored rides the return so the tool can warn (AC-22).
         return {
           status: "failed",
           operationId: operation.operationId,
           code: "PROVIDER_REJECTED",
           error: "All envelope recipients were rejected by the server.",
+          sentCopyStatus,
           requestCorrelationId,
         };
       }

@@ -98,20 +98,18 @@ export async function resolveDirectSendPayloadBinding(
       droppedAttachmentNames = manifest
         .filter((entry) => entry.selected === false)
         .map((entry) => String(entry.displayName ?? ""));
-      // R8-01: "send it now" (no addresses in the sentence) authorizes the
-      // revision the review showed — which requires that review to be the
-      // conversation's ONLY open draft, and the referenced revision to be
-      // that draft's current one. Two open drafts make the target
-      // ambiguous; a stale revision is not what the user reviewed.
-      if (extractHasNoAddresses(input.userText)) {
-        if (!Number.isFinite(conversationNumber)) return false;
-        const openDrafts = await deps.findOpenDraftsForConversation(
-          conversationNumber
-        );
-        if (openDrafts.length !== 1) return false;
-        if (openDrafts[0].id !== draft?.id) return false;
-        if (revision.id !== draft.currentRevisionId) return false;
-      }
+      // R9-01: the single-open-draft + current-revision rule runs for EVERY
+      // direct forward — addressed ("forward this to finance@x now") and
+      // address-free ("send it now") alike. Two open drafts (even with the
+      // same envelope) make the target ambiguous; a stale revision is not
+      // what the user reviewed. Both refuse to the review path.
+      if (!Number.isFinite(conversationNumber)) return false;
+      const openDrafts = await deps.findOpenDraftsForConversation(
+        conversationNumber
+      );
+      if (openDrafts.length !== 1) return false;
+      if (openDrafts[0].id !== draft?.id) return false;
+      if (revision.id !== draft.currentRevisionId) return false;
     } else if (input.toolName === "move_email_to_trash") {
       const messageId = Number(record.message_id);
       if (!Number.isInteger(messageId) || messageId <= 0) return false;
@@ -164,8 +162,3 @@ export async function resolveDirectSendPayloadBinding(
   });
 }
 
-/** True when the trusted sentence contains no email address at all. */
-function extractHasNoAddresses(userText: string): boolean {
-  const matches = userText.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g);
-  return !matches || matches.length === 0;
-}
