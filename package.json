@@ -114,7 +114,7 @@
     "@mdi/font": "7.4.47",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@napi-rs/canvas": "^0.1.82",
-    "@rollup/plugin-alias": "^5.1.0",
+    "@rollup/plugin-alias": "^6.0.0",
     "@types/better-sqlite3": "^7.6.9",
     "@types/papaparse": "^5.5.2",
     "@types/turndown": "^5.0.5",
