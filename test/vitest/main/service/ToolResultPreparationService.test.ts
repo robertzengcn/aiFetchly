@@ -1017,8 +1017,8 @@ describe("ToolResultModule — retrieval-work allowance", () => {
       agentId: "",
       turnId: "turn-1",
     };
-    // The allowance is 32 calls (PRD §8).
-    for (let i = 0; i < 32; i += 1) {
+    // The allowance is TOOL_RESULT_CONFIG.retrievalMaxCalls calls.
+    for (let i = 0; i < TOOL_RESULT_CONFIG.retrievalMaxCalls; i += 1) {
       const res = await mod.reserveRetrievalCall(key);
       expect(res.ok).toBe(true);
     }
@@ -1035,7 +1035,7 @@ describe("ToolResultModule — retrieval-work allowance", () => {
       outputEpoch: scope.outputEpoch,
       agentId: "",
     };
-    for (let i = 0; i < 32; i += 1) {
+    for (let i = 0; i < TOOL_RESULT_CONFIG.retrievalMaxCalls; i += 1) {
       await mod.reserveRetrievalCall({ ...base, turnId: "turn-1" });
     }
     expect((await mod.reserveRetrievalCall({ ...base, turnId: "turn-1" })).ok).toBe(
@@ -1056,9 +1056,9 @@ describe("ToolResultModule — retrieval-work allowance", () => {
       agentId: "",
       turnId: "turn-1",
     };
-    // Reading the same page 32 times exhausts the allowance; duplicates are
+    // Reading the same page retrievalMaxCalls times exhausts the allowance; duplicates are
     // not a way to bypass the guard.
-    for (let i = 0; i < 32; i += 1) {
+    for (let i = 0; i < TOOL_RESULT_CONFIG.retrievalMaxCalls; i += 1) {
       await mod.reserveRetrievalCall(key);
     }
     expect((await mod.reserveRetrievalCall(key)).ok).toBe(false);
@@ -1097,7 +1097,29 @@ describe("ToolResultModule — retrieval-work allowance", () => {
     await mod.reserveRetrievalCall(key);
     await mod.settleRetrievalCall({ ...key, tokens: 1000 });
     const remaining = await mod.remainingRetrievalTokens(key);
-    expect(remaining).toBe(32_000 - 1000);
+    expect(remaining).toBe(TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn - 1000);
+  });
+
+  it("refuses reservations when settledTokens reaches or exceeds retrievalMaxTokensPerTurn even if remaining calls are available", async () => {
+    const mod = await makeModule();
+    const scope = await mod.ensureScope("prof-1", "suite-conv-token-cap");
+    const key = {
+      profileId: "prof-1",
+      conversationId: "suite-conv-token-cap",
+      outputEpoch: scope.outputEpoch,
+      agentId: "",
+      turnId: "turn-1",
+    };
+    const firstReserve = await mod.reserveRetrievalCall(key);
+    expect(firstReserve.ok).toBe(true);
+    await mod.settleRetrievalCall({
+      ...key,
+      tokens: TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn,
+    });
+    const secondReserve = await mod.reserveRetrievalCall(key);
+    expect(secondReserve.ok).toBe(false);
+    const remaining = await mod.remainingRetrievalTokens(key);
+    expect(remaining).toBe(0);
   });
 });
 

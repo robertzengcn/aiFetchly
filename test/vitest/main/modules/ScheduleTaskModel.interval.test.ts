@@ -291,3 +291,158 @@ describe("AiMessageTaskRunModel.createOccurrence idempotency", () => {
     expect(byKey?.occurrence).toBe(3);
   });
 });
+
+describe("Bug #2 waiting_for_conversation recovery and retry operations", () => {
+  it("claimIntervalOccurrence retires an older waiting_for_conversation run and claims the new slot", async () => {
+    const tasks = new AiMessageTaskModel(tmpDir);
+    const schedules = new ScheduleTaskModel(tmpDir);
+    const runs = new AiMessageTaskRunModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const taskId = await createTask(tasks, "v2-conv-wait-retire");
+
+    const anchor = new Date();
+    const firstSlot = new Date(anchor.getTime() + 60_000);
+    const secondSlot = new Date(anchor.getTime() + 120_000);
+    const scheduleId = await schedules.createIntervalSchedule({
+      name: "loop",
+      taskId,
+      conversationId: "v2-conv-wait-retire",
+      intervalMs: 60_000,
+      anchorAt: anchor,
+      nextRunAt: firstSlot,
+      maxExecutionCount: 10,
+      expiresAt: new Date(anchor.getTime() + DAY),
+      misfirePolicy: "run_once",
+      overlapPolicy: "coalesce",
+    });
+
+    // Claim slot 1 and mark it waiting_for_conversation (simulating busy lease).
+    const firstClaim = await schedules.claimIntervalOccurrence({
+      scheduleId,
+      now: new Date(firstSlot.getTime() + 1_000),
+    });
+    expect(firstClaim.kind).toBe("claimed");
+    if (firstClaim.kind !== "claimed") return;
+    await runs.updateStatus(firstClaim.runId, "waiting_for_conversation", {
+      started_at: new Date(firstSlot.getTime() + 1_000),
+      error_code: "CONVERSATION_BUSY",
+    });
+
+    // Slot 2 becomes due: claimIntervalOccurrence must retire the waiting run and claim slot 2.
+    const secondClaim = await schedules.claimIntervalOccurrence({
+      scheduleId,
+      now: new Date(secondSlot.getTime() + 1_000),
+    });
+    expect(secondClaim.kind).toBe("claimed");
+
+    const retired = await runs.getByIdempotencyKey(firstClaim.idempotencyKey);
+    expect(retired?.status).toBe("coalesced");
+    expect(retired?.error_code).toBe("WAITING_RUN_EXPIRED");
+    expect(retired?.finished_at).toBeTruthy();
+  });
+
+  it("markInterruptedRuns recovers stale waiting_for_conversation, running, and pending runs", async () => {
+    const tasks = new AiMessageTaskModel(tmpDir);
+    const runs = new AiMessageTaskRunModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const taskId = await createTask(tasks, "v2-conv-interrupt");
+
+    const staleTime = new Date(Date.now() - 20 * 60_000);
+    const freshTime = new Date(Date.now() - 10_000);
+
+    const waitingRunId = await runs.createOccurrence({
+      taskId,
+      scheduleId: 901,
+      conversationId: "v2-conv-interrupt",
+      occurrence: 1,
+      scheduledFor: staleTime,
+      catchUp: false,
+      idempotencyKey: "scheduled-loop:901:1",
+    });
+    await runs.updateStatus(waitingRunId, "waiting_for_conversation", {
+      started_at: staleTime,
+      error_code: "CONVERSATION_BUSY",
+    });
+
+    const pendingRunId = await runs.createOccurrence({
+      taskId,
+      scheduleId: 901,
+      conversationId: "v2-conv-interrupt",
+      occurrence: 2,
+      scheduledFor: staleTime,
+      catchUp: false,
+      idempotencyKey: "scheduled-loop:901:2",
+    });
+    await runs.updateStatus(pendingRunId, "pending", {
+      started_at: staleTime,
+    });
+
+    const freshWaitingId = await runs.createOccurrence({
+      taskId,
+      scheduleId: 902,
+      conversationId: "v2-conv-interrupt-fresh",
+      occurrence: 1,
+      scheduledFor: freshTime,
+      catchUp: false,
+      idempotencyKey: "scheduled-loop:902:1",
+    });
+    await runs.updateStatus(freshWaitingId, "waiting_for_conversation", {
+      started_at: freshTime,
+      error_code: "CONVERSATION_BUSY",
+    });
+
+    const cutoff = new Date(Date.now() - 10 * 60_000);
+    const affected = await runs.markInterruptedRuns(cutoff);
+    expect(affected).toBe(2);
+
+    const w = await runs.getByIdempotencyKey("scheduled-loop:901:1");
+    const p = await runs.getByIdempotencyKey("scheduled-loop:901:2");
+    const f = await runs.getByIdempotencyKey("scheduled-loop:902:1");
+    expect(w?.status).toBe("interrupted");
+    expect(p?.status).toBe("interrupted");
+    expect(f?.status).toBe("waiting_for_conversation");
+  });
+
+  it("findWaitingIntervalRuns, claimWaitingRunForRetry, and retireWaitingRun handle single-winner retries cleanly", async () => {
+    const tasks = new AiMessageTaskModel(tmpDir);
+    const runs = new AiMessageTaskRunModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    const taskId = await createTask(tasks, "v2-conv-retry");
+
+    const runId = await runs.createOccurrence({
+      taskId,
+      scheduleId: 777,
+      conversationId: "v2-conv-retry",
+      occurrence: 1,
+      scheduledFor: new Date(),
+      catchUp: false,
+      idempotencyKey: "scheduled-loop:777:1",
+    });
+    await runs.updateStatus(runId, "waiting_for_conversation", {
+      started_at: new Date(),
+      error_code: "CONVERSATION_BUSY",
+    });
+
+    const waiting = await runs.findWaitingIntervalRuns(10);
+    expect(waiting.map((r) => r.id)).toContain(runId);
+
+    const retryNow = new Date();
+    const firstClaim = await runs.claimWaitingRunForRetry(runId, retryNow, 3);
+    const secondClaim = await runs.claimWaitingRunForRetry(runId, retryNow, 3);
+    expect(firstClaim).toBe(true);
+    expect(secondClaim).toBe(false);
+
+    const updated = await runs.getByIdempotencyKey("scheduled-loop:777:1");
+    expect(updated?.status).toBe("pending");
+    expect(updated?.attempt).toBe(2);
+
+    // Exhaust attempts and retire
+    await runs.updateStatus(runId, "waiting_for_conversation", {
+      error_code: "CONVERSATION_BUSY",
+    });
+    await runs.retireWaitingRun(runId, "WAITING_MAX_ATTEMPTS", retryNow);
+    const retired = await runs.getByIdempotencyKey("scheduled-loop:777:1");
+    expect(retired?.status).toBe("coalesced");
+    expect(retired?.error_code).toBe("WAITING_MAX_ATTEMPTS");
+  });
+});
