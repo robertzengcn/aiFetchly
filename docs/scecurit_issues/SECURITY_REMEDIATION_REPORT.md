@@ -95,3 +95,28 @@ Both have **Patched: None** on the advisory — the vulnerable version *is* the 
 - Code scanning: 0 open alerts.
 - Secret scanning: 0 open alerts.
 
+---
+
+## Round 4 — 2026-11-13 (2 open Dependabot alerts: @hono/node-server)
+
+**Source:** `gh api repos/robertzengcn/aiFetchly/dependabot/alerts?state=open`.
+
+### Fixed (version bump via `package.json` `resolutions`)
+
+| Package | From | To | Advisory | Mechanism |
+|---|---|---|---|---|
+| `@hono/node-server` | 2.1.4 | 2.1.8 | GHSA-jpvv-r467-5p4w (#348, CVE-2026-126210: Backslash in request path bypasses path-based access control at reverse proxy), GHSA-qv5m-9pm6-hqp3 (#349, CVE-2026-126343: Unhandled `ECONNRESET` on socket during async WebSocket upgrade crashes process) | Added `"@hono/node-server": "^2.1.8"` to `resolutions` in `package.json`. |
+
+### Verification
+- `yarn.lock` re-resolved with `yarn install` after removing the cached `2.1.4` block; `@hono/node-server` resolved to `2.1.8`.
+- `node docs/scecurit_issues/verify-fixes.js`: 335 alerts parsed, `@hono/node-server` identified as FIXED, 0 residual.
+- `npx vitest run --exclude ".worktrees/**" test/vitest/main/ForgePackagingDependencies.test.ts`: 12/12 passed.
+- `npx tsc --noEmit`: 0 errors.
+- `yarn vue-typecheck`: 0 errors.
+
+### Net after Round 4
+- Dependabot: 2 fixed by bump → **0 actionable open alerts**.
+- Code scanning: 0 open alerts.
+- Secret scanning: 0 open alerts.
+
+
