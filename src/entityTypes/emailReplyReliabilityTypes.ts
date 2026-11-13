@@ -103,7 +103,10 @@ export type EmailReplyPolicyCode =
   | "probe_timeout"
   | "probe_limit_exceeded"
   | "probe_failed"
-  | "no_reply_observed";
+  | "no_reply_observed"
+  // R5-04 (§10.4): a move could not invalidate pending approvals for this
+  // message; reply sending is refused until the durable obligation resolves.
+  | "reply_invalidation_pending";
 
 /** Authoritative decision returned by the policy orchestrator. */
 export interface EmailReplyPolicyDecision {

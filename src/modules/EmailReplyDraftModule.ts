@@ -10,6 +10,7 @@ import {
   CommitGeneratedDraftInput,
   CommitGeneratedDraftResult,
 } from "@/model/EmailReplyDraft.model";
+import { EmailReplyInvalidationObligationModel } from "@/model/EmailReplyInvalidationObligation.model";
 import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyDraftRevisionEntity } from "@/entity/EmailReplyDraftRevision.entity";
 import { EmailReplyDraftStatus } from "@/entityTypes/emailReceiveTypes";
@@ -306,6 +307,67 @@ export class EmailReplyDraftModule extends BaseModule {
       );
     } catch (error) {
       console.error("Error invalidating unsent drafts for mailbox:", error);
+      throw error;
+    }
+  }
+
+  /** Invalidate pending reply work for one message after a location change. */
+  async invalidateUnsentDraftsForMessage(
+    messageId: number,
+    reason: string
+  ): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.draftModel.invalidateUnsentDraftsForMessage(
+        messageId,
+        reason
+      );
+    } catch (error) {
+      console.error("Error invalidating unsent drafts for message:", error);
+      throw error;
+    }
+  }
+
+  // ---- R5-04: durable reply-invalidation obligations (design §10.4) ----
+
+  /** Persists an open obligation after a failed post-move invalidation. */
+  async recordInvalidationObligation(input: {
+    readonly messageId: number;
+    readonly emailServiceId: number;
+    readonly destinationFolder: string;
+  }): Promise<void> {
+    try {
+      await this.ensureConnection();
+      const model = new EmailReplyInvalidationObligationModel(this.dbpath);
+      await model.recordOpen(input);
+    } catch (error) {
+      log.error("Error recording reply invalidation obligation:", error);
+      throw error;
+    }
+  }
+
+  /** True while an open obligation blocks reply sending for the message. */
+  async hasOpenInvalidationObligation(messageId: number): Promise<boolean> {
+    try {
+      await this.ensureConnection();
+      const model = new EmailReplyInvalidationObligationModel(this.dbpath);
+      return await model.hasOpen(messageId);
+    } catch (error) {
+      // Fail closed: an unreadable obligation state must not let a reply
+      // send past the §10.4 gate.
+      log.error("Error reading reply invalidation obligation:", error);
+      return true;
+    }
+  }
+
+  /** Resolves open obligations once the invalidation finally landed. */
+  async resolveInvalidationObligations(messageId: number): Promise<void> {
+    try {
+      await this.ensureConnection();
+      const model = new EmailReplyInvalidationObligationModel(this.dbpath);
+      await model.resolveAll(messageId);
+    } catch (error) {
+      log.error("Error resolving reply invalidation obligation:", error);
       throw error;
     }
   }

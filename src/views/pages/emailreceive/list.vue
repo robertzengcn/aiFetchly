@@ -47,7 +47,23 @@
         @keyup.enter="reload"
       ></v-text-field>
       <v-btn color="primary" @click="reload">{{ t("common.search") }}</v-btn>
+      <!-- R5-08 (FR-18/FR-19): search → frozen preview → execute/cancel bulk. -->
+      <v-spacer></v-spacer>
+      <v-btn
+        color="error"
+        variant="tonal"
+        data-testid="org-bulk-open"
+        :disabled="!emailServiceId"
+        @click="bulkDialogOpen = true"
+      >
+        <v-icon start>mdi-delete-sweep</v-icon>{{ t("emailOrganization.bulk_open") || "Bulk trash" }}
+      </v-btn>
     </div>
+
+    <EmailOrganizationBulkDialog
+      v-model="bulkDialogOpen"
+      :email-service-id="emailServiceId"
+    ></EmailOrganizationBulkDialog>
 
     <v-alert
       v-if="!emailServiceId"
@@ -57,6 +73,31 @@
       density="compact"
     >
       {{ t("emailReceive.select_email_service_hint") || "Please select an Email Service to view messages." }}
+    </v-alert>
+
+    <v-alert
+      v-if="rowActionMessage"
+      type="info"
+      variant="tonal"
+      density="compact"
+      class="mb-2"
+      role="status"
+      data-testid="org-row-message"
+    >
+      {{ rowActionMessage }}
+      <v-btn
+        v-if="lastRowTrashOperationId !== null"
+        size="x-small"
+        variant="tonal"
+        color="warning"
+        class="ml-2"
+        data-testid="org-row-undo"
+        :loading="restoringRow"
+        @click="undoRowTrash"
+      >
+        <v-icon start size="x-small">mdi-undo</v-icon>
+        {{ t('emailOrganization.undo_action') || 'Undo' }}
+      </v-btn>
     </v-alert>
 
     <v-data-table-server
@@ -88,6 +129,31 @@
       </template>
       <template #item.actions="{ item }">
         <v-icon size="small" @click="openDetail(item.id)">mdi-eye</v-icon>
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          class="ml-1"
+          density="comfortable"
+          :aria-label="t('emailOrganization.forward_button') || 'Forward'"
+          :title="t('emailOrganization.forward_button') || 'Forward'"
+          @click="openDetail(item.id)"
+        >
+          <v-icon size="small">mdi-forward</v-icon>
+        </v-btn>
+        <v-btn
+          icon
+          size="x-small"
+          variant="text"
+          density="comfortable"
+          :aria-label="t('emailOrganization.trash_button') || 'Trash'"
+          :title="t('emailOrganization.trash_button') || 'Trash'"
+          :data-testid="`org-row-trash-${item.id}`"
+          :disabled="trashingRowId === item.id"
+          @click="trashRow(item.id)"
+        >
+          <v-icon size="small">mdi-delete</v-icon>
+        </v-btn>
       </template>
     </v-data-table-server>
   </AppPageShell>
@@ -95,21 +161,24 @@
 
 <script setup lang="ts">
 import AppPageShell from "@/views/components/pageTemplates/AppPageShell.vue";
+import EmailOrganizationBulkDialog from "@/views/components/emailOrganization/EmailOrganizationBulkDialog.vue";
 import { ref, computed, onMounted, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import type { Header } from "@/entityTypes/commonType";
 import { CapitalizeFirstLetter } from "@/views/utils/function";
 import { listReceivedMessages, syncUnreadEmails } from "@/views/api/emailreceive";
+import { moveMessageToTrash, restoreFromOperation } from "@/views/api/emailorganization";
 import { getEmailServiceList } from "@/views/api/emailservice";
 import type { EmailServiceListdata } from "@/entityTypes/emailmarketingType";
 import type { ReceivedMessageListDto } from "@/entityTypes/emailReceiveTypes";
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const router = useRouter();
 const route = useRoute();
 
 const emailServiceId = ref<number | null>(null);
+const bulkDialogOpen = ref(false);
 const emailServices = ref<EmailServiceListdata[]>([]);
 const serverItems = ref<ReceivedMessageListDto[]>([]);
 const totalItems = ref(0);
@@ -220,6 +289,64 @@ async function syncNow() {
     console.error("Sync failed:", err);
   } finally {
     syncing.value = false;
+  }
+}
+
+const trashingRowId = ref<number | null>(null);
+const rowActionMessage = ref<string | null>(null);
+// R6-05: the Trash operation id survives the row action so Undo is offered
+// right where the message was trashed — not only on the detail page.
+const lastRowTrashOperationId = ref<string | null>(null);
+const restoringRow = ref(false);
+
+/** R6-05: localized reason codes; unknown codes render the raw value. */
+function orgErrorCode(code: string | null | undefined): string {
+  if (!code) return "";
+  const key = `emailOrganization.error_code.${code}`;
+  return te(key) ? t(key) : code;
+}
+
+async function trashRow(id: number): Promise<void> {
+  if (trashingRowId.value !== null) return;
+  trashingRowId.value = id;
+  lastRowTrashOperationId.value = null;
+  try {
+    const result = await moveMessageToTrash(id);
+    if (result.success) {
+      lastRowTrashOperationId.value = result.operationId || null;
+      rowActionMessage.value =
+        t('emailOrganization.trash_success') || 'Moved to Trash.';
+    } else {
+      rowActionMessage.value = `${t('emailOrganization.action_failed') || 'Action failed'}: ${orgErrorCode(result.errorCode) || result.status}`;
+    }
+    await reload();
+  } catch (err) {
+    console.error('Trash failed:', err);
+    rowActionMessage.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    trashingRowId.value = null;
+  }
+}
+
+/** R6-05: Undo for the row Trash, through the same durable restore path. */
+async function undoRowTrash(): Promise<void> {
+  if (lastRowTrashOperationId.value === null || restoringRow.value) return;
+  restoringRow.value = true;
+  try {
+    const result = await restoreFromOperation(lastRowTrashOperationId.value);
+    if (result.success) {
+      lastRowTrashOperationId.value = null;
+      rowActionMessage.value =
+        t('emailOrganization.restore_success') || 'Restored to its original folder.';
+    } else {
+      rowActionMessage.value = `${t('emailOrganization.action_failed') || 'Action failed'}: ${orgErrorCode(result.errorCode) || result.status}`;
+    }
+    await reload();
+  } catch (err) {
+    console.error('Undo failed:', err);
+    rowActionMessage.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    restoringRow.value = false;
   }
 }
 

@@ -464,6 +464,9 @@ describe("TODO-08: acceptance-time mode capture (AC-14)", () => {
           releaseLoop = resolve as (v: unknown) => void;
         }) as never;
       }),
+      // Deliberately non-yielding: callback mode must never read the
+      // generator; the throw inside is the guard if it ever does.
+      // eslint-disable-next-line require-yield
       async *iterate(): AsyncGenerator<never, never, void> {
         throw new Error("iterate must not run in callback mode");
       },
@@ -497,6 +500,8 @@ describe("TODO-08: acceptance-time mode capture (AC-14)", () => {
       run: vi.fn(async (): Promise<never> => {
         throw new Error("run must not be called in generator mode");
       }),
+      // One-shot completed generator: returns immediately without yielding.
+      // eslint-disable-next-line require-yield
       async *iterate(input: { conversationId: string; assistantMessageId: string }) {
         return {
           type: "completed",
@@ -534,6 +539,8 @@ describe("R04: mode flip during engine preparation keeps the accepted mode", () 
         loopCalls.push("callback");
         throw new Error("unused");
       }),
+      // One-shot generator: pushes a marker and completes without yielding.
+      // eslint-disable-next-line require-yield
       async *iterate(): AsyncGenerator<never, never, void> {
         loopCalls.push("generator");
         return undefined as never;

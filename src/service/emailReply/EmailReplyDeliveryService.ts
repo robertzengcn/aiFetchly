@@ -1,4 +1,5 @@
 import { EmailReplyDraftModule } from "@/modules/EmailReplyDraftModule";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
 import { EmailReplyDraftRevisionModule } from "@/modules/EmailReplyDraftRevisionModule";
 import { EmailReplyApprovalModule } from "@/modules/EmailReplyApprovalModule";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
@@ -19,6 +20,7 @@ import {
   correlationIdForMessage,
   newRequestCorrelationId,
 } from "@/service/emailReply/EmailReplyCorrelation";
+import { runWithAccountLock } from "@/service/emailOrganization/accountMutex";
 import { classifySubmissionResult } from "@/service/emailReply/EmailSubmissionClassifier";
 import {
   buildSendIdempotencyKey,
@@ -858,7 +860,12 @@ export class EmailReplyDeliveryService {
     // it. A crash clears the in-memory mark (restart = quiescence).
     markSubmitterRunning(attemptId);
     try {
-      return await this.runClaimedSendToFinalization({
+      // R4-02: the account lock spans final admission (freshness gate + fence)
+    // AND SMTP, so a Trash/restore MOVE on the same account cannot invalidate
+    // the approval between admission and dispatch. The post-claim freshness
+    // gate revalidates AFTER acquiring the lock.
+    return await runWithAccountLock(emailServiceId, async () =>
+      await this.runClaimedSendToFinalization({
         message,
         draft,
         revision,
@@ -869,7 +876,8 @@ export class EmailReplyDeliveryService {
         attemptId,
         requestCorrelationId,
         assistedProbe,
-      });
+      })
+    );
     } finally {
       // EncompassingSettlement (F02): gate refusals (which finalize + throw),
       // fence refusals, SMTP outcomes and unexpected throws all settle here —
@@ -915,6 +923,50 @@ export class EmailReplyDeliveryService {
       requestCorrelationId,
       assistedProbe,
     } = input;
+    // 7a-anti. R5-04 (§10.4): an open reply-invalidation obligation for this
+    // message means a prior move could not invalidate pending approvals —
+    // sending now could answer from a stale approval after the move. The
+    // obligation's repair path resolves it; until then the send refuses with
+    // a safe finalize of the unsent claim (never a manufactured outcome).
+    let obligationOpen = false;
+    try {
+      obligationOpen = await this.draftModule.hasOpenInvalidationObligation(message.id);
+    } catch {
+      // hasOpenInvalidationObligation already fails closed (true), but a
+      // thrown connection error must also refuse.
+      obligationOpen = true;
+    }
+    // R6-03: the row itself can be MISSING — the same DB failure that broke
+    // the invalidation also broke the obligation insert. The fail-closed
+    // fallback is the move item's durable REPLY_INVALIDATION_PENDING marker
+    // on a nonterminal operation: it is written even when the guard row is
+    // not, so the send stays refused until a repair resolves the move.
+    if (!obligationOpen) {
+      obligationOpen = await new EmailOrganizationOperationModule().hasUnresolvedInvalidationPendingItem(
+        message.id
+      );
+    }
+    if (obligationOpen) {
+      const code: EmailReplyPolicyCode = "reply_invalidation_pending";
+      await this.draftModule.finalizeSendOutcome({
+        attemptId,
+        draftId: draft.id,
+        approvalId: approval.id,
+        emailServiceId,
+        messageId: message.id,
+        outcome: "failed",
+        providerMessageId: null,
+        failureCode: code,
+        sanitizedError: "Unsent (SMTP never called): a pending reply invalidation obligation is open.",
+        guardId: guardRow?.id ?? null,
+        requestCorrelationId,
+      });
+      throw new SendPolicyRejection(
+        "Send rejected: the message moved and its pending approvals could not be invalidated yet; retry after the mailbox settles.",
+        code,
+        requestCorrelationId
+      );
+    }
     // 7. Mark the attempt `submitted` at the SMTP handoff boundary (P0.6) so a
     //    crash here is recoverable to delivery_unknown rather than left claimed.
     await this.attemptModule.markSubmitted(attemptId, new Date(this.nowForInvocation()));
@@ -1013,6 +1065,9 @@ export class EmailReplyDeliveryService {
         parentMessageId: message.messageId,
         parentReferences: message.referencesHeader,
       });
+      // T07: SMTP runs under the account lock acquired by the caller
+      // (R4-02) — AsyncMutex is not re-entrant, so a second acquisition
+      // here would self-deadlock.
       const raw = await sender.sendReplyEmail({
         receiver: headers.recipientAddress,
         subject: headers.subject,

@@ -254,6 +254,13 @@ export interface SkillExecutionContext {
   readonly skipPermissionCheck?: boolean;
 
   /**
+   * R03: set ONLY by the scheduled executor for unattended runs. Trusted
+   * host state — never a tool argument. Mutation tools consult it as the
+   * service-level second guard.
+   */
+  readonly scheduledOrigin?: boolean;
+
+  /**
    * Emits a progress event for this tool call. Optional — fast tools leave it
    * undefined. Wired by the caller (e.g. AIChatQueryLoop) to a sink that
    * emits AIChatQueryToolProgressEvent.

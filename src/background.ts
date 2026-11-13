@@ -1824,6 +1824,135 @@ function initialize() {
         );
       }
 
+      // Email organization (forward/trash/restore) location backfill: insert
+      // a `legacy_unverified` location row for every received message lacking
+      // one (technical design §5.3 step 4). Idempotent and non-fatal — legacy
+      // rows stay ineligible for remote mutation until a live re-fetch
+      // verifies them. Fire-and-forget so startup never blocks on it.
+      try {
+        const { EmailOrganizationStartupService } = await import(
+          "@/service/emailOrganization/EmailOrganizationStartupService"
+        );
+        void new EmailOrganizationStartupService()
+          .ensureLocationBackfill()
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] startup backfill rejected:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+      } catch (err) {
+        log.error(
+          "[email-organization] startup backfill import failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
+      // Startup recovery + retention (design §13 / §9.2): expired claims
+      // become honest unknown outcomes for reconciliation, and unapproved
+      // encrypted artifacts older than the TTL are purged. Fire-and-forget;
+      // neither ever replays or resends an external action.
+      try {
+        const { EmailMailboxActionService } = await import(
+          "@/service/emailOrganization/EmailMailboxActionService"
+        );
+        const { EmailOrganizationArtifactStore } = await import(
+          "@/service/emailOrganization/EmailOrganizationArtifactStore"
+        );
+        const { EMAIL_ORGANIZATION_LIMITS } = await import(
+          "@/entityTypes/emailOrganizationTypes"
+        );
+        const { EmailOrganizationSelectionService } = await import(
+          "@/service/emailOrganization/EmailOrganizationSelectionService"
+        );
+        // R04: a restart can occur BEFORE leases expire — sweep on an
+        // interval so no operation is left running indefinitely.
+        const leaseSweepTimer = setInterval(
+          () => {
+            const actionService = new EmailMailboxActionService();
+            void actionService
+              .reconcileExpiredClaims()
+              .catch((err: unknown) => {
+                log.warn(
+                  "[email-organization] periodic lease sweep failed:",
+                  err instanceof Error ? err.message : String(err)
+                );
+              });
+            // R4-11: settle orphaned pending work so crash-interrupted
+            // operations never retain unexplained pending items.
+            void actionService
+              .settleOrphanedPendingOperations()
+              .catch((err: unknown) => {
+                log.warn(
+                  "[email-organization] orphan settle failed:",
+                  err instanceof Error ? err.message : String(err)
+                );
+              });
+          },
+          5 * 60 * 1000
+        );
+        leaseSweepTimer.unref();
+        void new EmailMailboxActionService()
+          .settleOrphanedPendingOperations()
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] startup orphan settle failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+        void new EmailMailboxActionService()
+          .reconcileExpiredClaims()
+          .then((reconciled: number) => {
+            if (reconciled > 0) {
+              log.info(
+                `[email-organization] startup recovery marked ${reconciled} expired claim(s) for reconciliation`
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] startup recovery failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+        void new EmailOrganizationArtifactStore(userdataPath)
+          .purgeOlderThan(new Date(Date.now() - EMAIL_ORGANIZATION_LIMITS.unapprovedArtifactTtlMs))
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] artifact retention sweep failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+        void new EmailOrganizationSelectionService()
+          .purgeExpired()
+          .catch((err: unknown) => {
+            log.warn(
+              "[email-organization] selection purge failed:",
+              err instanceof Error ? err.message : String(err)
+            );
+          });
+        // R17: an app open past the TTL must still run retention sweeps.
+        const retentionTimer = setInterval(
+          () => {
+            void new EmailOrganizationArtifactStore(userdataPath)
+              .purgeOlderThan(new Date(Date.now() - EMAIL_ORGANIZATION_LIMITS.unapprovedArtifactTtlMs))
+              .catch((err: unknown) => {
+                log.warn(
+                  "[email-organization] periodic artifact sweep failed:",
+                  err instanceof Error ? err.message : String(err)
+                );
+              });
+          },
+          60 * 60 * 1000
+        );
+        retentionTimer.unref();
+      } catch (err) {
+        log.error(
+          "[email-organization] startup recovery import failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+
       // Post-synchronize email-reply upgrade validation (R23, technical design
       // §5.3). Runs AFTER ensureInitialized() has applied TypeORM synchronize
       // over the POPULATED database. Read-only: never repairs, drops, or

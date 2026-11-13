@@ -384,7 +384,7 @@ describe("required-write barriers on real loop boundaries (TODO-01/02)", () => {
       request: { message: "go", conversationId: "v2-T02" },
       eventSink: makeEventCollector().sink,
     });
-    let continuationStarted = false;
+    const continuationStarted = false;
     let resolveSave!: (v: unknown) => void;
     mockSaveToolResultMessage.mockImplementation(
       () => new Promise((resolve) => { resolveSave = resolve; })

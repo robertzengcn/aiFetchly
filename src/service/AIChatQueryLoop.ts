@@ -112,12 +112,55 @@ export const OUTBOUND_EMAIL_DRAFT_TOOL = "draft_outbound_email_batch";
  * only an allowed gate does. An explicit user denial is not skipped, so the
  * normal permission path can still refuse the call.
  */
+/**
+ * R03: organization mutation tools whose trusted current-turn intent was
+ * resolved to send_now skip the generic card — the explicit user request IS
+ * the confirmation, bound to this turn's message (PRD FR-07 direct-send).
+ * Review-first/draft/negation intents never skip; the model is told to
+ * present the draft instead.
+ */
+export const ORGANIZATION_EMAIL_MUTATION_TOOLS: ReadonlySet<string> = new Set([
+  "send_email_forward",
+  "move_email_to_trash",
+  "restore_email",
+]);
+
+/**
+ * Pulls comparable text from the last user message (string content or
+ * text parts). Organization intent is resolved from this trusted host
+ * state — never from tool arguments or email content.
+ */
+export function extractUserMessageText(
+  message: OpenAIChatMessage | undefined
+): string {
+  if (message === undefined) return "";
+  if (typeof message.content === "string") return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((part) =>
+        typeof part === "object" && part !== null && "text" in part
+          ? String((part as { text?: unknown }).text ?? "")
+          : ""
+      )
+      .join(" ");
+  }
+  return "";
+}
+
 export function shouldSkipGenericToolPermission(input: {
   readonly toolName: string;
   readonly outboundSendGateAllowed: boolean;
   readonly explicitlyDenied: boolean;
+  readonly organizationSendGateAllowed?: boolean;
 }): boolean {
   if (input.toolName === OUTBOUND_EMAIL_DRAFT_TOOL) {
+    return true;
+  }
+  if (
+    ORGANIZATION_EMAIL_MUTATION_TOOLS.has(input.toolName) &&
+    input.organizationSendGateAllowed === true &&
+    !input.explicitlyDenied
+  ) {
     return true;
   }
   return (
@@ -132,6 +175,17 @@ import {
   type ToolTimeoutClass,
 } from "@/service/ToolTimeoutPolicy";
 import { CancellationToken } from "@/service/CancellationToken";
+import {
+  prepareTrustedIntentText,
+  resolveEmailOrganizationIntent,
+} from "@/service/emailOrganization/EmailOrganizationIntentResolver";
+import {
+  resolveDirectSendPayloadBinding as resolveDirectSendPayload,
+} from "@/service/emailOrganization/EmailOrganizationDirectSendBinding";
+import { EmailForwardDraftModule } from "@/modules/EmailForwardDraftModule";
+import { EmailReceivedMessageModule } from "@/modules/EmailReceivedMessageModule";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { parseStringArrayJson } from "@/utils/jsonArray";
 import {
   buildImageArtifactHandoffMessage,
   countImageContentParts,
@@ -573,6 +627,8 @@ interface PreparedToolCall {
    * the generic permission card must not be shown again (§14.2).
    */
   outboundSendGateAllowed?: boolean;
+  /** R03: trusted current-turn intent gate passed for org mutations. */
+  organizationSendGateAllowed?: boolean;
 }
 
 /**
@@ -4317,6 +4373,112 @@ export class AIChatQueryLoop {
           // Set only after the gate allows this exact send. The generic
           // permission card is then skipped; a blocked gate never reaches it.
           let outboundSendGateAllowed = false;
+          // R03: organization mutations resolve trusted current-turn intent
+          // (host state) — explicit send/delete executes once; review/draft/
+          // negation blocks the call and tells the model to present instead.
+          let organizationSendGateAllowed = false;
+          if (ORGANIZATION_EMAIL_MUTATION_TOOLS.has(call.name)) {
+            // Trusted current-turn text: the last user message in the loop
+            // input (host state — never a tool argument).
+            const lastUserMessage = [...input.messages]
+              .reverse()
+              .find((message) => message.role === "user");
+            // R5-07 (AC-13): quoted/pasted email content is stripped BEFORE
+            // intent matching — instruction phrases inside a paste belong to
+            // the pasted message, not to the user's own instruction.
+            const userText = prepareTrustedIntentText(
+              extractUserMessageText(lastUserMessage)
+            );
+            const organizationDecision = resolveEmailOrganizationIntent(userText);
+            // R03 (review hardening) + R5-07 + R6-01: review/draft/negation
+            // intents refuse the mutation. A trusted current-turn `send_now`
+            // skips the card ONLY when the host binds the FULL payload: the
+            // VERB the sentence names must be the tool being called, the
+            // frozen payload's addresses must be the addresses the sentence
+            // names, and "undo" must reference the single restorable
+            // operation. Anything unbound degrades to the review path.
+            let payloadBound = false;
+            if (organizationDecision.mode === "send_now") {
+              let parsedArgs: unknown = undefined;
+              try {
+                parsedArgs =
+                  typeof call.arguments === "string" && call.arguments !== ""
+                    ? (JSON.parse(call.arguments) as unknown)
+                    : call.arguments;
+              } catch {
+                parsedArgs = undefined;
+              }
+              payloadBound = await this.resolveDirectSendPayloadBinding({
+                toolName: call.name,
+                args: parsedArgs,
+                userText,
+                conversationId: input.conversationId,
+              });
+            }
+            if (organizationDecision.mode === "send_now" && payloadBound) {
+              // PRD §5.1/AC-01: the explicit user request IS the
+              // confirmation, bound to this turn and this frozen payload;
+              // the tool still runs entitlement, validation, durable
+              // operation and once-only authorization internally.
+              organizationSendGateAllowed = true;
+            } else if (organizationDecision.mode === "send_now") {
+              yield buildToolCallEvent(call.arguments ?? {});
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                organizationGateBlocked: true,
+                code: "review_required",
+                reason:
+                  "The request to act immediately did not resolve to one unambiguous payload. Present the draft or selection for review and wait for the user's explicit go-ahead.",
+              });
+              yield {
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  organizationGateBlocked: true,
+                  code: "review_required",
+                },
+              };
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
+            } else {
+              yield buildToolCallEvent(call.arguments ?? {});
+              const blockedContent = serializeToolResultContent({
+                success: false,
+                organizationGateBlocked: true,
+                code: "review_required",
+                reason:
+                  "The user asked for a review/draft rather than immediate action. Present the draft or selection for review and wait for the user's explicit go-ahead.",
+              });
+              yield {
+                type: "tool_result",
+                conversationId: input.conversationId,
+                messageId: input.assistantMessageId,
+                toolCallId: call.id,
+                toolName: call.name,
+                fullContent: blockedContent,
+                toolResult: {
+                  success: false,
+                  organizationGateBlocked: true,
+                  code: "review_required",
+                },
+              };
+              messages.push({
+                role: "tool",
+                tool_call_id: call.id,
+                content: blockedContent,
+              });
+              continue;
+            }
+          }
           if (call.name === OUTBOUND_EMAIL_SEND_TOOL) {
             const gateDecision = await this.evaluateOutboundEmailGate(
               input,
@@ -4608,7 +4770,8 @@ export class AIChatQueryLoop {
             input,
             executableCall,
             outboundAuthorization,
-            outboundSendGateAllowed
+            outboundSendGateAllowed,
+            organizationSendGateAllowed
           );
           const effectiveArguments = preparedCall.effectiveCall.arguments ?? {};
           yield buildToolCallEvent(effectiveArguments);
@@ -5536,6 +5699,7 @@ export class AIChatQueryLoop {
       batchHash: string;
     } | undefined,
     outboundSendGateAllowed = false,
+    organizationSendGateAllowed = false,
     onProgress?: ToolProgressEmitter,
     deadlineMs?: number
   ): Promise<
@@ -5852,6 +6016,7 @@ export class AIChatQueryLoop {
               skipPermissionCheck: shouldSkipGenericToolPermission({
                 toolName: call.name,
                 outboundSendGateAllowed,
+                organizationSendGateAllowed,
                 explicitlyDenied:
                   SkillPermissionService.getPermissionStatus(call.name) ===
                   "denied",
@@ -6665,7 +6830,46 @@ export class AIChatQueryLoop {
    * pre-allowlist is the trusted authorization AD-003 requires in that
    * unattended context, so the gate treats it as an honor-skip-review signal.
    * Never true for interactive chat (the renderer cannot forge scheduledContext).
-   *
+   */
+  /**
+   * R8-01: the direct-send binding is the PRODUCTION resolution in
+   * EmailOrganizationDirectSendBinding — durable reads and the pure check
+   * together, testable without this loop.
+   */
+  private async resolveDirectSendPayloadBinding(input: {
+    readonly toolName: string;
+    readonly args: unknown;
+    readonly userText: string;
+    readonly conversationId?: number | string | null;
+  }): Promise<boolean> {
+    return await resolveDirectSendPayload(
+      input,
+      {
+        readRevision: (revisionId) =>
+          new EmailForwardDraftModule().readRevision(revisionId),
+        readDraft: (draftId) => new EmailForwardDraftModule().readDraft(draftId),
+        readMessage: (messageId) => new EmailReceivedMessageModule().read(messageId),
+        countBySender: (emailServiceId, fromAddress) =>
+          new EmailReceivedMessageModule().countBySender(emailServiceId, fromAddress),
+        readOperation: async (operationId) => {
+          const operation = await new EmailOrganizationOperationModule().readOperation(operationId);
+          return operation
+            ? {
+                kind: operation.kind as string,
+                operationId: operation.operationId,
+                emailServiceId: operation.emailServiceId,
+              }
+            : null;
+        },
+        findRestorableTrashOperationIds: (emailServiceId) =>
+          new EmailOrganizationOperationModule().findRestorableTrashOperationIds(emailServiceId),
+        findOpenDraftsForConversation: (conversationId) =>
+          new EmailForwardDraftModule().findOpenDraftsForConversation(conversationId),
+      }
+    );
+  }
+
+  /**
    * Fail-closed: any unreadable intent, missing turn identity, or resolver
    * failure yields a blocking code — a send is never authorized on error.
    */
@@ -6773,7 +6977,8 @@ export class AIChatQueryLoop {
       authorizationId: number;
       batchHash: string;
     },
-    outboundSendGateAllowed = false
+    outboundSendGateAllowed = false,
+    organizationSendGateAllowed = false
   ): Promise<PreparedToolCall> {
     const startedAt = Date.now();
     const descriptor = this.resolveHookToolDescriptor(input, call);
@@ -6856,6 +7061,7 @@ export class AIChatQueryLoop {
       startedAt,
       outboundAuthorization,
       outboundSendGateAllowed,
+      organizationSendGateAllowed,
     } = prepared;
     // Resolve the timeout class. Explicit declaration on the skill wins;
     // argument-driven resolver wins over static field; then validated plugin
@@ -6883,6 +7089,7 @@ export class AIChatQueryLoop {
         effectiveCall,
         outboundAuthorization,
         outboundSendGateAllowed === true,
+        organizationSendGateAllowed === true,
         onProgress,
         pluginPolicy?.policy.maxRunMs
       );
@@ -6910,6 +7117,7 @@ export class AIChatQueryLoop {
         startedAt,
         outboundAuthorization,
         outboundSendGateAllowed === true,
+        organizationSendGateAllowed === true,
         onProgress
       );
     }
@@ -6957,6 +7165,7 @@ export class AIChatQueryLoop {
       batchHash: string;
     },
     outboundSendGateAllowed = false,
+    organizationSendGateAllowed = false,
     onProgress?: ToolProgressEmitter
   ): Promise<ToolExecutionResult> {
     const token = new CancellationToken(timeoutMs);
@@ -6989,6 +7198,7 @@ export class AIChatQueryLoop {
         skipPermissionCheck: shouldSkipGenericToolPermission({
           toolName: call.name,
           outboundSendGateAllowed,
+          organizationSendGateAllowed,
           explicitlyDenied:
             SkillPermissionService.getPermissionStatus(call.name) === "denied",
         }),

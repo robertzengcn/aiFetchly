@@ -58,6 +58,17 @@ export const e2eSeedEmailServiceInputSchema = lazySchema(() =>
 // network. The seeded `messageId` is a full RFC header value so the audit
 // detail recheck is realistic; the detection service re-normalizes it at
 // runtime.
+/** Email-organization journeys: one verified location row for a message. */
+export const e2eSeedMessageLocationInputSchema = lazySchema(() =>
+  z.strictObject({
+    messageId: z.number().int().positive(),
+    emailServiceId: z.number().int().positive(),
+    folderPath: z.string().min(1).max(255),
+    uidValidity: z.string().min(1).max(64),
+    providerUid: z.string().min(1).max(255),
+  })
+);
+
 export const e2eSeedReceivedMessageInputSchema = lazySchema(() =>
   z.strictObject({
     emailServiceId: z.number().int().positive(),

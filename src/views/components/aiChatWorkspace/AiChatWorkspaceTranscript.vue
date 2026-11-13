@@ -85,6 +85,16 @@
         <!-- Outbound-email batch (§18): the review/approve/send card IS the
              authorization surface (AD-003) — interactive, never a collapsed
              execution receipt. -->
+        <div
+          v-else-if="item.kind === 'email-organization'"
+          :key="item.key"
+        >
+          <EmailOrganizationOperationCard :operation-id="item.operationId" />
+        </div>
+
+        <!-- Outbound-email batch (§18): the review/approve/send card IS the
+             authorization surface (AD-003) — interactive, never a collapsed
+             execution receipt. -->
         <AiChatOutboundBatchReviewCard
           v-else-if="item.kind === 'outbound-batch'"
           :message="item.message"
@@ -195,11 +205,34 @@ import type {
   PlanPresentationView,
 } from "@/views/components/aiChatWorkspace/planPresentationProjection";
 import type { AIChatPlanQuestionView } from "@/entityTypes/aiChatPlanTypes";
-import type { MessageType } from "@/entityTypes/commonType";
+import { MessageType } from "@/entityTypes/commonType";
 import AiChatEmailReplyReviewCard from "./AiChatEmailReplyReviewCard.vue";
 import { emailReplyDraftId } from "./emailReplyCardModel";
 import { isOutboundBatchResultMessage } from "@/views/components/outboundEmail/outboundBatchCardModel";
+import EmailOrganizationOperationCard from "@/views/components/emailOrganization/EmailOrganizationOperationCard.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+
+/** R12: extracts an organization operation id from a tool-result message. */
+function organizationOperationIdFromMessage(message: ChatV2MessageView): string | null {
+  if (message.messageType !== MessageType.TOOL_RESULT) return null;
+  const toolName = String(message.metadata?.toolName || "");
+  if (
+    toolName !== "send_email_forward" &&
+    toolName !== "move_email_to_trash" &&
+    toolName !== "restore_email"
+  ) {
+    return null;
+  }
+  const payload = message.metadata?.toolResult as
+    | { result?: { operationId?: unknown }; operationId?: unknown }
+    | undefined;
+  const operationId =
+    payload?.result?.operationId ?? payload?.operationId ?? null;
+  return typeof operationId === "string" && operationId.length >= 8
+    ? operationId
+    : null;
+}
+
 
 const props = defineProps<{
   messages: readonly ChatV2MessageView[];
@@ -278,6 +311,7 @@ type ProjectedItem =
   | { kind: "permission-prompt"; key: string; message: ChatV2MessageView }
   | { kind: "email-reply"; key: string; draftId: number }
   | { kind: "outbound-batch"; key: string; message: ChatV2MessageView }
+  | { kind: "email-organization"; key: string; operationId: string }
   | { kind: "skill-install"; key: string; message: ChatV2MessageView }
   | { kind: "batch-card"; key: string; message: ChatV2MessageView };
 
@@ -354,6 +388,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             message: msg,
           });
         }
+        // R12: organization mutation results render the shared operation
+        // card (progress, recipient outcomes, Undo/Restore).
+        const orgOperationId = organizationOperationIdFromMessage(msg);
+        if (orgOperationId !== null) {
+          result.push({
+            kind: "email-organization",
+            key: `email-organization-${msg.id}`,
+            operationId: orgOperationId,
+          });
+        }
         // FR-SKL-001: installation results render the shared install card
         // (approvals, dependencies, credentials) outside the collapsed group.
         if (isSkillInstallResult(messages[i])) {
@@ -403,6 +447,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           const replyId = emailReplyDraftId(messages[i]);
           if (replyId !== null) {
             result.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
+          }
+          // T14: organization cards surface in the skip loop too — the common
+          // call/result sequence must not lose the progress/Undo card.
+          const orgId = organizationOperationIdFromMessage(messages[i]);
+          if (orgId !== null) {
+            result.push({
+              kind: "email-organization",
+              key: `email-organization-${messages[i].id}`,
+              operationId: orgId,
+            });
           }
           if (isOutboundBatchResultMessage(messages[i])) {
             result.push({

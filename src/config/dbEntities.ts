@@ -108,6 +108,16 @@ import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.enti
 import { EmailConversationEntity } from "@/entity/EmailConversation.entity";
 import { EmailReplyKnowledgeScopeEntity } from "@/entity/EmailReplyKnowledgeScope.entity";
 import { EmailReplyGuardEntity } from "@/entity/EmailReplyGuard.entity";
+import { EmailMessageLocationEntity } from "@/entity/EmailMessageLocation.entity";
+import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
+import { EmailOrganizationOperationItemEntity } from "@/entity/EmailOrganizationOperationItem.entity";
+import { EmailOrganizationAttemptEntity } from "@/entity/EmailOrganizationAttempt.entity";
+import { EmailOrganizationAuthorizationEntity } from "@/entity/EmailOrganizationAuthorization.entity";
+import { EmailOrganizationAuditEntity } from "@/entity/EmailOrganizationAudit.entity";
+import { EmailForwardDraftEntity } from "@/entity/EmailForwardDraft.entity";
+import { EmailForwardRevisionEntity } from "@/entity/EmailForwardRevision.entity";
+import { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSelection.entity";
+import { EmailReplyInvalidationObligationEntity } from "@/entity/EmailReplyInvalidationObligation.entity";
 import { AiTaskExecutionEntity } from "@/entity/AiTaskExecution.entity";
 import { AiTaskExecutionLedgerEntity } from "@/entity/AiTaskExecutionLedger.entity";
 import { AiTaskOperationEntity } from "@/entity/AiTaskOperation.entity";
@@ -208,6 +218,16 @@ export const DB_ENTITIES = [
   EmailConversationEntity,
   EmailReplyKnowledgeScopeEntity,
   EmailReplyGuardEntity,
+  EmailMessageLocationEntity,
+  EmailOrganizationOperationEntity,
+  EmailOrganizationOperationItemEntity,
+  EmailOrganizationAttemptEntity,
+  EmailOrganizationAuthorizationEntity,
+  EmailOrganizationAuditEntity,
+  EmailForwardDraftEntity,
+  EmailForwardRevisionEntity,
+  EmailOrganizationSelectionEntity,
+  EmailReplyInvalidationObligationEntity,
   // Task-completion-policy V1 (Slice 1): execution/ledger/operation tables.
   AiTaskExecutionEntity,
   AiTaskExecutionLedgerEntity,
