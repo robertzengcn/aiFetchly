@@ -51,6 +51,9 @@ export default ({ mode }) => {
             'process.env.VITE_PLUGIN_HUB_URL': JSON.stringify(
                 process.env.VITE_PLUGIN_HUB_URL || ''
             ),
+            'process.env.AIFETCHLY_ALLOW_HTTP_HUB': JSON.stringify(
+                process.env.AIFETCHLY_ALLOW_HTTP_HUB || ''
+            ),
             // Bake the crash-upload mainLogTail rollout flag for PRODUCTION
             // builds only: packaged apps launched from Finder/Start Menu have
             // no shell env, so the value must come from the build environment

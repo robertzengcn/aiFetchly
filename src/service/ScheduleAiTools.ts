@@ -65,7 +65,7 @@ export function toolFailure(
  * VALIDATION_FAILED failure payload.
  */
 export function validationFailure(error: ZodError): ScheduleToolFailure {
-  const messages = error.errors.map((issue) => {
+  const messages = error.issues.map((issue) => {
     const field = issue.path.join(".");
     return `${field}: ${issue.message}`;
   });

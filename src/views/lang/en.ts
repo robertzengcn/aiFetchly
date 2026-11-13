@@ -3390,7 +3390,7 @@ export default {
       git_ref: "Branch / tag / commit (optional)",
       github_url: "GitHub repo or release asset URL",
       github_ref: "Branch / tag (optional)",
-      npm_package: "Package name (e.g. @scope/pkg)",
+      npm_package: "Package name (e.g. {'@'}scope/pkg)",
       npm_version: "Version (optional)",
       npm_registry: "Registry URL (optional, HTTPS)",
       npm_token: "Auth token (optional, not stored)",

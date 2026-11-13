@@ -743,6 +743,7 @@ import {
 import { useConversationRename } from "@/views/composables/conversationRename";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useChatModelsStore } from "@/views/store/chatModels";
+import { AI_PROVIDER_SETTINGS_CHANGED_EVENT } from "@/views/api/aiProvider";
 import { useChatReportState } from "@/views/store/chatReportState";
 import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import {
@@ -786,6 +787,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
+const chatModelsStore = useChatModelsStore();
 const headerRename = useConversationRename();
 const selectedStore = useSelectedConversationStore();
 const inspector = useAppInspectorStore();
@@ -1888,44 +1890,57 @@ async function onToolApprovalModeChange(next: ChatToolApprovalMode): Promise<voi
  * no-model state, never an indefinite spinner.
  */
 const modelsLoaded = ref(false);
+let loadModelsPromise: Promise<void> | null = null;
 
 async function loadModels(): Promise<void> {
-  try {
-    const resp = await getOpenAIChatModels();
-    const data = resp?.data;
-    if (!Array.isArray(data)) return;
-    const validModels = data.filter(
-      (m) => m && typeof m.id === "string" && m.id.length > 0
-    );
-    availableModels.value = validModels;
-    defaultModelId.value = resp?.default_model;
-    const map = new Map<string, number>();
-    for (const model of validModels) {
-      const window =
-        model.context_size ??
-        model.context_window ??
-        model.context_length ??
-        DEFAULT_CONTEXT_WINDOW;
-      if (typeof window === "number" && window > 0) {
-        map.set(model.id, window);
-      }
-    }
-    modelContextWindows.value = map;
-    const saved = localStorage.getItem(LAST_MODEL_STORAGE_KEY) ?? undefined;
-    const usable =
-      saved && validModels.some((m) => m.id === saved)
-        ? saved
-        : defaultModelId.value ?? validModels[0]?.id;
-    selectedModel.value = usable;
-    // R8 P2-11 (FR-REC-005): publish to the shared store so the Context
-    // inspector (app-shell mount, no surface props) resolves the SAME
-    // denominator as this badge.
-    useChatModelsStore().publishModelCatalog(map, usable, resp?.default_model);
-  } catch {
-    // Model list unavailable — "Auto" fallback; sending still works.
-  } finally {
-    modelsLoaded.value = true;
+  if (loadModelsPromise) {
+    return loadModelsPromise;
   }
+  loadModelsPromise = (async () => {
+    try {
+      const resp = await getOpenAIChatModels();
+      const data = resp?.data;
+      if (!Array.isArray(data)) return;
+      const validModels = data.filter(
+        (m) => m && typeof m.id === "string" && m.id.length > 0
+      );
+      availableModels.value = validModels;
+      defaultModelId.value = resp?.default_model;
+      const map = new Map<string, number>();
+      for (const model of validModels) {
+        const window =
+          model.context_size ??
+          model.context_window ??
+          model.context_length ??
+          DEFAULT_CONTEXT_WINDOW;
+        if (typeof window === "number" && window > 0) {
+          map.set(model.id, window);
+        }
+      }
+      modelContextWindows.value = map;
+      const saved = localStorage.getItem(LAST_MODEL_STORAGE_KEY) ?? undefined;
+      // Preserve the user's chosen model if still present in the refreshed catalog.
+      const currentValid =
+        selectedModel.value && validModels.some((m) => m.id === selectedModel.value);
+      const usable =
+        currentValid
+          ? selectedModel.value
+          : saved && validModels.some((m) => m.id === saved)
+            ? saved
+            : defaultModelId.value ?? validModels[0]?.id;
+      selectedModel.value = usable;
+      // R8 P2-11 (FR-REC-005): publish to the shared store so the Context
+      // inspector (app-shell mount, no surface props) resolves the SAME
+      // denominator as this badge.
+      chatModelsStore.publishModelCatalog(map, usable, resp?.default_model);
+    } catch {
+      // Model list unavailable — "Auto" fallback; sending still works.
+    } finally {
+      modelsLoaded.value = true;
+      loadModelsPromise = null;
+    }
+  })();
+  return loadModelsPromise;
 }
 
 const contextUsedTokens = computed(() => {
@@ -1951,9 +1966,28 @@ const contextPercent = computed(() =>
 watch(
   () => selectedModel.value,
   (next) => {
-    useChatModelsStore().setSelectedModelId(next);
+    chatModelsStore.setSelectedModelId(next);
+    if (typeof next === "string" && next.length > 0) {
+      try {
+        localStorage.setItem(LAST_MODEL_STORAGE_KEY, next);
+      } catch {
+        // Storage unavailable — session-only preference.
+      }
+    }
   }
 );
+
+// Re-query models whenever a catalog refresh is requested (e.g. New chat).
+watch(
+  () => chatModelsStore.refreshSeq,
+  () => {
+    void loadModels();
+  }
+);
+
+function handleProviderSettingsChanged(): void {
+  void loadModels();
+}
 
 // --- Selection (layout-provided, local fallback) ----------------------------
 async function onNewChat(): Promise<void> {
@@ -3644,6 +3678,10 @@ onMounted(async () => {
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     onReasoningVisibilityChanged
   );
+  window.addEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
+  );
   unsubscribeStartAck = selectedStore.onStartAck(onEngineStartAck);
   unsubscribeLiveToolResult = selectedStore.onLiveToolResult((chunk) => {
     // FR-INT-003: trusted navigation for the SELECTED conversation's live
@@ -3689,6 +3727,10 @@ onUnmounted(() => {
   window.removeEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     onReasoningVisibilityChanged
+  );
+  window.removeEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
   );
   unsubscribeStartAck?.();
   unsubscribeStartAck = null;

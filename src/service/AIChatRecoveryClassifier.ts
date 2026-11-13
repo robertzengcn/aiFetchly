@@ -191,6 +191,14 @@ export class AIChatRecoveryClassifier {
           originalError: error,
         });
       }
+      const fromServerEnvelope = this.classifyServerEnvelopeText(text);
+      if (fromServerEnvelope) {
+        return new AIChatRecoverableError({
+          reason: fromServerEnvelope,
+          message: error.message || text,
+          originalError: error,
+        });
+      }
       const fromAuth = this.classifyAuthText(text);
       if (fromAuth) {
         return new AIChatRecoverableError({
@@ -203,14 +211,6 @@ export class AIChatRecoveryClassifier {
       if (fromText) {
         return new AIChatRecoverableError({
           reason: fromText,
-          message: error.message || text,
-          originalError: error,
-        });
-      }
-      const fromServerEnvelope = this.classifyServerEnvelopeText(text);
-      if (fromServerEnvelope) {
-        return new AIChatRecoverableError({
-          reason: fromServerEnvelope,
           message: error.message || text,
           originalError: error,
         });
@@ -398,9 +398,21 @@ export class AIChatRecoveryClassifier {
   }
 
   private classifyAuthText(text: string): AIChatRecoveryReason | undefined {
+    if (
+      text.includes("ai server error") ||
+      text.includes("openai streaming api error")
+    ) {
+      return undefined;
+    }
     if (/\b401\b/.test(text) || /\b403\b/.test(text)) return "auth";
     if (/authentication failed/.test(text)) return "auth";
-    if (/refresh\s+token/.test(text) && /(invalid|expired|rejected|not found)/.test(text)) {
+    if (
+      /refresh\s+token/.test(text) &&
+      /(invalid|expired|rejected|not found|failed)/.test(text)
+    ) {
+      return "auth";
+    }
+    if (/failed to refresh (access )?token|token refresh failed/.test(text)) {
       return "auth";
     }
     if (/please login again/.test(text)) return "auth";
@@ -424,15 +436,32 @@ export class AIChatRecoveryClassifier {
   private classifyServerEnvelopeText(
     text: string
   ): AIChatRecoveryReason | undefined {
-    const match = text.match(/ai server error code=(\d{3})/i);
-    if (!match) {
+    const isEnvelope =
+      text.includes("ai server error") ||
+      text.includes("openai streaming api error");
+    if (!isEnvelope) {
       return undefined;
     }
-    const status = Number(match[1]);
-    if (!Number.isFinite(status)) {
-      return undefined;
+
+    const match = text.match(/ai server error(?:\s+code=([^\s:]+))?/i);
+    const code = match ? match[1] : undefined;
+
+    if (code && /^\d{3}$/.test(code)) {
+      const status = Number(code);
+      if (status === 401 || status === 403) {
+        // Upstream provider authentication failure inside stream envelope - server error, NOT client session auth.
+        return "server_error";
+      }
+      return this.classifyHttpStatus(status, text);
     }
-    return this.classifyHttpStatus(status, text);
+
+    // Non-numeric codes (e.g. tool_loop_failed, internal_error, etc.) or stream errors
+    const bodyReason = this.matchBodyPattern(text);
+    if (bodyReason) return bodyReason;
+    if (/rate_limit/i.test(code || "")) return "rate_limit";
+    if (/timeout/i.test(code || "")) return "timeout";
+    if (/overload/i.test(code || "")) return "overload";
+    return "server_error";
   }
 
   private composeHttpMessage(

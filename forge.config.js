@@ -660,20 +660,23 @@ function ensureNodeAbiPatched() {
  * a safety net in the prePackage hook for direct electron-forge invocations.
  */
 function ensureRemoteRebuildPatched() {
-  const scriptPath = join(__dirname, "scripts", "patch-remote-rebuild.js");
-  const result = spawnSync(process.execPath, [scriptPath], {
-    cwd: __dirname,
-    stdio: "inherit",
-  });
+  const patchModule = require("./scripts/patch-remote-rebuild.js");
+  const status = patchModule.run();
+  if (status !== 0) {
+    throw new Error(`remote-rebuild patch failed with exit code ${status}`);
+  }
+}
 
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `remote-rebuild patch failed with exit code ${result.status}`
-    );
-  }
+// Apply Forge patches (remote-rebuild + VitePlugin child-process isolation) as
+// soon as forge.config.js is loaded, BEFORE Electron Forge's PluginInterface
+// requires @electron-forge/plugin-vite.
+ensureRemoteRebuildPatched();
+
+function finalizeStagedPackage(buildPath) {
+  restorePrunedRuntimeDependencies(buildPath);
+  removeEmptyDirectories(buildPath);
+  verifyStagedRendererHtml(buildPath);
+  verifyGeneratedRuntimeRequires(buildPath);
 }
 
 function fixInteropNamespaceDefault(viteBuildDir) {
@@ -792,21 +795,35 @@ module.exports = {
     // ignore: [
     //   /node_modules\/(?!(better-sqlite3|bindings|file-uri-to-path)\/)/,
     // ],
-    // Under the CI smoke skip path (FORGE_SKIP_NATIVE_REBUILD=1) the
-    // `ignore` allow-list above is the authoritative keep/ignore decision for
-    // every file under node_modules. electron-packager's `prune: true` would
-    // ALSO run galactus's flora-colossus Walker.walkTree() — a recursive scan
-    // of the WHOLE root dependency tree (dev + prod + optional, ~2300 modules)
-    // building an in-memory module map, purely to make a module-level keep
-    // decision that the allow-list already subsumes. That walk is the dominant
-    // memory consumer of the finalize/copy phase and has OOM-killed the 15 GB
-    // CI runner mid-"Finalizing package" (bare "The operation was canceled"
-    // with no exit code — the kernel reaps the runner agent). Skipping it on
-    // the constrained runner keeps peak memory bounded to the file-by-file
-    // O(1) Set lookups of shouldKeepPackagedPath. Production (non-skip) builds
-    // keep prune:true so the module-level pass still trims anything the
-    // allow-list might let through.
-    prune: process.env.FORGE_SKIP_NATIVE_REBUILD !== "1",
+    // The `ignore` allow-list above is the authoritative keep/ignore decision
+    // for every file and directory under node_modules, populated from the
+    // Node-resolver-accurate production dependency closure
+    // (`getResolvedProductionClosure(EXTERNAL_DEPENDENCIES)`).
+    //
+    // electron-packager's `prune: true` would ALSO run galactus's
+    // flora-colossus Walker.walkTree() — a recursive scan of the WHOLE root
+    // dependency tree (dev + prod + optional, ~2300 modules) building an
+    // in-memory module map, and in @electron/packager's copy-filter.js
+    // `pruner.pruneModule(name)` overrides `ignore` for top-level module
+    // directories, creating empty directory husks while consuming gigabytes of
+    // RAM. That walk has OOM-killed both the 7 GB Linux runner and the 14 GB
+    // macOS runner mid-packaging ("The hosted runner lost communication with
+    // the server"). Skipping galactus prune by default keeps peak memory
+    // bounded to O(1) Set lookups in shouldKeepPackagedPath, while `afterCopy`
+    // and `packageAfterPrune` still run `finalizeStagedPackage`.
+    prune: process.env.FORGE_ENABLE_GALACTUS_PRUNE === "1",
+    afterCopy: [
+      (buildPath, _electronVersion, _platform, _arch, callback) => {
+        try {
+          if (process.env.FORGE_ENABLE_GALACTUS_PRUNE !== "1") {
+            finalizeStagedPackage(buildPath);
+          }
+          callback();
+        } catch (error) {
+          callback(error);
+        }
+      },
+    ],
     overwrite: true,
   },
   rebuildConfig: {
@@ -1299,16 +1316,16 @@ module.exports = {
       // transitives the full walk would, including the hoisted deps of nested
       // installs, while skipping the expensive native realpath scan that
       // stalls CI.
-      if (process.env.FORGE_SKIP_NATIVE_REBUILD === "1") {
-        nativeModuleDependenciesToPackage = Array.from(
-          getResolvedProductionClosure(EXTERNAL_DEPENDENCIES)
-        );
-      } else {
+      if (process.env.FORGE_USE_FLORA_COLOSSUS_WALK === "1") {
         const nativeModuleDependencies = await getExternalNestedDependencies(
           EXTERNAL_DEPENDENCIES
         );
         nativeModuleDependenciesToPackage = Array.from(
           nativeModuleDependencies
+        );
+      } else {
+        nativeModuleDependenciesToPackage = Array.from(
+          getResolvedProductionClosure(EXTERNAL_DEPENDENCIES)
         );
       }
       rebuildPackagerAllowLists(nativeModuleDependenciesToPackage);
@@ -1317,30 +1334,8 @@ module.exports = {
       fixInteropNamespaceDefault(join(buildPath, ".vite", "build"));
       copyBuiltChildProcesses(buildPath);
     },
-    //   packageAfterPrune: async (_config, buildPath) => {
-    //     const gypPath = path.join(
-    //       buildPath,
-    //       'node_modules',
-    //       'bufferutil',
-    //       'build',
-    //       'node_gyp_bins'
-    //     );
-    //     await fs.rm(gypPath, {recursive: true, force: true});
-    //     const utfPaht=path.join(
-    //       buildPath,
-    //       'node_modules',
-    //       'utf-8-validate',
-    //       'build',
-    //       'node_gyp_bins'
-    //     );
-    //     await fs.rm(utfPaht, {recursive: true, force: true});
-
-    //  }
     packageAfterPrune: async (_forgeConfig, buildPath) => {
-      restorePrunedRuntimeDependencies(buildPath);
-      removeEmptyDirectories(buildPath);
-      verifyStagedRendererHtml(buildPath);
-      verifyGeneratedRuntimeRequires(buildPath);
+      finalizeStagedPackage(buildPath);
     },
     // Galactus can empty pruned module CONTENTS during finalize — AFTER the
     // afterPrune hook ran — leaving directory husks that pass an existsSync

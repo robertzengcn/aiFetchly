@@ -3314,7 +3314,7 @@ export default {
       git_ref: "ブランチ / タグ / コミット（任意）",
       github_url: "GitHub リポジトリまたはリリース アセット URL",
       github_ref: "ブランチ / タグ（任意）",
-      npm_package: "パッケージ名（例: @scope/pkg）",
+      npm_package: "パッケージ名（例: {'@'}scope/pkg）",
       npm_version: "バージョン（任意）",
       npm_registry: "レジストリ URL（任意、HTTPS）",
       npm_token: "認証トークン（任意、保存されません）",

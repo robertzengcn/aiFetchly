@@ -14,6 +14,9 @@ on:
     branches: [dev, master, test]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -28,6 +31,7 @@ jobs:
           # and with package.json engines (node >=22.0.0). The old 20.19.3 pin
           # made `yarn install --frozen-lockfile` abort with EENGINE.
           node-version: 22.19.0
+          cache: yarn
 
       # Native modules (better-sqlite3, sqlite-vec, isolated-vm) need a C/C++
       # toolchain + cmake to build from source on Linux.
@@ -35,6 +39,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 build-essential cmake
+
+      - name: Use HTTPS for GitHub dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -175,9 +183,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-22.04 pinned (not -latest): 9 consecutive eviction
-        # shutdown-signals ~2 min into the vite builds on the -latest
-        # pool; the pinned image runs a different runner pool (mirrors
+        # ubuntu-22.04 pinned (not -latest): eviction shutdown-signals
+        # ~2 min into electron-packager on the -latest pool (Ubuntu 26);
+        # the pinned image runs a different, stable runner pool (mirrors
         # the windows-2022 pin).
         os: [ubuntu-22.04, windows-2022, macos-latest]
         # Per-OS limits live in the matrix. The job-level env block may NOT
@@ -200,10 +208,7 @@ jobs:
     env:
       FORGE_DISABLE_ASAR: "1"
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      # Match ci.yml on Linux. Test Suite #116 set a 4096 MB heap on the
-      # job and the ubuntu-22.04 runner lost communication during packaging
-      # (no log blob). The same commit's CI package step, at 3072 for the
-      # whole job, finished in ~90s. Windows and macOS keep 4096.
+      # Match ci.yml on Linux. Windows and macOS keep 4096.
       NODE_OPTIONS: ${{ matrix.node_options }}
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
@@ -222,6 +227,19 @@ jobs:
           node-version: 22.19.0
           cache: yarn
 
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+            ~/AppData/Local/electron/Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
         with:
@@ -238,8 +256,21 @@ jobs:
       - name: Install Linux system dependencies for native modules
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev xvfb
+          set -euo pipefail
+          if pkg-config --exists libsecret-1 && command -v Xvfb >/dev/null 2>&1; then
+            echo "libsecret-1-dev and xvfb already present; skipping apt"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            echo "apt attempt $attempt"
+            sudo apt-get update || echo "apt-get update failed; using stale index"
+            if sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb; then
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Use HTTPS for GitHub dependencies
         run: |
@@ -289,7 +320,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Memory/swap before:"; free -h
-          sudo fallocate -l 4G /swapfile-ci
+          sudo fallocate -l 8G /swapfile-ci
           sudo chmod 600 /swapfile-ci
           sudo mkswap /swapfile-ci >/dev/null
           sudo swapon /swapfile-ci

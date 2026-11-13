@@ -446,7 +446,7 @@ describe("plugin-ipc", () => {
     aiEnabledValue = "false";
     const fn = handlers.get(PLUGIN_INSTALL_FROM_SOURCE)!;
     const result = await fn({}, {
-      operationId: "11111111-2222-3333-4444-555555555555",
+      operationId: "11111111-2222-4333-8444-555555555555",
       kind: "github",
       uri: "https://github.com/owner/repo",
       ref: "v1",
@@ -468,7 +468,7 @@ describe("plugin-ipc", () => {
     const result = await fn(
       {},
       {
-        operationId: "11111111-2222-3333-4444-555555555555",
+        operationId: "11111111-2222-4333-8444-555555555555",
         kind: "git",
         uri: "https://example.com/x.git\r\n--upload-pack=evil",
       }
@@ -501,7 +501,7 @@ describe("plugin-ipc", () => {
     const result = await fn(
       {},
       {
-        operationId: "11111111-2222-3333-4444-555555555556",
+        operationId: "11111111-2222-4333-8444-555555555556",
         kind: "local-folder",
         folderPath: "/tmp/plugin",
       }

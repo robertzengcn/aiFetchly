@@ -92,12 +92,11 @@ function safeParse<T = unknown>(data: unknown): T | null {
  * `workspaceRoot`, `workspaceKey`, `scopeId`, and absolute paths — are
  * rejected outright so a forged scope can never ride a request (FR-055).
  */
-const conversationSchema = z.object(
-  {
+const conversationSchema = z
+  .object({
     conversationId: z.string().min(1).max(200),
-  },
-  { description: "conversation request" }
-);
+  })
+  .describe("conversation request");
 
 const strictConversation = conversationSchema.strict();
 

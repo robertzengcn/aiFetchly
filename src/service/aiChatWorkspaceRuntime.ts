@@ -155,6 +155,12 @@ export function getSharedAIChatTitleService(): AIChatTitleService {
             provider.apiKey
           ).complete(request, { signal });
         }
+        try {
+          const { TokenRefreshService } = await import("@/modules/tokenRefresh");
+          await TokenRefreshService.performAutoRefreshCheck();
+        } catch {
+          // best-effort token refresh check
+        }
         const { AiChatApi } = await import("@/api/aiChatApi");
         // B04: hosted-pinned entry — no global provider re-resolution.
         return new AiChatApi().openAIChatCompletionHostedPinned(request, {
