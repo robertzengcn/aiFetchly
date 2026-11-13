@@ -68,3 +68,55 @@ Both have **Patched: None** on the advisory — the vulnerable version *is* the 
 - Code scanning: 1 fixed (pending CodeQL rescan of `master` to close alert #67) → **0 actionable open**.
 - Follow-up (out of scope): remove the unused direct deps `http-mitm-proxy`, `basic-ftp`, `node-forge` from `package.json` — they are declared but never imported. Does not clear any no-patch alert on its own (braces still arrives via `chokidar`/`ts-loader`).
 
+---
+
+## Round 3 — 2026-11-12 (5 open Dependabot alerts: node-forge, fast-xml-parser, minimatch)
+
+**Source:** `gh api repos/robertzengcn/aiFetchly/dependabot/alerts?state=open`.
+
+### Fixed (version bumps via `package.json` devDependencies & `resolutions`)
+
+| Package | From | To | Advisory | Mechanism |
+|---|---|---|---|---|
+| `node-forge` | 1.4.2 | 1.4.3 | GHSA-6889-vf6x-f3g5 (#347, CVE-2026-125335: Ed25519 small-order keys), GHSA-2r2c-6745-f938 (#346: TLS crash on unsupported ServerHello compression), GHSA-5gfc-39fc-j95v (#344: TLS crash on handshake record without session) | Bumped `"node-forge": "^1.4.1"` to `"^1.4.3"` in `resolutions`. |
+| `fast-xml-parser` | 5.11.0 | 5.12.0 | GHSA-v572-5636-h5vf (#343: Quadratic CPU consumption scanning unterminated stop-node tags) | Bumped `"fast-xml-parser": "^5.11.0"` to `"^5.12.0"` in `resolutions`. |
+| `minimatch` | 9.0.9 | 11.0.8 | GHSA-g3hv-75wg-m249 (#342, CVE-2026-118764: DoS via globparts amplification in firstPhasePreProcess) | Bumped devDependency `"minimatch": "^11.0.8"`. Added resolutions for `@typescript-eslint/typescript-estree`, `@vue/language-core`, `editorconfig`, `@electron/universal` to `^11.0.8`. Preserved `@electron/asar/minimatch: ^3.1.4` (keeps asar on callable 3.x line). Removed stale global `brace-expansion: ^2.1.7` resolution so minimatch 11 resolves `brace-expansion@^5.0.12` with `{ expand }` named export. |
+
+### Verification
+- `yarn.lock` re-resolved with `yarn install` after clearing cached vulnerable blocks.
+- `node docs/scecurit_issues/verify-fixes.js`: 237 alerts parsed, all 5 new alerts identified as FIXED.
+- `npx tsc --noEmit`: 0 errors.
+- `yarn vue-typecheck`: 0 errors.
+- `npx vitest run --exclude ".worktrees/**" test/vitest/main/ForgePackagingDependencies.test.ts`: 12/12 passed.
+- `yarn test:components`: 185 test files, 1624 tests passed.
+
+### Net after Round 3
+- Dependabot: 5 fixed by bump → **0 actionable open alerts**.
+- Code scanning: 0 open alerts.
+- Secret scanning: 0 open alerts.
+
+---
+
+## Round 4 — 2026-11-13 (2 open Dependabot alerts: @hono/node-server)
+
+**Source:** `gh api repos/robertzengcn/aiFetchly/dependabot/alerts?state=open`.
+
+### Fixed (version bump via `package.json` `resolutions`)
+
+| Package | From | To | Advisory | Mechanism |
+|---|---|---|---|---|
+| `@hono/node-server` | 2.1.4 | 2.1.8 | GHSA-jpvv-r467-5p4w (#348, CVE-2026-126210: Backslash in request path bypasses path-based access control at reverse proxy), GHSA-qv5m-9pm6-hqp3 (#349, CVE-2026-126343: Unhandled `ECONNRESET` on socket during async WebSocket upgrade crashes process) | Added `"@hono/node-server": "^2.1.8"` to `resolutions` in `package.json`. |
+
+### Verification
+- `yarn.lock` re-resolved with `yarn install` after removing the cached `2.1.4` block; `@hono/node-server` resolved to `2.1.8`.
+- `node docs/scecurit_issues/verify-fixes.js`: 335 alerts parsed, `@hono/node-server` identified as FIXED, 0 residual.
+- `npx vitest run --exclude ".worktrees/**" test/vitest/main/ForgePackagingDependencies.test.ts`: 12/12 passed.
+- `npx tsc --noEmit`: 0 errors.
+- `yarn vue-typecheck`: 0 errors.
+
+### Net after Round 4
+- Dependabot: 2 fixed by bump → **0 actionable open alerts**.
+- Code scanning: 0 open alerts.
+- Secret scanning: 0 open alerts.
+
+
