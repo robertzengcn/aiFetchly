@@ -508,6 +508,7 @@ export class ScheduledAiMessageRunner {
     };
 
     let outcome: ScheduledTurnOutcome;
+    let registeredEngine = false;
     try {
       try {
         lease = await coordinator.acquire({
@@ -558,6 +559,7 @@ export class ScheduledAiMessageRunner {
         scheduleId,
         clearPermissionBackstop,
       });
+      registeredEngine = true;
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
       const ownerSink = new ScheduledLoopEventSink(
         (event) => {
@@ -784,7 +786,9 @@ export class ScheduledAiMessageRunner {
       clearPermissionBackstop();
       clearResumeTimeout();
       this.runRegistry.unregister(runId);
-      engineRegistry.unregister(conversationId);
+      if (registeredEngine) {
+        engineRegistry.unregister(conversationId, runId);
+      }
       if (lease) lease.release();
     }
 
@@ -1403,6 +1407,7 @@ export class ScheduledAiMessageRunner {
     const outboundSendPreAuthorized =
       await this.resolveOutboundSendPreAuthorized(conversationId, policy);
 
+    let registeredEngine = false;
     try {
       try {
         lease = await coordinator.acquire({
@@ -1437,6 +1442,7 @@ export class ScheduledAiMessageRunner {
         scheduleId: scheduleKey,
         clearPermissionBackstop,
       });
+      registeredEngine = true;
       // BUGFIX 2026-11-02: standalone scheduled runs never advanced the
       // workspace sidebar projection — a brand-new task conversation had no
       // ai_chat_conversations row at all, so Run Now's workspace folder
@@ -1677,7 +1683,9 @@ export class ScheduledAiMessageRunner {
       clearPermissionBackstop();
       clearResumeTimeout();
       this.runRegistry.unregister(runId);
-      engineRegistry.unregister(conversationId);
+      if (registeredEngine) {
+        engineRegistry.unregister(conversationId, runId);
+      }
       if (lease) lease.release();
     }
 
