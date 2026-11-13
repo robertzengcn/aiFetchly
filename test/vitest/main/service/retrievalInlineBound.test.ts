@@ -66,13 +66,14 @@ describe("retrieval inline bound", () => {
 
   it("shortens a read page and points next_cursor at the first omitted byte", () => {
     const outputId = `out_${"cd".repeat(16)}`;
+    const inputBytes = 20_000;
     const fitted = fitWrappedRetrievalResult({
       output_id: outputId,
       revision: 2,
-      text: "a".repeat(8000),
+      text: "a".repeat(inputBytes),
       start_byte: 0,
-      end_byte: 8000,
-      total_bytes: 8000,
+      end_byte: inputBytes,
+      total_bytes: inputBytes,
       complete: true,
       next_cursor: null,
       source_completeness: "complete",
@@ -87,7 +88,7 @@ describe("retrieval inline bound", () => {
       end_byte: number;
     };
     expect(page.complete).toBe(false);
-    expect(page.text.length).toBeLessThan(8000);
+    expect(page.text.length).toBeLessThan(inputBytes);
     const decoded = decodeToolResultCursor(page.next_cursor, {
       outputId,
       mode: "read",
