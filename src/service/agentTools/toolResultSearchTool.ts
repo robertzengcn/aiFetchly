@@ -15,6 +15,7 @@ import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import {
   TOOL_RESULT_DENIAL_RECOVERY,
   TOOL_RESULT_SEARCH_ARGUMENT_RECOVERY,
+  toolResultBudgetExhaustedResult,
   toolResultReadFailure,
 } from "@/service/agentTools/toolResultDenialRecovery";
 import { countTextTokens } from "@/service/ToolResultTextUtil";
@@ -108,67 +109,74 @@ export async function handleToolResultSearch(
     toolResultMetrics.record("retrieval.budget_exhausted");
     return {
       success: false,
-      result: {
-        error: work.code,
-        // Be explicit that review is incomplete rather than letting the model
-        // assume it examined everything.
-        analysis_complete: false,
-      },
+      result: toolResultBudgetExhaustedResult({
+        outputId: target.target.outputId,
+        cursor: parsed.data.cursor,
+      }),
     };
   }
 
-  // Search p95 is an NFR target; measure the scan itself (resolution already
-  // happened above). `detail: "model"` distinguishes this from the UI IPC
-  // search path that serves the renderer (T17).
-  const searchStartedAt = performance.now();
-  const outcome = await trusted.retrieval.search({
-    target: target.target,
-    query: parsed.data.query,
-    cursor: parsed.data.cursor,
-    maxMatches: parsed.data.max_matches,
-  });
-  toolResultMetrics.recordLatency(
-    "retrieval.latency_ms",
-    performance.now() - searchStartedAt,
-    "model"
-  );
+  let settled = false;
+  try {
+    // Search p95 is an NFR target; measure the scan itself (resolution already
+    // happened above). `detail: "model"` distinguishes this from the UI IPC
+    // search path that serves the renderer (T17).
+    const searchStartedAt = performance.now();
+    const outcome = await trusted.retrieval.search({
+      target: target.target,
+      query: parsed.data.query,
+      cursor: parsed.data.cursor,
+      maxMatches: parsed.data.max_matches,
+    });
+    toolResultMetrics.recordLatency(
+      "retrieval.latency_ms",
+      performance.now() - searchStartedAt,
+      "model"
+    );
 
-  if (!outcome.ok) {
-    // Release the reservation before returning. With settlement now RELEASING
-    // `reservedCalls`, an unsettled reservation permanently consumes one of the
-    // turn's 32 calls.
-    await trusted.settleWork(0);
-    return { success: false, result: toolResultReadFailure(outcome.code) };
+    if (!outcome.ok) {
+      // Release the reservation before returning. With settlement now RELEASING
+      // `reservedCalls`, an unsettled reservation permanently consumes one of the
+      // turn's retrieval calls.
+      await trusted.settleWork(0);
+      settled = true;
+      return { success: false, result: toolResultReadFailure(outcome.code) };
+    }
+
+    const page = outcome.page;
+    const fitted = fitWrappedRetrievalResult({
+      success: true,
+      output_id: page.outputId,
+      revision: target.target.revision,
+      query: parsed.data.query,
+      // Cursor before the match list so a tail truncation cannot drop it.
+      next_cursor: page.nextCursor,
+      scan_complete: page.scanComplete,
+      source_completeness: page.sourceCompleteness,
+      matches: page.matches.map((m) => ({
+        start_byte: m.startByte,
+        end_byte: m.endByte,
+        excerpt: m.excerpt,
+        read_cursor: m.readCursor,
+        match_count_in_window: m.matchCountInWindow,
+      })),
+    });
+    const envelope =
+      fitted !== null && typeof fitted === "object"
+        ? (fitted as Record<string, unknown>)
+        : {
+            success: false,
+            error: "RETRIEVAL_PAGE_TOO_LARGE",
+            analysis_complete: false,
+            output_id: page.outputId,
+          };
+    await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
+    settled = true;
+    toolResultMetrics.record("retrieval.search");
+    return { success: true, result: envelope };
+  } finally {
+    if (!settled) {
+      await trusted.settleWork(0).catch(() => undefined);
+    }
   }
-
-  const page = outcome.page;
-  const fitted = fitWrappedRetrievalResult({
-    success: true,
-    output_id: page.outputId,
-    revision: target.target.revision,
-    query: parsed.data.query,
-    // Cursor before the match list so a tail truncation cannot drop it.
-    next_cursor: page.nextCursor,
-    scan_complete: page.scanComplete,
-    source_completeness: page.sourceCompleteness,
-    matches: page.matches.map((m) => ({
-      start_byte: m.startByte,
-      end_byte: m.endByte,
-      excerpt: m.excerpt,
-      read_cursor: m.readCursor,
-      match_count_in_window: m.matchCountInWindow,
-    })),
-  });
-  const envelope =
-    fitted !== null && typeof fitted === "object"
-      ? (fitted as Record<string, unknown>)
-      : {
-          success: false,
-          error: "RETRIEVAL_PAGE_TOO_LARGE",
-          analysis_complete: false,
-          output_id: page.outputId,
-        };
-  await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
-  toolResultMetrics.record("retrieval.search");
-  return { success: true, result: envelope };
 }

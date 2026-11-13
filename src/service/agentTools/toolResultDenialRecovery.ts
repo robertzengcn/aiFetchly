@@ -60,3 +60,31 @@ export function toolResultReadFailure(
   }
   return { error: code };
 }
+
+/**
+ * Shown when the per-turn retrieval allowance (`retrievalMaxCalls` or
+ * `retrievalMaxTokensPerTurn`) is exhausted (technical design §8.5). Includes
+ * a hard instruction not to repeat retrieval calls this turn so models stop
+ * spinning and summarize their partial review cleanly.
+ */
+export const TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY =
+  "Per-turn retrieval budget is exhausted; do NOT call tool_result_read or tool_result_search again in this turn. " +
+  "Saved results remain accessible by output_id in future turns. " +
+  "Stop retrieving now, present the findings gathered so far, and clearly state which saved results were only partially reviewed.";
+
+/** Build the terminal-for-turn `RETRIEVAL_BUDGET_EXHAUSTED` result payload. */
+export function toolResultBudgetExhaustedResult(input: {
+  outputId: string;
+  cursor?: string;
+}): Record<string, unknown> {
+  return {
+    error: "RETRIEVAL_BUDGET_EXHAUSTED",
+    output_id: input.outputId,
+    ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+    // Be explicit that review is incomplete rather than letting the model
+    // assume it examined everything.
+    analysis_complete: false,
+    terminal_for_turn: true,
+    recovery: TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+  };
+}
