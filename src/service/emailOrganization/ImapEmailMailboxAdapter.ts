@@ -107,6 +107,9 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
       options?.connectionFactory ??
       ((imapOptions) => {
         // Lazy import keeps the real client out of pure-unit test paths.
+        // (A top-level import would load imapflow into every suite that
+        // imports this module; the lazy require is deliberate.)
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const ImapFlow = require("imapflow") as { ImapFlow: new (opts: unknown) => MailboxActionConnection };
         return new ImapFlow.ImapFlow({ ...imapOptions, emitLogs: false });
       });

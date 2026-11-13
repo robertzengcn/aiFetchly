@@ -389,6 +389,9 @@ function extractAttachments(parsed: ParsedMail): RawAttachment[] {
 
 export function sanitizeFilename(name: string): string {
   const base = path_base(name);
+  // Control characters (U+0000–U+001F, U+007F) are exactly what this
+  // sanitizer strips from filenames, so the explicit range is intentional.
+  // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, "_").trim();
   const safe = cleaned.length > 0 ? cleaned.slice(0, 120) : "attachment";
   return safe;
