@@ -119,4 +119,28 @@ Both have **Patched: None** on the advisory — the vulnerable version *is* the 
 - Code scanning: 0 open alerts.
 - Secret scanning: 0 open alerts.
 
+---
+
+## Round 5 — 2026-11-13 (7 open Dependabot alerts: hono & basic-ftp)
+
+**Source:** `gh api repos/robertzengcn/aiFetchly/dependabot/alerts?state=open`.
+
+### Fixed (version bumps via `package.json` `resolutions`)
+
+| Package | From | To | Advisory | Mechanism |
+|---|---|---|---|---|
+| `basic-ftp` | 6.2.1 | 6.2.6 | GHSA-5pm8-86m8-9m6r (#350: Uncaught TypeError in MLSD directory-listing parser via `__proto__` fact name causes DoS), GHSA-2c9v-7cqw-2849 (#351: Uncaught exception crashes Node.js when password or resumed-download path contains CR/LF) | Bumped `"basic-ftp": "^6.2.1"` to `"^6.2.6"` in `resolutions`. |
+| `hono` | 4.13.13 | 4.13.18 | GHSA-46wx-v44x-9hh2 (#356: `csrf()` bypass via `text/ping`), GHSA-45h5-4mhm-8533 (#355: `validator('form')` skips multipart with extra params), GHSA-79j7-g8v3-w9hm (#354: `mount()` path bypasses scoped middleware), GHSA-54ff-f62r-g23q (#353: RegExpRouter skips wildcard middleware), GHSA-67x2-j3p7-529g (#352: `css` helper HTML injection via split closing tag) | Added `"hono": "^4.13.18"` to `resolutions` in `package.json`. |
+
+### Verification
+- `yarn.lock` re-resolved with `yarn install` after removing stale `basic-ftp@6.2.1` and `hono@4.13.13` blocks; resolved to `basic-ftp@6.2.6` and `hono@4.13.18`.
+- `node docs/scecurit_issues/verify-fixes.js`: 342 alerts parsed, `basic-ftp` and `hono` identified as FIXED, 0 residual.
+- `npx vitest run --exclude ".worktrees/**" test/vitest/main/ForgePackagingDependencies.test.ts`: 12/12 passed.
+
+### Net after Round 5
+- Dependabot: 7 fixed by bump → **0 actionable open alerts**.
+- Code scanning: 0 open alerts.
+- Secret scanning: 0 open alerts.
+
+
 
