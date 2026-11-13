@@ -51,6 +51,10 @@ vi.mock("@/service/ToolResultTextUtil", () => ({
 
 import { handleToolResultSearch } from "@/service/agentTools/toolResultSearchTool";
 import { handleToolResultRead } from "@/service/agentTools/toolResultReadTool";
+import {
+  TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+  toolResultBudgetExhaustedResult,
+} from "@/service/agentTools/toolResultDenialRecovery";
 import type { ToolResultToolContext } from "@/service/agentTools/toolResultContext";
 
 let currentContext: ToolResultToolContext | null = null;
@@ -260,5 +264,34 @@ describe("tool_result_read denial recovery", () => {
       handleToolResultSearch({ output_id: outId, query: "car" }, buildSkillContext())
     ).rejects.toThrow("boom search");
     expect(settleCalls).toEqual([0, 0]);
+  });
+
+  it("builds correct payload in toolResultBudgetExhaustedResult with and without cursor", () => {
+    const withoutCursor = toolResultBudgetExhaustedResult({
+      outputId: "out_test123",
+    });
+    expect(withoutCursor).toEqual({
+      error: "RETRIEVAL_BUDGET_EXHAUSTED",
+      output_id: "out_test123",
+      analysis_complete: false,
+      terminal_for_turn: true,
+      recovery: TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+    });
+    expect(Object.prototype.hasOwnProperty.call(withoutCursor, "cursor")).toBe(
+      false
+    );
+
+    const withCursor = toolResultBudgetExhaustedResult({
+      outputId: "out_test456",
+      cursor: "cursor_abc_123",
+    });
+    expect(withCursor).toEqual({
+      error: "RETRIEVAL_BUDGET_EXHAUSTED",
+      output_id: "out_test456",
+      cursor: "cursor_abc_123",
+      analysis_complete: false,
+      terminal_for_turn: true,
+      recovery: TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+    });
   });
 });

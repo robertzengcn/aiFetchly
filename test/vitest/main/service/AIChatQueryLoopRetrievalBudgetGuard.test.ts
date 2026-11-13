@@ -370,4 +370,231 @@ describe("AIChatQueryLoop RETRIEVAL_BUDGET_EXHAUSTED guards", () => {
     expect(jsonReadEnvelope).not.toBeNull();
     expect((jsonReadEnvelope?.text ?? "").length).toBeGreaterThanOrEqual(4000);
   });
+
+  it("handles mixed tool call round where a retrieval tool exhausts budget but another tool succeeds", async () => {
+    const observedToolsPerRound: string[][] = [];
+    let callCount = 0;
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          observedToolsPerRound.push(
+            (req.tools ?? []).map((t) => t.function.name)
+          );
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk({
+              id: "resp-mixed",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: "gpt-4o",
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call-read-1",
+                        type: "function",
+                        function: {
+                          name: TOOL_RESULT_READ_TOOL_NAME,
+                          arguments: JSON.stringify({
+                            output_id: "out_0123456789abcdef0123456789abcdef",
+                          }),
+                        },
+                      },
+                      {
+                        index: 1,
+                        id: "call-maps-1",
+                        type: "function",
+                        function: {
+                          name: "search_maps_businesses",
+                          arguments: JSON.stringify({ query: "wholesale auto" }),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+            });
+            return;
+          }
+          onChunk(
+            makeTextChunk("Finished with available map data.", "stop")
+          );
+        }
+      ),
+      executeTool: vi.fn(async (name, _args, ctx) => {
+        if (name === TOOL_RESULT_READ_TOOL_NAME) {
+          return budgetExhaustedExecutionResult(
+            "out_0123456789abcdef0123456789abcdef",
+            name,
+            ctx.toolCallId ?? "call-read-1"
+          );
+        }
+        return {
+          tool_call_id: ctx.toolCallId ?? "call-maps-1",
+          tool_name: name,
+          success: true,
+          execution_time_ms: 10,
+          result: { count: 1, results: [{ name: "Auto Wholesale LLC" }] },
+        };
+      }),
+      getSkillDefinition: () => undefined,
+      requestBudgetService: new AIChatRequestBudgetService(),
+      resolveModelLimits: () => ({
+        contextLimit: 128_000,
+        outputLimit: 16_384,
+        limitSource: "provider",
+        outputSource: "provider",
+      }),
+    });
+
+    const result = await loop.run(buildInput(makeTools()));
+    expect(result.type).toBe("completed");
+    if (result.type === "completed") {
+      expect(result.fullContent).toContain("Finished with available map data");
+    }
+    expect(observedToolsPerRound).toEqual([
+      [
+        "search_maps_businesses",
+        TOOL_RESULT_READ_TOOL_NAME,
+        TOOL_RESULT_SEARCH_TOOL_NAME,
+      ],
+      ["search_maps_businesses"],
+    ]);
+  });
+
+  it("removes retrieval tools when tool_result_search exhausts per-turn budget", async () => {
+    const observedToolsPerRound: string[][] = [];
+    let callCount = 0;
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          observedToolsPerRound.push(
+            (req.tools ?? []).map((t) => t.function.name)
+          );
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(
+              makeToolCallChunk(
+                "call-search-1",
+                TOOL_RESULT_SEARCH_TOOL_NAME,
+                JSON.stringify({
+                  output_id: "out_0123456789abcdef0123456789abcdef",
+                  query: "dealer phone",
+                })
+              )
+            );
+            return;
+          }
+          onChunk(
+            makeTextChunk("Summary without further searching.", "stop")
+          );
+        }
+      ),
+      executeTool: vi.fn(async (name, _args, ctx) =>
+        budgetExhaustedExecutionResult(
+          "out_0123456789abcdef0123456789abcdef",
+          name,
+          ctx.toolCallId ?? "call-search-1"
+        )
+      ),
+      getSkillDefinition: () => undefined,
+      requestBudgetService: new AIChatRequestBudgetService(),
+      resolveModelLimits: () => ({
+        contextLimit: 128_000,
+        outputLimit: 16_384,
+        limitSource: "provider",
+        outputSource: "provider",
+      }),
+    });
+
+    const result = await loop.run(buildInput(makeTools()));
+    expect(result.type).toBe("completed");
+    expect(observedToolsPerRound).toEqual([
+      [
+        "search_maps_businesses",
+        TOOL_RESULT_READ_TOOL_NAME,
+        TOOL_RESULT_SEARCH_TOOL_NAME,
+      ],
+      ["search_maps_businesses"],
+    ]);
+  });
+
+  it("resets retrieval budget exhaustion state on a subsequent turn", async () => {
+    const observedToolsPerTurn: string[][] = [];
+    let turn = 1;
+
+    const loop = new AIChatQueryLoop({
+      streamChatCompletion: vi.fn(
+        async (
+          req: OpenAIChatCompletionRequest,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          observedToolsPerTurn.push(
+            (req.tools ?? []).map((t) => t.function.name)
+          );
+          if (turn === 1) {
+            onChunk(
+              makeToolCallChunk(
+                "call-read-turn-1",
+                TOOL_RESULT_READ_TOOL_NAME,
+                JSON.stringify({ output_id: "out_0123456789abcdef0123456789abcdef" })
+              )
+            );
+            return;
+          }
+          onChunk(makeTextChunk("Turn 2 text answer.", "stop"));
+        }
+      ),
+      executeTool: vi.fn(async (name, _args, ctx) =>
+        budgetExhaustedExecutionResult(
+          "out_0123456789abcdef0123456789abcdef",
+          name,
+          ctx.toolCallId ?? "call-read-turn-1"
+        )
+      ),
+      getSkillDefinition: () => undefined,
+      requestBudgetService: new AIChatRequestBudgetService(),
+      resolveModelLimits: () => ({
+        contextLimit: 128_000,
+        outputLimit: 16_384,
+        limitSource: "provider",
+        outputSource: "provider",
+      }),
+    });
+
+    // Turn 1: single round where tool_result_read is called and budget exhausted
+    await loop.run(buildInput(makeTools(), { maxToolRounds: 1 }));
+
+    // Turn 2: fresh run on the same AIChatQueryLoop instance
+    turn = 2;
+    await loop.run(
+      buildInput(makeTools(), {
+        assistantMessageId: "asst-retrieval-guard-turn-2",
+        startRound: 0,
+      })
+    );
+
+    expect(observedToolsPerTurn[0]).toEqual([
+      "search_maps_businesses",
+      TOOL_RESULT_READ_TOOL_NAME,
+      TOOL_RESULT_SEARCH_TOOL_NAME,
+    ]);
+    expect(observedToolsPerTurn[1]).toEqual([
+      "search_maps_businesses",
+      TOOL_RESULT_READ_TOOL_NAME,
+      TOOL_RESULT_SEARCH_TOOL_NAME,
+    ]);
+  });
 });

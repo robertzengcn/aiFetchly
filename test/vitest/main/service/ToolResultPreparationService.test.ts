@@ -1099,6 +1099,28 @@ describe("ToolResultModule — retrieval-work allowance", () => {
     const remaining = await mod.remainingRetrievalTokens(key);
     expect(remaining).toBe(TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn - 1000);
   });
+
+  it("refuses reservations when settledTokens reaches or exceeds retrievalMaxTokensPerTurn even if remaining calls are available", async () => {
+    const mod = await makeModule();
+    const scope = await mod.ensureScope("prof-1", "suite-conv-token-cap");
+    const key = {
+      profileId: "prof-1",
+      conversationId: "suite-conv-token-cap",
+      outputEpoch: scope.outputEpoch,
+      agentId: "",
+      turnId: "turn-1",
+    };
+    const firstReserve = await mod.reserveRetrievalCall(key);
+    expect(firstReserve.ok).toBe(true);
+    await mod.settleRetrievalCall({
+      ...key,
+      tokens: TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn,
+    });
+    const secondReserve = await mod.reserveRetrievalCall(key);
+    expect(secondReserve.ok).toBe(false);
+    const remaining = await mod.remainingRetrievalTokens(key);
+    expect(remaining).toBe(0);
+  });
 });
 
 /**
