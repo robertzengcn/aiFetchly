@@ -5,7 +5,12 @@ const mockFindDue = vi.hoisted(() => vi.fn());
 const mockClaim = vi.hoisted(() => vi.fn());
 const mockGetByTrigger = vi.hoisted(() => vi.fn());
 const mockPauseWithReason = vi.hoisted(() => vi.fn());
+const mockGetScheduleByIdModel = vi.hoisted(() => vi.fn());
 const mockMarkInterrupted = vi.hoisted(() => vi.fn());
+const mockFindWaitingRuns = vi.hoisted(() => vi.fn());
+const mockClaimWaitingRun = vi.hoisted(() => vi.fn());
+const mockRetireWaitingRun = vi.hoisted(() => vi.fn());
+const mockIsConversationBusy = vi.hoisted(() => vi.fn());
 const mockRunChatLoop = vi.hoisted(() => vi.fn());
 const mockCleanupInactiveDependencies = vi.hoisted(() => vi.fn());
 const mockCleanupOldExecutions = vi.hoisted(() => vi.fn());
@@ -72,6 +77,7 @@ vi.mock("@/model/ScheduleTask.model", () => ({
     claimIntervalOccurrence: mockClaim,
     getSchedulesByTriggerType: mockGetByTrigger,
     pauseWithReason: mockPauseWithReason,
+    getScheduleById: mockGetScheduleByIdModel,
   };
     }
   },
@@ -81,8 +87,18 @@ vi.mock("@/model/AiMessageTaskRun.model", () => ({
     constructor() {
       return {
     markInterruptedRuns: mockMarkInterrupted,
+    findWaitingIntervalRuns: mockFindWaitingRuns,
+    claimWaitingRunForRetry: mockClaimWaitingRun,
+    retireWaitingRun: mockRetireWaitingRun,
   };
     }
+  },
+}));
+vi.mock("@/service/AIChatConversationTurnCoordinator", () => ({
+  AIChatConversationTurnCoordinator: {
+    getInstance: () => ({
+      isBusy: mockIsConversationBusy,
+    }),
   },
 }));
 vi.mock("@/service/ScheduledAiMessageRunner", () => ({
@@ -144,7 +160,12 @@ beforeEach(() => {
   mockFindDue.mockResolvedValue([]);
   mockClaim.mockResolvedValue({ kind: "not_due" });
   mockGetByTrigger.mockResolvedValue([]);
+  mockGetScheduleByIdModel.mockResolvedValue(null);
   mockMarkInterrupted.mockResolvedValue(0);
+  mockFindWaitingRuns.mockResolvedValue([]);
+  mockClaimWaitingRun.mockResolvedValue(false);
+  mockRetireWaitingRun.mockResolvedValue(undefined);
+  mockIsConversationBusy.mockReturnValue(false);
   mockCleanupInactiveDependencies.mockResolvedValue(0);
   mockCleanupOldExecutions.mockResolvedValue(0);
   mockRunChatLoop.mockResolvedValue({
@@ -230,6 +251,107 @@ describe("BackgroundScheduler.processIntervalTasks", () => {
     await scheduler.processIntervalTasks();
 
     expect(mockFindDue).not.toHaveBeenCalled();
+  });
+
+  it("retries a waiting_for_conversation run when conversation becomes idle before next due slot", async () => {
+    const waitingRun = {
+      id: 44,
+      task_id: 1,
+      schedule_id: 3,
+      conversation_id: "v2-conv",
+      occurrence: 2,
+      attempt: 1,
+      catch_up: false,
+      scheduled_for: new Date(Date.now() - 15_000),
+      idempotency_key: "scheduled-loop:3:2",
+      status: "waiting_for_conversation",
+    };
+    mockFindDue.mockResolvedValue([]);
+    mockFindWaitingRuns.mockResolvedValue([waitingRun]);
+    mockGetScheduleByIdModel.mockResolvedValue({
+      ...SCHED,
+      next_run_time: new Date(Date.now() + 120_000),
+    });
+    mockIsConversationBusy.mockReturnValue(false);
+    mockClaimWaitingRun.mockResolvedValue(true);
+
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
+    scheduler.isRunning = true;
+
+    await scheduler.processIntervalTasks();
+
+    expect(mockClaimWaitingRun).toHaveBeenCalledWith(44, expect.any(Date), 3);
+    expect(mockRunChatLoop).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 1,
+        scheduleId: 3,
+        runId: 44,
+        occurrence: 2,
+        idempotencyKey: "scheduled-loop:3:2",
+      })
+    );
+  });
+
+  it("retires a waiting_for_conversation run when attempts are exhausted", async () => {
+    const exhaustedRun = {
+      id: 45,
+      task_id: 1,
+      schedule_id: 3,
+      conversation_id: "v2-conv",
+      occurrence: 3,
+      attempt: 3,
+      catch_up: false,
+      scheduled_for: new Date(Date.now() - 15_000),
+      idempotency_key: "scheduled-loop:3:3",
+      status: "waiting_for_conversation",
+    };
+    mockFindDue.mockResolvedValue([]);
+    mockFindWaitingRuns.mockResolvedValue([exhaustedRun]);
+    mockGetScheduleByIdModel.mockResolvedValue({
+      ...SCHED,
+      next_run_time: new Date(Date.now() + 120_000),
+    });
+
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
+    scheduler.isRunning = true;
+
+    await scheduler.processIntervalTasks();
+
+    expect(mockRetireWaitingRun).toHaveBeenCalledWith(
+      45,
+      "WAITING_MAX_ATTEMPTS",
+      expect.any(Date)
+    );
+    expect(mockClaimWaitingRun).not.toHaveBeenCalled();
+    expect(mockRunChatLoop).not.toHaveBeenCalled();
+  });
+
+  it("guards processIntervalTasks against overlapping re-entrant polls", async () => {
+    let resolveFindDue!: (rows: unknown[]) => void;
+    mockFindDue.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFindDue = resolve;
+        })
+    );
+    const scheduler = new BackgroundScheduler(
+      "/tmp/sched-test"
+    ) as unknown as PrivateScheduler;
+    scheduler.isRunning = true;
+
+    const first = scheduler.processIntervalTasks();
+    const second = scheduler.processIntervalTasks();
+    await vi.waitFor(() => {
+      expect(typeof resolveFindDue).toBe("function");
+    });
+    resolveFindDue([]);
+    await Promise.all([first, second]);
+
+    expect(mockFindDue).toHaveBeenCalledTimes(1);
   });
 
   it("still runs chat-bound interval occurrences when the global scheduler is stopped", async () => {

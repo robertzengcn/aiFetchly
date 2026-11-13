@@ -22,7 +22,11 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { SearchController } from "@/controller/SearchController";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
-import { SCHEDULED_LOOP_STALE_RUN_MS } from "@/config/aiChatScheduledLoopConfig";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
+import {
+  SCHEDULED_LOOP_MAX_WAIT_ATTEMPTS,
+  SCHEDULED_LOOP_STALE_RUN_MS,
+} from "@/config/aiChatScheduledLoopConfig";
 
 export interface SchedulerStatus {
   isRunning: boolean;
@@ -80,6 +84,7 @@ export class BackgroundScheduler extends BaseDb {
 
   private isInitialized = false;
   private isRunning = false;
+  private isProcessingIntervalTasks = false;
   private executionQueue: ExecutionQueueItem[] = [];
   private runningExecutions: Set<number> = new Set();
   private maxConcurrentExecutions = 5;
@@ -479,7 +484,8 @@ export class BackgroundScheduler extends BaseDb {
    * every clean shutdown).
    */
   private async processIntervalTasks(): Promise<void> {
-    if (!this.isRunning) return;
+    if (!this.isRunning || this.isProcessingIntervalTasks) return;
+    this.isProcessingIntervalTasks = true;
     try {
       const now = new Date();
       const due =
@@ -488,8 +494,84 @@ export class BackgroundScheduler extends BaseDb {
         if (!this.isRunning) break;
         await this.processIntervalSchedule(schedule);
       }
+      if (this.isRunning) {
+        await this.processWaitingIntervalRuns(now);
+      }
     } catch (error) {
       console.error("Error processing interval scheduled tasks:", error);
+    } finally {
+      this.isProcessingIntervalTasks = false;
+    }
+  }
+
+  /**
+   * Retry or retire interval runs currently in `waiting_for_conversation` once
+   * the conversation turn lease is free (or retire when inactive / superseded /
+   * wait attempts exhausted).
+   */
+  private async processWaitingIntervalRuns(now: Date): Promise<void> {
+    const runModel = this.getIntervalRunModel();
+    const waitingRuns = await runModel.findWaitingIntervalRuns?.(50);
+    if (!waitingRuns || waitingRuns.length === 0) return;
+
+    const scheduleModel = this.getIntervalScheduleModel();
+    const coordinator = AIChatConversationTurnCoordinator.getInstance();
+    const maxTotalAttempts = 1 + SCHEDULED_LOOP_MAX_WAIT_ATTEMPTS;
+
+    for (const run of waitingRuns) {
+      if (!this.isRunning) break;
+      if (run.schedule_id == null || run.occurrence == null) continue;
+
+      const schedule = await scheduleModel.getScheduleById?.(run.schedule_id);
+      if (
+        !schedule ||
+        !schedule.is_active ||
+        schedule.status !== ScheduleStatus.ACTIVE
+      ) {
+        await runModel.retireWaitingRun?.(run.id, "SCHEDULE_INACTIVE", now);
+        continue;
+      }
+
+      if (
+        schedule.next_run_time &&
+        schedule.next_run_time.getTime() <= now.getTime()
+      ) {
+        await runModel.retireWaitingRun?.(run.id, "WAITING_RUN_EXPIRED", now);
+        continue;
+      }
+
+      if (run.attempt >= maxTotalAttempts) {
+        await runModel.retireWaitingRun?.(
+          run.id,
+          "WAITING_MAX_ATTEMPTS",
+          now
+        );
+        continue;
+      }
+
+      if (run.conversation_id && coordinator.isBusy(run.conversation_id)) {
+        continue;
+      }
+
+      const claimed = await runModel.claimWaitingRunForRetry?.(
+        run.id,
+        now,
+        maxTotalAttempts
+      );
+      if (!claimed) continue;
+
+      const runner = new ScheduledAiMessageRunner();
+      await runner.runChatScheduledLoop({
+        taskId: run.task_id,
+        scheduleId: run.schedule_id,
+        runId: run.id,
+        occurrence: run.occurrence,
+        catchUp: Boolean(run.catch_up),
+        scheduledFor: run.scheduled_for ?? now,
+        idempotencyKey:
+          run.idempotency_key ??
+          `scheduled-loop:${run.schedule_id}:${run.occurrence}`,
+      });
     }
   }
 

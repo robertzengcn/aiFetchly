@@ -380,6 +380,20 @@ describe("ScheduledAiMessageRunner — scheduled finalization (Unit 6)", () => {
     await expect(call()).rejects.toThrow(/disk I\/O error/);
   });
 
+  it("flag-on + CONVERSATION_BUSY: does not call startScheduled or create an orphan ledger row when lease acquire fails", async () => {
+    flagOn.value = true;
+    mockAcquire.mockRejectedValue(new Error("CONVERSATION_BUSY"));
+    const result = await call({ idempotencyKey: "scheduled-loop:2:1" });
+    expect(result.status).toBe("blocked_by_policy");
+    expect(mockStartScheduled).not.toHaveBeenCalled();
+    expect(mockFinalizeScheduled).not.toHaveBeenCalled();
+    expect(mockUpdateRunStatus).toHaveBeenCalledWith(
+      9,
+      "waiting_for_conversation",
+      expect.objectContaining({ error_code: "CONVERSATION_BUSY" })
+    );
+  });
+
   /**
    * D8 review-coverage gap: the `reused` crash-retry branch had zero tests.
    * A transport retry of the same occurrence key (same scheduleId +
