@@ -74,6 +74,19 @@ The replay return is the remaining path with no warning at all. `sendApprovedFor
 
 Repair: build the chat sentence from the active locale, including a translated frame for the submitted, unknown, and rejected cases. On `already_processed`, copy `sentCopyStatus` from the stored item and attach the same warning when it is `failed` or `unknown`.
 
+## Remediation status
+
+**Remediated on this branch (commit `435143d8a`), re-read at the production binding.** The audit's verification scenarios are implemented as tests — through the pure check AND the production binding.
+
+| Item | Status | Evidence on the production path |
+| --- | --- | --- |
+| R10-01 unbound exclusion phrase | **Fixed** | `sentenceExcludesAttachment` binds each exclusion phrase occurrence to the stem that FOLLOWS it within a 48-char window (`without the logo`, `except the invoice`, `除了logo`): the stem must be the object of THAT phrase, whole-word. The audit's exact scenarios pass: `"forward this invoice to finance@example.com now without delay"` + invoice.pdf → **false** (the window after `without` is `delay`, and the stem occurs only BEFORE the phrase, which latin phrases never scan); both invoice.pdf and logo.png deselected with `...without the logo` → logo.png true, invoice.pdf false (one phrase per file); `"except don't cc anyone"` → false. Japanese object-before-particle survives: CJK phrases also scan a short window BEFORE the phrase (`logo.pngを除いて` matches, `invoice.pdfを除いて` does not authorize logo.png) — a before-window on latin would reopen the without-delay hole, so it is CJK-only. |
+| R10-02 English frame + replay omission | **Fixed** | `sentCopyWarningSentence` now renders the ACTIVE locale's `sent_copy_warning` template (the same translated frame the card renders through `t()`, all six language files) with the locale's `sent_copy_status` word interpolated — the three English literals are gone. The replay path repeats the sentence: both `already_processed` returns in `sendApprovedForward` (the idempotency-key short-circuit and the create-race return) carry `sentCopyStatus` read from the prior operation's stored item `resultJson`, and the tool attaches the warning on the ALREADY_ATTEMPTED failure envelope and on the succeeded replay (`code: "SENT_COPY_UNVERIFIED"` on the success shape) — no re-send. |
+
+**Verification run on this branch:** `yarn typecheck` 0 errors; `yarn vue-typecheck` 0 errors; binding tests 14/14 (incl. the audit's without-delay and two-file scenarios through the production function); resolver 38/38 (incl. the pure exclusion scenarios); main org suites 11 files / 121 tests; component suite 184/1616; `emailOrganizationJourneys.test.ts` 4/4 re-run at the remediation commit.
+
+**Still open (operator/CI, unchanged):** live test-mailbox validation and Forge packaged proof (`yarn package` stays off developer machines per AGENTS.md).
+
 ## Requirement scorecard
 
 | ID | Stage | This pass |
