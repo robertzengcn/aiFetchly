@@ -172,6 +172,10 @@ import {
   TOOL_RESULT_CONFIG,
   BATCH_PREVIEW_TOOL_NAMES as TOOL_RESULT_BATCH_PREVIEW_TOOL_NAMES,
 } from "@/config/toolResultConfig";
+import {
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+} from "@/entityTypes/toolResultToolTypes";
 import { extractToolResultImages } from "@/service/toolResultImageHarvest";
 import { USER_AI_ENABLED, USERSDBPATH } from "@/config/usersetting";
 import {
@@ -959,7 +963,20 @@ function mergeToolResultHookContext(
   };
 }
 
+const RETRIEVAL_TOOL_NAMES = new Set<string>([
+  TOOL_RESULT_READ_TOOL_NAME,
+  TOOL_RESULT_SEARCH_TOOL_NAME,
+]);
+const RETRIEVAL_BUDGET_EXHAUSTED_ERROR = "RETRIEVAL_BUDGET_EXHAUSTED";
+const MAX_CONSECUTIVE_EXHAUSTED_RETRIEVAL_ROUNDS = 2;
+
 function buildFailedToolFallbackMessage(info: LastFailedToolInfo): string {
+  if (info.error === RETRIEVAL_BUDGET_EXHAUSTED_ERROR) {
+    return (
+      "Stopped reading additional saved tool outputs because the per-turn retrieval budget was exhausted. " +
+      "Results gathered so far remain preserved in this conversation, and remaining outputs can be read in a follow-up turn."
+    );
+  }
   return `The tool \`${info.name}\` did not complete successfully: ${info.error}`;
 }
 
@@ -2403,6 +2420,8 @@ export class AIChatQueryLoop {
       | undefined;
     const messages = input.messages;
     let lastFailedTool: LastFailedToolInfo | null = null;
+    let retrievalBudgetExhaustedThisTurn = false;
+    let consecutiveExhaustedRetrievalRounds = 0;
     let immediatePlanSubmissionContent: string | null = null;
 
     // Local mutable copies so EnterPlanMode can swap them mid-run.
@@ -2583,6 +2602,7 @@ export class AIChatQueryLoop {
           }
           const canKeepGoing =
             executedToolRound &&
+            !retrievalBudgetExhaustedThisTurn &&
             !input.abortController.signal.aborted &&
             input.isActiveTurn() &&
             roundCapContinuations < maxRoundCapContinuations;
@@ -2709,6 +2729,14 @@ export class AIChatQueryLoop {
             )
           );
           exposedTools = exposedTools.filter((t) => keep.has(t.function.name));
+        }
+        // Once this turn's retrieval budget is exhausted, withdraw
+        // tool_result_read/tool_result_search from the exposed tool schema so
+        // the model cannot keep repeating calls that are guaranteed to fail.
+        if (retrievalBudgetExhaustedThisTurn) {
+          exposedTools = exposedTools.filter(
+            (t) => !RETRIEVAL_TOOL_NAMES.has(t.function.name)
+          );
         }
         const hasExposedTools = exposedTools.length > 0;
 
@@ -3872,6 +3900,8 @@ export class AIChatQueryLoop {
         // Ticket P2-8: handoff messages collected per tool batch — appended
         // after the loop so tool responses stay contiguous.
         const postToolHandoffs: OpenAIChatMessage[] = [];
+        let roundHadRetrievalBudgetExhausted = false;
+        let roundHadOtherExecutedCall = false;
         for (const call of parsedCalls) {
           if (!call.ok || !call.id || !call.name) {
             continue;
@@ -4883,6 +4913,7 @@ export class AIChatQueryLoop {
 
           if (toolResult.success) {
             lastFailedTool = null;
+            roundHadOtherExecutedCall = true;
             // PRD FR-13/FR-16: a successful extract_contact_info call must
             // expose verify_contact_info on the next round even when the
             // tool is normally deferred.
@@ -4890,10 +4921,25 @@ export class AIChatQueryLoop {
               discoveredToolNames.add(VERIFY_CONTACT_INFO_TOOL_NAME);
             }
           } else {
+            const toolErrorCode = extractToolError(toolPayload);
+            const rawResultError =
+              typeof toolResult.result.error === "string"
+                ? toolResult.result.error.trim()
+                : "";
             lastFailedTool = {
               name: call.name,
-              error: extractToolError(toolPayload),
+              error: toolErrorCode,
             };
+            if (
+              RETRIEVAL_TOOL_NAMES.has(call.name) &&
+              (toolErrorCode === RETRIEVAL_BUDGET_EXHAUSTED_ERROR ||
+                rawResultError === RETRIEVAL_BUDGET_EXHAUSTED_ERROR)
+            ) {
+              retrievalBudgetExhaustedThisTurn = true;
+              roundHadRetrievalBudgetExhausted = true;
+            } else {
+              roundHadOtherExecutedCall = true;
+            }
           }
           const failureDetail = toolResult.success
             ? ""
@@ -5061,6 +5107,20 @@ export class AIChatQueryLoop {
       // Ticket P2-8: all tool responses are contiguous; the handoff
       // (model-only role:user) messages follow the batch.
       messages.push(...postToolHandoffs);
+      if (roundHadRetrievalBudgetExhausted && !roundHadOtherExecutedCall) {
+        consecutiveExhaustedRetrievalRounds += 1;
+      } else {
+        consecutiveExhaustedRetrievalRounds = 0;
+      }
+      if (
+        consecutiveExhaustedRetrievalRounds >=
+        MAX_CONSECUTIVE_EXHAUSTED_RETRIEVAL_ROUNDS
+      ) {
+        log.warn(
+          `[ai-chat-v2] stopping loop after ${consecutiveExhaustedRetrievalRounds} consecutive retrieval-budget-exhausted rounds`
+        );
+        break;
+      }
       }
 
       // All tool calls for this round have executed and their results are
