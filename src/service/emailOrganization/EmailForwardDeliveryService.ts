@@ -95,8 +95,37 @@ export type SendForwardOutcome =
       /** T12: the prior operation's durable status (may be failed/unknown). */
       readonly priorOutcome: string;
       readonly operationId: string;
+      /**
+       * R10-02: the stored Sent-copy status of the prior attempt, so a
+       * replay repeats the AC-22 warning when the copy is unverified.
+       */
+      readonly sentCopyStatus?: EmailSentCopyStatus;
       readonly requestCorrelationId: string;
     };
+
+/**
+ * R10-02: the stored Sent-copy status from the prior operation's item row,
+ * so a replay of a send whose copy was unverified repeats the warning.
+ */
+function sentCopyStatusFromItem(
+  items: ReadonlyArray<{ resultJson: string | null }>
+): EmailSentCopyStatus | undefined {
+  for (const item of items) {
+    if (item.resultJson === null) continue;
+    try {
+      const parsed = JSON.parse(item.resultJson) as { sentCopyStatus?: unknown };
+      if (
+        parsed.sentCopyStatus === "failed" ||
+        parsed.sentCopyStatus === "unknown"
+      ) {
+        return parsed.sentCopyStatus;
+      }
+    } catch {
+      // malformed evidence: keep scanning
+    }
+  }
+  return undefined;
+}
 
 function newCorrelationId(): string {
   return `fwd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -162,11 +191,16 @@ export class EmailForwardDeliveryService extends BaseModule {
     if (existingOperation) {
       // T12: the duplicate envelope projects the EXISTING durable outcome —
       // already-attempted is not accepted-by-SMTP when the prior operation
-      // failed or is unresolved.
+      // failed or is unresolved. R10-02: a replay repeats the Sent-copy
+      // warning when the prior attempt stored an unverified copy.
+      const replayItems = await this.operationModule
+        .listItems(existingOperation.operationId)
+        .catch(() => []);
       return {
         status: "already_processed",
         priorOutcome: existingOperation.status,
         operationId: existingOperation.operationId,
+        sentCopyStatus: sentCopyStatusFromItem(replayItems),
         requestCorrelationId,
       };
     }
@@ -207,10 +241,15 @@ export class EmailForwardDeliveryService extends BaseModule {
     });
     const operation = operationResult.operation;
     if (operationResult.status === "existing") {
+      // R10-02: same replay warning as the idempotency-key short-circuit.
+      const replayItems = await this.operationModule
+        .listItems(operation.operationId)
+        .catch(() => []);
       return {
         status: "already_processed",
         priorOutcome: operation.status,
         operationId: operation.operationId,
+        sentCopyStatus: sentCopyStatusFromItem(replayItems),
         requestCorrelationId,
       };
     }

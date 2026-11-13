@@ -426,6 +426,67 @@ describe("resolveDirectSendPayloadBinding — production resolution (R8-01)", ()
     expect(allowed).toBe(true);
   });
 
+  it("R10-01: 'without delay' with invoice.pdf deselected REFUSES (audit test)", async () => {
+    const draft = makeDraft({ id: 1, currentRevisionId: 11 });
+    const revision = makeRevision({
+      id: 11,
+      draftId: 1,
+      attachmentsJson: JSON.stringify([
+        { displayName: "invoice.pdf", selected: false, partId: "p1" },
+      ]),
+    });
+    const state: HarnessState = {
+      revisions: new Map([[11, revision]]),
+      drafts: new Map([[1, draft]]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const refused = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this invoice to finance@example.com now without delay",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(refused).toBe(false);
+  });
+
+  it("R10-01: two deselected files, one exclusion — only logo.png is authorized, invoice.pdf refuses", async () => {
+    const draft = makeDraft({ id: 1, currentRevisionId: 11 });
+    const revision = makeRevision({
+      id: 11,
+      draftId: 1,
+      attachmentsJson: JSON.stringify([
+        { displayName: "invoice.pdf", selected: false, partId: "p1" },
+        { displayName: "logo.png", selected: false, partId: "p2" },
+      ]),
+    });
+    const state: HarnessState = {
+      revisions: new Map([[11, revision]]),
+      drafts: new Map([[1, draft]]),
+      messages: new Map([[42, makeMessage({ id: 42 })]]),
+      senderCounts: new Map(),
+      operationKinds: new Map(),
+      restorableIds: [],
+    };
+    const deps = makeDeps(state);
+    const refused = await resolveDirectSendPayloadBinding(
+      {
+        toolName: "send_email_forward",
+        args: { draft_id: 1, revision_id: 11 },
+        userText: "forward this invoice to finance@example.com now without the logo",
+        conversationId: CONVERSATION,
+      },
+      deps
+    );
+    expect(refused).toBe(false);
+  });
+
   it("a revision that dropped an attachment refuses unless the sentence names it", async () => {
     const draft = makeDraft({ id: 1, currentRevisionId: 11 });
     const revision = makeRevision({

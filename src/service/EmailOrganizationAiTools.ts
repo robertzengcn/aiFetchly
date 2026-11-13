@@ -212,20 +212,32 @@ function sentCopyStatusLabelFor(locale: string, status: EmailSentCopyStatus): st
   return table?.[status] ?? fallback?.[status] ?? status;
 }
 
-/** R9-02: the chat warning sentence in the active locale's label. */
+/**
+ * R10-02 (FR-15): the chat warning sentence is the ACTIVE locale's
+ * `sent_copy_warning` template — the same translated frame the operation
+ * card renders through `t()` — with the locale's status word interpolated.
+ * The three prior English literals are gone.
+ */
 async function sentCopyWarningSentence(
-  variant: "submitted" | "unknown" | "failed",
   status: EmailSentCopyStatus
 ): Promise<string> {
   const locale = await resolveUiLocale();
   const label = sentCopyStatusLabelFor(locale, status);
-  if (variant === "submitted") {
-    return `The forward was submitted, but the Sent copy could not be verified (${label}).`;
-  }
-  if (variant === "unknown") {
-    return `The forward outcome is unknown, and the Sent copy could not be verified (${label}).`;
-  }
-  return `The forward was rejected by the server, and the Sent copy could not be verified (${label}).`;
+  const table = (LOCALE_MESSAGE_TABLES[locale.slice(0, 2).toLowerCase()] as
+    | {
+        emailOrganization?: {
+          sent_copy_warning?: string;
+        };
+      }
+    | undefined)?.emailOrganization?.sent_copy_warning;
+  const fallback = (enMessages as {
+    emailOrganization?: {
+      sent_copy_warning?: string;
+    };
+  }).emailOrganization?.sent_copy_warning;
+  const template =
+    table ?? fallback ?? "The Sent copy could not be verified ({status}).";
+  return template.replace("{status}", label);
 }
 
 /**
@@ -439,11 +451,29 @@ export async function sendEmailForward(
     );
     // R10: top-level success only for VERIFIED complete success; partial
     // acceptance, failure and unknowns surface through the envelope.
-    if (outcome.status === "already_processed" && outcome.priorOutcome !== "succeeded") {
+    if (outcome.status === "already_processed") {
+      // R10-02 (AC-22): a replay repeats the Sent-copy warning when the
+      // prior attempt stored an unverified copy — the status rides the
+      // replay return now, so the user re-sees the sentence without the
+      // tool re-sending anything.
+      const replayWarning =
+        outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown"
+          ? await sentCopyWarningSentence(outcome.sentCopyStatus)
+          : undefined;
+      if (outcome.priorOutcome !== "succeeded") {
+        return {
+          success: false,
+          error: `This forward was already attempted; the prior operation is ${outcome.priorOutcome}.`,
+          code: "ALREADY_ATTEMPTED",
+          ...(replayWarning !== undefined ? { warning: replayWarning } : {}),
+          result: { ...outcome } as unknown as Record<string, unknown>,
+        };
+      }
       return {
-        success: false,
-        error: `This forward was already attempted; the prior operation is ${outcome.priorOutcome}.`,
-        code: "ALREADY_ATTEMPTED",
+        success: true,
+        ...(replayWarning !== undefined
+          ? { warning: replayWarning, code: "SENT_COPY_UNVERIFIED" }
+          : {}),
         result: { ...outcome } as unknown as Record<string, unknown>,
       };
     }
@@ -454,10 +484,7 @@ export async function sendEmailForward(
         outcome.status === "failed" &&
         (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")
       ) {
-        const failedCopyWarning = await sentCopyWarningSentence(
-          "failed",
-          outcome.sentCopyStatus
-        );
+        const failedCopyWarning = await sentCopyWarningSentence(outcome.sentCopyStatus);
         return {
           success: false,
           error: outcome.error,
@@ -473,7 +500,7 @@ export async function sendEmailForward(
         outcome.status === "outcome_unknown" &&
         outcome.sentCopyStatus !== undefined &&
         (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")
-          ? await sentCopyWarningSentence("unknown", outcome.sentCopyStatus)
+          ? await sentCopyWarningSentence(outcome.sentCopyStatus)
           : undefined;
       return {
         success: false,
@@ -494,7 +521,7 @@ export async function sendEmailForward(
       // the surface the user is looking at — this turn's tool result.
       const partialCopyWarning =
         outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown"
-          ? await sentCopyWarningSentence("submitted", outcome.sentCopyStatus)
+          ? await sentCopyWarningSentence(outcome.sentCopyStatus)
           : undefined;
       return {
         success: false,
@@ -510,7 +537,7 @@ export async function sendEmailForward(
     if (outcome.status === "submitted" && (outcome.sentCopyStatus === "failed" || outcome.sentCopyStatus === "unknown")) {
       return {
         success: true,
-        warning: await sentCopyWarningSentence("submitted", outcome.sentCopyStatus),
+        warning: await sentCopyWarningSentence(outcome.sentCopyStatus),
         code: "SENT_COPY_UNVERIFIED",
         result: { ...outcome } as unknown as Record<string, unknown>,
       };

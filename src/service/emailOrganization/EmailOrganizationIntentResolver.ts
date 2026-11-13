@@ -570,49 +570,80 @@ const DROP_EXCLUSION_PHRASES: readonly string[] = [
 ];
 
 /**
- * R9-01: TRUE when the sentence excludes the dropped file — an exclusion
- * phrase must be present AND the dropped name's stem must appear as a
- * whole word (latin boundary check tolerates CJK neighbors). A bare
- * mention of the filename ("forward this invoice" with invoice.pdf
- * deselected), a stem inside another word ("keep the logo" has no
- * exclusion; "forward" contains the a/e/o stems of one-letter file names)
- * is NOT an exclusion.
+ * R10-01: TRUE when the sentence excludes the dropped file — an exclusion
+ * phrase must apply TO the dropped file: the stem (or full name) appears
+ * as a whole word within a short window right after the phrase
+ * ("without the logo", "except the invoice", "除了logo"), so an unrelated
+ * "without delay" or "except don't cc" never authorizes dropping a file
+ * named elsewhere in the sentence. Japanese grammar puts the object
+ * before the particle ("logo.pngを除いて"), so CJK phrases also scan a
+ * short window BEFORE the phrase. A phrase that names no file, a bare
+ * mention of the filename, a stem inside another word ("keep the logo",
+ * "forward" contains the a/e/o stems of one-letter names) is NOT an
+ * exclusion.
  */
+const STEM_WINDOW_CHARS = 48;
+
+function wholeWordMatches(text: string, candidate: string): boolean {
+  const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    "(?:^|[^a-z0-9])" + escaped + "(?:[^a-z0-9]|$)",
+    "i"
+  ).test(text);
+}
+
+function phraseOccurrenceEnds(text: string, phrase: string): number[] {
+  const ends: number[] = [];
+  if (/^[a-z0-9' ]+$/.test(phrase)) {
+    // Latin phrases need word boundaries.
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    for (const match of text.matchAll(
+      new RegExp("(?:^|[^a-z0-9])(" + escaped + ")(?=[^a-z0-9]|$)", "gi")
+    )) {
+      ends.push((match.index ?? 0) + match[0].length);
+    }
+  } else {
+    // CJK phrases: plain substring occurrences.
+    let idx = text.indexOf(phrase);
+    while (idx >= 0) {
+      ends.push(idx + phrase.length);
+      idx = text.indexOf(phrase, idx + 1);
+    }
+  }
+  return ends;
+}
+
 export function sentenceExcludesAttachment(
   userText: string,
   droppedName: string
 ): boolean {
   const text = normalizeText(userText);
   if (text === "") return false;
-  const hasExclusion = DROP_EXCLUSION_PHRASES.some((phrase) => {
-    const normalized = normalizeText(phrase);
-    if (normalized === "") return false;
-    // Latin phrases need word boundaries; CJK phrases are plain substrings.
-    if (/^[a-z0-9' ]+$/.test(normalized)) {
-      const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return new RegExp(
-        "(?:^|[^a-z0-9])" + escaped + "(?:[^a-z0-9]|$)",
-        "i"
-      ).test(text);
-    }
-    return text.includes(normalized);
-  });
-  if (!hasExclusion) return false;
   const fullName = droppedName.trim().toLowerCase();
   const stem = fullName.replace(/\.[a-z0-9]{1,8}$/, "");
   if (stem === "") return false;
-  // The stem as a whole word, or the full filename as a whole word — a
-  // Japanese/Chinese user often keeps the latin filename in the sentence
-  // ("logo.pngを除いて送信"), where the CJK neighbors satisfy the boundary.
-  for (const candidate of [stem, fullName]) {
-    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (
-      new RegExp(
-        "(?:^|[^a-z0-9])" + escaped + "(?:[^a-z0-9]|$)",
-        "i"
-      ).test(text)
-    ) {
-      return true;
+  const targets = stem !== fullName ? [stem, fullName] : [stem];
+  for (const phrase of DROP_EXCLUSION_PHRASES) {
+    const normalized = normalizeText(phrase);
+    if (normalized === "") continue;
+    const isLatin = /^[a-z0-9' ]+$/.test(normalized);
+    const ends = phraseOccurrenceEnds(text, normalized);
+    for (const end of ends) {
+      // The stem must be the OBJECT of this phrase: within a short window
+      // AFTER it ("without the logo", "除了logo"). Japanese puts the object
+      // before the particle ("logo.pngを除いて"), so CJK phrases also scan
+      // a short window BEFORE the phrase.
+      const afterWindow = text.slice(end, end + STEM_WINDOW_CHARS);
+      if (targets.some((target) => wholeWordMatches(afterWindow, target))) {
+        return true;
+      }
+      if (!isLatin) {
+        const beforeStart = Math.max(0, end - normalized.length - STEM_WINDOW_CHARS);
+        const beforeWindow = text.slice(beforeStart, end - normalized.length);
+        if (targets.some((target) => wholeWordMatches(beforeWindow, target))) {
+          return true;
+        }
+      }
     }
   }
   return false;

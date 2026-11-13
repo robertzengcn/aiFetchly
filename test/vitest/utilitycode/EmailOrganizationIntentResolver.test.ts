@@ -512,6 +512,43 @@ describe("sentenceExcludesAttachment (R9-01: exclusion phrase + whole-word stem)
     expect(sentenceExcludesAttachment("forward this to a@b.test", "o.pdf")).toBe(false);
   });
 
+  it("R10-01: an unrelated exclusion phrase never authorizes the drop (audit test)", () => {
+    // "without delay" — the phrase modifies the delay, not the file.
+    expect(
+      sentenceExcludesAttachment(
+        "forward this invoice to finance@example.com now without delay",
+        "invoice.pdf"
+      )
+    ).toBe(false);
+    // "except don't cc anyone" — the phrase is about the cc list.
+    expect(
+      sentenceExcludesAttachment(
+        "forward this invoice to finance@example.com now except don't cc anyone",
+        "invoice.pdf"
+      )
+    ).toBe(false);
+    // The stem BEFORE the phrase never matches on latin ("forward this
+    // invoice ... without ...").
+    expect(
+      sentenceExcludesAttachment(
+        "forward this invoice to finance@example.com now without the logo",
+        "invoice.pdf"
+      )
+    ).toBe(false);
+  });
+
+  it("R10-01: with two deselected files, only the file the phrase names is excluded", () => {
+    const text = "forward this invoice to finance@example.com now without the logo";
+    expect(sentenceExcludesAttachment(text, "logo.png")).toBe(true);
+    expect(sentenceExcludesAttachment(text, "invoice.pdf")).toBe(false);
+  });
+
+  it("R10-01: Japanese object-before-particle still matches", () => {
+    expect(sentenceExcludesAttachment("logo.pngを除いて送信して", "logo.png")).toBe(true);
+    // But an unrelated CJK phrase does not authorize an unrelated file.
+    expect(sentenceExcludesAttachment("invoice.pdfを除いて送信して", "logo.png")).toBe(false);
+  });
+
   it("accepts non-English exclusion phrases", () => {
     expect(sentenceExcludesAttachment("除了logo都转发到a@b.test", "logo.png")).toBe(true);
     expect(sentenceExcludesAttachment("reenvíalo a a@b.test sin el logo", "logo.png")).toBe(true);
