@@ -82,7 +82,7 @@ function mapError(
   error: unknown
 ): KnowledgeLibraryToolError {
   if (error instanceof ZodError) {
-    const messages = error.errors.map((issue) => issue.message).join("; ");
+    const messages = error.issues.map((issue) => issue.message).join("; ");
     return toolError("INVALID_INPUT", `Invalid input: ${messages}`);
   }
   const message = error instanceof Error ? error.message : String(error);

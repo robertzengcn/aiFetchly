@@ -1874,3 +1874,190 @@ describe("AiChatApi - Recovery-driven streaming retry", () => {
     }
   });
 });
+
+describe("AiChatApi - Hosted non-streaming connect retry", () => {
+  const successCompletion = (): Record<string, unknown> => ({
+    id: "cmpl-1",
+    object: "chat.completion",
+    created: 1,
+    model: "m",
+    choices: [
+      { index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" },
+    ],
+    usage: { total_tokens: 1, prompt_tokens: 1, completion_tokens: 0 },
+  });
+
+  beforeEach(() => {
+    mockPostStreamShared.mockReset();
+    mockPostJsonShared.mockReset();
+    mockGetShared.mockReset();
+    mockTokenGetValue.mockImplementation(defaultTokenGetValue);
+  });
+
+  it("retries a connection failure then succeeds on the hosted non-streaming path", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostJsonShared
+        .mockRejectedValueOnce(new Error("fetch failed"))
+        .mockResolvedValueOnce(successCompletion());
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletion({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 16,
+      });
+      const assertion = expect(p).resolves.toMatchObject({
+        choices: [{ message: { content: "ok" } }],
+      });
+      // Runs the 1s connect-retry backoff and the second attempt.
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mockPostJsonShared).toHaveBeenCalledTimes(2);
+      expect(mockPostJsonShared).toHaveBeenNthCalledWith(
+        2,
+        "/api/ai/v1/chat/completions",
+        expect.objectContaining({ model: "m", stream: false }),
+        undefined
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries ECONNREFUSED-shaped connection failures the same way", async () => {
+    vi.useFakeTimers();
+    try {
+      mockPostJsonShared
+        .mockRejectedValueOnce(
+          new Error("connect ECONNREFUSED 127.0.0.1:3000")
+        )
+        .mockResolvedValueOnce(successCompletion());
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletion({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 16,
+      });
+      const assertion = expect(p).resolves.toBeDefined();
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mockPostJsonShared).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the bounded connect-retry budget and rethrows the original error", async () => {
+    vi.useFakeTimers();
+    try {
+      const connectError = new Error("fetch failed");
+      mockPostJsonShared.mockRejectedValue(connectError);
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletion({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 16,
+      });
+      const assertion = expect(p).rejects.toBe(connectError);
+      await vi.runAllTimersAsync();
+      await assertion;
+      // Initial attempt + 2 retries = 3 total attempts.
+      expect(mockPostJsonShared).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT retry non-connection failures (HTTP status envelopes)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Cloudflare-style 520 envelope (HttpResponseError-like, status 520).
+      mockPostJsonShared.mockRejectedValue(
+        Object.assign(new Error("origin failure"), {
+          name: "HttpResponseError",
+          status: 520,
+        })
+      );
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletion({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 16,
+      });
+      const assertion = expect(p).rejects.toThrow(/origin failure/);
+      await vi.runAllTimersAsync();
+      await assertion;
+      // Status failures keep the existing handling (lightweight-service same-route
+      // retry, small-model fallback) — no transport-layer stacking here.
+      expect(mockPostJsonShared).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors the caller abort signal during the connect-retry backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const ac = new AbortController();
+      mockPostJsonShared.mockRejectedValue(new Error("fetch failed"));
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletion(
+        {
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16,
+        },
+        { signal: ac.signal }
+      );
+      // Abort while the 1s backoff sleep is pending -> immediate rejection,
+      // no further attempts.
+      await vi.advanceTimersByTimeAsync(1);
+      ac.abort();
+      await expect(p).rejects.toBeDefined();
+      expect(mockPostJsonShared).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still applies the small-model 404 fallback after a retried connect failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const notFound = Object.assign(new Error("Not Found"), {
+        name: "HttpResponseError",
+        status: 404,
+      });
+      mockPostJsonShared
+        .mockRejectedValueOnce(new Error("fetch failed"))
+        .mockRejectedValueOnce(notFound)
+        .mockResolvedValueOnce(successCompletion());
+
+      const api = new AiChatApi();
+      const p = api.openAIChatCompletion({
+        model: "small",
+        messages: [{ role: "user", content: "hi" }],
+        max_tokens: 16,
+      });
+      const assertion = expect(p).resolves.toMatchObject({
+        choices: [{ message: { content: "ok" } }],
+      });
+      // First connect retry plus the small-model fallback retry.
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(mockPostJsonShared).toHaveBeenCalledTimes(3);
+      expect(mockPostJsonShared).toHaveBeenNthCalledWith(
+        3,
+        "/api/ai/v1/chat/completions",
+        expect.not.objectContaining({ model: "small" }),
+        undefined
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

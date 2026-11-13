@@ -3,6 +3,15 @@ import type {
   ConversationRuntimeStatus,
   ConversationSummaryEvent,
 } from "@/entityTypes/aiChatWorkspaceTypes";
+import {
+  AIChatTitleService,
+  type ResolvedTitleProvider,
+} from "@/service/AIChatTitleService";
+import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
+import { OpenAICompatibleProviderClient } from "@/service/aiProvider/OpenAICompatibleProviderClient";
+import { getSharedExecutionScheduler } from "@/service/aiChatSharedScheduler";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 
 /**
@@ -110,6 +119,91 @@ export function getStartupStreamImplementationConfig(): EnvAIChatStreamImplement
     startupStreamConfig = config ?? new EnvAIChatStreamImplementationConfig();
   }
   return startupStreamConfig;
+}
+
+/**
+ * Chat-titles design §6: the shared title-generation service. One instance
+ * per process; the completion owner wiring (workspace IPC + queue service)
+ * funnels completion notifications here without importing IPC modules.
+ */
+let sharedTitleService: AIChatTitleService | null = null;
+
+export function getSharedAIChatTitleService(): AIChatTitleService {
+  if (!sharedTitleService) {
+    sharedTitleService = new AIChatTitleService({
+      createModule: () => new AIChatConversationModule(),
+      resolveTitleProvider: (): ResolvedTitleProvider | null => {
+        // Design §8.4: hosted naming requires entitlement; custom-provider
+        // naming follows resolveForChat and never invokes hosted fallback.
+        const resolution = new AIProviderResolver().resolveForChat();
+        if (!resolution.canUse) return null;
+        if (resolution.kind === "local") {
+          return {
+            kind: "local",
+            config: resolution.config,
+            apiKey: resolution.apiKey,
+          };
+        }
+        return { kind: "hosted" };
+      },
+      completeTitle: async (provider, request, signal) => {
+        if (provider.kind === "local") {
+          // Pinned snapshot: this client can never re-read the current
+          // global provider (titles design §8.3).
+          return new OpenAICompatibleProviderClient(
+            provider.config,
+            provider.apiKey
+          ).complete(request, { signal });
+        }
+        try {
+          const { TokenRefreshService } = await import("@/modules/tokenRefresh");
+          await TokenRefreshService.performAutoRefreshCheck();
+        } catch {
+          // best-effort token refresh check
+        }
+        const { AiChatApi } = await import("@/api/aiChatApi");
+        // B04: hosted-pinned entry — no global provider re-resolution.
+        return new AiChatApi().openAIChatCompletionHostedPinned(request, {
+          signal,
+        });
+      },
+      broadcastTitle: (event) => {
+        sharedWorkspaceEventRouter.broadcastTitleUpdate(event);
+      },
+      providerConfigVersion: () => currentProviderConfigVersion(),
+      isForegroundBusy: () => {
+        // Titles B10: foreground priority must see DISPATCHED runs too —
+        // runs move out of the queue into the active map on dispatch.
+        const scheduler = getSharedExecutionScheduler();
+        return scheduler.queueDepth() > 0 || scheduler.activeCount() > 0;
+      },
+      requestIdFactory: () => crypto.randomUUID(),
+    });
+    if (titleRuntimeSealed) {
+      // A post-shutdown replacement singleton is born sealed (F05).
+      sharedTitleService.dispose();
+    }
+  }
+  return sharedTitleService;
+}
+
+/** Test/DB-switch hook: drop the singleton (mirrors other runtime resets). */
+export function resetSharedAIChatTitleService(): void {
+  sharedTitleService?.dispose();
+  sharedTitleService = null;
+}
+
+/**
+ * F05: process-shutdown seal. Disposes the service ONLY if it exists (never
+ * instantiates it) and permanently seals the runtime — any replacement
+ * singleton is created already-disposed, preserving process-wide
+ * no-new-dispatch semantics after exit begins.
+ */
+let titleRuntimeSealed = false;
+
+export function sealSharedAIChatTitleServiceForShutdown(): void {
+  titleRuntimeSealed = true;
+  sharedTitleService?.dispose();
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,10 @@ import {
   type RetryInfo,
 } from "@/views/utils/workspaceStreamPresenter";
 import {
+  GENERATED_TITLE_MAX_CODEPOINTS,
+  sanitizeExcerpt,
+} from "@/service/aiChatTitle/AIChatTitleText";
+import {
   cancelChatRun,
   createClientRequestId,
   loadHistoryPage,
@@ -1420,6 +1424,24 @@ export const useSelectedConversationStore = defineStore(
         metadata: { source: "chat-v2" },
       });
       syncFromPresenter();
+
+      // FR-01: immediately seed the provisional excerpt title if the conversation is new/untitled
+      const currentSummary = workspaceStore.conversationsById.get(conversationId);
+      if (
+        currentSummary &&
+        (!currentSummary.title || currentSummary.title.trim() === "") &&
+        currentSummary.titleRevision === 0
+      ) {
+        const excerpt = sanitizeExcerpt(text, GENERATED_TITLE_MAX_CODEPOINTS);
+        if (excerpt.length > 0) {
+          workspaceStore.applyTitleUpdate({
+            conversationId,
+            title: excerpt,
+            titleRevision: 0,
+            titleSource: "excerpt",
+          });
+        }
+      }
 
       // T8/D5 (audit): the optimistic row is the request's identity holder —
       // a REJECTION removes it so the draft (still in the composer) is not

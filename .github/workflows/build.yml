@@ -76,9 +76,20 @@ jobs:
             echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
             exit 1
           fi
+          hub_url="${{ secrets.VITE_PLUGIN_HUB_URL_TEST || vars.VITE_PLUGIN_HUB_URL_TEST || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}"
+          allow_http="${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -127,6 +138,8 @@ jobs:
           # memory headroom for the WiX tooling instead of hoarding a 4 GB
           # old-space ceiling.
           export NODE_OPTIONS="--max-old-space-size=3072"
+          export FORGE_SKIP_NATIVE_REBUILD=1
+          export ELECTRON_FORGE_VITE_CONCURRENT=1
           echo "Building with NODE_OPTIONS=${NODE_OPTIONS}"
 
           echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"
@@ -340,9 +353,20 @@ jobs:
             echo "::error::secrets.VITE_LOGIN_URL_TEST is empty. Add it in repo Settings > Secrets, or fork PRs cannot use secrets."
             exit 1
           fi
+          hub_url="${{ secrets.VITE_PLUGIN_HUB_URL_TEST || vars.VITE_PLUGIN_HUB_URL_TEST || secrets.VITE_PLUGIN_HUB_URL || vars.VITE_PLUGIN_HUB_URL || '' }}"
+          allow_http="${{ secrets.AIFETCHLY_ALLOW_HTTP_HUB || vars.AIFETCHLY_ALLOW_HTTP_HUB || '' }}"
+          if [[ "$hub_url" == http://* ]] && [ -z "$allow_http" ]; then
+            allow_http="1"
+          fi
           {
             echo "NODE_ENV=test"
             echo "VITE_LOGIN_URL=${{ secrets.VITE_LOGIN_URL_TEST }}"
+            if [ -n "$hub_url" ]; then
+              echo "VITE_PLUGIN_HUB_URL=$hub_url"
+            fi
+            if [ -n "$allow_http" ]; then
+              echo "AIFETCHLY_ALLOW_HTTP_HUB=$allow_http"
+            fi
           } > .env
           cp .env .env.test
           if ! grep -qE '^VITE_LOGIN_URL=.' .env; then
@@ -523,6 +547,8 @@ jobs:
           export NODE_ENV=test
           export MAKE_MAC_DMG=false
           export NODE_OPTIONS="--max-old-space-size=4096"
+          export FORGE_SKIP_NATIVE_REBUILD=1
+          export ELECTRON_FORGE_VITE_CONCURRENT=1
           rm -rf out/
 
           echo "[$(date -u +%FT%TZ)] phase: guarded electron-forge package start"

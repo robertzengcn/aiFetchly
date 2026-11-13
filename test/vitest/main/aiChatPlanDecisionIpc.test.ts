@@ -51,6 +51,10 @@ const planSpies = {
   requestPlanChanges: vi.fn(),
   listVersions: vi.fn(),
 };
+// Durable plan display rows (PRD §12.4): decision commits persist rows.
+const planRowSpies = {
+  savePlanEventMessage: vi.fn(),
+};
 vi.mock("@/modules/AIChatPlanModule", () => ({
   AIChatPlanModule: class {
     approvePlan = planSpies.approvePlan;
@@ -69,7 +73,9 @@ vi.mock("@/modules/token", () => ({
 }));
 
 vi.mock("@/modules/AIChatV2Module", () => ({
-  AIChatV2Module: class {},
+  AIChatV2Module: class {
+    savePlanEventMessage = planRowSpies.savePlanEventMessage;
+  },
 }));
 vi.mock("@/modules/AIChatToolApprovalModule", () => ({
   AIChatToolApprovalModule: class {},
@@ -180,6 +186,7 @@ beforeEach(() => {
   planSpies.rejectPlan.mockResolvedValue({ state: "rejected" });
   planSpies.requestPlanChanges.mockResolvedValue({ state: "revise" });
   planSpies.listVersions.mockResolvedValue([]);
+  planRowSpies.savePlanEventMessage.mockResolvedValue(undefined);
   queueSpies.submit.mockResolvedValue({
     pendingMessage: { pendingMessageId: 77 },
     disposition: "queued",
@@ -299,6 +306,90 @@ describe("plan decision IPC input contract (audit R2 N07)", () => {
       planId: "",
     });
     expect(bad.status).toBe(false);
+  });
+});
+
+/**
+ * PRD §12.4 (durable plan lifecycle rows): the committed decision persists
+ * the matching display row so the workspace transcript keeps the resolved
+ * receipt after any selection re-seed. A failed display row never fails the
+ * user's decision (presentation aid only, warn-not-throw).
+ */
+describe("plan decision commits persist the display row (PRD §12.4)", () => {
+  it("approve persists the plan_approved row with the committed state", async () => {
+    const committed = {
+      planId: "plan-1",
+      conversationId: "v2-a",
+      status: "approved",
+      title: "Newsletter campaign",
+      objective: "Ship it",
+      currentVersion: 3,
+    };
+    planSpies.approvePlan.mockResolvedValue(committed);
+    await callChannel(AI_CHAT_V2_APPROVE_PLAN, VALID_DECISION);
+    expect(planRowSpies.savePlanEventMessage).toHaveBeenCalledTimes(1);
+    expect(planRowSpies.savePlanEventMessage).toHaveBeenCalledWith({
+      conversationId: "v2-a",
+      eventType: "plan_approved",
+      planState: committed,
+    });
+  });
+
+  it("reject persists the plan_rejected row", async () => {
+    const committed = {
+      planId: "plan-1",
+      conversationId: "v2-a",
+      status: "rejected",
+      title: "Newsletter campaign",
+      objective: "Ship it",
+      currentVersion: 3,
+    };
+    planSpies.rejectPlan.mockResolvedValue(committed);
+    await callChannel(AI_CHAT_V2_REJECT_PLAN, {
+      ...VALID_DECISION,
+      feedback: "no",
+    });
+    expect(planRowSpies.savePlanEventMessage).toHaveBeenCalledWith({
+      conversationId: "v2-a",
+      eventType: "plan_rejected",
+      planState: committed,
+    });
+  });
+
+  it("request-changes persists the plan_changes_requested row", async () => {
+    const committed = {
+      planId: "plan-1",
+      conversationId: "v2-a",
+      status: "awaiting_approval",
+      title: "Newsletter campaign",
+      objective: "Ship it",
+      currentVersion: 3,
+    };
+    planSpies.requestPlanChanges.mockResolvedValue(committed);
+    await callChannel(AI_CHAT_V2_REQUEST_PLAN_CHANGES, {
+      ...VALID_DECISION,
+      feedback: "narrow it",
+    });
+    expect(planRowSpies.savePlanEventMessage).toHaveBeenCalledWith({
+      conversationId: "v2-a",
+      eventType: "plan_changes_requested",
+      planState: committed,
+    });
+  });
+
+  it("a failed display-row write never fails the decision itself", async () => {
+    planRowSpies.savePlanEventMessage.mockRejectedValue(
+      new Error("disk hiccup")
+    );
+    const result = await callChannel(AI_CHAT_V2_APPROVE_PLAN, VALID_DECISION);
+    expect(result.status).toBe(true);
+    expect(planSpies.approvePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("a null decision result writes no display row", async () => {
+    planSpies.approvePlan.mockResolvedValue(null);
+    await callChannel(AI_CHAT_V2_APPROVE_PLAN, VALID_DECISION);
+    expect(planRowSpies.savePlanEventMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -5260,7 +5260,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
         "Open the site first and hand control to the user for sign-in when needed. " +
         "Never invent an account id. Preserve the requested hostname. " +
         "Returns a session_id used by every other browser_* tool. " +
-        "Requires the managed browser to be enabled in System Settings.",
+        "Enabled by default in System Settings (unless manually turned off).",
       parameters: {
         type: "object",
         properties: {

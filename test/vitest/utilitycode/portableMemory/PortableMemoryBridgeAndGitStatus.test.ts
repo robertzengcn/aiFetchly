@@ -114,6 +114,34 @@ describe("PortableWorkspaceMemoryBridgeService", () => {
     expect(result.applied).toBe(true);
     expect(fs.existsSync(path.join(root, "CLAUDE.md"))).toBe(false);
   });
+
+  it("previews and applies replacement for an outdated bridge block", async () => {
+    const outdated = "<!-- aifetchly:project-memory:start -->\nOld content\n<!-- aifetchly:project-memory:end -->\n# Tail\n";
+    fs.writeFileSync(path.join(root, "AGENTS.md"), outdated);
+    const preview = await service.preview(root, "AGENTS.md");
+    expect(preview.action).toBe("replace");
+    expect(preview.unifiedDiff).toContain("-Old content");
+    expect(preview.unifiedDiff).toContain("+## Project memory");
+
+    const result = await service.apply({ canonicalRoot: root, target: "AGENTS.md" });
+    expect(result.applied).toBe(true);
+    const content = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
+    expect(content).toContain("## Project memory");
+    expect(content).toContain("# Tail");
+  });
+
+  it("handles replacement when bridge has no trailing newline", async () => {
+    const outdatedNoNewline = "<!-- aifetchly:project-memory:start -->\nOld content\n<!-- aifetchly:project-memory:end -->";
+    fs.writeFileSync(path.join(root, "AGENTS.md"), outdatedNoNewline);
+    const preview = await service.preview(root, "AGENTS.md");
+    expect(preview.action).toBe("replace");
+
+    const result = await service.apply({ canonicalRoot: root, target: "AGENTS.md" });
+    expect(result.applied).toBe(true);
+    const content = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
+    expect(content).toContain("## Project memory");
+    expect(content.endsWith("\n")).toBe(true);
+  });
 });
 
 async function bridgeBlock(): Promise<string> {

@@ -2550,6 +2550,14 @@ export default {
     draft_label: "Brouillon — révision requise",
   },
   aiProvider: {
+    chatTitles: {
+      section: "Titres des conversations",
+      description: "Le nommage automatique utilise un court extrait de la conversation et peut engendrer une légère utilisation du fournisseur.",
+      autoToggle: "Nommer automatiquement les nouvelles conversations",
+      hostedModelHint: "Le mode hébergé utilise le modèle léger du service.",
+      customModelLabel: "Modèle de titres (facultatif)",
+      customModelHint: "Sert à nommer automatiquement les nouvelles conversations. Utilise votre fournisseur configuré.",
+    },
     title: "Fournisseur d'IA",
     description:
       "Les fournisseurs personnalisés peuvent alimenter AI Chat avec votre propre modèle. Les fonctionnalités d'IA hébergée aiFetchly nécessitent toujours un abonnement.",
@@ -3521,7 +3529,7 @@ export default {
       git_ref: "Branche / tag / commit (optionnel)",
       github_url: "URL de dépôt ou d'asset de release GitHub",
       github_ref: "Branche / tag (optionnel)",
-      npm_package: "Nom du paquet (ex. @scope/pkg)",
+      npm_package: "Nom du paquet (ex. {'@'}scope/pkg)",
       npm_version: "Version (optionnel)",
       npm_registry: "URL du registre (optionnel, HTTPS)",
       npm_token: "Jeton d'authentification (optionnel, non stocké)",
@@ -4012,6 +4020,21 @@ export default {
       duplicate: "Dupliquer la conversation",
       deleteConfirm:
         "Supprimer cette conversation ? Tous les messages et artefacts générés seront supprimés. Action irréversible.",
+    },
+    renameDialog: {
+      title: "Renommer la conversation",
+      label: "Nom de la conversation",
+      save: "Enregistrer",
+      cancel: "Annuler",
+      limitHint: "200 caractères max",
+      errorEmpty: "Saisissez un nom pour cette conversation",
+      errorTooLong: "Le nom ne doit pas dépasser 200 caractères",
+      errorInvalid: "Le nom contient des caractères non pris en charge",
+      errorSaveFailed: "Impossible de renommer. Veuillez réessayer.",
+      errorUnavailable: "Cette conversation n'est plus disponible",
+      saving: "Enregistrement…",
+      renameAction: "Renommer la conversation",
+      menuButtonLabel: "Actions de la conversation",
     },
     runStrip: {
       goal: "Objectif : {objective}",

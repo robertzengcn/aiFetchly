@@ -95,6 +95,7 @@ This is the **release** path. The final `publish-github-release` job:
 ### Required secrets (production)
 
 - `VITE_LOGIN_URL_PROD`
+- `VITE_PLUGIN_HUB_URL_PROD` (or `VITE_PLUGIN_HUB_URL`, optional: defaults to `https://plugins.aifetchly.com` if unset)
 - `MACOS_CERTIFICATE_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`,
   `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` (macOS signing/notarization —
   still required)

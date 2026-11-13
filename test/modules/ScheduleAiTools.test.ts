@@ -144,7 +144,7 @@ describe("ScheduleAiTools", () => {
         {
           code: "too_small" as const,
           minimum: 0,
-          type: "number",
+          origin: "number",
           inclusive: true,
           exact: false,
           message: "Number must be greater than or equal to 0",
@@ -153,7 +153,7 @@ describe("ScheduleAiTools", () => {
         {
           code: "too_big" as const,
           maximum: 100,
-          type: "number",
+          origin: "number",
           inclusive: true,
           exact: false,
           message: "Number must be less than or equal to 100",

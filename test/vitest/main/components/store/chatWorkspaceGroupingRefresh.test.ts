@@ -30,7 +30,8 @@ import type {
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
-  subscribeSummaryEvents: vi.fn(),
+  subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
 }));
 
 import { bootstrapWorkspace, subscribeSummaryEvents } from "@/views/api/aiChatWorkspace";
@@ -55,6 +56,7 @@ function summary(
     conversationId,
     workspaceKey: null,
     title: `Title ${conversationId}`,
+    titleRevision: 0,
     preview: "",
     lastActivityAt: "2026-11-02T00:00:00.000Z",
     unread: false,

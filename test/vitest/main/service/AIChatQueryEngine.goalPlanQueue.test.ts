@@ -57,6 +57,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
       createConversationIfNeeded: vi.fn().mockReturnValue("v2-plan-queue"),
       getDefaultSystemPrompt: vi.fn().mockReturnValue("You are helpful."),
       mergeMessageMetadata: vi.fn().mockResolvedValue(undefined),
+      stampUserMessageTurnIdentity: vi.fn().mockResolvedValue(undefined),
     };
   }),
 }));

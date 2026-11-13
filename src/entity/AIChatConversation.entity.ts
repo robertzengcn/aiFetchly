@@ -40,30 +40,68 @@ export class AIChatConversationEntity extends AuditableEntity {
   @Column("boolean", { nullable: false, default: false })
   titleIsUserSet!: boolean;
 
-  /** Short normalized excerpt for navigation. No tool bodies or secrets. */
+  /**
+   * Provenance of `title`: placeholder | excerpt | ai | user | legacy.
+   * Defaults classify pre-existing rows as legacy (titles PRD §4).
+   */
   @Order(5)
+  @Column("varchar", { length: 16, nullable: false, default: "legacy" })
+  titleSource!: string;
+
+  /** Monotonic version of the visible title; guards renderer reconciliation. */
+  @Order(6)
+  @Column("int", { nullable: false, default: 0 })
+  titleRevision!: number;
+
+  /** Conversation-content lifecycle; incremented when history is cleared. */
+  @Order(7)
+  @Column("int", { nullable: false, default: 0 })
+  titleEpoch!: number;
+
+  /** One-attempt lifecycle state within an epoch (titles design §4). */
+  @Order(8)
+  @Column("varchar", { length: 16, nullable: false, default: "suppressed" })
+  titleGenerationStatus!: string;
+
+  /** 0 or 1 within an epoch; incremented atomically by the claim (§5.1). */
+  @Order(9)
+  @Column("int", { nullable: false, default: 0 })
+  titleAttemptCount!: number;
+
+  /** Unique claim identity for the current attempt; never reused. */
+  @Order(10)
+  @Column("varchar", { length: 64, nullable: true })
+  titleRequestId!: string | null;
+
+  /** Bounded internal outcome such as timeout/invalid_output/interrupted. */
+  @Order(11)
+  @Column("varchar", { length: 32, nullable: true })
+  titleFailureCode!: string | null;
+
+  /** Short normalized excerpt for navigation. No tool bodies or secrets. */
+  @Order(12)
   @Column("varchar", { length: 300, nullable: false, default: "" })
   preview!: string;
 
-  @Order(6)
+  @Order(13)
   @Column("int", { nullable: false, default: 0 })
   messageCount!: number;
 
-  @Order(7)
+  @Order(14)
   @Column("datetime", { nullable: true })
   lastMessageAt!: Date | null;
 
   /** Timestamp of the newest persisted assistant result (drives unread). */
-  @Order(8)
+  @Order(15)
   @Column("datetime", { nullable: true })
   lastResultAt!: Date | null;
 
   /** Monotonic read marker advanced only after the newest page is displayed. */
-  @Order(9)
+  @Order(16)
   @Column("datetime", { nullable: true })
   lastReadAt!: Date | null;
 
-  @Order(10)
+  @Order(17)
   @Column("datetime", { nullable: true })
   archivedAt!: Date | null;
 

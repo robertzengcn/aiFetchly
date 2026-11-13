@@ -2570,6 +2570,14 @@ export default {
     draft_label: "Borrador — requiere revisión",
   },
   aiProvider: {
+    chatTitles: {
+      section: "Títulos de chats",
+      description: "El nombramiento automático usa un fragmento breve de la conversación y puede generar un pequeño uso del proveedor.",
+      autoToggle: "Nombrar automáticamente los nuevos chats",
+      hostedModelHint: "El modo alojado usa el modelo ligero del servicio.",
+      customModelLabel: "Modelo de títulos (opcional)",
+      customModelHint: "Se usa para nombrar chats nuevos automáticamente. Usa tu proveedor configurado.",
+    },
     title: "Proveedor de IA",
     description:
       "Los proveedores personalizados pueden alimentar el AI Chat con tu propio modelo. Las funciones de IA alojada de aiFetchly siguen requiriendo una suscripción.",
@@ -3544,7 +3552,7 @@ export default {
       git_ref: "Rama / etiqueta / commit (opcional)",
       github_url: "URL de repositorio o asset de release de GitHub",
       github_ref: "Rama / etiqueta (opcional)",
-      npm_package: "Nombre del paquete (p. ej. @scope/pkg)",
+      npm_package: "Nombre del paquete (p. ej. {'@'}scope/pkg)",
       npm_version: "Versión (opcional)",
       npm_registry: "URL del registro (opcional, HTTPS)",
       npm_token: "Token de autenticación (opcional, no se guarda)",
@@ -4032,6 +4040,21 @@ export default {
       deleteConfirm:
         "¿Eliminar esta conversación? Se quitarán todos los mensajes y artefactos generados. No se puede deshacer.",
       delete: "Eliminar chat",
+    },
+    renameDialog: {
+      title: "Cambiar nombre del chat",
+      label: "Nombre del chat",
+      save: "Guardar",
+      cancel: "Cancelar",
+      limitHint: "Máx. 200 caracteres",
+      errorEmpty: "Escribe un nombre para este chat",
+      errorTooLong: "El nombre no puede superar los 200 caracteres",
+      errorInvalid: "El nombre contiene caracteres no admitidos",
+      errorSaveFailed: "No se pudo cambiar el nombre. Inténtalo de nuevo.",
+      errorUnavailable: "Este chat ya no está disponible",
+      saving: "Guardando…",
+      renameAction: "Cambiar nombre del chat",
+      menuButtonLabel: "Acciones de la conversación",
     },
     runStrip: {
       goal: "Objetivo: {objective}",

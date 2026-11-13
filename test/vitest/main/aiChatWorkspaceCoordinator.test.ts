@@ -970,6 +970,8 @@ describe("summary event privacy (FR-022)", () => {
       "sourceRunId",
       "runOwner",
       "title",
+      // Chat-titles design §10.3: bounded integer title version — no content.
+      "titleRevision",
       "reason",
     ]);
     for (const summary of win.summaries) {

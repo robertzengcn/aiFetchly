@@ -33,6 +33,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
     getConversationMessages: mockGetConversationMessages,
     getRecentMessages: vi.fn().mockResolvedValue([]),
     saveUserMessage: mockSaveUserMessage,
+stampUserMessageTurnIdentity: vi.fn().mockResolvedValue(undefined),
     saveAssistantMessage: mockSaveAssistantMessage,
     saveToolCallMessage: mockSaveToolCallMessage,
     saveToolResultMessage: mockSaveToolResultMessage,
@@ -383,7 +384,7 @@ describe("required-write barriers on real loop boundaries (TODO-01/02)", () => {
       request: { message: "go", conversationId: "v2-T02" },
       eventSink: makeEventCollector().sink,
     });
-    let continuationStarted = false;
+    const continuationStarted = false;
     let resolveSave!: (v: unknown) => void;
     mockSaveToolResultMessage.mockImplementation(
       () => new Promise((resolve) => { resolveSave = resolve; })

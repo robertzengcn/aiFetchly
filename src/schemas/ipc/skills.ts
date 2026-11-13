@@ -27,7 +27,7 @@ export const skillGrantPermissionInputSchema = lazySchema(() =>
  * Accept legacy `enable` from older renderer builds.
  */
 export const skillToggleInputSchema = lazySchema(
-  (): z.ZodType<SkillToggleInput, z.ZodTypeDef, unknown> =>
+  (): z.ZodType<SkillToggleInput, unknown> =>
     z.preprocess((value) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return value

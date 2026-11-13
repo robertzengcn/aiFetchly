@@ -17,9 +17,19 @@ import {
   MAX_RESPONSE_BODY_BYTES,
   MAX_RETRY_AFTER_MS,
 } from "@/modules/lib/httpResponseError";
+import { triggerSignoutOnAuthShapedFailure } from "@/service/AuthSessionExpiryGuard";
 // Re-export for callers (and tests) that still import the error type from
 // this module's pre-extraction location.
 export { HttpResponseError } from "@/modules/lib/httpResponseError";
+
+/**
+ * Titles B05 (design §5.1/§8.5): strict single-dispatch requests opt out of
+ * auth-refresh replay. A 401/403 surfaces as a typed error instead of a
+ * second POST — an already-attempted completion is never replayed.
+ */
+export interface NoReplayRequestInit extends RequestInit {
+  noAuthReplay?: boolean;
+}
 
 /**
  * Decide whether a refresh failure is auth-shaped versus a transient/network
@@ -44,7 +54,12 @@ export function isRefreshTokenInvalidError(error: unknown): boolean {
     msg.includes("refresh token has expired") ||
     msg.includes("refresh token is invalid") ||
     msg.includes("refresh token rejected") ||
-    msg.includes("http error: 401")
+    msg.includes("failed to refresh access token") ||
+    msg.includes("token refresh failed") ||
+    msg.includes("failed to refresh token") ||
+    msg.includes("no row found") ||
+    msg.includes("http error: 401") ||
+    msg.includes("http error: 403")
   );
 }
 
@@ -145,9 +160,11 @@ export class HttpClient {
    * in-flight refresh promise, so the backend's refresh-token rotation never
    * races.
    *
-   * Sign-out policy: refresh failures never clear local auth state. The current
-   * remote request fails, and later requests can retry refresh when the backend
-   * or network recovers.
+   * Sign-out policy: definitive auth-shaped refresh failures (refresh token
+   * rejected/expired, retry still 401/403, no refresh token stored) trigger a
+   * sign-out via {@link triggerSignoutOnAuthShapedFailure} so the user can
+   * re-login. Transient failures (network, HTTP 5xx) never clear local auth
+   * state — later requests can retry refresh when the backend recovers.
    *
    * Prevents infinite refresh loops by checking the isRetry flag.
    */
@@ -166,12 +183,15 @@ export class HttpClient {
 
     // Prevent infinite refresh loops: if we already retried once and the
     // retried request still hit 401/403, refresh did not help. Fail this
-    // request but keep local auth state for offline/local features.
+    // request; the session cannot recover → sign out so the user can
+    // re-login (session-expiry re-login requirement).
     if (isRetry) {
-      log.warn("Token refresh retry still failed; keeping local session");
-      throw new Error(
+      log.warn("Token refresh retry still failed; triggering sign-out");
+      const err = new Error(
         "Authentication failed after token refresh retry (HTTP 401/403)."
       );
+      triggerSignoutOnAuthShapedFailure(err);
+      throw err;
     }
 
     try {
@@ -201,10 +221,11 @@ export class HttpClient {
     } catch (error) {
       log.error("Token refresh error:", error);
 
-      // Do not sign out on refresh failure. Auth-shaped failures can be caused
-      // by backend/proxy instability; keep local session state and fail only
-      // this remote request.
+      // Definitive auth-shaped refresh failure (refresh token rejected /
+      // expired): the session cannot recover → sign out so the user can
+      // re-login. Transient failures (network, 5xx) keep the local session.
       if (isRefreshTokenInvalidError(error)) {
+        triggerSignoutOnAuthShapedFailure(error);
         throw error;
       }
 
@@ -240,6 +261,11 @@ export class HttpClient {
     // 401 the same as 403 here — otherwise a genuinely expired access token
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
+      // Titles B05: never replay a strict single-dispatch request after a
+      // token refresh — the retry would spend a second provider call.
+      if ((options as NoReplayRequestInit).noAuthReplay === true) {
+        throw await this._buildHttpResponseError(res);
+      }
       log.warn(`Received ${res.status} - Attempting token refresh`);
       const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
@@ -275,14 +301,17 @@ export class HttpClient {
         // Try to refresh token and retry request
         return this._refreshTokenAndRetry(endpoint, options, isRetry, absolute);
       } else {
-        // No refresh token available. Fail this request but keep local auth
-        // state so local features remain usable.
+        // No refresh token stored: the session cannot recover via refresh.
+        // Sign out so the user can re-login (session-expiry re-login
+        // requirement) — local features keep working until tokens clear.
         log.warn(
           "[HttpClient] No refresh token available; keeping local session"
         );
-        throw new Error(
+        const err = new Error(
           `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );
+        triggerSignoutOnAuthShapedFailure(err);
+        throw err;
       }
     }
 
@@ -495,7 +524,7 @@ export class HttpClient {
   public async postJson<T = any>(
     endpoint: string,
     data: unknown,
-    options = {}
+    options: NoReplayRequestInit = {}
   ): Promise<T> {
     // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
     // default to the standard JSON accept/content-type. The hard-coded
@@ -552,13 +581,16 @@ export class HttpClient {
         );
       }
 
-      // Prevent infinite refresh loops: already retried once. Fail this request
-      // but keep local auth state.
+      // Prevent infinite refresh loops: already retried once. Fail this
+      // request; the session cannot recover → sign out so the user can
+      // re-login (session-expiry re-login requirement).
       if (isRetry) {
-        log.warn("Token refresh retry still failed; keeping local session");
-        throw new Error(
+        log.warn("Token refresh retry still failed; triggering sign-out");
+        const err = new Error(
           `Authentication failed after token refresh retry (HTTP ${res.status}).`
         );
+        triggerSignoutOnAuthShapedFailure(err);
+        throw err;
       }
 
       // Check if refresh token exists
@@ -592,9 +624,11 @@ export class HttpClient {
         } catch (error) {
           log.error("Token refresh error:", error);
 
-          // Do not sign out on refresh failure. Keep local session state and
-          // fail only this stream request.
+          // Definitive auth-shaped refresh failure (refresh token rejected /
+          // expired): the session cannot recover → sign out so the user can
+          // re-login. Transient failures (network, 5xx) keep the session.
           if (isRefreshTokenInvalidError(error)) {
+            triggerSignoutOnAuthShapedFailure(error);
             throw error;
           }
 
@@ -602,12 +636,15 @@ export class HttpClient {
           throw error;
         }
       } else {
-        // No refresh token available. Fail this request but keep local auth
-        // state so local features remain usable.
+        // No refresh token stored: the session cannot recover via refresh.
+        // Sign out so the user can re-login (session-expiry re-login
+        // requirement).
         log.warn("No refresh token available; keeping local session");
-        throw new Error(
+        const err = new Error(
           `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );
+        triggerSignoutOnAuthShapedFailure(err);
+        throw err;
       }
     }
 

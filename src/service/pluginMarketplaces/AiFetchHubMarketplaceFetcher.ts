@@ -301,11 +301,13 @@ export class AiFetchHubMarketplaceFetcher implements PluginMarketplaceFetcher {
     const isLocalDev =
       parsedBase.protocol === "http:" &&
       (parsedBase.hostname === "localhost" ||
-        parsedBase.hostname === "127.0.0.1");
+        parsedBase.hostname === "127.0.0.1" ||
+        process.env.NODE_ENV === "development" ||
+        process.env.AIFETCHLY_ALLOW_HTTP_HUB === "1");
     if (parsedBase.protocol !== "https:" && !isLocalDev) {
       return fail(
         "marketplace-source-invalid",
-        "Plugin Hub URL must be https (or localhost for dev)."
+        "Plugin Hub URL must be https (or localhost/development for dev)."
       );
     }
 

@@ -21,6 +21,7 @@ const bootstrapWorkspaceMock = vi.hoisted(() => vi.fn());
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: bootstrapWorkspaceMock,
   subscribeSummaryEvents: vi.fn(() => () => undefined),
+  subscribeTitleEvents: vi.fn(() => () => undefined),
 }));
 
 const i18n = createI18n({
@@ -30,6 +31,10 @@ const i18n = createI18n({
     en: {
       workspaceChat: {
         newChat: "New chat",
+        renameDialog: {
+          renameAction: "Rename chat",
+          menuButtonLabel: "Conversation actions",
+        },
         automations: "Automations",
         insights: "Insights",
         knowledgeLibrary: "Knowledge Library",
@@ -137,6 +142,7 @@ describe("AiChatWorkspaceSidebar Other chats folder", () => {
       conversationId,
       workspaceKey: null,
       title: `Chat ${conversationId}`,
+      titleRevision: 0,
       preview: "Preview",
       runtimeStatus: "idle",
       attention: "none",
@@ -231,6 +237,7 @@ describe("AiChatWorkspaceSidebar current-route vs selection semantics (FR-SHELL-
       conversationId,
       workspaceKey: null,
       title: `Chat ${conversationId}`,
+      titleRevision: 0,
       preview: "Preview",
       runtimeStatus: "idle",
       attention: "none",
@@ -336,6 +343,97 @@ describe("AiChatWorkspaceSidebar current-route vs selection semantics (FR-SHELL-
     ).toBe("true");
   });
 });
+describe("AiChatWorkspaceSidebar row actions (chat titles)", () => {
+  function mountSidebarWithMenus() {
+    return mount(AiChatWorkspaceSidebar, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          AccountMenu: { template: '<div data-testid="account-menu-stub" />' },
+          "v-menu": {
+            template:
+              '<div class="menu-stub"><slot name="activator" :props="{ }" /><slot /></div>',
+          },
+          "v-list": {
+            template: '<div role="menu"><slot /></div>',
+          },
+          "v-list-item": {
+            template:
+              '<div role="menuitem" :data-testid="dataTestId" @click="$emit(\'click\')"><slot />{{ title }}</div>',
+            props: ["title", "prependIcon", "dataTestId"],
+            emits: ["click"],
+          },
+          "v-icon": { template: "<i />" },
+        },
+      },
+    });
+  }
+
+  function rowSummary(
+    conversationId: string,
+    workspaceKey: string | null
+  ): WorkspaceConversationSummary {
+    return {
+      conversationId,
+      workspaceKey,
+      title: `Chat ${conversationId}`,
+      titleRevision: 0,
+      preview: "Preview",
+      runtimeStatus: "idle",
+      attention: "none",
+      unread: false,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      activeRunId: null,
+    };
+  }
+
+  it("renders a sibling actions menu button for unassigned and grouped rows", async () => {
+    const store = useChatWorkspaceStore();
+    store.unassigned = [rowSummary("u1", null)];
+    store.workspaces = [
+      {
+        workspaceKey: "ws-a",
+        displayName: "Workspace A",
+        canonicalRootPath: null,
+        approvalState: "approved",
+        conversations: [rowSummary("g1", "ws-a")],
+      },
+    ];
+    const wrapper = mountSidebarWithMenus();
+    // The unassigned folder defaults collapsed — expand it first.
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="workspace-row-menu-u1"]').exists()
+    ).toBe(true);
+    expect(
+      wrapper.find('[data-testid="workspace-row-menu-g1"]').exists()
+    ).toBe(true);
+    // The actions button must NOT join the data-nav-row roving-focus chain.
+    const menuButton = wrapper.find(
+      '[data-testid="workspace-row-menu-u1"]'
+    );
+    expect(menuButton.attributes("data-nav-row")).toBeUndefined();
+  });
+
+  it("rename menu action emits the row's conversation id, not the selected one", async () => {
+    const store = useChatWorkspaceStore();
+    store.unassigned = [rowSummary("u1", null), rowSummary("u2", null)];
+    const wrapper = mountSidebarWithMenus();
+    // Select u1 (via store selection), then expand and use u2's menu.
+    store.setSelected("u1");
+    await wrapper.get('[data-nav-row="unassigned"]').trigger("click");
+    await flushPromises();
+    await wrapper
+      .find('[data-testid="workspace-row-rename-u2"]')
+      .trigger("click");
+    const renameEvents = wrapper.emitted("rename");
+    expect(renameEvents).toEqual([["u2"]]);
+    // Navigation was not triggered by the actions menu.
+    expect(wrapper.emitted("select")).toBeUndefined();
+    expect(push).not.toHaveBeenCalled();
+  });
+});
 
 describe("AiChatWorkspaceSidebar Project header (manual refresh + collapse)", () => {
   function conversation(conversationId: string): WorkspaceConversationSummary {
@@ -343,6 +441,7 @@ describe("AiChatWorkspaceSidebar Project header (manual refresh + collapse)", ()
       conversationId,
       workspaceKey: null,
       title: `Chat ${conversationId}`,
+      titleRevision: 0,
       preview: "Preview",
       runtimeStatus: "idle",
       attention: "none",

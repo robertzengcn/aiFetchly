@@ -8,6 +8,8 @@ vi.mock("@/views/components/aiChatWorkspace/WorkspaceStatusIndicator.vue", () =>
   default: { template: "<span />" },
 }));
 
+const REPORT_UNAVAILABLE = "Conversation reporting is currently unavailable.";
+
 function mountHeader(
   runtimeStatus: ConversationRuntimeStatus,
   extra: Partial<{
@@ -15,6 +17,9 @@ function mountHeader(
     loopStatus: string | null;
     hasConversation: boolean;
     inspectorOpen: boolean;
+    reportEnabled: boolean;
+    reportLoading: boolean;
+    reportDisabledReason: string;
   }> = {}
 ) {
   const i18n = createI18n({
@@ -30,6 +35,7 @@ function mountHeader(
             loopPaused: "Scheduled loop paused",
           },
         },
+        aiConversationReport: { action: "Report conversation" },
       },
     },
   });
@@ -41,6 +47,9 @@ function mountHeader(
       activeToolCount: 0,
       inspectorOpen: false,
       hasConversation: true,
+      reportEnabled: true,
+      reportLoading: false,
+      reportDisabledReason: "",
       ...extra,
     },
     global: {
@@ -262,5 +271,65 @@ describe("AiChatConversationHeader goal/loop chips + sidebar toggle placement", 
     expect(/\bmin-width:\s*0;/.test(chipRule)).toBe(true);
     expect(/\bflex-shrink:\s*0;/.test(chipRule)).toBe(false);
     expect(/\bmax-width:/.test(chipRule)).toBe(true);
+  });
+});
+
+/**
+ * Move-conversation-report-into-overflow-menu (2026-11-03): the report
+ * action lives in the "..." menu as a non-destructive item. It stays
+ * visible but disabled with the reason announced as the item subtitle
+ * (PRD §11.4): Vuetify disabled list items are pointer-events:none, so a
+ * hover tooltip cannot carry the reason.
+ */
+describe("AiChatConversationHeader report conversation entry", () => {
+  it("renders the report item and emits report on click when enabled", async () => {
+    const wrapper = mountHeader("idle");
+    const item = wrapper.get('[data-testid="workspace-overflow-report"]');
+    expect(item.attributes("title")).toBe("Report conversation");
+    await item.trigger("click");
+    expect(wrapper.emitted("report")).toHaveLength(1);
+  });
+
+  it("sits in the non-destructive section, above the divider (PRD §11.5)", () => {
+    const wrapper = mountHeader("idle");
+    const siblings = Array.from(
+      wrapper.get('[data-testid="workspace-overflow-report"]')
+        .element.parentElement?.children ?? []
+    );
+    const reportIdx = siblings.findIndex(
+      (el) =>
+        (el as HTMLElement).getAttribute?.("data-testid") ===
+        "workspace-overflow-report"
+    );
+    expect(reportIdx).toBeGreaterThan(-1);
+    const dividerIdx = siblings.findIndex((el) => el.tagName === "HR");
+    expect(reportIdx).toBeLessThan(dividerIdx);
+  });
+
+  it("stays visible but disabled with the reason announced when reporting is unavailable", () => {
+    const wrapper = mountHeader("idle", {
+      reportEnabled: false,
+      reportDisabledReason: REPORT_UNAVAILABLE,
+    });
+    const item = wrapper.get('[data-testid="workspace-overflow-report"]');
+    expect(item.attributes("disabled")).toBe("true");
+    expect(item.attributes("aria-disabled")).toBe("true");
+    expect(item.attributes("subtitle")).toBe(REPORT_UNAVAILABLE);
+  });
+
+  it("disables the item while capability fetch is in flight", () => {
+    const wrapper = mountHeader("idle", { reportLoading: true });
+    const item = wrapper.get('[data-testid="workspace-overflow-report"]');
+    expect(item.attributes("disabled")).toBe("true");
+    expect(item.attributes("aria-disabled")).toBe("true");
+  });
+
+  it("renders no reason subtitle and stays clickable when enabled", () => {
+    const wrapper = mountHeader("idle");
+    const item = wrapper.get('[data-testid="workspace-overflow-report"]');
+    // Unstubbed custom element renders :disabled="false" as disabled="false".
+    expect(item.attributes("disabled")).toBe("false");
+    expect(item.attributes("aria-disabled")).toBe("false");
+    expect(item.attributes("subtitle")).toBeUndefined();
   });
 });

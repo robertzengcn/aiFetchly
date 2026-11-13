@@ -553,6 +553,8 @@ export const AI_CHAT_WORKSPACE_ACTIVITY = "ai-chat-workspace:activity";
 /** Main→Renderer: redacted sidebar projection updates (no content bodies). */
 export const AI_CHAT_WORKSPACE_SUMMARY_EVENT =
   "ai-chat-workspace:summary-event";
+/** Main→Renderer: revisioned title-only updates (chat-titles design §10.2). */
+export const AI_CHAT_WORKSPACE_TITLE_UPDATED = "ai-chat-workspace:title-updated";
 /** Main→Renderer: selected-conversation detailed run events. */
 export const AI_CHAT_WORKSPACE_DETAIL_EVENT = "ai-chat-workspace:detail-event";
 /** Rollout flag read/write (PRD §33): redesign on/off with rollback. */
