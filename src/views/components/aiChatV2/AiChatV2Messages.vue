@@ -50,11 +50,20 @@
       <div
         v-if="showTypingIndicator"
         class="v2-messages__typing"
-        :aria-label="t('aiChatV2.thinking') || 'AI is thinking…'"
+        data-testid="ai-chat-working-indicator"
+        :aria-label="t('aiChatV2.ai_working') || 'Working…'"
+        role="status"
       >
-        <span class="v2-messages__typing-dot" />
-        <span class="v2-messages__typing-dot" />
-        <span class="v2-messages__typing-dot" />
+        <v-progress-circular
+          indeterminate
+          size="14"
+          width="2"
+          color="primary"
+          class="mr-2"
+        />
+        <span class="v2-messages__working-text">
+          {{ t("aiChatV2.ai_working") || "Working…" }}
+        </span>
       </div>
       <div
         v-if="retryInfo"
@@ -355,37 +364,17 @@ defineExpose({ scrollToBottomForce });
 .v2-messages__typing {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 6px 12px;
   margin-top: 8px;
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 12px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 16px;
   width: fit-content;
 }
-.v2-messages__typing-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.4);
-  animation: v2-typing-bounce 1.2s infinite ease-in-out;
-}
-.v2-messages__typing-dot:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.v2-messages__typing-dot:nth-child(3) {
-  animation-delay: 0.3s;
-}
-@keyframes v2-typing-bounce {
-  0%,
-  60%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.5;
-  }
-  30% {
-    transform: translateY(-4px);
-    opacity: 1;
-  }
+.v2-messages__working-text {
+  line-height: 1;
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 .v2-messages__retry {
   display: inline-flex;

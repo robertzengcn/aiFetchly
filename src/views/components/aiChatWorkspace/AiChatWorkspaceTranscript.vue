@@ -140,6 +140,24 @@
           @submit="onPlanAnswer"
         />
       </template>
+      <div
+        v-if="isWorking"
+        class="workspace-transcript__working"
+        data-testid="workspace-transcript-working"
+        role="status"
+        :aria-label="t('aiChatV2.ai_working') || 'Working…'"
+      >
+        <v-progress-circular
+          indeterminate
+          size="14"
+          width="2"
+          color="primary"
+          class="mr-2"
+        />
+        <span class="workspace-transcript__working-text">
+          {{ t("aiChatV2.ai_working") || "Working…" }}
+        </span>
+      </div>
       <AiChatV2StreamStatus
         v-if="streamStatus === 'error' && errorMessage"
         status="error"
@@ -206,6 +224,8 @@ const props = defineProps<{
   activeAssistantMessageId: string | null;
   streamStatus: "idle" | "streaming" | "cancelled" | "error";
   errorMessage?: string;
+  /** Explicit remote working state (running turn, tool rounds, stream active). */
+  isRemoteWorking?: boolean;
   showReasoning?: boolean;
   /** FR-059: submission error for the active plan-question flow. */
   planSubmitError?: string | null;
@@ -266,6 +286,10 @@ const emit = defineEmits<{
     }
   ): void;
 }>();
+
+const isWorking = computed(
+  () => props.isRemoteWorking ?? (props.streamStatus === "streaming")
+);
 
 type ProjectedItem =
   | { kind: "user-message"; key: string; message: ChatV2MessageView }
@@ -519,7 +543,29 @@ const projectedItems = computed<ProjectedItem[]>(() => {
     if (msg.role === "user") {
       result.push({ kind: "user-message", key: msg.id, message: msg });
     } else {
-      result.push({ kind: "assistant-message", key: msg.id, message: msg });
+      const hasContent = Boolean(msg.content && msg.content.length > 0);
+      const hasReasoning = Boolean(
+        props.showReasoning &&
+          msg.metadata?.reasoning?.content &&
+          msg.metadata.reasoning.content.length > 0
+      );
+      const hasActionableMetadata = Boolean(
+        msg.metadata?.error ||
+          msg.metadata?.cancelled ||
+          msg.metadata?.artifact ||
+          msg.metadata?.toolResult ||
+          msg.metadata?.toolCallId ||
+          (Array.isArray(msg.metadata?.generatedImages) &&
+            msg.metadata.generatedImages.length > 0) ||
+          (Array.isArray(msg.metadata?.generatedImageReferences) &&
+            msg.metadata.generatedImageReferences.length > 0) ||
+          (Array.isArray(msg.metadata?.attachments) &&
+            msg.metadata.attachments.length > 0) ||
+          msg.metadata?.planStateView
+      );
+      if (hasContent || hasReasoning || hasActionableMetadata) {
+        result.push({ kind: "assistant-message", key: msg.id, message: msg });
+      }
     }
     i += 1;
   }
@@ -671,7 +717,7 @@ watch(
 watch(
   () => {
     const last = props.messages[props.messages.length - 1];
-    return `${props.messages.length}:${last ? last.content.length : 0}`;
+    return `${props.messages.length}:${last ? last.content.length : 0}:${isWorking.value ? 1 : 0}`;
   },
   () => {
     void nextTick().then(onScroll);
@@ -699,6 +745,20 @@ onMounted(onScroll);
 }
 .workspace-transcript > :deep(*) {
   flex-shrink: 0;
+}
+.workspace-transcript__working {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 6px 12px;
+  margin-top: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 16px;
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+.workspace-transcript__working-text {
+  line-height: 1;
 }
 .workspace-transcript__scroll-down {
   position: absolute;

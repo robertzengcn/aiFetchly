@@ -1,14 +1,6 @@
 <template>
   <div class="v2-stream-status" v-if="visible">
-    <v-progress-circular
-      v-if="status === 'streaming'"
-      indeterminate
-      size="14"
-      width="2"
-      color="primary"
-      class="mr-2"
-    />
-    <v-icon v-else-if="status === 'cancelled'" size="14" color="grey" class="mr-1">
+    <v-icon v-if="status === 'cancelled'" size="14" color="grey" class="mr-1">
       mdi-cancel
     </v-icon>
     <v-icon v-else-if="status === 'error'" size="14" color="error" class="mr-1">
@@ -39,9 +31,10 @@ type Status = "idle" | "streaming" | "cancelled" | "error";
 const props = defineProps<{ status: Status; errorMessage?: string }>();
 const { t } = useI18n();
 
-const visible = computed(() => props.status !== "idle");
+const visible = computed(
+  () => props.status !== "idle" && props.status !== "streaming"
+);
 const text = computed(() => {
-  if (props.status === "streaming") return t("aiChatV2.streaming") || "Generating…";
   if (props.status === "cancelled") return t("aiChatV2.cancelled") || "Cancelled";
   if (props.status === "error")
     return props.errorMessage || t("aiChatV2.server_unavailable") || "Error";

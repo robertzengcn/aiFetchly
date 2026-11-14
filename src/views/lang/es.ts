@@ -2876,6 +2876,7 @@ export default {
     loading_history: "Cargando historial…",
     streaming: "Generando…",
     thinking: "La IA está pensando…",
+    ai_working: "Trabajando…",
     reconnecting: "Reconectando…",
     reconnect_attempt: "(intento {n}/{max})",
     recovery: {
