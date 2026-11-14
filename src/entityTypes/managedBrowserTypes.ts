@@ -265,6 +265,7 @@ export interface SafeManagedBrowserStatus {
 
 export type BrowserChatNoticeType =
   | "login_required"
+  | "sensitive_field_visible"
   | "login_verifying"
   | "login_verified"
   | "login_verification_failed"

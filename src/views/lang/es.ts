@@ -4196,7 +4196,8 @@ export default {
       deny: "Denegar",
     },
     notices: {
-      login_required: "Se necesita inicio de sesión — la ventana te espera",
+      login_required: "Inicio de sesión necesario: la ventana del navegador te espera. La aplicación puede rellenar las credenciales guardadas por sí misma mediante browser_sign_in; las contraseñas nunca llegan al asistente.",
+      sensitive_field_visible: "Hay un campo de contraseña visible en esta página. El asistente usa browser_sign_in (credenciales guardadas) y nunca escribe contraseñas.",
       login_verifying: "Verificando tu inicio de sesión…",
       login_verified: "Inicio de sesión verificado — sesión guardada",
       login_verification_failed:

@@ -4179,7 +4179,8 @@ export default {
       deny: "Refuser",
     },
     notices: {
-      login_required: "Connexion requise — la fenêtre vous attend",
+      login_required: "Connexion requise — la fenêtre du navigateur vous attend. L'application peut remplir elle-même les identifiants enregistrés via browser_sign_in ; les mots de passe n'arrivent jamais à l'assistant.",
+      sensitive_field_visible: "Un champ de mot de passe est visible sur cette page. L'assistant utilise browser_sign_in (identifiants enregistrés) et ne tape jamais de mot de passe.",
       login_verifying: "Vérification de votre connexion…",
       login_verified: "Connexion vérifiée — session enregistrée",
       login_verification_failed: "La connexion n'a pas encore pu être vérifiée",

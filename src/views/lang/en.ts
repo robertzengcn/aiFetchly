@@ -4180,7 +4180,8 @@ export default {
       deny: "Deny",
     },
     notices: {
-      login_required: "Login needed — the browser window is waiting for you",
+      login_required: "Login needed — the browser window is waiting for you. The app can fill saved credentials itself via browser_sign_in — passwords never reach the assistant.",
+      sensitive_field_visible: "A password field is visible on this page. The assistant uses browser_sign_in (saved credentials) and never types passwords.",
       login_verifying: "Verifying your login…",
       login_verified: "Login verified — session saved",
       login_verification_failed: "Login could not be verified yet",

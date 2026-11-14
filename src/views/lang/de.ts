@@ -4196,7 +4196,8 @@ export default {
       deny: "Ablehnen",
     },
     notices: {
-      login_required: "Anmeldung erforderlich — das Fenster wartet auf Sie",
+      login_required: "Anmeldung erforderlich — das Browserfenster wartet auf Sie. Die App kann gespeicherte Zugangsdaten selbst über browser_sign_in eintragen; Passwörter erreichen die Assistenz niemals.",
+      sensitive_field_visible: "Auf dieser Seite ist ein Passwortfeld sichtbar. Die Assistenz verwendet browser_sign_in (gespeicherte Zugangsdaten) und tippt niemals Passwörter.",
       login_verifying: "Ihre Anmeldung wird geprüft…",
       login_verified: "Anmeldung geprüft — Sitzung gespeichert",
       login_verification_failed: "Anmeldung konnte noch nicht geprüft werden",

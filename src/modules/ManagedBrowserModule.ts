@@ -1203,6 +1203,18 @@ export class ManagedBrowserModule {
       throw new ManagedBrowserError("internal_error");
     }
     record.pageRevision = message.observation.pageRevision;
+    // A-FR-01/N03: a VISIBLE password field is surfaced to the user with
+    // the tool that handles it — the assistant fills saved credentials
+    // via browser_sign_in and never types passwords.
+    if (message.observation.notices.some((n) => n.code === "sensitive_field_visible")) {
+      this.publishNotice(
+        record,
+        "sensitive_field_visible",
+        `sfv-${message.observation.pageRevision}`,
+        {},
+        false
+      );
+    }
     // Track the live origin for the sign-in site gate (A-FR-02) and the
     // approval fingerprint's site component (D-FR-27).
     record.currentOrigin = message.observation.origin || record.currentOrigin;

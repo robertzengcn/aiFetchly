@@ -3958,7 +3958,8 @@ export default {
       deny: "拒绝",
     },
     notices: {
-      login_required: "需要登录——浏览器窗口正在等待您",
+      login_required: "需要登录——浏览器窗口正在等待您。应用可以通过 browser_sign_in 自动填写已保存的凭据，密码绝不会传递给助手。",
+      sensitive_field_visible: "页面上可见密码输入框。助手将使用 browser_sign_in（已保存的凭据），绝不会手动输入密码。",
       login_verifying: "正在验证您的登录…",
       login_verified: "登录已验证——会话已保存",
       login_verification_failed: "暂时无法验证登录",

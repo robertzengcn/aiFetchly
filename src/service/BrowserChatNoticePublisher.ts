@@ -44,6 +44,7 @@ const ALLOWED_ARG_KEYS: ReadonlySet<string> = new Set([
 
 const SEVERITY_BY_TYPE: Readonly<Record<BrowserChatNoticeType, SafeBrowserChatNotice["severity"]>> = {
   login_required: "warning",
+  sensitive_field_visible: "warning",
   login_verifying: "info",
   login_verified: "success",
   login_verification_failed: "warning",

@@ -4103,7 +4103,8 @@ export default {
       deny: "拒否",
     },
     notices: {
-      login_required: "ログインが必要です——ウィンドウが待っています",
+      login_required: "ログインが必要です — ブラウザウィンドウが待機しています。アプリは browser_sign_in で保存済みの資格情報を自動入力できます。パスワードがアシスタントに渡されることはありません。",
+      sensitive_field_visible: "このページにパスワード欄が表示されています。アシスタントは browser_sign_in（保存済みの資格情報）を使用し、パスワードを手入力することはありません。",
       login_verifying: "ログインを確認中…",
       login_verified: "ログイン確認済み——セッションを保存しました",
       login_verification_failed: "ログインをまだ確認できません",
