@@ -203,6 +203,9 @@ describe("BrowserControlCards (F21 live batch card)", () => {
     const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
     card.vm.$emit("returnNow", "batch_live2");
     card.vm.$emit("pause", { taskId: "batch_live2:0" });
+    // B13/C-FR-04: Take control routes through the pause-or-take-control
+    // channel as well.
+    card.vm.$emit("takeControl", { taskId: "batch_live2:0" });
     card.vm.$emit("resume", { taskId: "batch_live2:0" });
     card.vm.$emit("stop", { taskId: "batch_live2:0" });
     await flushPromises();
@@ -288,6 +291,7 @@ describe("BrowserControlCards credential card (N07)", () => {
       siteDomain: "example.test",
       mode: "login",
       prefillUsername: null,
+      passwordOnly: false,
       createdAt: Date.now(),
     });
     await flushPromises();
@@ -308,6 +312,7 @@ describe("BrowserControlCards credential card (N07)", () => {
       siteDomain: "example.test",
       mode: "login",
       prefillUsername: null,
+      passwordOnly: false,
       createdAt: Date.now(),
     });
     await flushPromises();
@@ -343,6 +348,7 @@ describe("BrowserControlCards credential conversation binding (B01)", () => {
       siteDomain: "example.test",
       mode: "login",
       prefillUsername: "alice",
+      passwordOnly: false,
       createdAt: Date.now(),
     });
     await flushPromises();
@@ -361,6 +367,7 @@ describe("BrowserControlCards credential conversation binding (B01)", () => {
       siteDomain: "example.test",
       mode: "login",
       prefillUsername: null,
+      passwordOnly: false,
       createdAt: Date.now(),
     });
     await flushPromises();

@@ -1706,3 +1706,45 @@ describe("BrowserTaskRunner B17 recovery against fresh state", () => {
     expect(last.error_code).toBe("text_required");
   });
 });
+
+describe("BrowserTaskRunner B13 resume instructions", () => {
+  it("folds the user's resume instructions into the next decision subgoal", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (input: unknown) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input);
+    }) as typeof deps.decisionClient.decide;
+    // The runner owns a generated task id — the resume instructions are
+    // recorded against THAT id (as the IPC handler does).
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b13",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    deps.control.recordResumeInstructions(
+      runner.taskId,
+      "prefer the second result and stop there"
+    );
+    const result = await runner.run();
+    // The FIRST decision after the resume carries the instructions.
+    expect(String(calls[0]?.subgoal)).toContain(
+      "prefer the second result and stop there"
+    );
+    expect(result.evidence).toContain("resume_with_instructions");
+  });
+});

@@ -39,6 +39,15 @@
               icon
               size="x-small"
               variant="text"
+              :data-testid="`task-take-control-${task.taskId}`"
+              @click="emit('takeControl', { taskId: task.taskId, sessionId: task.sessionId })"
+            >
+              {{ t('browserTasks.takeControl') || 'Take control' }}
+            </v-btn>
+            <v-btn
+              icon
+              size="x-small"
+              variant="text"
               :data-testid="`task-resume-${task.taskId}`"
               @click="emit('resume', { taskId: task.taskId, sessionId: task.sessionId })"
             >
@@ -78,6 +87,7 @@ defineProps<{
 const emit = defineEmits<{
   (event: "returnNow", batchId: string): void;
   (event: "pause", payload: { taskId: string; sessionId?: string }): void;
+  (event: "takeControl", payload: { taskId: string; sessionId?: string }): void;
   (event: "resume", payload: { taskId: string; sessionId?: string }): void;
   (event: "stop", payload: { taskId: string; sessionId?: string }): void;
 }>();

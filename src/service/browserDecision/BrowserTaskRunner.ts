@@ -253,8 +253,17 @@ export class BrowserTaskRunner {
         }
 
         const candidates = buildDecisionCandidates({ elements: observation.elements });
-        const decisionInput = this.buildDecisionInput(observation, candidates);
+        // B13/C-FR-07: instructions the user typed when resuming the task
+        // are folded into THIS decision (consume-once) — consumed BEFORE
+        // the decision input is built so the subgoal actually rides it.
         this.pendingSubgoal = null;
+        const resumeInstructions =
+          control.consumeResumeInstructions?.(this.taskId) ?? null;
+        if (resumeInstructions) {
+          this.pendingSubgoal = `the user resumed the task with these instructions: ${resumeInstructions}`;
+          evidence.push("resume_with_instructions");
+        }
+        const decisionInput = this.buildDecisionInput(observation, candidates);
         if (this.startUrl === null) {
           this.startUrl = observation.url;
         }

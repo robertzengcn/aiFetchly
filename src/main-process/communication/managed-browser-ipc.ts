@@ -267,6 +267,15 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       }
       // F06: closing the intervention keeps the cap record truthful.
       controlService.endIntervention(input.taskId);
+      // B13/C-FR-07: the user's instructions are stored on the control
+      // record and consumed ONCE by the running loop (folded into its
+      // next decision input) — they never vanish into the renderer.
+      if (input.instructions) {
+        controlService.recordResumeInstructions(
+          input.taskId,
+          input.instructions
+        );
+      }
       controlService.resume(input.taskId);
       return { ok: true, instructions: input.instructions ?? null };
     }

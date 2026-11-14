@@ -67,6 +67,8 @@ export class AgentTaskControlService {
   >();
   /** R04: per-task resume generation (incremented on resume). */
   private readonly resumeGenerations = new Map<string, number>();
+  /** B13/C-FR-07: instructions typed by the user on resume (consume-once). */
+  private readonly resumeInstructions = new Map<string, string>();
   private readonly now: () => number;
   /** F06: lazy sweep enforcing the 60-minute pause/wait cap. */
   private pauseCapSweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -285,6 +287,27 @@ export class AgentTaskControlService {
   /** R04: the resume generation for a task (0 if never paused). */
   public getResumeGeneration(taskId: string): number {
     return this.resumeGenerations.get(taskId) ?? 0;
+  }
+
+  /**
+   * B13/C-FR-07: the instructions the user typed when resuming. The
+   * consuming loop (runner/sub-agent) folds them into its next decision
+   * input; they are consumed exactly once.
+   */
+  public recordResumeInstructions(taskId: string, instructions: string): void {
+    const trimmed = instructions.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    this.resumeInstructions.set(taskId, trimmed.slice(0, 2000));
+  }
+
+  public consumeResumeInstructions(taskId: string): string | null {
+    const stored = this.resumeInstructions.get(taskId) ?? null;
+    if (stored !== null) {
+      this.resumeInstructions.delete(taskId);
+    }
+    return stored;
   }
 
   /** Stop: cancels every waiter (the loop fails fast, C-FR-04). */

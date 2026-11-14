@@ -7,6 +7,7 @@
     :tasks="activeBatch.tasks"
     @return-now="onReturnNow"
     @pause="onPause"
+    @take-control="onTakeControl"
     @resume="onResume"
     @stop="onStop"
   />
@@ -370,6 +371,12 @@ async function onReturnNow(batchId: string): Promise<void> {
 }
 
 async function onPause(payload: { taskId: string; sessionId?: string }): Promise<void> {
+  await pauseBrowserTask(payload);
+}
+
+// B13/C-FR-04: Take control routes through the SAME pause-or-take-control
+// handler (both layers: session user-control + loop control gate).
+async function onTakeControl(payload: { taskId: string; sessionId?: string }): Promise<void> {
   await pauseBrowserTask(payload);
 }
 
