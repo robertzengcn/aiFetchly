@@ -127,12 +127,73 @@ describe("BrowserSiteModule (S-FR-01..06)", () => {
       visitedDomains: ["auth.partner-sso.test", "sso-site.test"],
     });
     expect(proposal?.proposedDomains).toEqual(["auth.partner-sso.test"]);
+    expect(proposal?.token).toMatch(/^dom_/);
+    // B03: the apply is token-gated.
     await module.applyAdditionalDomains({
       siteId: site.siteId,
       domains: proposal?.proposedDomains ?? [],
+      token: proposal?.token ?? "",
     });
     const match = await module.matchByUrl("https://auth.partner-sso.test/oauth");
     expect(match?.siteId).toBe(site.siteId);
+  });
+
+  it("B03: rejects an apply without, with a foreign, or with an over-broad token", async () => {
+    const module = new BrowserSiteModule();
+    await module.seedFromPlatformLists();
+    const site = await module.upsertSite({
+      name: "SSO Gated",
+      url: "https://sso-gated.test/",
+    });
+    const proposal = await module.proposeAdditionalDomains({
+      siteId: site.siteId,
+      visitedDomains: ["auth.gated-sso.test"],
+    });
+    expect(proposal).not.toBeNull();
+    // No token at all → rejected.
+    expect(
+      await module.applyAdditionalDomains({
+        siteId: site.siteId,
+        domains: proposal!.proposedDomains,
+        token: "",
+      })
+    ).toBe(false);
+    // A token minted for ANOTHER site → rejected.
+    const otherSite = await module.upsertSite({
+      name: "Other Site",
+      url: "https://other-gated.test/",
+    });
+    expect(
+      await module.applyAdditionalDomains({
+        siteId: otherSite.siteId,
+        domains: proposal!.proposedDomains,
+        token: proposal!.token,
+      })
+    ).toBe(false);
+    // A domain the proposal did not include → rejected (subset rule).
+    expect(
+      await module.applyAdditionalDomains({
+        siteId: site.siteId,
+        domains: ["auth.gated-sso.test", "evil.gated-sso.test"],
+        token: proposal!.token,
+      })
+    ).toBe(false);
+    // The token is still unconsumed after the failures; the legitimate
+    // apply succeeds and the token is single-use afterwards.
+    expect(
+      await module.applyAdditionalDomains({
+        siteId: site.siteId,
+        domains: proposal!.proposedDomains,
+        token: proposal!.token,
+      })
+    ).toBe(true);
+    expect(
+      await module.applyAdditionalDomains({
+        siteId: site.siteId,
+        domains: proposal!.proposedDomains,
+        token: proposal!.token,
+      })
+    ).toBe(false);
   });
 
   it("saves and returns the learned login recipe", async () => {

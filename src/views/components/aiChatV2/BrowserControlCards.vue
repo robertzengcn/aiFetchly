@@ -21,6 +21,17 @@
     @other="onAccountPickerOther"
   />
 
+  <!-- B03/S-FR-04: extra-domain confirmation card (post sign-in).
+       Renders the pending proposal of THIS conversation only. -->
+  <BrowserSiteConfirmCard
+    v-if="activeSiteConfirmRequest !== null"
+    :site-id="activeSiteConfirmRequest.siteId"
+    :registrable-domain="activeSiteConfirmRequest.registrableDomain"
+    :proposed-domains="activeSiteConfirmRequest.proposedDomains"
+    @applied="onSiteDomainsApplied"
+    @cancelled="onSiteConfirmCancelled"
+  />
+
   <!-- N07/B01: live credential card (no-account / username-only sign-in).
        Renders the pending request of THIS conversation only — a request
        opened in another chat never renders here (A-FR-05). -->
@@ -42,18 +53,22 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import BrowserTaskBatchCard from "./BrowserTaskBatchCard.vue";
 import BrowserCredentialCard from "./BrowserCredentialCard.vue";
 import BrowserAccountPickerCard from "./BrowserAccountPickerCard.vue";
+import BrowserSiteConfirmCard from "./BrowserSiteConfirmCard.vue";
 import {
   browserBatchReturnNow,
   onManagedBrowserBatchEvent,
   onManagedBrowserAccountPickerRequest,
   onManagedBrowserCredentialRequest,
+  onManagedBrowserSiteConfirmRequest,
   pauseBrowserTask,
   resumeBrowserTask,
   stopBrowserTask,
   submitBrowserAccountPicker,
+  submitBrowserSiteConfirm,
   type BrowserBatchEvent,
   type BrowserCredentialRequestEvent,
   type BrowserAccountPickerRequestEvent,
+  type BrowserSiteConfirmRequestEvent,
 } from "@/views/api/managedBrowser";
 import { useI18n } from "vue-i18n";
 
@@ -184,6 +199,67 @@ async function onAccountPickerOther(): Promise<void> {
   clearPickerRequest();
 }
 
+// B03: pending extra-domain confirmation proposals, per conversation like
+// the other cards.
+const siteConfirmRequests = ref(
+  new Map<string, BrowserSiteConfirmRequestEvent>()
+);
+
+const activeSiteConfirmRequest =
+  computed<BrowserSiteConfirmRequestEvent | null>(() => {
+    let newest: BrowserSiteConfirmRequestEvent | null = null;
+    for (const request of siteConfirmRequests.value.values()) {
+      if (
+        props.conversationId != null &&
+        request.conversationId !== props.conversationId
+      ) {
+        continue;
+      }
+      newest = request;
+    }
+    return newest;
+  });
+
+function clearSiteConfirmRequest(): void {
+  const active = activeSiteConfirmRequest.value;
+  if (active !== null) {
+    siteConfirmRequests.value.delete(active.requestId);
+  }
+}
+
+async function onSiteDomainsApplied(payload: {
+  siteId: number;
+  domains: string[];
+}): Promise<void> {
+  const active = activeSiteConfirmRequest.value;
+  if (active === null) {
+    return;
+  }
+  await submitBrowserSiteConfirm({
+    requestId: active.requestId,
+    conversationId: active.conversationId,
+    siteId: active.siteId,
+    domains: payload.domains,
+    cancelled: false,
+  });
+  clearSiteConfirmRequest();
+}
+
+async function onSiteConfirmCancelled(): Promise<void> {
+  const active = activeSiteConfirmRequest.value;
+  if (active === null) {
+    return;
+  }
+  await submitBrowserSiteConfirm({
+    requestId: active.requestId,
+    conversationId: active.conversationId,
+    siteId: active.siteId,
+    domains: [],
+    cancelled: true,
+  });
+  clearSiteConfirmRequest();
+}
+
 const LABEL_FALLBACK = "Browser task";
 
 function applyEvent(event: BrowserBatchEvent): void {
@@ -229,6 +305,7 @@ function applyEvent(event: BrowserBatchEvent): void {
 let unsubscribe: (() => void) | null = null;
 let unsubscribeCredential: (() => void) | null = null;
 let unsubscribePicker: (() => void) | null = null;
+let unsubscribeSiteConfirm: (() => void) | null = null;
 let pruneTimer: number | null = null;
 
 onMounted(() => {
@@ -243,6 +320,9 @@ onMounted(() => {
   );
   unsubscribePicker = onManagedBrowserAccountPickerRequest((request) => {
     pickerRequests.value.set(request.requestId, request);
+  });
+  unsubscribeSiteConfirm = onManagedBrowserSiteConfirmRequest((request) => {
+    siteConfirmRequests.value.set(request.requestId, request);
   });
   pruneTimer = window.setInterval(() => {
     // Finished batches linger 30s for review, then the card disappears.
@@ -265,6 +345,12 @@ onMounted(() => {
         pickerRequests.value.delete(requestId);
       }
     }
+    // B03: same TTL sweep for site-confirm proposals.
+    for (const [requestId, request] of siteConfirmRequests.value) {
+      if (Date.now() - request.createdAt > 10 * 60_000) {
+        siteConfirmRequests.value.delete(requestId);
+      }
+    }
   }, 5_000);
 });
 
@@ -272,6 +358,7 @@ onBeforeUnmount(() => {
   unsubscribe?.();
   unsubscribeCredential?.();
   unsubscribePicker?.();
+  unsubscribeSiteConfirm?.();
   if (pruneTimer !== null) {
     window.clearInterval(pruneTimer);
   }

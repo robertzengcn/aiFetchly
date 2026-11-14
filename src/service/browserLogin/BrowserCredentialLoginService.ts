@@ -226,6 +226,105 @@ export function getAccountPickerWaitRegistry(): AccountPickerWaitRegistry {
   return pickerRegistry;
 }
 
+/**
+ * B03/S-FR-04: a pending extra-domain confirmation card. The proposal
+ * (domains + token) is minted from the session's AUTHORITATIVE redirect
+ * ledger; the renderer card answers with a domain subset only — the
+ * confirmation token never leaves the main process.
+ */
+export interface PendingSiteConfirmRequest {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly sessionId: string;
+  readonly siteId: number;
+  readonly registrableDomain: string;
+  readonly proposedDomains: readonly string[];
+  /** Main-process-only; applyAdditionalDomains consumes it. */
+  readonly token: string;
+  readonly resolve: (input: {
+    applied: boolean;
+    domains: readonly string[];
+    cancelled: boolean;
+  }) => void;
+  readonly createdAt: number;
+}
+
+class SiteConfirmWaitRegistry {
+  private readonly pending = new Map<string, PendingSiteConfirmRequest>();
+  private sink: ((request: PendingSiteConfirmRequest) => void) | null = null;
+
+  public setSink(sink: (request: PendingSiteConfirmRequest) => void): void {
+    this.sink = sink;
+  }
+
+  public create(input: {
+    readonly conversationId: string;
+    readonly sessionId: string;
+    readonly siteId: number;
+    readonly registrableDomain: string;
+    readonly proposedDomains: readonly string[];
+    readonly token: string;
+  }): {
+    readonly request: PendingSiteConfirmRequest;
+    readonly promise: Promise<{
+      applied: boolean;
+      domains: readonly string[];
+      cancelled: boolean;
+    }>;
+  } {
+    let resolve!: PendingSiteConfirmRequest["resolve"];
+    const promise = new Promise<{
+      applied: boolean;
+      domains: readonly string[];
+      cancelled: boolean;
+    }>((res) => {
+      resolve = res;
+    });
+    const requestId = `site_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    const request: PendingSiteConfirmRequest = {
+      requestId,
+      conversationId: input.conversationId,
+      sessionId: input.sessionId,
+      siteId: input.siteId,
+      registrableDomain: input.registrableDomain,
+      proposedDomains: input.proposedDomains,
+      token: input.token,
+      resolve,
+      createdAt: Date.now(),
+    };
+    this.pending.set(requestId, request);
+    this.sink?.(request);
+    setTimeout(() => {
+      const entry = this.pending.get(requestId);
+      if (entry) {
+        this.pending.delete(requestId);
+        entry.resolve({ applied: false, domains: [], cancelled: true });
+      }
+    }, PENDING_TTL_MS).unref?.();
+    return { request, promise };
+  }
+
+  /** Single-use, owner-conversation-bound consume. */
+  public consume(input: {
+    readonly requestId: string;
+    readonly conversationId: string;
+  }): PendingSiteConfirmRequest | null {
+    const entry = this.pending.get(input.requestId);
+    if (!entry || entry.conversationId !== input.conversationId) {
+      return null;
+    }
+    this.pending.delete(input.requestId);
+    return entry;
+  }
+}
+
+const siteConfirmRegistry = new SiteConfirmWaitRegistry();
+
+/** Renderer-facing accessor for the site-confirm IPC handler. */
+export function getSiteConfirmWaitRegistry(): SiteConfirmWaitRegistry {
+  return siteConfirmRegistry;
+}
+
 export class BrowserCredentialLoginService {
   /**
    * A-FR-10/F12: one automated attempt per account (and per session for
@@ -700,6 +799,42 @@ export class BrowserCredentialLoginService {
   }
 
   /**
+   * B03/D-15/D-16: post the extra-domain confirmation card after a
+   * successful sign-in. The proposal comes ONLY from the session's
+   * redirect ledger (`proposeExtraDomainsFromSession`); the card's apply
+   * is consumed through the single-use token minted with the proposal.
+   */
+  private async postSiteDomainConfirmation(
+    input: BrowserSignInInput,
+    site: SiteMatch
+  ): Promise<void> {
+    const confirmation = await getDefaultManagedBrowserModule()
+      .proposeExtraDomainsFromSession(input.sessionId, site.siteId)
+      .catch(() => null);
+    if (!confirmation || confirmation.proposedDomains.length === 0) {
+      return;
+    }
+    const { request, promise } = siteConfirmRegistry.create({
+      conversationId: input.conversationId,
+      sessionId: input.sessionId,
+      siteId: site.siteId,
+      registrableDomain: site.registrableDomain,
+      proposedDomains: confirmation.proposedDomains,
+      token: confirmation.token,
+    });
+    void request;
+    const choice = await promise;
+    if (choice.cancelled || choice.domains.length === 0) {
+      return;
+    }
+    await getDefaultBrowserSiteModule().applyAdditionalDomains({
+      siteId: site.siteId,
+      domains: choice.domains,
+      token: request.token,
+    });
+  }
+
+  /**
    * A-FR-08/09: fill via the worker, wipe the local copy, then classify the
    * outcome. Failure paths hand off with a clear reason and never retry.
    */
@@ -767,6 +902,11 @@ export class BrowserCredentialLoginService {
             };
           }
         }
+        // B03/S-FR-04: after a successful sign-in, propose the extra
+        // domains the session ACTUALLY visited (redirect ledger) through
+        // the confirmation card. Non-blocking — the sign-in result returns
+        // while the user reviews the proposal; the apply is token-gated.
+        void this.postSiteDomainConfirmation(input, site).catch(() => undefined);
         return {
           status: "signed_in",
           ...(credential.accountId !== null ? { accountId: credential.accountId } : {}),

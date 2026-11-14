@@ -26,6 +26,8 @@ import {
   MANAGED_BROWSER_CREDENTIAL_REQUEST,
   MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
   MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
+  MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
+  MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_RESUME,
   BROWSER_TASK_STOP,
@@ -333,6 +335,44 @@ export function onManagedBrowserAccountPickerRequest(
   window.api.receive(MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, handler);
   return () => {
     window.api.removeListener(MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, handler);
+  };
+}
+
+/**
+ * B03/S-FR-04: submit the extra-domain confirmation card. The chosen
+ * domain subset is validated against the proposal inside the main
+ * process (token-gated); no token crosses IPC.
+ */
+export async function submitBrowserSiteConfirm(input: {
+  requestId: string;
+  conversationId: string;
+  siteId: number;
+  domains: string[];
+  cancelled: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_SITE_CONFIRM, input);
+}
+
+export interface BrowserSiteConfirmRequestEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly sessionId: string;
+  readonly siteId: number;
+  readonly registrableDomain: string;
+  readonly proposedDomains: readonly string[];
+  readonly createdAt: number;
+}
+
+/** B03: live extra-domain confirmation proposals (post sign-in). */
+export function onManagedBrowserSiteConfirmRequest(
+  callback: (request: BrowserSiteConfirmRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserSiteConfirmRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_SITE_CONFIRM_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_SITE_CONFIRM_REQUEST, handler);
   };
 }
 

@@ -76,3 +76,34 @@ export const accountPickerSubmitSchema = lazySchema(() =>
 export type AccountPickerSubmitInput = z.infer<
   ReturnType<typeof accountPickerSubmitSchema>
 >;
+
+/**
+ * B03/S-FR-04: extra-domain confirmation card. The request lists ONLY the
+ * domains the session actually visited (main-process ledger); the submit
+ * carries the user's chosen subset — no token rides the renderer channel.
+ */
+export const siteConfirmRequestEventSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1).max(128),
+    conversationId: z.string().min(1).max(128),
+    sessionId: z.string().min(1).max(64),
+    siteId: z.number().int().positive(),
+    registrableDomain: z.string().min(1).max(253),
+    proposedDomains: z.array(z.string().min(1).max(253)).min(1).max(16),
+    createdAt: z.number().int().positive(),
+  })
+);
+
+export const siteConfirmSubmitSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1).max(128),
+    conversationId: z.string().min(1).max(128),
+    siteId: z.number().int().positive(),
+    domains: z.array(z.string().min(1).max(253)).max(16),
+    cancelled: z.boolean(),
+  })
+);
+
+export type SiteConfirmSubmitInput = z.infer<
+  ReturnType<typeof siteConfirmSubmitSchema>
+>;

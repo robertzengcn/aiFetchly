@@ -45,11 +45,33 @@ export interface SiteUpsertConfirmation {
   readonly siteId: number;
   readonly registrableDomain: string;
   readonly proposedDomains: readonly string[];
+  /**
+   * B03/S-FR-04: single-use confirmation token minted by this module.
+   * `applyAdditionalDomains` rejects an apply that does not carry the
+   * exact token for this site and domain subset — the token never has to
+   * leave the main process (the renderer card answers with domains only).
+   */
+  readonly token: string;
+}
+
+/** TTL for a minted domain-confirmation token (bounded exposure). */
+const DOMAIN_CONFIRMATION_TTL_MS = 10 * 60_000;
+
+interface PendingDomainConfirmation {
+  readonly token: string;
+  readonly siteId: number;
+  readonly domains: readonly string[];
+  readonly createdAt: number;
 }
 
 export class BrowserSiteModule extends BaseModule {
   private model: BrowserSiteModel | null = null;
   private seedPromise: Promise<void> | null = null;
+  /** B03: live domain-confirmation tokens, keyed by token. */
+  private readonly pendingDomainConfirmations = new Map<
+    string,
+    PendingDomainConfirmation
+  >();
 
   /**
    * Lazy one-time seeding (S-FR-02): the registry is populated from the
@@ -311,18 +333,86 @@ export class BrowserSiteModule extends BaseModule {
     if (proposed.length === 0) {
       return null;
     }
+    // B03/D-15: the apply path is gated on a token minted HERE, at the
+    // moment the proposal was derived from the session's redirect ledger.
+    const token = this.issueDomainConfirmationToken(entity.id, proposed);
     return {
       siteId: entity.id,
       registrableDomain: entity.registrableDomain,
       proposedDomains: proposed,
+      token,
     };
   }
 
-  /** Apply a user-confirmed domain change (only from the confirmation card). */
+  /**
+   * B03: mint a single-use, TTL-bound confirmation token for a domain
+   * proposal. Main-process internal — the renderer never sees it.
+   */
+  private issueDomainConfirmationToken(
+    siteId: number,
+    domains: readonly string[]
+  ): string {
+    const token = `dom_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    this.pendingDomainConfirmations.set(token, {
+      token,
+      siteId,
+      domains: [...domains],
+      createdAt: Date.now(),
+    });
+    setTimeout(() => {
+      this.pendingDomainConfirmations.delete(token);
+    }, DOMAIN_CONFIRMATION_TTL_MS).unref?.();
+    return token;
+  }
+
+  /**
+   * B03/D-16: consume a confirmation token. The apply is accepted only
+   * when the token exists, is still live, matches the site, and covers
+   * EXACTLY a subset of the proposed domains. Single use.
+   */
+  public consumeDomainConfirmationToken(input: {
+    readonly token: string;
+    readonly siteId: number;
+    readonly domains: readonly string[];
+  }): boolean {
+    const entry = this.pendingDomainConfirmations.get(input.token);
+    if (!entry || entry.siteId !== input.siteId) {
+      return false;
+    }
+    if (Date.now() - entry.createdAt > DOMAIN_CONFIRMATION_TTL_MS) {
+      this.pendingDomainConfirmations.delete(input.token);
+      return false;
+    }
+    const proposed = new Set(entry.domains.map((d) => d.toLowerCase()));
+    for (const domain of input.domains) {
+      if (!proposed.has(domain.trim().toLowerCase())) {
+        return false;
+      }
+    }
+    this.pendingDomainConfirmations.delete(input.token);
+    return true;
+  }
+
+  /**
+   * Apply a user-confirmed domain change (only from the confirmation card).
+   * B03/D-16: requires the single-use token minted with the proposal — a
+   * call without (or with a foreign/expired/over-broad) token is rejected.
+   */
   public async applyAdditionalDomains(input: {
     readonly siteId: number;
     readonly domains: readonly string[];
+    readonly token: string;
   }): Promise<boolean> {
+    if (
+      !input.token ||
+      !this.consumeDomainConfirmationToken({
+        token: input.token,
+        siteId: input.siteId,
+        domains: input.domains,
+      })
+    ) {
+      return false;
+    }
     const model = await this.getModel();
     const entity = await model.getSiteById(input.siteId);
     if (!entity) {

@@ -12,6 +12,7 @@ const invokeMock = vi.fn();
 
 const credentialListeners = new Set<(request: unknown) => void>();
 const pickerListeners = new Set<(request: unknown) => void>();
+const siteConfirmListeners = new Set<(request: unknown) => void>();
 
 vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/views/api/managedBrowser")>();
@@ -28,6 +29,14 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
     onManagedBrowserAccountPickerRequest: (cb: (request: unknown) => void) => {
       pickerListeners.add(cb);
       return () => pickerListeners.delete(cb);
+    },
+    onManagedBrowserSiteConfirmRequest: (cb: (request: unknown) => void) => {
+      siteConfirmListeners.add(cb);
+      return () => siteConfirmListeners.delete(cb);
+    },
+    submitBrowserSiteConfirm: (input: unknown) => {
+      invokeMock("MANAGED_BROWSER_SUBMIT_SITE_CONFIRM", input);
+      return Promise.resolve({ accepted: true });
     },
     submitBrowserAccountPicker: (input: unknown) => {
       invokeMock("MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER", input);
@@ -74,6 +83,12 @@ const i18n = createI18n({
         pickAccountHint: "Several saved accounts match {domain}.",
         useAnother: "Use another account",
       },
+      browserSite: {
+        confirmTitle: "Confirm additional login domains",
+        confirmHint: "The sign-in for {domain} visited additional domains.",
+        warning: "Prompt-injected requests cannot add domains.",
+        apply: "Confirm selected domains",
+      },
       browserTasks: {
         batchTitle: "Parallel browser tasks",
         returnResultsNow: "Return results now",
@@ -115,10 +130,17 @@ function emitPicker(request: unknown): void {
   }
 }
 
+function emitSiteConfirm(request: unknown): void {
+  for (const listener of siteConfirmListeners) {
+    listener(request);
+  }
+}
+
 beforeEach(() => {
   batchListeners.clear();
   credentialListeners.clear();
   pickerListeners.clear();
+  siteConfirmListeners.clear();
   invokeMock.mockClear();
 });
 
@@ -426,6 +448,82 @@ describe("BrowserControlCards account picker (B02)", () => {
       conversationId: "conv-a",
       accountId: null,
       cancelled: false,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B03: extra-domain confirmation card mounting and apply routing.
+// ---------------------------------------------------------------------------
+
+describe("BrowserControlCards site confirm (B03)", () => {
+  function mountWith(conversationId: string | null) {
+    return mount(BrowserControlCards, {
+      props: { conversationId },
+      global: { plugins: [i18n] },
+    });
+  }
+
+  const confirmRequest = {
+    requestId: "site-b03",
+    conversationId: "conv-a",
+    sessionId: "mb_signin0005",
+    siteId: 42,
+    registrableDomain: "example.test",
+    proposedDomains: ["auth.partner-sso.test", "cdn.partner-sso.test"],
+    createdAt: Date.now(),
+  };
+
+  it("mounts the confirm card for the owning conversation with proposed domains", async () => {
+    const wrapper = mountWith("conv-a");
+    emitSiteConfirm(confirmRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserSiteConfirmCard" });
+    expect(card.exists()).toBe(true);
+    expect(card.props("registrableDomain")).toBe("example.test");
+    expect(card.props("proposedDomains")).toHaveLength(2);
+    // Another conversation does not render it.
+    const wrapperOther = mountWith("conv-other");
+    expect(
+      wrapperOther.findComponent({ name: "BrowserSiteConfirmCard" }).exists()
+    ).toBe(false);
+  });
+
+  it("apply submits the chosen domain subset and clears the card", async () => {
+    const wrapper = mountWith("conv-a");
+    emitSiteConfirm(confirmRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserSiteConfirmCard" });
+    card.vm.$emit("applied", {
+      siteId: 42,
+      domains: ["auth.partner-sso.test"],
+    });
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("MANAGED_BROWSER_SUBMIT_SITE_CONFIRM", {
+      requestId: "site-b03",
+      conversationId: "conv-a",
+      siteId: 42,
+      domains: ["auth.partner-sso.test"],
+      cancelled: false,
+    });
+    expect(
+      wrapper.findComponent({ name: "BrowserSiteConfirmCard" }).exists()
+    ).toBe(false);
+  });
+
+  it("cancel submits cancelled with no domains", async () => {
+    const wrapper = mountWith("conv-a");
+    emitSiteConfirm(confirmRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserSiteConfirmCard" });
+    card.vm.$emit("cancelled");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("MANAGED_BROWSER_SUBMIT_SITE_CONFIRM", {
+      requestId: "site-b03",
+      conversationId: "conv-a",
+      siteId: 42,
+      domains: [],
+      cancelled: true,
     });
   });
 });

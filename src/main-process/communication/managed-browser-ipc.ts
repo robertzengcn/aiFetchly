@@ -21,6 +21,8 @@ import {
   MANAGED_BROWSER_CREDENTIAL_REQUEST,
   MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
   MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
+  MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
+  MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_TAKE_CONTROL,
   BROWSER_TASK_RESUME,
@@ -37,10 +39,15 @@ import {
 import {
   registerValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
-import { browserCredentialSubmitSchema, accountPickerSubmitSchema } from "@/schemas/ipc/browserCredential";
+import {
+  browserCredentialSubmitSchema,
+  accountPickerSubmitSchema,
+  siteConfirmSubmitSchema,
+} from "@/schemas/ipc/browserCredential";
 import {
   getCredentialCardWaitRegistry,
   getAccountPickerWaitRegistry,
+  getSiteConfirmWaitRegistry,
 } from "@/service/browserLogin/BrowserCredentialLoginService";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import {
@@ -147,6 +154,21 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       sessionId: request.sessionId,
       siteDomain: request.siteDomain,
       candidates: request.candidates,
+      createdAt: request.createdAt,
+    })
+  );
+
+  // B03/S-FR-04: extra-domain confirmation proposals stream to the owning
+  // conversation; the apply resolves the wait and is token-gated in the
+  // BrowserSiteModule (the token itself never crosses IPC).
+  getSiteConfirmWaitRegistry().setSink((request) =>
+    sendToRenderer(win, MANAGED_BROWSER_SITE_CONFIRM_REQUEST, {
+      requestId: request.requestId,
+      conversationId: request.conversationId,
+      sessionId: request.sessionId,
+      siteId: request.siteId,
+      registrableDomain: request.registrableDomain,
+      proposedDomains: request.proposedDomains,
       createdAt: request.createdAt,
     })
   );
@@ -329,6 +351,26 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       }
       entry.resolve({
         accountId: input.accountId,
+        cancelled: input.cancelled,
+      });
+      return { accepted: true };
+    }
+  );
+
+  registerValidatedHandler(
+    MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
+    siteConfirmSubmitSchema,
+    async (input) => {
+      const entry = getSiteConfirmWaitRegistry().consume({
+        requestId: input.requestId,
+        conversationId: input.conversationId,
+      });
+      if (!entry) {
+        return { accepted: false };
+      }
+      entry.resolve({
+        applied: !input.cancelled,
+        domains: input.cancelled ? [] : input.domains,
         cancelled: input.cancelled,
       });
       return { accepted: true };

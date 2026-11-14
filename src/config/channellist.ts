@@ -748,6 +748,13 @@ export const MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST =
   "managed-browser:account-picker-request";
 export const MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER =
   "managed-browser:submit-account-picker";
+// B03/S-FR-04: extra-domain confirmation card. The proposal comes only
+// from the session's redirect ledger; the submit carries the user's
+// chosen domain subset (the token stays in the main process).
+export const MANAGED_BROWSER_SITE_CONFIRM_REQUEST =
+  "managed-browser:site-confirm-request";
+export const MANAGED_BROWSER_SUBMIT_SITE_CONFIRM =
+  "managed-browser:submit-site-confirm";
 // PRD C-FR-04: renderer-only task control (user actions; no model tool).
 export const BROWSER_TASK_PAUSE = "browser-task:pause";
 export const BROWSER_TASK_TAKE_CONTROL = "browser-task:take-control";
