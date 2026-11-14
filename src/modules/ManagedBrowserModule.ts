@@ -1746,7 +1746,7 @@ record.currentUrl = message.observation.url || record.currentUrl;
       );
       const accounts = await new Sam().getAllSocialAccounts();
       const account = accounts.find((a) => a.id === accountId);
-      return (account?.proxy ?? []).map((row) => ({
+      const rows = (account?.proxy ?? []).map((row) => ({
         id: row.id,
         host: row.host,
         port: row.port,
@@ -1754,7 +1754,31 @@ record.currentUrl = message.observation.url || record.currentUrl;
         pass: row.pass ?? null,
         protocol: row.protocol ?? null,
         country_code: row.country_code ?? null,
+        lastCheckPassed: null as boolean | null,
       }));
+      // N05/P-FR-01: the LAST CHECK outcome lives in the proxy_check
+      // table — auto selection prefers a recently-passed proxy.
+      try {
+        const { ProxyCheckModel } = await import("@/model/ProxyCheck.model");
+        const { proxyCheckStatus } = await import("@/model/ProxyCheck.model");
+        const checkModel = new ProxyCheckModel(
+          new (
+            await import("@/modules/token")
+          ).Token().getValue(
+            (await import("@/config/usersetting")).USERSDBPATH
+          )
+        );
+        for (const row of rows) {
+          const check = await checkModel.getProxyCheck(row.id);
+          row.lastCheckPassed =
+            check == null
+              ? null
+              : check.status === proxyCheckStatus.Success;
+        }
+      } catch {
+        // Check-state lookup is best-effort; rows stay null-checked.
+      }
+      return rows;
     } catch (error) {
       log.warn(
         `[ManagedBrowserModule] proxy row lookup failed: ${
@@ -2164,10 +2188,12 @@ record.currentUrl = message.observation.url || record.currentUrl;
     // T10/F18: the switch reopens the page the user was on (P-FR-02) —
     // the FULL URL with path/query, not just the origin.
     const lastUrl = record.currentUrl ?? record.currentOrigin ?? undefined;
-    // P-FR-05: the cap is per SESSION LINEAGE, not per record — each
-    // switch stops this record and starts a fresh one, so the count is
-    // carried in a module-level map keyed by the lineage.
-    const lineageKey = `${conversation ?? "public"}:${accountId}:${record.platformId}`;
+    // P-FR-05/N05: the cap counts switches PER TASK — a task's own
+    // budget; public sessions in one chat no longer share one budget.
+    // Interactive (task-less) sessions keep the conversation-lineage key.
+    const lineageKey = record.ownerAgentTaskId
+      ? `task:${record.ownerAgentTaskId}`
+      : `${conversation ?? "public"}:${accountId}:${record.platformId}`;
     const priorCount = this.proxySwitchCounts.get(lineageKey) ?? 0;
     if (priorCount >= 3) {
       throw new ManagedBrowserError("proxy_switch_limit");
@@ -2325,6 +2351,8 @@ record.currentUrl = message.observation.url || record.currentUrl;
       pageTitle: record.pageTitle,
       ownerConversationId: record.conversationId,
       rootConversationId: record.rootConversationId,
+      /** N05/P-FR-03: which proxy row the session launched through. */
+      effectiveProxyId: record.effectiveProxyId,
       pageRevision: record.pageRevision,
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,

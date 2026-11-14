@@ -11,6 +11,28 @@ export class SocialAccountModel extends BaseDb {
         this.repository = this.sqliteDb.connection.getRepository(SocialAccountEntity);
     }
 
+    /** N05/P-FR-03: append the account↔proxy link (idempotent). */
+    async appendProxyLink(accountId: number, proxyId: number): Promise<void> {
+        const account = await this.repository.findOne({
+            where: { id: accountId },
+            relations: ["proxy"],
+        });
+        if (!account) {
+            return;
+        }
+        const already = (account.proxy ?? []).some(
+            (row: { id: number }) => row.id === proxyId
+        );
+        if (already) {
+            return;
+        }
+        const { ProxyEntity } = await import("@/entity/Proxy.entity");
+        const proxyRef = new ProxyEntity();
+        proxyRef.id = proxyId;
+        account.proxy = [...(account.proxy ?? []), proxyRef];
+        await this.repository.save(account);
+    }
+
     /**
      * Save social account
      */

@@ -337,6 +337,46 @@ export class SocialAccountModule extends BaseModule {
   }
 
   /**
+   * N05/P-FR-03: after a successful sign-in THROUGH a proxy, link that
+   * proxy row to the account so later sessions reuse it. Idempotent —
+   * an existing link is left untouched.
+   */
+  public async linkProxyToAccount(
+    accountId: number,
+    proxyId: number
+  ): Promise<boolean> {
+    try {
+      const account = await this.socialAccountModel.getSocialAccountById(accountId);
+      if (!account) {
+        return false;
+      }
+      const existing = (account.proxy ?? []).some((row) => row.id === proxyId);
+      if (existing) {
+        return true;
+      }
+      const { ProxyModel } = await import("@/model/Proxy.model");
+      const { Token } = await import("@/modules/token");
+      const { USERSDBPATH } = await import("@/config/usersetting");
+      const proxyModel = new ProxyModel(
+        new Token().getValue(USERSDBPATH)
+      );
+      const proxyEntity = await proxyModel.getProxyById(proxyId);
+      if (!proxyEntity) {
+        return false;
+      }
+      await this.socialAccountModel.appendProxyLink(accountId, proxyId);
+      return true;
+    } catch (error) {
+      log.warn(
+        `[SocialAccountModule] proxy link failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    }
+  }
+
+  /**
    * Get social accounts by status
    */
   public async getSocialAccountsByStatus(

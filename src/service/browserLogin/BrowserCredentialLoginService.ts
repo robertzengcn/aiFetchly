@@ -882,6 +882,25 @@ export class BrowserCredentialLoginService {
         if (credential.accountId !== null) {
           await accountModule.recordLoginFailureClear(credential.accountId);
         }
+        // N05/P-FR-03: link the proxy the session actually used so later
+        // sessions for this account reuse it. Best-effort.
+        try {
+          const postStatus = getDefaultManagedBrowserModule().getStatus(
+            input.sessionId
+          );
+          const usedProxyId = postStatus?.effectiveProxyId ?? null;
+          if (
+            credential.accountId !== null &&
+            usedProxyId !== null &&
+            postStatus?.accountId === credential.accountId
+          ) {
+            await accountModule
+              .linkProxyToAccount(credential.accountId, usedProxyId)
+              .catch(() => undefined);
+          }
+        } catch {
+          // Proxy linking never fails the sign-in.
+        }
         if (credential.accountId !== null) {
           try {
             await getDefaultManagedBrowserModule().bindAccountToSession(

@@ -3,6 +3,7 @@ import {
   MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import type { ManagedBrowserErrorCode } from "@/entityTypes/managedBrowserTypes";
+import { classifyProxyError } from "@/service/browserProxy/BrowserProxySelectionService";
 import type {
   BrowserAction,
   BrowserActionProgram,
@@ -539,12 +540,37 @@ export class BrowserActionExecutor {
     }
     // A navigation that started but failed is an unknown effect (7.3).
     dispatch.inputSent = true;
-    await options.page.goto(url, {
-      timeout:
-        options.navigateTimeoutMs ??
-        MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
-      waitUntil: "domcontentloaded",
-    });
+    try {
+      await options.page.goto(url, {
+        timeout:
+          options.navigateTimeoutMs ??
+          MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
+        waitUntil: "domcontentloaded",
+      });
+    } catch (error) {
+      // N05/P-FR-04: a Chromium proxy failure surfaces as a TYPED proxy
+      // error (proxy_connect_failed / proxy_auth_failed / tunnel_failed)
+      // instead of a generic internal_error. The navigation already
+      // started, so the effect stays unknown (7.3).
+      const message = error instanceof Error ? error.message : String(error);
+      const proxyCode = classifyProxyError(message);
+      const classified =
+        proxyCode === "tunnel_failed"
+          ? ("tunnel_failed" as const)
+          : proxyCode === "proxy_auth_failed"
+            ? ("proxy_auth_failed" as const)
+            : proxyCode === "proxy_connect_failed"
+              ? ("proxy_connect_failed" as const)
+              : null;
+      if (classified) {
+        return {
+          success: false,
+          errorCode: classified,
+          effectUnknown: true,
+        };
+      }
+      throw error;
+    }
     // Navigation invalidates every reference (FR-TOOL-003).
     options.registry.reset(options.registry.currentRevision + 1);
     return { success: true, urlAfter: safeUrl(options.page) };

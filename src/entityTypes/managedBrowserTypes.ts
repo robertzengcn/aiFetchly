@@ -68,6 +68,11 @@ export type ManagedBrowserErrorCode =
   | "browser_incompatible"
   | "fingerprint_mismatch"
   | "proxy_unavailable"
+  // N05/P-FR-04: structured proxy failure reasons (surfaced instead of a
+  // generic internal_error; classification in BrowserActionExecutor).
+  | "proxy_connect_failed"
+  | "proxy_auth_failed"
+  | "tunnel_failed"
   | "navigation_blocked"
   | "authentication_required"
   | "challenge_requires_handoff"
@@ -238,6 +243,11 @@ export interface SafeManagedBrowserStatus {
    * the task ends. Null for directly-owned sessions.
    */
   readonly rootConversationId: string | null;
+  /**
+   * N05/P-FR-03: the proxy ROW the session launched through (an opaque
+   * id — never credentials). Null for direct sessions.
+   */
+  readonly effectiveProxyId: number | null;
   readonly pageTitle: string | null;
   readonly pageRevision: number;
   readonly authenticated: boolean | null;
