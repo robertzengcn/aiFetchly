@@ -168,6 +168,7 @@ function visibleRecord(
     checked: null,
     selected: null,
     hrefOrigin: null,
+    hrefFull: null,
     visible: true,
     ...overrides,
   };

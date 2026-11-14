@@ -50,7 +50,10 @@ import { BrowserActionExecutor } from "@/childprocess/managed-browser/BrowserAct
 import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/YouTubeBrowserAdapter";
 import { PublicBrowserAdapter } from "@/childprocess/managed-browser/adapters/PublicBrowserAdapter";
 import { GenericSignInAdapter } from "@/childprocess/managed-browser/adapters/GenericSignInAdapter";
-import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
+import type {
+  DetectedChallenge,
+  PlatformBrowserAdapter,
+} from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
   redactSecrets,
   sanitizeScriptResult,
@@ -486,21 +489,23 @@ export class WorkerSession {
         shouldCancel: () => this.cancelled || abort.signal.aborted,
         now: this.now,
       });
-      // GAP-05 (reordered per PRD D-FR-11 / design 7.1): challenges
-      // appearing after an ordinary action must stop further automation —
-      // detect AFTER every action program and BEFORE sending the result,
-      // PRD D-FR-11: send ONE coherent result that carries the effect AND
-      // a fresh sanitized next-step observation, so the caller does not
-      // need an extra observe() round to decide the next action. An
-      // observation failure after a successful input is reported as
-      // observation:null (observation_unavailable) — never as a failed
-      // no-effect action.
+      // B06/D-FR-11 (design 7.1): the challenge probe runs BEFORE the
+      // next-step observation is built. A challenge landing after a
+      // normal action must be delivered as a HANDOFF-state observation —
+      // never as a ready page the runner could choose another action on.
+      const challenge =
+        outcome.stopCode === "handoff_required"
+          ? null
+          : await this.adapter.detectChallenge(page).catch(() => null);
       let observation: BrowserObservation | null = null;
       if (
         outcome.stopCode === null || outcome.stopCode === "completed"
       ) {
         try {
-          observation = await this.buildObservation(page);
+          observation = await this.buildObservation(
+            page,
+            challenge ? "handoff" : "ready"
+          );
         } catch {
           observation = null;
         }
@@ -527,13 +532,13 @@ export class WorkerSession {
             }
           : null,
       });
-      // GAP-05: challenge detection runs AFTER the outcome is delivered
-      // — when a challenge is found, its notice + challenge_detected
-      // transition follow the ACTION_RESULT, and the session does NOT
-      // go ready (the early-return below skips that transition).
+      // GAP-05: the challenge EVENTS follow the ACTION_RESULT (the
+      // outcome is never swallowed), but the probe already ran BEFORE the
+      // observation — the result's observation state is "handoff" and the
+      // session does NOT go ready (the early-return skips that).
       if (
         outcome.stopCode !== "handoff_required" &&
-        (await this.detectAndReportChallenge())
+        (await this.detectAndReportChallenge(challenge))
       ) {
         return;
       }
@@ -967,16 +972,19 @@ export class WorkerSession {
       return null;
     }
     try {
-      return await page.evaluate<string | null>(
+      const key = await page.evaluate<string | null>(
         `(() => {
           const el =
             document.querySelector('.g-recaptcha[data-sitekey]') ||
             document.querySelector('[data-sitekey]');
           if (!el) return null;
-          const key = el.getAttribute('data-sitekey');
-          return key ? key.slice(0, 128) : null;
+          const extracted = el.getAttribute('data-sitekey');
+          return extracted ? extracted.slice(0, 128) : null;
         })()`
       );
+      // B06 hardening: a page script that returns undefined must never
+      // crash the challenge path downstream (`siteKey.length`).
+      return typeof key === "string" ? key : null;
     } catch {
       return null;
     }
@@ -989,14 +997,19 @@ export class WorkerSession {
    * and invalidates every reference; a repeat within the window (redirect
    * storm) stays silent so the user sees ONE notice.
    */
-  private async detectAndReportChallenge(): Promise<boolean> {
+  private async detectAndReportChallenge(
+    // B06: a pre-computed probe result (runActions probes BEFORE building
+    // the next-step observation); omit to probe the live page.
+    precomputed?: DetectedChallenge | null
+  ): Promise<boolean> {
     const page = this.page;
     if (!page) {
       return false;
     }
-    const detection = await this.adapter
-      .detectChallenge(page)
-      .catch(() => null);
+    const detection =
+      precomputed !== undefined
+        ? precomputed
+        : await this.adapter.detectChallenge(page).catch(() => null);
     if (!detection) {
       return false;
     }
@@ -1146,13 +1159,16 @@ export class WorkerSession {
   }
 
   private async buildObservation(
-    page: PuppeteerPageLike
+    page: PuppeteerPageLike,
+    // B06: a challenge observed on the page is delivered as "handoff",
+    // never as a ready page (D-FR-11: the runner must not act on it).
+    state: BrowserObservation["state"] = "ready"
   ): Promise<BrowserObservation> {
     return buildObservation({
       page,
       sessionId: this.sessionId,
       registry: this.registry,
-      state: "ready",
+      state,
     });
   }
 

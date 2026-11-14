@@ -126,6 +126,7 @@ describe("collector SELECT options (F14)", () => {
       checked: null,
       selected: true,
       hrefOrigin: null,
+      hrefFull: null,
       visible: true,
       options: [
         { v: "de", l: "Germany" },

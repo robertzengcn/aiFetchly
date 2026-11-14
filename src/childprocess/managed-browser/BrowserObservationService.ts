@@ -56,6 +56,8 @@ export interface CollectedElementRecord {
   readonly checked: boolean | null;
   readonly selected: boolean | null;
   readonly hrefOrigin: string | null;
+  /** B04: the normalized absolute link URL — full-URL NAVIGATE provenance. */
+  readonly hrefFull: string | null;
   readonly visible: boolean;
   /** T21/A-AC-04: filled by the privileged login filler. */
   isCredential?: boolean;
@@ -155,8 +157,15 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
     const inputTypeRaw = htmlEl.getAttribute('type');
     const inputType = htmlEl.tagName === 'INPUT' || htmlEl.tagName === 'TEXTAREA' ? (inputTypeRaw || 'text') : null;
     let hrefOrigin = null;
+    let hrefFull = null;
     if (htmlEl.tagName === 'A' && htmlEl.href) {
-      try { hrefOrigin = new URL(htmlEl.href).origin; } catch (e) { hrefOrigin = null; }
+      try {
+        const u = new URL(htmlEl.href);
+        hrefOrigin = u.origin;
+        // B04: the FULL normalized URL (origin+path+query+hash) — NAVIGATE
+        // provenance is per-URL, not per-origin.
+        hrefFull = String(u.href).slice(0, 2048);
+      } catch (e) { hrefOrigin = null; hrefFull = null; }
     }
     // F14: observed SELECT options — bounded (20), sanitized downstream.
     let options = null;
@@ -184,6 +193,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       checked: htmlEl.checked === undefined ? null : !!htmlEl.checked,
       selected: htmlEl.tagName === 'SELECT' ? htmlEl.selectedIndex >= 0 : null,
       hrefOrigin,
+      hrefFull,
       visible: entry.visible,
       isCredential,
       options,
@@ -256,6 +266,7 @@ export function shapeElementRecord(
   | "checked"
   | "selected"
   | "hrefOrigin"
+  | "hrefFull"
   | "option_ids"
   | "option_labels"
   | "option_values"
@@ -281,6 +292,8 @@ export function shapeElementRecord(
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
     ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
+    // B04: full normalized URL rides the summary for NAVIGATE provenance.
+    ...(record.hrefFull ? { hrefFull: record.hrefFull } : {}),
     // F14: positional option ids (o_0..) plus sanitized labels/values
     // so the decision can pick an OBSERVED option and the runner can
     // map it back to the real value.
@@ -458,6 +471,7 @@ function toSummaryFields(
   if (shaped.checked != null) out.checked = shaped.checked;
   if (shaped.selected != null) out.selected = shaped.selected;
   if (shaped.hrefOrigin != null) out.hrefOrigin = shaped.hrefOrigin;
+  if (shaped.hrefFull != null) out.hrefFull = shaped.hrefFull;
   if (shaped.option_ids != null) out.option_ids = shaped.option_ids;
   if (shaped.option_labels != null) out.option_labels = shaped.option_labels;
   if (shaped.option_values != null) out.option_values = shaped.option_values;

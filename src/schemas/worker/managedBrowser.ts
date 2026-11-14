@@ -205,6 +205,9 @@ const errorCodeSchema = z.enum([
   "internal_error",
   "session_already_account_bound",
   "proxy_switch_in_progress",
+  // B07: a SELECT resolution that fails against the live options BEFORE
+  // any input is dispatched — proven no-effect (runner reobserves).
+  "stale_select_option",
 ]);
 
 const challengeKindSchema = z.enum([
@@ -657,11 +660,16 @@ const elementSummarySchema = z.strictObject({
   checked: z.boolean().optional(),
   selected: z.boolean().optional(),
   hrefOrigin: z.string().max(512).optional(),
+  // B04: full normalized link URL for per-URL NAVIGATE provenance.
+  href_full: z.string().max(2048).optional(),
   // F14: observed SELECT options — ids are positional (o_N), labels
   // and values are the sanitized page-authored strings.
   option_ids: z.array(z.string().max(8)).max(20).optional(),
   option_labels: z.array(z.string().max(200)).max(20).optional(),
-  option_values: z.array(z.string().max(200)).max(20).optional(),
+  // B05: the bound MUST match the collector (512) and the select action's
+  // expected_values (512) — a tighter limit here silently drops the whole
+  // observation when one option value exceeds it.
+  option_values: z.array(z.string().max(512)).max(20).optional(),
 });
 
 const observationSchema = z.strictObject({

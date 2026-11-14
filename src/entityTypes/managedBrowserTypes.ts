@@ -101,6 +101,7 @@ export type ManagedBrowserErrorCode =
   | "cache_maintenance_failed"
   | "cache_limit_invalid"
   | "internal_error"
+  | "stale_select_option"
   | "session_already_account_bound"
   | "proxy_switch_in_progress";
 
@@ -329,6 +330,8 @@ export interface BrowserElementSummary {
   readonly checked?: boolean;
   readonly selected?: boolean;
   readonly hrefOrigin?: string;
+  /** B04: the full normalized link URL — NAVIGATE provenance per URL. */
+  readonly hrefFull?: string;
   /** F14: observed SELECT options (positional o_N ids + labels/values). */
   readonly option_ids?: string[];
   readonly option_labels?: string[];

@@ -18,6 +18,9 @@ function makeElement(overrides: {
   type?: (text: string) => Promise<void>;
   descriptor?: { role: string; name: string };
   inputType?: string | null;
+  select?: (...values: string[]) => Promise<string[]>;
+  /** B07: route page-function evaluates by script name. */
+  onEvaluate?: (fnName: string) => Promise<unknown>;
 }): ExecutorElementHandle {
   const descriptor = overrides.descriptor ?? { role: "button", name: "Go" };
   return {
@@ -31,8 +34,11 @@ function makeElement(overrides: {
         await overrides.type(text);
       }
     },
-    async select(): Promise<string[]> {
-      return [];
+    async select(...values: string[]): Promise<string[]> {
+      if (overrides.select) {
+        return await overrides.select(...values);
+      }
+      return values;
     },
     async hover(): Promise<void> {
       /* no-op */
@@ -51,6 +57,9 @@ function makeElement(overrides: {
       }
       if (fnName === "probeInputElementTypeFn") {
         return (overrides.inputType ?? null) as unknown as T;
+      }
+      if (overrides.onEvaluate) {
+        return (await overrides.onEvaluate(fnName)) as T;
       }
       return undefined as unknown as T;
     },
@@ -223,5 +232,70 @@ describe("BrowserActionExecutor unknown-effect classification (D-FR-26)", () => 
       new PageReferenceRegistry<ExecutorElementHandle>(3),
     );
     expect(outcome.effect).toBe("unknown");
+  });
+});
+
+describe("BrowserActionExecutor B07 SELECT stale-option classification", () => {
+  const selectAction = {
+    type: "select" as const,
+    ref: "",
+    pageRevision: 3,
+    values: ["o_0"],
+    expected_values: ["expected-live-value"],
+  };
+
+  it("a stale_select_option throw before dispatch is a KNOWN no-effect failure", async () => {
+    // Options were reordered after the observation: the resolution throws
+    // before element.select is invoked — the page state is unchanged, so
+    // the runner must be able to reobserve (not halt on unknown effect).
+    const selectCalls: string[][] = [];
+    const element = makeElement({
+      descriptor: { role: "combobox", name: "Country" },
+      select: async (...values) => {
+        selectCalls.push(values);
+        return values;
+      },
+      onEvaluate: async (fnName) => {
+        if (fnName === "resolveSelectOptionsFn") {
+          throw new Error("stale_select_option");
+        }
+        return undefined;
+      },
+    });
+    const { registry, ref } = makeRegistry(element, "combobox", "Country");
+    const outcome = await run(
+      [{ ...selectAction, ref }],
+      makePage({}),
+      registry,
+    );
+    expect(outcome.effect).toBe("known");
+    expect(outcome.stopCode).toBe("completed");
+    expect(outcome.results[0]?.success).toBe(false);
+    expect(outcome.results[0]?.errorCode).toBe("stale_select_option");
+    // Nothing was dispatched to the page.
+    expect(selectCalls).toHaveLength(0);
+  });
+
+  it("a select failure AFTER the resolution dispatched is still unknown", async () => {
+    const element = makeElement({
+      descriptor: { role: "combobox", name: "Country" },
+      select: async () => {
+        throw new Error("select detached");
+      },
+      onEvaluate: async (fnName) => {
+        if (fnName === "resolveSelectOptionsFn") {
+          return ["live-value"];
+        }
+        return undefined;
+      },
+    });
+    const { registry, ref } = makeRegistry(element, "combobox", "Country");
+    const outcome = await run(
+      [{ ...selectAction, ref }],
+      makePage({}),
+      registry,
+    );
+    expect(outcome.effect).toBe("unknown");
+    expect(outcome.stopCode).toBe("unknown_effect");
   });
 });

@@ -397,14 +397,35 @@ export class BrowserActionExecutor {
         case "select":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
-            dispatch.inputSent = true;
             // P1/D-FR-17: positional tokens resolve against the LIVE
             // element's native options before the selection.
-            const resolved = await entry.element.evaluate<string[]>(
-              resolveSelectOptionsFn,
-              action.values,
-              action.expected_values ?? null
-            );
+            let resolved: string[];
+            try {
+              resolved = await entry.element.evaluate<string[]>(
+                resolveSelectOptionsFn,
+                action.values,
+                action.expected_values ?? null
+              );
+            } catch (error) {
+              // B07/D-FR-26: the stale-option throw happens BEFORE any
+              // input is dispatched — it is a PROVEN no-effect failure
+              // (effectUnknown: false) so the runner reobserves instead
+              // of halting the task with unknown_execution_effect.
+              if (
+                error instanceof Error &&
+                error.message === "stale_select_option"
+              ) {
+                return {
+                  success: false,
+                  errorCode: "stale_select_option" as const,
+                  effectUnknown: false,
+                };
+              }
+              throw error;
+            }
+            // The select() call is the first mutation — inputSent only
+            // covers everything AFTER the resolution succeeded.
+            dispatch.inputSent = true;
             await entry.element.select(...resolved);
             return { success: true };
           });

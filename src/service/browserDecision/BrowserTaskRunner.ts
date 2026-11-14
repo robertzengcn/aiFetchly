@@ -141,6 +141,8 @@ export interface RunnerObservation {
     readonly option_values?: readonly string[] | null;
     /** N09/D-FR-16: observed LINK origin — NAVIGATE provenance. */
     readonly hrefOrigin?: string | null;
+    /** B04: observed link FULL normalized URL — per-URL NAVIGATE provenance. */
+    readonly href_full?: string | null;
   }>;
   readonly visibleText: string;
 }
@@ -428,30 +430,39 @@ export class BrowserTaskRunner {
               evidence.push("navigate_not_same_site");
               continue;
             }
-            // N09/D-FR-16: provenance — a cross-ORIGIN target on the
-            // same registrable domain must have been OBSERVED as a link
-            // (or be the current origin itself). The model cannot invent
-            // deep links it never saw.
-            let targetOrigin: string | null = null;
+            // N09/D-FR-16 + B04: provenance is per-URL. The same-site
+            // registrable-domain check above still applies; additionally
+            // the FULL normalized target (origin+path+query+fragment)
+            // must be an OBSERVED link — or the page the observation was
+            // taken on. An origin match alone never authorizes other
+            // paths on that origin.
+            let targetKey: string | null = null;
             try {
-              targetOrigin = new URL(action.url).origin;
+              targetKey = urlKeyOf(new URL(action.url));
             } catch {
-              targetOrigin = null;
+              targetKey = null;
             }
-            const currentOrigin = (() => {
+            const currentPageKey = (() => {
               try {
-                return new URL(observation.url).origin;
+                return urlKeyOf(new URL(observation.url));
               } catch {
                 return null;
               }
             })();
-            const originObserved =
-              targetOrigin === currentOrigin ||
-              observation.elements.some(
-                (el) => el.hrefOrigin != null && el.hrefOrigin === targetOrigin
-              );
-            if (!originObserved) {
-              evidence.push("navigate_unobserved_origin");
+            const urlObserved =
+              (targetKey !== null && targetKey === currentPageKey) ||
+              observation.elements.some((el) => {
+                if (el.href_full == null || targetKey === null) {
+                  return false;
+                }
+                try {
+                  return urlKeyOf(new URL(el.href_full)) === targetKey;
+                } catch {
+                  return false;
+                }
+              });
+            if (!urlObserved) {
+              evidence.push("navigate_unobserved_url");
               continue;
             }
           }
@@ -1166,4 +1177,13 @@ export class BrowserTaskRunner {
       userInterventions: control.get(this.taskId)?.interventions ?? [],
     };
   }
+}
+
+/**
+ * B04: canonical comparison key for NAVIGATE provenance — origin,
+ * path, query, and fragment. Default ports and empty fragments are
+ * normalized by the URL constructor itself.
+ */
+function urlKeyOf(url: URL): string {
+  return `${url.origin}${url.pathname}${url.search}${url.hash}`;
 }

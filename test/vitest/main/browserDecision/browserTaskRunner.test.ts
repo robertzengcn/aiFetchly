@@ -1351,17 +1351,23 @@ describe("BrowserTaskRunner N09 NAVIGATE provenance", () => {
       deps
     );
     const result = await runner.run();
-    expect(result.evidence).toContain("navigate_unobserved_origin");
-    // Nothing navigated — the unobserved origin never dispatched.
+    expect(result.evidence).toContain("navigate_unobserved_url");
+    // Nothing navigated — the unobserved URL never dispatched.
     expect(seen).toEqual([]);
   });
 
-  it("allows navigation when the origin WAS observed as a link", async () => {
+  it("allows navigation to the FULL URL of an observed link", async () => {
     const seen: RunnerAction[] = [];
     const deps = makeNavDeps(
       [
         { ref: "e_nav", role: "link", name: "Mail" },
-        { ref: "e_link", role: "link", name: "Mail home", hrefOrigin: "https://mail.example.test" },
+        {
+          ref: "e_link",
+          role: "link",
+          name: "Mail inbox",
+          hrefOrigin: "https://mail.example.test",
+          href_full: "https://mail.example.test/inbox",
+        },
       ],
       seen
     );
@@ -1376,6 +1382,116 @@ describe("BrowserTaskRunner N09 NAVIGATE provenance", () => {
     );
     const result = await runner.run();
     expect(seen.map((a) => a.type)).toContain("navigate");
+    expect(result.status).toBe("completed");
+  });
+});
+
+describe("BrowserTaskRunner B04 NAVIGATE per-URL provenance", () => {
+  const navDecision = (url: string): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+    status: "decided",
+    action: { operation: "NAVIGATE", target_id: null, option_id: null, key: null, url, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  });
+
+  function makeB04Deps(
+    elements: Array<Record<string, unknown>>,
+    seen: RunnerAction[]
+  ) {
+    let navigated = false;
+    const deps = makeRunnerDeps(
+      [navDecision("https://example.test/unobserved"), doneEntry()],
+      observation({
+        url: "https://example.test/search",
+        elements: elements as never,
+      })
+    );
+    deps.observe = async (): Promise<RunnerObservation | null> =>
+      observation({
+        url: navigated
+          ? "https://example.test/unobserved"
+          : "https://example.test/search",
+        elements: elements as never,
+      });
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      if (input.actions.some((a) => a.type === "navigate")) {
+        navigated = true;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    return deps;
+  }
+
+  it("an origin match alone does NOT authorize an unobserved path on the same origin", async () => {
+    // B04: a link to https://cdn.example.test/one-path must not authorize
+    // https://cdn.example.test/other-path; likewise a same-origin link to
+    // /search never authorizes /unobserved.
+    const seen: RunnerAction[] = [];
+    const deps = makeB04Deps(
+      [
+        {
+          ref: "e_link",
+          role: "link",
+          name: "Observed path",
+          hrefOrigin: "https://example.test",
+          href_full: "https://example.test/search",
+        },
+      ],
+      seen
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b04a",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "/unobserved" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).toContain("navigate_unobserved_url");
+    expect(seen).toEqual([]);
+  });
+
+  it("navigating to the CURRENT page URL is authorized", async () => {
+    const deps = makeRunnerDeps(
+      [navDecision("https://example.test/search"), doneEntry()],
+      observation({
+        url: "https://example.test/search",
+        elements: [] as never,
+      })
+    );
+    let navigated = false;
+    deps.observe = async (): Promise<RunnerObservation | null> =>
+      observation({
+        url: navigated
+          ? "https://example.test/search?refreshed=1"
+          : "https://example.test/search",
+        elements: [] as never,
+      });
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      if (input.actions.some((a) => a.type === "navigate")) {
+        navigated = true;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b04b",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "example.test" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).not.toContain("navigate_unobserved_url");
     expect(result.status).toBe("completed");
   });
 });
