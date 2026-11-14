@@ -45,10 +45,26 @@ Second pass (same day), commits `15f4a34fc` → `90979e32e`:
 | `7d354cdb7` | B13: resume instructions reach the running loop; Take control button |
 | `90979e32e` | build: proxy classifier moved inside the worker bundle (rolldown chunk panic) |
 
-Still open: the large phases N01 (hosted/native decision routes),
-N02 (planner + field helper), the remaining N03/N04/N06/N07/N08/N09
-clauses — each needs its own focused pass; N01 additionally depends on
-the hosted decision contract (external).
+Still open: the large phases N01 (hosted/native decision clients —
+needs the hosted decision contract, external), N02 (planner + field
+helper — a full phase), the deep N06 sub-agent items (batch
+confirmation card, queueing for a busy account, per-provider
+concurrency), the N04 registry switch-over callers and PSL replacement,
+and N09's settings section, real E2E drivers, and the paired held-out
+evaluation (external).
+
+Third pass (same day), commits `bc94a961d` → `9d2…`:
+
+| Commit | Items |
+| --- | --- |
+| `bc94a961d` | N08: priority candidate shortlist (D-FR-13/14); pre-input viewport revalidation (D-FR-15); feature-conditional browser prompt rows (D-FR-10c) |
+| `418f48a1e` | N07/N06: startup sweep for control records (C-FR-14); return-now marks interrupted (C-FR-11); browser_execute_task in the operator allow-list (M-FR-01/12); grants present the agent TASK id (M-FR-02) |
+| `2c067cfab` | N01: in-flight provider-change abort (D-FR-02); dedicated usage_total_tokens on the task record (D-AC-08) |
+| `8dcae205e` | N05/P-FR-06: proxy-aligned locale/timezone |
+| `5f5921c7a` | N03/A-FR-10: cooldown per account+site; cooldown-free reasons |
+| `3bb6153f`+ | N01: chat output negotiation (D-FR-18) + alias resolution via /models (D-FR-04) |
+| conversation-scope | N07/C-FR-09: the wait probe is per-conversation — a sibling's user wait no longer freezes a batch child's clock |
+| `7d…`/`54729b531` | N02/A-FR-14: the runner's SIGN_IN operation routes login walls to the credential service (bounded, never types passwords); N03/A-FR-01: sensitive-field + login-required notices name browser_sign_in (six languages) |
 
 Verification: 456 main managedBrowser+browserDecision tests, 1605
 component tests, and the touched utility suites pass; `tsc --noEmit`
