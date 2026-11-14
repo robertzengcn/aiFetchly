@@ -202,6 +202,130 @@ describe("ToolResultPreparationService — small results (AC-01)", () => {
   });
 });
 
+describe("ToolResultPreparationService — batch aggregate receipts", () => {
+  /**
+   * A batch aggregate record sized like the live 4-image batches the E2E
+   * drives (commit 8eb008caa measured ~3.3KB): real uuid-shaped identity
+   * fields, a full instruction echo, and slimmed output descriptors.
+   */
+  function batchOutput(items: number): unknown {
+    const uuid = (i: number, j: number): string =>
+      `${i.toString().repeat(8)}-${j}0ff-4a0b-9c1d-${(i * 7919 + j * 104729)
+        .toString(16)
+        .padStart(12, "0")}`;
+    return {
+      status: "completed",
+      processor: "image_edit",
+      requestedCount: items,
+      completedCount: items,
+      failedCount: 0,
+      cancelledCount: 0,
+      concurrency: 3,
+      instruction: "make the lighting warmer".padEnd(500, " e2e"),
+      items: Array.from({ length: items }, (_, i) => ({
+        input: {
+          kind: "generated_image",
+          reference: { messageId: `assistant-${uuid(i, 0)}`, imageIndex: 0 },
+        },
+        status: "completed",
+        outputImages: [
+          {
+            url: `aifetchly-generated-image://local/e2e@aifetchly.test/conv-${uuid(
+              i,
+              1
+            )}/assistant-${uuid(i, 0)}/gen-${uuid(i, 2)}.png`,
+            file_name: `gen-${uuid(i, 2)}.png`,
+            mime_type: "image/png",
+            width: 64,
+            height: 64,
+            delivery: "local_file",
+          },
+        ],
+        durationMs: 1200 + i,
+      })),
+    };
+  }
+
+  it("externalizes a batch aggregate that fits the inline budget (renderer contract)", async () => {
+    // Precondition: the body fits the inline budget (bytes AND the 1-token-
+    // per-byte token count) but exceeds the DEFAULT preview budget — so this
+    // test only passes when the batch budget was applied at the boundary.
+    const output = batchOutput(6);
+    const bodyBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
+    expect(bodyBytes).toBeGreaterThan(TOOL_RESULT_CONFIG.previewMaxBytes);
+    expect(bodyBytes).toBeLessThan(TOOL_RESULT_CONFIG.batchPreviewMaxBytes);
+    expect(bodyBytes).toBeLessThanOrEqual(TOOL_RESULT_CONFIG.inlineMaxBytes);
+    expect(bodyBytes).toBeLessThanOrEqual(TOOL_RESULT_CONFIG.inlineMaxTokens);
+
+    const prepared = await preparation.prepare(
+      { success: true, executionTimeMs: 4200, output, previewKind: "text" },
+      deps({ context: context({ toolName: "process_artifact_batch" }) })
+    );
+
+    // The durable envelope is the contract: the renderer unwraps the
+    // aggregate record from `toolOutputPreview` in the receipt.
+    const receipt = prepared.receipt;
+    expect(receipt).toBeDefined();
+    if (!receipt) return;
+    expect(typeof receipt.preview).toBe("string");
+    // The whole record survives — the batch preview budget (8KB), not the
+    // 2KB default, bounded it.
+    expect(receipt.previewComplete).toBe(true);
+    expect(Buffer.byteLength(receipt.preview, "utf8")).toBeGreaterThan(
+      TOOL_RESULT_CONFIG.previewMaxBytes
+    );
+    const record = JSON.parse(receipt.preview) as {
+      requestedCount?: number;
+      completedCount?: number;
+    };
+    expect(record.requestedCount).toBe(6);
+    expect(record.completedCount).toBe(6);
+  });
+
+  it("keeps a tiny batch aggregate in the receipt envelope too", async () => {
+    const prepared = await preparation.prepare(
+      {
+        success: true,
+        executionTimeMs: 800,
+        output: batchOutput(1),
+        previewKind: "text",
+      },
+      deps({ context: context({ toolName: "process_artifact_batch" }) })
+    );
+    const receipt = prepared.receipt;
+    expect(receipt).toBeDefined();
+    if (!receipt) return;
+    const record = JSON.parse(receipt.preview) as {
+      requestedCount?: number;
+      completedCount?: number;
+    };
+    expect(record.requestedCount).toBe(1);
+    expect(record.completedCount).toBe(1);
+  });
+
+  it("publishes a valid receipt when an async producer omits execution_time_ms", async () => {
+    // A bare async SkillExecutionResult carries no execution_time_ms; the
+    // boundary must re-bound it to 0 instead of letting NaN invalidate the
+    // receipt (which would turn a good result into a publication failure).
+    const prepared = await preparation.prepare(
+      {
+        success: true,
+        executionTimeMs: undefined as unknown as number,
+        output: batchOutput(1),
+        previewKind: "text",
+      },
+      deps({ context: context({ toolName: "process_artifact_batch" }) })
+    );
+    const receipt = prepared.receipt;
+    expect(receipt).toBeDefined();
+    if (!receipt) return;
+    expect(receipt.executionTimeMs).toBe(0);
+    // The published receipt validates end-to-end.
+    const parsed = toolResultReceiptSchema.safeParse(receipt);
+    expect(parsed.success).toBe(true);
+  });
+});
+
 describe("ToolResultPreparationService — large results (AC-02)", () => {
   it("produces a schema-valid receipt with a retrievable reference", async () => {
     const prepared = await preparation.prepare(
