@@ -28,6 +28,7 @@ function status(
     accountLabel: "My Channel",
     platformLabel: "YouTube",
       ownerConversationId: null,
+      rootConversationId: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",
@@ -1081,4 +1082,68 @@ describe("P0-3 fail-closed refs", () => {
         JSON.stringify(dispatched)
       ).not.toContain("Attacker-chosen name");
     });
+});
+
+// ---------------------------------------------------------------------------
+// B11/M-FR-07: sub-agent session ownership — the ROOT (parent) conversation
+// rides the start call, is recorded on the session, and may drive/read the
+// session; every OTHER conversation stays rejected.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService sub-agent ownership (B11)", () => {
+  const SUB_AGENT_CTX = {
+    conversationId: "agent-v2-child",
+    toolCallId: "call-agent-1",
+    ownerAgentId: "agt-123",
+    rootConversationId: "conv-parent",
+  };
+
+  it("startSession forwards agentTaskId and rootConversationId to the module", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    await service.startSession({ purpose: "open website" }, SUB_AGENT_CTX);
+    const startInput = (module.start as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as Record<string, unknown>;
+    expect(startInput.agentTaskId).toBe("agt-123");
+    expect(startInput.rootConversationId).toBe("conv-parent");
+    expect(startInput.conversationId).toBe("agent-v2-child");
+  });
+
+  it("the ROOT conversation may drive the sub-agent's session", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({
+            ownerConversationId: "agent-v2-child",
+            rootConversationId: "conv-parent",
+          })
+        : null
+    );
+    const service = makeService({ module });
+    // Observe from the PARENT conversation: accepted (read/takeover).
+    const obs = await service.observe({ session_id: SESSION_ID }, {
+      ...CTX,
+      conversationId: "conv-parent",
+    });
+    expect(obs.sessionId).toBe(SESSION_ID);
+  });
+
+  it("every OTHER conversation is still rejected", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({
+            ownerConversationId: "agent-v2-child",
+            rootConversationId: "conv-parent",
+          })
+        : null
+    );
+    const service = makeService({ module });
+    await expect(
+      service.observe({ session_id: SESSION_ID }, {
+        ...CTX,
+        conversationId: "conv-stranger",
+      })
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
 });

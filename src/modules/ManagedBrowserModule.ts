@@ -118,6 +118,8 @@ export interface StartManagedBrowserInput {
   readonly purpose: string;
   /** T23/M-FR-07: owning agent task id for sub-agent driven sessions. */
   readonly agentTaskId?: string;
+  /** B11/M-FR-07: the owning parent conversation for sub-agent sessions. */
+  readonly rootConversationId?: string;
   /**
    * PRD P-FR-01: optional proxy choice at session start. Account
    * sessions default to their linked proxy; `direct`/different-proxy
@@ -143,6 +145,8 @@ interface ActiveSessionRecord {
   readonly conversationId: string | null;
   /** F03: retained so the account-lease transfer keeps ownership. */
   readonly ownerAgentTaskId: string | null;
+  /** B11: the root (parent) conversation of a sub-agent-owned session. */
+  readonly rootConversationId: string | null;
   readonly leaseToken: string;
   /** Lease key (account: or public:) used to release this session. */
   readonly leaseKey: string;
@@ -733,6 +737,7 @@ export class ManagedBrowserModule {
         platformId: account.platformId,
         conversationId: input.conversationId ?? null,
         ownerAgentTaskId: input.agentTaskId ?? null,
+        rootConversationId: input.rootConversationId ?? null,
         leaseToken: lease.leaseToken,
         leaseKey,
         siteDomain: requestedSiteDomain,
@@ -2314,6 +2319,7 @@ record.currentUrl = message.observation.url || record.currentUrl;
       currentOrigin: record.currentOrigin,
       pageTitle: record.pageTitle,
       ownerConversationId: record.conversationId,
+      rootConversationId: record.rootConversationId,
       pageRevision: record.pageRevision,
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,

@@ -52,6 +52,7 @@ function status(
     accountLabel: "My Channel",
     platformLabel: "YouTube",
       ownerConversationId: null,
+      rootConversationId: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",

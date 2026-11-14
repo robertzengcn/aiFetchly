@@ -232,6 +232,12 @@ export interface SafeManagedBrowserStatus {
   readonly state: ManagedBrowserSessionState;
   readonly currentOrigin: string | null;
   readonly ownerConversationId: string | null;
+  /**
+   * B11/M-FR-07: the ROOT (parent) conversation of a sub-agent-owned
+   * session — the parent may drive/read the session and take over after
+   * the task ends. Null for directly-owned sessions.
+   */
+  readonly rootConversationId: string | null;
   readonly pageTitle: string | null;
   readonly pageRevision: number;
   readonly authenticated: boolean | null;

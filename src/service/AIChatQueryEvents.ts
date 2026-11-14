@@ -739,6 +739,13 @@ export interface AIChatQueryLoopInput {
    */
   ownerAgentId?: string;
   /**
+   * B11/M-FR-07: trusted ROOT (parent) conversation id for sub-agent
+   * turns, supplied by the engine — never tool arguments. Threaded into
+   * SkillExecutionContext.rootConversationId so browser sessions started
+   * by a sub-agent record their parent chat (drive/takeover rights).
+   */
+  rootConversationId?: string;
+  /**
    * Persisted outbound-email intent decision id for this turn. Null when the
    * turn did not resolve an outbound-email intent (e.g. not marketing-related)
    * or the resolver failed. Supplied by the main process, not tool arguments.

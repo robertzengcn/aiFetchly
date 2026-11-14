@@ -350,6 +350,14 @@ export interface SkillExecutionContext {
   readonly ownerAgentId?: string;
 
   /**
+   * B11/M-FR-07: trusted ROOT (parent) conversation id for sub-agent
+   * executions, supplied by the engine — never tool arguments. Browser
+   * sessions started by a sub-agent record it so the parent chat can
+   * drive/take over that session.
+   */
+  readonly rootConversationId?: string;
+
+  /**
    * Persisted outbound-email intent decision id for this turn. Null when no
    * outbound-email intent was resolved. Supplied by the main process.
    */

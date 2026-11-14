@@ -114,6 +114,12 @@ export interface BrowserToolExecutionContext {
   /** T23/M-FR-07: owning agent id when the call comes from a sub-agent. */
   readonly ownerAgentId?: string;
   /**
+   * B11/M-FR-07: the ROOT (parent) conversation id for sub-agent calls —
+   * sessions started by a sub-agent record it, so the parent chat can
+   * read/drive/take over that session.
+   */
+  readonly rootConversationId?: string;
+  /**
    * Accepted for interface compatibility but DELIBERATELY IGNORED by the
    * managed-browser tools: consequential actions are ALWAYS-CONFIRM
    * (TODO-MSB-002) — no consent flag bypasses the approval gate.
@@ -355,13 +361,20 @@ export class ManagedBrowserAiToolService {
         "no_active_session"
       );
     }
-    // PRD M-FR-07: a session owned by a conversation may only be driven
-    // by its owner. Ownerless (renderer-started public) sessions accept
-    // the caller; the parent-conversation exception lands with sub-agents.
+    // PRD M-FR-07/B11: a session owned by a conversation may only be
+    // driven by its owner — EXCEPT the session's ROOT conversation: a
+    // sub-agent's session records the parent chat, which may read, drive,
+    // and take the session over after the task ends. Every other
+    // conversation is rejected.
+    const callerIsRoot =
+      callerConversationId != null &&
+      status.rootConversationId != null &&
+      status.rootConversationId === callerConversationId;
     if (
       callerConversationId &&
       status.ownerConversationId &&
-      status.ownerConversationId !== callerConversationId
+      status.ownerConversationId !== callerConversationId &&
+      !callerIsRoot
     ) {
       throw new ManagedBrowserAiToolError(
         "worker_exited",
@@ -434,6 +447,11 @@ export class ManagedBrowserAiToolService {
           conversationId: context.conversationId,
           ...(context.ownerAgentId
             ? { agentTaskId: context.ownerAgentId }
+            : {}),
+          // B11/M-FR-07: the sub-agent's ROOT conversation rides the
+          // session so the parent chat can drive/take it over.
+          ...(context.rootConversationId
+            ? { rootConversationId: context.rootConversationId }
             : {}),
           ...(parsed.data.proxy ? { proxy: parsed.data.proxy } : {}),
         },

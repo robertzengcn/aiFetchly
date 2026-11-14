@@ -4876,6 +4876,8 @@ function managedBrowserToolWrapper(
     toolCallId: string;
     jobId?: string;
     ownerAgentId?: string;
+    /** B11: root (parent) conversation for sub-agent executions. */
+    rootConversationId?: string;
     skipPermissionCheck?: boolean;
     signal?: AbortSignal;
     emitProgress?: (event: {
@@ -4896,6 +4898,7 @@ function managedBrowserToolWrapper(
     signal: context.signal,
     jobId: context.jobId,
     ownerAgentId: context.ownerAgentId,
+    rootConversationId: context.rootConversationId,
   })
     .then((result) => ({ success: true, result }))
     .catch((error: unknown) => {

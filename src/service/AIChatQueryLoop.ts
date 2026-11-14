@@ -5981,6 +5981,9 @@ export class AIChatQueryLoop {
         sourceUserMessageId: input.sourceUserMessageId,
         intentDecisionId: input.intentDecisionId,
         ownerAgentId: input.ownerAgentId,
+        // B11/M-FR-07: the root (parent) conversation rides the tool
+        // context so browser sessions started by a sub-agent record it.
+        rootConversationId: input.rootConversationId,
         outboundAuthorization: meta.outboundAuthorization,
         skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
         emitProgress: (event) => {
