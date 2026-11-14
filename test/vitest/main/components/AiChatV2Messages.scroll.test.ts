@@ -8,7 +8,7 @@ import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 const i18n = createI18n({
   legacy: false,
   locale: "en",
-  messages: { en: { aiChatV2: {} } },
+  messages: { en: { aiChatV2: { ai_working: "Working…" } } },
 });
 
 /**
@@ -373,5 +373,24 @@ describe("AiChatV2Messages streaming scroll throttling", () => {
     // Immediate path writes synchronously, no rAF needed.
     expect(counter.getWriteCount()).toBeGreaterThan(writesBefore);
     wrapper.unmount();
+  });
+});
+
+describe("AiChatV2Messages working indicator", () => {
+  it("renders working indicator when showTypingIndicator is true", async () => {
+    const wrapper = mount(AiChatV2Messages, {
+      props: {
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "streaming",
+        showTypingIndicator: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const indicator = wrapper.find('[data-testid="ai-chat-working-indicator"]');
+    expect(indicator.exists()).toBe(true);
+    expect(indicator.text()).toContain("Working…");
   });
 });

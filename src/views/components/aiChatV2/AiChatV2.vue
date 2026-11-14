@@ -3387,8 +3387,26 @@ const pinnedPermissionPrompt = computed<ChatV2MessageView | null>(() => {
 
 const visibleMessages = computed<ChatV2MessageView[]>(() => {
   const pinnedId = pinnedPermissionPrompt.value?.id;
-  if (!pinnedId) return messages.value;
-  return messages.value.filter((message) => message.id !== pinnedId);
+  const filtered = pinnedId
+    ? messages.value.filter((message) => message.id !== pinnedId)
+    : messages.value;
+
+  return filtered.filter((msg) => {
+    if (msg.role !== "assistant") return true;
+    const hasContent = Boolean(msg.content && msg.content.length > 0);
+    const hasReasoning = Boolean(
+      msg.metadata?.reasoning?.content &&
+        msg.metadata.reasoning.content.length > 0
+    );
+    const hasActionableMetadata = Boolean(
+      msg.metadata?.error ||
+        msg.metadata?.cancelled ||
+        msg.metadata?.artifact ||
+        msg.metadata?.toolResult ||
+        msg.metadata?.toolCallId
+    );
+    return hasContent || hasReasoning || hasActionableMetadata;
+  });
 });
 
 const pinnedPermissionToolResult = computed<Record<string, unknown>>(
@@ -3489,6 +3507,7 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // `chatIsRunning`, which includes the scheduled turn's own "running" state.
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
+  if (chatIsRunning.value && !receivedFirstResponse.value) return true;
   if (!isStreaming.value) return false;
   if (!receivedFirstResponse.value) return true;
   // Between tool rounds: last message is a tool call/result with no

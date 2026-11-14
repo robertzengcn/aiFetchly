@@ -50,11 +50,20 @@
       <div
         v-if="showTypingIndicator"
         class="v2-messages__typing"
-        :aria-label="t('aiChatV2.thinking') || 'AI is thinking…'"
+        data-testid="ai-chat-working-indicator"
+        :aria-label="t('aiChatV2.ai_working') || 'Working…'"
+        role="status"
       >
-        <span class="v2-messages__typing-dot" />
-        <span class="v2-messages__typing-dot" />
-        <span class="v2-messages__typing-dot" />
+        <v-progress-circular
+          indeterminate
+          size="14"
+          width="2"
+          color="primary"
+          class="mr-2"
+        />
+        <span class="v2-messages__working-text">
+          {{ t("aiChatV2.ai_working") || "Working…" }}
+        </span>
       </div>
       <div
         v-if="retryInfo"
@@ -361,6 +370,11 @@ defineExpose({ scrollToBottomForce });
   background: rgba(0, 0, 0, 0.04);
   border-radius: 12px;
   width: fit-content;
+}
+.v2-messages__working-text {
+  line-height: 1;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.65);
 }
 .v2-messages__typing-dot {
   width: 7px;
