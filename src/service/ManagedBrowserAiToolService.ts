@@ -1115,12 +1115,48 @@ export class ManagedBrowserAiToolService {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
     this.ensureSession(parsed.data.session_id, context?.conversationId);
-    void parsed.data.reason; // renderer-initiated semantics only; recorded server-side
+    // B12/C-FR-02 (design 18.2): inside an agent turn, the handoff BLOCKS
+    // in the tool call until the user resolves, the window expires, or
+    // the task is stopped — the tool no longer returns while the dialog
+    // is merely OPEN. The coordinator opens the handoff with the (schema-
+    // valid) reason, marks the job waiting_for_user (freezing the parent
+    // poll deadline), and returns the resolution.
+    const handoffTaskId = `handoff-${context?.toolCallId ?? crypto.randomUUID().slice(0, 12)}`;
+    const { awaitUserResolution } = await import(
+      "@/service/browserAgents/HandoffCoordinator"
+    );
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const controlService = getDefaultAgentTaskControlService();
+    controlService.register(handoffTaskId, context?.conversationId ?? "");
+    const resolution = await awaitUserResolution({
+      sessionId: parsed.data.session_id,
+      reason: "user_requested" as const,
+      taskId: handoffTaskId,
+      signal: context?.signal,
+      jobId: context?.jobId ?? null,
+    });
+    if (resolution !== "resolved") {
+      // B12: expiry/cancel map to INTERRUPTED for THIS task only (partial
+      // results; no automatic resume) — never a failed control record.
+      controlService.setState(handoffTaskId, "interrupted", `handoff_${resolution}`);
+      return {
+        sessionId: parsed.data.session_id,
+        handoff_resolution: resolution,
+        interrupted: true,
+        ...(resolution === "expired"
+          ? { reason: "handoff_expired" }
+          : { reason: "handoff_cancelled" }),
+      };
+    }
     try {
-      const status = await this.browserModule.requestHandoff(
-        parsed.data.session_id
-      );
-      return { ...status };
+      const status = this.browserModule.getStatus(parsed.data.session_id);
+      return {
+        ...(status ?? { sessionId: parsed.data.session_id }),
+        handoff_resolution: "resolved",
+        interrupted: false,
+      };
     } catch (error) {
       this.wrapModuleError(error);
     }

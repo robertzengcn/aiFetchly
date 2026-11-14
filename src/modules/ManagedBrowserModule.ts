@@ -1441,6 +1441,11 @@ record.currentUrl = message.observation.url || record.currentUrl;
     // a worker that is actually ready (review finding).
     if (message.type === "SESSION_STATE_CHANGED") {
       record.state = message.state;
+      // B13/C-FR-07: resume ADVANCES the page revision — the worker has
+      // already reset its reference registry, and the module mirror must
+      // follow so held approvals and stale refs against the pre-handoff
+      // page can never match again. The agent must observe before acting.
+      record.pageRevision += 1;
     }
     // PRD D-FR-15a: handoff ended; the pinned observation's TTL restarts.
     this.unpinLastObservation(sessionId);

@@ -6,6 +6,22 @@ import {
   type ManagedBrowserAiToolServiceDeps,
 } from "@/service/ManagedBrowserAiToolService";
 import { ManagedBrowserError } from "@/modules/ManagedBrowserModule";
+
+// B12: the HandoffCoordinator resolves the DEFAULT module singleton —
+// tests point that at the CURRENT test's module fixture.
+const defaultModuleHolder = vi.hoisted(() => ({
+  current: null as unknown | null,
+}));
+vi.mock("@/modules/ManagedBrowserModule", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/modules/ManagedBrowserModule")>();
+  return {
+    ...original,
+    getDefaultManagedBrowserModule: () =>
+      defaultModuleHolder.current ??
+      original.getDefaultManagedBrowserModule(),
+  };
+});
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { BrowserActionRiskClassifier } from "@/service/BrowserActionRiskClassifier";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
@@ -1145,5 +1161,63 @@ describe("ManagedBrowserAiToolService sub-agent ownership (B11)", () => {
         conversationId: "conv-stranger",
       })
     ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B12/C-FR-02: browser_request_handoff BLOCKS inside the tool until the
+// user resolves / the window expires / the task stops; expiry and cancel
+// map to interrupted (never failed).
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService blocking handoff (B12)", () => {
+  const HANDOFF_CTX = {
+    conversationId: "agent-v2-child",
+    toolCallId: "call-handoff-1",
+  };
+
+  it("blocks until the user resolves and reports handoff_resolution resolved", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({ state: "ready" }) // the user already resumed via the dialog
+        : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    const result = (await service.requestHandoff(
+      { session_id: SESSION_ID },
+      HANDOFF_CTX
+    )) as Record<string, unknown>;
+    expect(result.handoff_resolution).toBe("resolved");
+    expect(result.interrupted).toBe(false);
+    // The coordinator opened the handoff with the schema-valid reason.
+    expect(module.requestHandoff).toHaveBeenCalledWith(
+      SESSION_ID,
+      "user_requested"
+    );
+  });
+
+  it("maps an EXPIRED window to interrupted (never failed)", async () => {
+    const module = makeModule();
+    // The window lapses: the session stops (scheduleHandoffExpiry path).
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID ? status({ state: "stopped" }) : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    const result = (await service.requestHandoff(
+      { session_id: SESSION_ID },
+      HANDOFF_CTX
+    )) as Record<string, unknown>;
+    expect(result.handoff_resolution).toBe("expired");
+    expect(result.interrupted).toBe(true);
+    // The control record for THIS task is interrupted, not failed.
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const control = getDefaultAgentTaskControlService();
+    const record = control.get("handoff-call-handoff-1");
+    expect(record?.state).toBe("interrupted");
   });
 });

@@ -91,9 +91,11 @@ export async function awaitUserResolution(
   };
   input.signal?.addEventListener("abort", onAbort, { once: true });
 
+  let resolution: HandoffResolution = "expired";
   try {
     for (;;) {
       if (input.signal?.aborted) {
+        resolution = "cancelled";
         return "cancelled";
       }
       const status = browserModule.getStatus(input.sessionId);
@@ -109,6 +111,7 @@ export async function awaitUserResolution(
       if (!HANDOFF_WAITING_STATES.has(status.state)) {
         // The user verified/resumed through the dialog and the session is
         // operable again (ready/running/login_required/challenge states).
+        resolution = "resolved";
         return "resolved";
       }
       control.enforcePauseCap(input.taskId);
@@ -118,14 +121,15 @@ export async function awaitUserResolution(
     input.signal?.removeEventListener("abort", onAbort);
     control.endIntervention(input.taskId);
     setUserWait(false);
-    // F06: if the resolution path did NOT already resume the task (e.g.
-    // expiry or a dialog path without BROWSER_TASK_RESUME), reopen its
-    // control gate here — a waiting runner must never hang at
-    // waitUntilOpen. resume() bumps the generation, so any proposal held
-    // across the wait is discarded (C-FR-06).
-    const record = control.get(input.taskId);
-    if (record?.state === "waiting_for_user") {
-      control.resume(input.taskId);
+    // B12/C-FR-02: the control gate is reopened ONLY on a USER RESOLUTION.
+    // After `expired` or `cancelled` the task maps to interrupted (the
+    // caller marks it) — resuming would let the task continue past a
+    // window the user never resolved.
+    if (resolution === "resolved") {
+      const record = control.get(input.taskId);
+      if (record?.state === "waiting_for_user") {
+        control.resume(input.taskId);
+      }
     }
   }
 }

@@ -1473,6 +1473,10 @@ describe("review fixes (2026-09-08)", () => {
     const resumed = await h.module.resumeAfterHandoff(status.sessionId);
     expect(resumed.state).toBe("ready");
     expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
+    // B13/C-FR-07: resume ADVANCES the page revision — old refs from the
+    // pre-handoff page can never match again.
+    const beforeRevision = status.pageRevision;
+    expect(resumed.pageRevision).toBeGreaterThan(beforeRevision);
     // observe() must now pass the state guard (previously action_not_allowed).
     const observation = await h.module.observe(status.sessionId);
     expect(observation.origin).toBe("https://www.youtube.com");
