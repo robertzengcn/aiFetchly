@@ -545,7 +545,8 @@ const projectedItems = computed<ProjectedItem[]>(() => {
     } else {
       const hasContent = Boolean(msg.content && msg.content.length > 0);
       const hasReasoning = Boolean(
-        msg.metadata?.reasoning?.content &&
+        props.showReasoning &&
+          msg.metadata?.reasoning?.content &&
           msg.metadata.reasoning.content.length > 0
       );
       const hasActionableMetadata = Boolean(
@@ -553,7 +554,14 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           msg.metadata?.cancelled ||
           msg.metadata?.artifact ||
           msg.metadata?.toolResult ||
-          msg.metadata?.toolCallId
+          msg.metadata?.toolCallId ||
+          (Array.isArray(msg.metadata?.generatedImages) &&
+            msg.metadata.generatedImages.length > 0) ||
+          (Array.isArray(msg.metadata?.generatedImageReferences) &&
+            msg.metadata.generatedImageReferences.length > 0) ||
+          (Array.isArray(msg.metadata?.attachments) &&
+            msg.metadata.attachments.length > 0) ||
+          msg.metadata?.planStateView
       );
       if (hasContent || hasReasoning || hasActionableMetadata) {
         result.push({ kind: "assistant-message", key: msg.id, message: msg });
@@ -742,12 +750,12 @@ onMounted(onScroll);
   display: inline-flex;
   align-items: center;
   align-self: flex-start;
-  padding: 8px 12px;
+  padding: 6px 12px;
   margin-top: 4px;
-  background: rgba(0, 0, 0, 0.04);
-  border-radius: 12px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 16px;
   font-size: 13px;
-  color: rgba(0, 0, 0, 0.65);
+  color: rgba(var(--v-theme-on-surface), 0.7);
 }
 .workspace-transcript__working-text {
   line-height: 1;

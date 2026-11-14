@@ -3395,7 +3395,8 @@ const visibleMessages = computed<ChatV2MessageView[]>(() => {
     if (msg.role !== "assistant") return true;
     const hasContent = Boolean(msg.content && msg.content.length > 0);
     const hasReasoning = Boolean(
-      msg.metadata?.reasoning?.content &&
+      showReasoning.value &&
+        msg.metadata?.reasoning?.content &&
         msg.metadata.reasoning.content.length > 0
     );
     const hasActionableMetadata = Boolean(
@@ -3403,7 +3404,14 @@ const visibleMessages = computed<ChatV2MessageView[]>(() => {
         msg.metadata?.cancelled ||
         msg.metadata?.artifact ||
         msg.metadata?.toolResult ||
-        msg.metadata?.toolCallId
+        msg.metadata?.toolCallId ||
+        (Array.isArray(msg.metadata?.generatedImages) &&
+          msg.metadata.generatedImages.length > 0) ||
+        (Array.isArray(msg.metadata?.generatedImageReferences) &&
+          msg.metadata.generatedImageReferences.length > 0) ||
+        (Array.isArray(msg.metadata?.attachments) &&
+          msg.metadata.attachments.length > 0) ||
+        msg.metadata?.planStateView
     );
     return hasContent || hasReasoning || hasActionableMetadata;
   });
@@ -3497,27 +3505,14 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
 //
-// Only fires for INTERACTIVE streams. A scheduled turn sets
-// `authoritativeRuntimeStatus` to "running" (its submitMessage registers in
-// the engine's activeTurns) but never sets `isStreaming`; its tokens stream
-// into a normal assistant message via handleScheduledStream, which already
-// shows its own "Generating…" stream status. Showing the typing dots here too
-// would render a redundant "running label" below the file list during every
-// scheduled run, so we gate on `isStreaming` (interactive) — not
-// `chatIsRunning`, which includes the scheduled turn's own "running" state.
+// True whenever the remote is running or working (stream in flight, pending tool
+// executions, tool rounds, or scheduled stream running). The dedicated working indicator
+// in AiChatV2Messages replaces the legacy empty assistant bubble and in-bubble "Generating…".
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (chatIsRunning.value && !receivedFirstResponse.value) return true;
-  if (!isStreaming.value) return false;
-  if (!receivedFirstResponse.value) return true;
-  // Between tool rounds: last message is a tool call/result with no
-  // active text streaming — show dots so the user knows the AI is processing.
-  const last = messages.value[messages.value.length - 1];
-  if (!last) return true;
-  return (
-    last.messageType === MessageType.TOOL_CALL ||
-    last.messageType === MessageType.TOOL_RESULT
-  );
+  if (chatIsRunning.value || liveScheduledAssistant.value !== null) return true;
+  if (isStreaming.value) return true;
+  return false;
 });
 
 // Plan Mode state

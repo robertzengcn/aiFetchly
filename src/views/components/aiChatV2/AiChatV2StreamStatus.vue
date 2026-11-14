@@ -1,14 +1,6 @@
 <template>
   <div class="v2-stream-status" v-if="visible">
-    <v-progress-circular
-      v-if="status === 'streaming'"
-      indeterminate
-      size="14"
-      width="2"
-      color="primary"
-      class="mr-2"
-    />
-    <v-icon v-else-if="status === 'cancelled'" size="14" color="grey" class="mr-1">
+    <v-icon v-if="status === 'cancelled'" size="14" color="grey" class="mr-1">
       mdi-cancel
     </v-icon>
     <v-icon v-else-if="status === 'error'" size="14" color="error" class="mr-1">

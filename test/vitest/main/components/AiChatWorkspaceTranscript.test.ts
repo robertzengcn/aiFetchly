@@ -1392,6 +1392,98 @@ describe("AiChatWorkspaceTranscript remote working indicator & empty bubble supp
     expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
   });
 
+  it("renders assistant message with empty text if generatedImages or attachments are present", async () => {
+    const imageAssistant: ChatV2MessageView = {
+      id: "a-image",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        generatedImages: [{ url: "https://example.com/img.png", prompt: "cat" }] as never,
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [imageAssistant],
+        activeAssistantMessageId: "a-image",
+        streamStatus: "idle",
+        isRemoteWorking: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+  });
+
+  it("suppresses assistant message when content is empty and reasoning is present if showReasoning is false", async () => {
+    const reasoningAssistant: ChatV2MessageView = {
+      id: "a-reasoning",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Thinking deeply...",
+          format: "plain_text",
+          source: "server",
+        },
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [reasoningAssistant],
+        activeAssistantMessageId: "a-reasoning",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+        showReasoning: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(0);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+  });
+
+  it("renders assistant message when content is empty and reasoning is present if showReasoning is true", async () => {
+    const reasoningAssistant: ChatV2MessageView = {
+      id: "a-reasoning-visible",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Thinking deeply...",
+          format: "plain_text",
+          source: "server",
+        },
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [reasoningAssistant],
+        activeAssistantMessageId: "a-reasoning-visible",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+        showReasoning: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+  });
+
   it("hides working indicator when remote is idle and not streaming", async () => {
     const wrapper = mount(AiChatWorkspaceTranscript, {
       props: {

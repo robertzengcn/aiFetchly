@@ -356,5 +356,42 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
     const allMsgs = chatMessages.findAll("[data-message-id]");
     expect(allMsgs).toHaveLength(1);
     expect(chatMessages.text()).toContain("Hello");
+    // Remote is still working while streaming, so indicator remains visible
+    expect(
+      chatMessages.find('[data-testid="ai-chat-working-indicator"]').exists()
+    ).toBe(true);
+
+    // End of turn (done event) followed by terminal history reload with idle status
+    const doneEvent: ChatV2ScheduledStreamEvent = {
+      conversationId: "conv-scheduled-start",
+      runId: 9,
+      messageId: "scheduled-assistant-start-1",
+      kind: "done",
+    };
+    handler(doneEvent);
+    await flushPromises();
+
+    getChatV2HistoryMock.mockResolvedValue({
+      messages: [
+        {
+          id: "scheduled-assistant-start-1",
+          conversationId: "conv-scheduled-start",
+          role: "assistant",
+          content: "Hello",
+          timestamp: new Date().toISOString(),
+          messageType: "message" as const,
+        },
+      ],
+      runtimeStatus: "idle",
+    });
+    const updateHandler = subscribeConversationUpdatedMock.mock.calls[0][0] as (
+      event: { conversationId: string }
+    ) => void;
+    updateHandler({ conversationId: "conv-scheduled-start" });
+    await flushPromises();
+
+    expect(
+      chatMessages.find('[data-testid="ai-chat-working-indicator"]').exists()
+    ).toBe(false);
   });
 });
