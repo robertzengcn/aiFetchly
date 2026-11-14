@@ -39,6 +39,7 @@ import type { ChatV2DirectionTransition } from "@/entityTypes/aiChatV2Types";
 import type { AIChatSteeringBatch } from "@/service/AIChatTurnControl";
 import {
   OpenAIStreamAccumulator,
+  describeUnexecutableToolCallFragments,
   type ParsedToolCallResult,
 } from "@/service/OpenAIStreamAccumulator";
 import { ToolExecutor } from "@/service/ToolExecutor";
@@ -3196,8 +3197,20 @@ export class AIChatQueryLoop {
           totalTokens: resolvedUsage.totalTokens,
         };
 
-        const nativeParsedCalls = accumulator
-          .tryParseToolCallArguments()
+        const allBufferedCalls = accumulator.tryParseToolCallArguments();
+        // Diagnostic: entries the name/id filter below would silently drop.
+        // Flash-tier GLM routes split one logical tool call across indexes or
+        // stream a nameless continuation fragment, so the surviving call
+        // executed with only part of its arguments. Warn-log the fragments so
+        // the loss is visible instead of silently losing arguments.
+        for (const fragmentDetail of describeUnexecutableToolCallFragments(
+          allBufferedCalls
+        )) {
+          log.warn(
+            `[ai-chat-v2] round ${round}: dropping unexecutable ${fragmentDetail}`
+          );
+        }
+        const nativeParsedCalls = allBufferedCalls
           .filter((call) => call.name && call.id)
           .flatMap((call) => {
             if (call.ok) return [call];

@@ -43,6 +43,7 @@ import { AIHtmlArtifactToolService } from "@/service/AIHtmlArtifactToolService";
 import { ZodError } from "zod";
 import {
   bulkEmailTaskInputSchema,
+  describeMissingBulkEmailParams,
   EmailMarketingDirectEmailInput,
 } from "@/entityTypes/emailMarketingAiTypes";
 import {
@@ -263,6 +264,37 @@ async function executeReadAttachmentContentSkill(
     }
   );
   return attachmentReadResult(result);
+}
+
+/**
+ * JSON Schema `anyOf` branches encoding the REAL required-parameter sets for
+ * the outbound email tools (draft_outbound_email_batch /
+ * start_email_send_task). Their runtime validation (bulkEmailTaskInputSchema)
+ * requires a recipient source AND a content source, but the flat schema only
+ * declared `required: ["service_ids"]`. Schema-literal models served through
+ * the AI server's flash tiers (e.g. z-ai/glm-5.3-flash in the test
+ * environment) read that as "service_ids is the only mandatory field" and
+ * emitted calls carrying just email_content + service_ids — every such call
+ * failed tool validation with "Invalid email marketing tool input" and burned
+ * agentic rounds retrying the same incomplete arguments.
+ *
+ * The four flat branches are the exact cross-product the runtime accepts:
+ * recipients (emails XOR email_search_task_id) × content (template_ids XOR
+ * email_subject + email_content). Providers that do not implement anyOf
+ * ignore it, which is no worse than the previous under-specified schema;
+ * providers that do honor branch-level `required` now see the full contract.
+ * `service_ids` stays top-level required and the property descriptions are
+ * unchanged.
+ */
+function outboundEmailRequiredBranches(): Record<string, unknown> {
+  return {
+    anyOf: [
+      { required: ["email_search_task_id", "template_ids"] },
+      { required: ["email_search_task_id", "email_subject", "email_content"] },
+      { required: ["emails", "template_ids"] },
+      { required: ["emails", "email_subject", "email_content"] },
+    ],
+  };
 }
 
 const BUILT_IN_SKILLS: SkillDefinition[] = [
@@ -2038,6 +2070,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
       },
       required: ["service_ids"],
+      ...outboundEmailRequiredBranches(),
     },
     tier: "main",
     // Creating a durable draft does not contact recipients. Keep the actual
@@ -2069,12 +2102,23 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         input = bulkEmailTaskInputSchema.parse(args);
       } catch (error) {
         if (error instanceof ZodError) {
+          // Name the missing required arguments explicitly so schema-literal
+          // models (flash tiers) can self-correct on the next round instead
+          // of regenerating the same incomplete call. Shapes-in-words only —
+          // never a copy-pasteable example value.
+          const missing = describeMissingBulkEmailParams(args);
           return {
             success: false,
             result: {
               success: false,
-              error: "Invalid email marketing tool input",
+              error:
+                missing.length > 0
+                  ? `Invalid email marketing tool input — missing required arguments: ${missing.join(
+                      "; "
+                    )}`
+                  : "Invalid email marketing tool input",
               validation_errors: error.issues.map((issue) => issue.message),
+              missing_params: missing,
             },
           };
         }
@@ -2239,6 +2283,7 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
         },
       },
       required: ["service_ids"],
+      ...outboundEmailRequiredBranches(),
     },
     tier: "main",
     requiresConfirmation: true,

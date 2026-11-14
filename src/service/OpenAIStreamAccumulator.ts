@@ -267,3 +267,36 @@ export class OpenAIStreamAccumulator {
     });
   }
 }
+
+/**
+ * Describe buffered tool-call entries that can never execute because the
+ * stream never carried a function name or a call id for them.
+ *
+ * Some OpenAI-compatible providers (observed with flash-tier GLM routes)
+ * split one logical tool call across tool_call indexes, or stream argument
+ * fragments on a fresh index without re-sending `function.name`/`id`. Such
+ * fragments were previously dropped silently by the caller's
+ * `call.name && call.id` filter — the surviving call then executed with only
+ * part of its arguments (e.g. start_email_send_task missing emails/email_subject),
+ * and the loss was invisible in diagnostics. The strings returned here are
+ * one-line warn-log descriptions; empty when every buffered call is
+ * executable.
+ */
+export function describeUnexecutableToolCallFragments(
+  calls: readonly ParsedToolCallResult[]
+): string[] {
+  const details: string[] = [];
+  for (const call of calls) {
+    if (call.name && call.id) continue;
+    const lacking =
+      !call.name && !call.id
+        ? "name+id"
+        : !call.name
+          ? "name"
+          : "id";
+    details.push(
+      `tool_call fragment without ${lacking} (index=${call.index}, argsLen=${call.rawArgumentsJson.length}) rawArgs="${call.rawArgumentsJson.slice(0, 200)}"`
+    );
+  }
+  return details;
+}

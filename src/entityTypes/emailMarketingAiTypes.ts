@@ -129,6 +129,62 @@ export type EmailMarketingDirectEmailInput = z.infer<
 >;
 export type EmailRecipientInput = EmailMarketingDirectEmailInput;
 
+/**
+ * Describe, in model-facing language, which required bulk-email parameters
+ * are absent from raw tool-call arguments.
+ *
+ * Weak models served through AI-server flash tiers (e.g. z-ai/glm-5.3-flash)
+ * repeatedly emitted start_email_send_task calls carrying only
+ * email_content + service_ids. The generic "Invalid email marketing tool
+ * input" wrapper gave them no parameter names to fix, so they regenerated
+ * the same incomplete call for many agentic rounds. Naming the missing
+ * parameters explicitly measurably improves their retry (the same models DO
+ * add a parameter once an error text mentions it by name). The descriptions
+ * are deliberately shapes-in-words, never a copy-pasteable example value, so
+ * a lazy model cannot echo the hint back as a real recipient address.
+ */
+export function describeMissingBulkEmailParams(args: unknown): string[] {
+  const record = (args ?? {}) as Record<string, unknown>;
+  const missing: string[] = [];
+
+  const hasSearchTask =
+    typeof record.email_search_task_id === "number" &&
+    record.email_search_task_id > 0;
+  const hasEmails = Array.isArray(record.emails) && record.emails.length > 0;
+  if (!hasSearchTask && !hasEmails) {
+    missing.push(
+      "emails (array of recipient addresses) or email_search_task_id (number)"
+    );
+  }
+
+  const hasTemplates =
+    Array.isArray(record.template_ids) && record.template_ids.length > 0;
+  const hasSubject =
+    typeof record.email_subject === "string" &&
+    record.email_subject.trim().length > 0;
+  const hasBody =
+    (typeof record.email_content === "string" &&
+      record.email_content.trim().length > 0) ||
+    (typeof record.email_html_content === "string" &&
+      record.email_html_content.trim().length > 0);
+  if (!hasTemplates) {
+    if (!hasSubject) {
+      missing.push("email_subject (string subject line)");
+    }
+    if (!hasBody) {
+      missing.push("email_content (plain-text body) or template_ids (array)");
+    }
+  }
+
+  const hasServices =
+    Array.isArray(record.service_ids) && record.service_ids.length > 0;
+  if (!hasServices) {
+    missing.push("service_ids (array of email service IDs)");
+  }
+
+  return missing;
+}
+
 /** Summary of an email search task */
 export interface EmailSearchTaskSummary {
   id: number;

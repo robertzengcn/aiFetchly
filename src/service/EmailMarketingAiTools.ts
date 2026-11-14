@@ -26,6 +26,7 @@ import {
   AiListEmailSearchTasksResult,
   AiEmailSearchTaskEmailsResult,
   bulkEmailTaskInputSchema,
+  describeMissingBulkEmailParams,
   emailMarketingPaginationSchema,
   getEmailServiceConfigInputSchema,
   getEmailSearchTaskEmailsInputSchema,
@@ -48,6 +49,35 @@ function validationFailure(error: ZodError): {
     success: false,
     error: "Invalid email marketing tool input",
     validation_errors: error.issues.map((issue) => issue.message),
+  };
+}
+
+/**
+ * Validation failure for the bulk-email send/preview/draft inputs. Besides
+ * the generic wrapper it names the required parameters the raw arguments are
+ * missing, so schema-literal models can self-correct instead of regenerating
+ * the same incomplete call for many rounds.
+ */
+function bulkEmailValidationFailure(
+  error: ZodError,
+  args: unknown
+): {
+  success: false;
+  error: string;
+  validation_errors: string[];
+  missing_params: string[];
+} {
+  const missing = describeMissingBulkEmailParams(args);
+  return {
+    success: false,
+    error:
+      missing.length > 0
+        ? `Invalid email marketing tool input — missing required arguments: ${missing.join(
+            "; "
+          )}`
+        : "Invalid email marketing tool input",
+    validation_errors: error.issues.map((issue) => issue.message),
+    missing_params: missing,
   };
 }
 
@@ -547,7 +577,7 @@ export async function previewBulkEmailSendTask(
     };
   } catch (error) {
     return error instanceof ZodError
-      ? validationFailure(error)
+      ? bulkEmailValidationFailure(error, args)
       : failure(error);
   }
 }
@@ -607,7 +637,7 @@ export async function startBulkEmailSendTask(
     };
   } catch (error) {
     return error instanceof ZodError
-      ? validationFailure(error)
+      ? bulkEmailValidationFailure(error, args)
       : failure(error);
   }
 }
