@@ -95,8 +95,10 @@ describe("awaitUserResolution (F06)", () => {
     statuses.set("mb_x3", { state: "stopped", handoffReason: null });
     const resolution = await promise;
     expect(resolution).toBe("expired");
-    // No hung gate: the waiting record was reopened on the way out.
-    expect(control.getState("f06-dead")).toBe("running");
+    // B12/C-FR-02: an expired window maps the control record to
+    // INTERRUPTED (partial results; no automatic resume) — resuming
+    // would let the task continue past a window nobody resolved.
+    expect(control.getState("f06-dead")).toBe("interrupted");
   });
 
   it("resolves immediately when the session is already operable", async () => {
