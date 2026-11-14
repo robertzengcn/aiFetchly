@@ -442,7 +442,7 @@ describe("AIChatTurnQueueService submit + drain", () => {
   });
 
   it("lease busy releases the claim back to queued without dispatching", async () => {
-    const { service, stub, setLeaseEnabled } = makeService();
+    const { service, stub, setLeaseEnabled, events } = makeService();
     setLeaseEnabled(false);
     await service.submit({
       clientRequestId: "cr-lease",
@@ -453,6 +453,11 @@ describe("AIChatTurnQueueService submit + drain", () => {
       return views[0]?.status === "queued";
     });
     expect(stub.submitted.length).toBe(0);
+    // When lease is busy, dispatch claim release must emit 'queued' so renderer resets from 'dispatching'
+    await vi.waitFor(() => {
+      const lastEvent = events[events.length - 1];
+      expect(lastEvent?.status).toBe("queued");
+    });
   });
 
   it("AI-disabled drain holds the queue durably", async () => {

@@ -232,8 +232,8 @@ export class AIChatPendingMessageModel extends BaseDb {
       },
       {
         status: "queued" as AIChatPendingMessageStatus,
-        claimToken: undefined,
-        targetAssistantMessageId: undefined,
+        claimToken: null as unknown as undefined,
+        targetAssistantMessageId: null as unknown as undefined,
       }
     );
     return (result.affected ?? 0) === 1;
@@ -263,7 +263,7 @@ export class AIChatPendingMessageModel extends BaseDb {
           }
         : {
             status: "queued" as AIChatPendingMessageStatus,
-            claimToken: undefined,
+            claimToken: null as unknown as undefined,
           }
     );
     return (result.affected ?? 0) === 1;
@@ -300,7 +300,7 @@ export class AIChatPendingMessageModel extends BaseDb {
       },
       {
         status: "queued" as AIChatPendingMessageStatus,
-        recoveryReason: undefined,
+        recoveryReason: null as unknown as undefined,
         updatedAt: new Date(),
       }
     );
@@ -490,7 +490,7 @@ export class AIChatPendingMessageModel extends BaseDb {
           await this.repository.update(row.id, {
             status: "paused" as AIChatPendingMessageStatus,
             recoveryReason: "recovered_dispatch",
-            claimToken: undefined,
+            claimToken: null as unknown as undefined,
             updatedAt: now,
           });
           counts.pausedDispatching += 1;
@@ -521,8 +521,8 @@ export class AIChatPendingMessageModel extends BaseDb {
           await this.repository.update(row.id, {
             status: "paused" as AIChatPendingMessageStatus,
             recoveryReason: "recovered_steering",
-            claimToken: undefined,
-            targetAssistantMessageId: undefined,
+            claimToken: null as unknown as undefined,
+            targetAssistantMessageId: null as unknown as undefined,
             updatedAt: now,
           });
           counts.pausedSteering += 1;

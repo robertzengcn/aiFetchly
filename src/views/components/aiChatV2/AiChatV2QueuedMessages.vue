@@ -75,13 +75,14 @@ const { t } = useI18n();
 <style scoped>
 .v2-queued {
   flex: 0 0 auto;
-  max-height: 168px;
+  max-height: 104px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 12px 4px;
+  gap: 4px;
+  padding: 4px 8px 2px;
   border-top: 1px solid rgba(var(--v-theme-on-surface), 0.08);
   background: rgba(var(--v-theme-on-surface), 0.03);
+  scrollbar-width: thin;
 }
 </style>

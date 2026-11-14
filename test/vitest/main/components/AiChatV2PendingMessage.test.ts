@@ -203,4 +203,44 @@ describe("AiChatV2PendingMessage", () => {
     );
     expect(wrapper.text()).toContain("Could not start the turn.");
   });
+
+  it("only displays recoveryReason badge when status is paused, never when dispatching or queued", () => {
+    // When paused with recovery reason: badge appears
+    const paused = mountPending(
+      makeView({
+        status: "paused",
+        recoveryReason: "recovered_after_restart",
+      })
+    );
+    expect(
+      paused.find('[data-testid="ai-chat-pending-recovery"]').exists()
+    ).toBe(true);
+    expect(paused.text()).toContain("Recovered after restart");
+
+    // When dispatching: recovery badge must NOT be displayed even if recoveryReason exists on the row
+    const dispatching = mountPending(
+      makeView({
+        status: "dispatching",
+        recoveryReason: "recovered_after_restart",
+      })
+    );
+    expect(
+      dispatching.find('[data-testid="ai-chat-pending-recovery"]').exists()
+    ).toBe(false);
+    expect(dispatching.text()).toContain("Sending…");
+    expect(dispatching.text()).not.toContain("Recovered after restart");
+
+    // When queued: recovery badge must NOT be displayed
+    const queued = mountPending(
+      makeView({
+        status: "queued",
+        recoveryReason: "recovered_after_restart",
+      })
+    );
+    expect(
+      queued.find('[data-testid="ai-chat-pending-recovery"]').exists()
+    ).toBe(false);
+    expect(queued.text()).toContain("Queued");
+    expect(queued.text()).not.toContain("Recovered after restart");
+  });
 });

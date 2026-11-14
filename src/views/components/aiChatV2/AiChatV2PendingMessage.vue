@@ -29,7 +29,7 @@
         {{ statusLabel }}
       </span>
       <span
-        v-if="view.recoveryReason"
+        v-if="view.status === 'paused' && view.recoveryReason"
         class="v2-pending__recovery"
         data-testid="ai-chat-pending-recovery"
       >
@@ -38,6 +38,7 @@
       <v-btn
         v-if="showSteer"
         size="x-small"
+        density="compact"
         variant="tonal"
         color="primary"
         class="ml-2"
@@ -66,6 +67,7 @@
       <v-btn
         v-if="canRemove"
         size="x-small"
+        density="compact"
         variant="text"
         color="default"
         class="ml-1"
@@ -81,6 +83,7 @@
       <v-btn
         v-if="showResume"
         size="x-small"
+        density="compact"
         variant="tonal"
         color="primary"
         class="ml-1"
@@ -246,11 +249,12 @@ function onResume(): void {
 
 <style scoped>
 .v2-pending {
-  border: 1px dashed rgba(var(--v-theme-on-surface), 0.35);
-  border-radius: 12px;
-  padding: 8px 12px;
-  margin: 4px 0;
+  border: 1px dashed rgba(var(--v-theme-on-surface), 0.28);
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin: 2px 0;
   opacity: 0.92;
+  background: rgba(var(--v-theme-on-surface), 0.02);
 }
 .v2-pending--sent,
 .v2-pending--applied,
@@ -260,40 +264,57 @@ function onResume(): void {
 .v2-pending__content {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: var(--app-chat-font-size, 14px);
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 2.7em;
 }
 .v2-pending__attachments {
-  margin-top: 4px;
+  margin-top: 2px;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 .v2-pending__chip {
-  font-size: 12px;
+  font-size: 11px;
   border: 1px solid rgba(var(--v-theme-on-surface), 0.2);
-  border-radius: 8px;
-  padding: 2px 6px;
+  border-radius: 4px;
+  padding: 1px 5px;
 }
 .v2-pending__status-row {
   display: flex;
   align-items: center;
-  margin-top: 4px;
+  margin-top: 2px;
   flex-wrap: wrap;
   gap: 4px;
+  min-height: 22px;
 }
 .v2-pending__status {
-  font-size: 12px;
+  font-size: 11px;
   opacity: 0.8;
   display: inline-flex;
   align-items: center;
+}
+.v2-pending__recovery {
+  font-size: 11px;
+  opacity: 0.85;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(var(--v-theme-warning), 0.12);
+  color: rgb(var(--v-theme-warning));
+  font-weight: 500;
 }
 .v2-pending__steer-hint {
   opacity: 0.6;
   cursor: help;
 }
 .v2-pending__failure {
-  font-size: 12px;
+  font-size: 11px;
   color: rgb(var(--v-theme-error));
-  margin-top: 4px;
+  margin-top: 2px;
 }
 </style>
