@@ -1389,23 +1389,23 @@ export class ManagedBrowserAiToolService {
     // D-FR-04: a stored `small`/`haiku` alias is resolved to a REAL model
     // BEFORE the decision request — third-party providers 404 on the
     // alias, and the decision must never depend on server-side aliasing.
+    // The /models listing routes through AiChatApi (no direct provider
+    // client import — cross-chunk edges panicked rolldown's chunker).
     let decisionModel: string | undefined = undefined;
     try {
-      const { isSmallModelAlias } = await import(
-        "@/service/aiProvider/SmallModelAlias"
-      );
+      // D-FR-04 note: the alias check is LOCAL — importing the shared
+      // SmallModelAlias module here crosses a chunk boundary and panics
+      // rolldown during artifact builds.
+      const isSmallModelAlias = (model: unknown): boolean =>
+        typeof model === "string" &&
+        ["haiku", "small"].includes(model.trim().toLowerCase());
       const resolved = new AIProviderResolver().resolveForChat();
       if (resolved.canUse && resolved.kind === "local") {
         const defaultModel = resolved.config.defaultModel;
         if (isSmallModelAlias(defaultModel)) {
-          const { OpenAICompatibleProviderClient } = await import(
-            "@/service/aiProvider/OpenAICompatibleProviderClient"
-          );
-          const client = new OpenAICompatibleProviderClient(
-            resolved.config,
-            resolved.apiKey
-          );
-          const models = await client.listModels();
+          const { AiChatApi } = await import("@/api/aiChatApi");
+          const api = new AiChatApi();
+          const models = await api.listOpenAIModels();
           const real = (models.data ?? [])
             .map((m) => (typeof m === "string" ? m : (m as { id?: string }).id))
             .find(
