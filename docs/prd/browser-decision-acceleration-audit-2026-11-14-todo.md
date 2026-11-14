@@ -28,9 +28,27 @@ closed. Commits, in order:
 | `e42a…` (proxy unit) | B08 deterministic restore by effective proxy id; B09 fail-closed decrypt/encrypt + row replace; B10 renderer password redaction (`hasPassword`) — see the proxy/search commits |
 | B16/B17 | ESCALATE through the bounded recovery table; verification MISS → next decision subgoal; documented URL-change fallback for empty criteria; recovery re-observes before deciding and carries the REAL failed action |
 
-B13 remains PARTIAL: the transcript note and the "Resume with
-instructions" text write-back, the Take control/Open browser card
-buttons, and the focus implementation are still open (N07/N09).
+B13 is now closed for its code items: the user's resume instructions
+are stored on the control record and folded ONCE into the runner's next
+decision subgoal (`resume_with_instructions` evidence), and the batch
+card gained a Take control button (the focus capability stays
+unimplemented — no dead button is exposed). N08 is closed for its
+one-defect items; N03/N04/N05 partial closures below.
+
+Second pass (same day), commits `15f4a34fc` → `90979e32e`:
+
+| Commit | Items |
+| --- | --- |
+| `15f4a34fc` | N08: ownership guard on signIn/evaluateScript/setProxy/stopSession (D-FR-08); admission records toolCallId/jobId/agentTaskId (D-FR-07); worker throw mid-step = unknown effect; observation bucket closed on build failure; D-FR-27 SELECT value binding + revision-independent approval match |
+| `75e613325` | N05: proxy_check join feeds lastCheckPassed (P-FR-01); switch budget per task (P-FR-05); typed proxy errors wired through the executor (P-FR-04); sign-in links the used proxy to the account (P-FR-03) |
+| `fb3ae768` + `3bb6153f`/`fd2304b1b` | N04/S-FR-03: distinct upsert reasons (https_required / ip_address_not_allowed / public_suffix_not_allowed); N03 quick wins: username_hint secret-shape gate (A-FR-04), password-only card (A-FR-05), post-dispatch password-type recheck (A-FR-16), safety failures open handoff |
+| `7d354cdb7` | B13: resume instructions reach the running loop; Take control button |
+| `90979e32e` | build: proxy classifier moved inside the worker bundle (rolldown chunk panic) |
+
+Still open: the large phases N01 (hosted/native decision routes),
+N02 (planner + field helper), the remaining N03/N04/N06/N07/N08/N09
+clauses — each needs its own focused pass; N01 additionally depends on
+the hosted decision contract (external).
 
 Verification: 456 main managedBrowser+browserDecision tests, 1605
 component tests, and the touched utility suites pass; `tsc --noEmit`
