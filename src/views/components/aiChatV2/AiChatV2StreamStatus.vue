@@ -39,9 +39,10 @@ type Status = "idle" | "streaming" | "cancelled" | "error";
 const props = defineProps<{ status: Status; errorMessage?: string }>();
 const { t } = useI18n();
 
-const visible = computed(() => props.status !== "idle");
+const visible = computed(
+  () => props.status !== "idle" && props.status !== "streaming"
+);
 const text = computed(() => {
-  if (props.status === "streaming") return t("aiChatV2.streaming") || "Generating…";
   if (props.status === "cancelled") return t("aiChatV2.cancelled") || "Cancelled";
   if (props.status === "error")
     return props.errorMessage || t("aiChatV2.server_unavailable") || "Error";

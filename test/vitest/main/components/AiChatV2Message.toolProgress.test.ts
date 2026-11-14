@@ -208,3 +208,28 @@ describe("AiChatV2Message approved tool execution", () => {
     expect(wrapper.find(".v2-message__tool-running").exists()).toBe(true);
   });
 });
+
+describe("AiChatV2Message streaming status", () => {
+  it("does not render Generating… text inside assistant bubble when status is streaming", async () => {
+    const message: ChatV2MessageView = {
+      id: "a1",
+      conversationId: "c1",
+      role: "assistant",
+      content: "Hello world",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatV2Message, {
+      props: {
+        message,
+        status: "streaming",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Generating…");
+    expect(wrapper.find(".v2-stream-status").exists()).toBe(false);
+  });
+});
