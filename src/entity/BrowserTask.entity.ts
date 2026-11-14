@@ -88,4 +88,7 @@ export class BrowserTaskEntity extends AuditableEntity {
 
   @Column({ type: "integer", nullable: true })
   userInterventionCount!: number | null;
+  /** N01/D-AC-08: provider-reported token usage summed over decisions. */
+  @Column("integer", { nullable: true })
+  decisionTokens!: number | null;
 }

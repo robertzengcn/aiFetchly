@@ -161,18 +161,39 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
             return { status: "provider_error", reason_code: "provider_config_changed" };
           }
         }
-        const response = await this.complete(
-          {
-            messages: [
-              { role: "system", content: CHAT_DECISION_SYSTEM_PROMPT },
-              { role: "user", content: buildChatDecisionPrompt(input) },
-            ],
-            ...(this.model ? { model: this.model } : {}),
-            response_format: { type: "json_object" },
-            temperature: 0,
-          },
-          signal
-        );
+        // D-FR-02: the config watch ABORTS the in-flight fetch when the
+        // provider configuration changes mid-request — the body is
+        // cancelled, not merely discarded after it returns.
+        const attemptController = new AbortController();
+        const onOuterAbort = (): void => attemptController.abort();
+        signal.addEventListener("abort", onOuterAbort, { once: true });
+        const configWatch = this.getConfigKey
+          ? setInterval(() => {
+              if (this.configChanged()) {
+                attemptController.abort();
+              }
+            }, 500)
+          : null;
+        let response: ChatCompletionLike;
+        try {
+          response = await this.complete(
+            {
+              messages: [
+                { role: "system", content: CHAT_DECISION_SYSTEM_PROMPT },
+                { role: "user", content: buildChatDecisionPrompt(input) },
+              ],
+              ...(this.model ? { model: this.model } : {}),
+              response_format: { type: "json_object" },
+              temperature: 0,
+            },
+            attemptController.signal
+          );
+        } finally {
+          if (configWatch !== null) {
+            clearInterval(configWatch);
+          }
+          signal.removeEventListener("abort", onOuterAbort);
+        }
         // F05: a late response (the deadline abort landed while
         // awaiting) and a provider change DURING the in-flight request
         // are both discarded — the output is never used.
@@ -191,6 +212,9 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         });
         // T29: usage attribution - provider-reported token totals are
         // surfaced in the uncertainty metadata (never as confidence).
+        // N01/D-AC-08: token usage rides the result as a DEDICATED field
+        // — never smuggled through calibration_version (which is a
+        // native-route concept).
         const usage = (
           response as {
             usage?: { total_tokens?: number };
@@ -199,10 +223,7 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         if (normalized.status === "decided" && usage?.total_tokens) {
           return {
             ...normalized,
-            uncertainty: {
-              ...normalized.uncertainty,
-              calibration_version: `tokens:${usage.total_tokens}`,
-            },
+            usage_total_tokens: usage.total_tokens,
           };
         }
         return normalized;

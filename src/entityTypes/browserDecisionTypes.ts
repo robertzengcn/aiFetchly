@@ -141,6 +141,8 @@ export interface BrowserDecisionDecided {
   readonly status: "decided";
   readonly action: BrowserProposedAction;
   readonly uncertainty: BrowserDecisionUncertainty;
+  /** N01/D-AC-08: provider-reported token usage for THIS decision. */
+  readonly usage_total_tokens?: number;
 }
 
 export interface BrowserDecisionLlmRequired {

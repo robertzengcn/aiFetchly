@@ -87,6 +87,7 @@ const uncertaintySchema = z.object({
   source: z.enum(["native_distribution", "unavailable"]),
   confidence: z.number().min(0).max(1).nullable(),
   calibration_version: z.string().max(64).nullable().optional(),
+        usage_total_tokens: z.number().int().nonnegative().optional(),
 });
 
 const proposedActionSchema = z.object({

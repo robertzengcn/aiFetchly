@@ -63,6 +63,8 @@ export class BrowserTaskModule extends BaseModule {
     readonly recoveryCalls?: number;
     readonly activeTimeMs?: number;
     readonly userInterventionCount?: number;
+    /** N01/D-AC-08: provider-reported token usage for the decisions. */
+    readonly decisionTokens?: number;
   }): Promise<void> {
     const model = await this.getModel();
     // F07: MERGE with the existing cursor — counters a caller omits keep
@@ -82,6 +84,9 @@ export class BrowserTaskModule extends BaseModule {
     }
     if (input.activeTimeMs !== undefined) {
       entity.activeTimeMs = input.activeTimeMs;
+    }
+    if (input.decisionTokens !== undefined) {
+      entity.decisionTokens = input.decisionTokens;
     }
     if (input.userInterventionCount !== undefined) {
       entity.userInterventionCount = input.userInterventionCount;

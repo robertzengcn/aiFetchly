@@ -187,6 +187,8 @@ export class BrowserTaskRunner {
   }
   private leafSteps = 0;
   private decisionRequests = 0;
+  /** N01/D-AC-08: summed provider-reported token usage (chat route). */
+  private tokenUsage = 0;
   private recoveryCalls = 0;
   private lastFailureKey: string | null = null;
   private consecutiveEquivalentFailures = 0;
@@ -307,6 +309,9 @@ export class BrowserTaskRunner {
             signal.removeEventListener("abort", onOuterAbort);
           }
           this.decisionRequests++;
+          if (decision.status === "decided" && decision.usage_total_tokens) {
+            this.tokenUsage += decision.usage_total_tokens;
+          }
           // F05: a decision that returns after its request deadline (or
           // task abort) is stale — it must never become an executable
           // action. The runner checks the OUTER signal elsewhere; the
