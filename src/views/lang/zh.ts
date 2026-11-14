@@ -2717,6 +2717,7 @@ export default {
     loading_history: "正在加载历史…",
     streaming: "生成中…",
     thinking: "AI 正在思考…",
+    ai_working: "处理中…",
     reconnecting: "正在重新连接…",
     reconnect_attempt: "(第 {n}/{max} 次尝试)",
     recovery: {

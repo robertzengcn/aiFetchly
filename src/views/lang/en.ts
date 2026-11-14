@@ -2878,6 +2878,7 @@ export default {
     loading_history: "Loading history…",
     streaming: "Generating…",
     thinking: "AI is thinking…",
+    ai_working: "Working…",
     reconnecting: "Reconnecting…",
     reconnect_attempt: "(attempt {n}/{max})",
     recovery: {

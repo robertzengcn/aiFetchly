@@ -2806,6 +2806,7 @@ export default {
     loading_history: "履歴を読み込み中…",
     streaming: "生成中…",
     thinking: "AIが思考中…",
+    ai_working: "処理中…",
     reconnecting: "再接続中…",
     reconnect_attempt: "({max}回中{n}回目)",
     recovery: {

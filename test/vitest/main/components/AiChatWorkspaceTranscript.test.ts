@@ -6,6 +6,12 @@ import { createI18n } from "vue-i18n";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
+import en from "@/views/lang/en";
+import zh from "@/views/lang/zh";
+import es from "@/views/lang/es";
+import fr from "@/views/lang/fr";
+import de from "@/views/lang/de";
+import ja from "@/views/lang/ja";
 
 const i18n = createI18n({
   legacy: false,
@@ -1312,4 +1318,21 @@ it('recognizes sent reply results and rejects failed or invalid draft results', 
   for (const toolResult of [{ success: false, draftId: 42 }, { draftId: -1 }, { draftId: '42' }, {}]) {
     expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'create_email_reply_draft', toolResult }))).toBeNull();
   }
+});
+
+interface LangWithAiChatV2 {
+  aiChatV2?: {
+    ai_working?: string;
+  };
+}
+
+describe("AiChatWorkspaceTranscript i18n", () => {
+  it("defines aiChatV2.ai_working across all supported languages", () => {
+    expect((en as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Working…");
+    expect((zh as LangWithAiChatV2).aiChatV2?.ai_working).toBe("处理中…");
+    expect((es as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Trabajando…");
+    expect((fr as LangWithAiChatV2).aiChatV2?.ai_working).toBe("En cours…");
+    expect((de as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Wird bearbeitet…");
+    expect((ja as LangWithAiChatV2).aiChatV2?.ai_working).toBe("処理中…");
+  });
 });
