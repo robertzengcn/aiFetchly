@@ -174,16 +174,33 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
               }
             }, 500)
           : null;
+        // D-FR-18: the output mode is NEGOTIATED across the hard cap of
+        // two upstream attempts — attempt 1 uses json_object (widely
+        // supported); attempt 2 falls back to plain text with the
+        // JSON-only instruction (providers whose json_object mode mangles
+        // or rejects the payload get a second, different strategy).
+        const responseFormat =
+          attempt === 0
+            ? ({ type: "json_object" } as const)
+            : ({ type: "text" } as const);
         let response: ChatCompletionLike;
         try {
           response = await this.complete(
             {
               messages: [
                 { role: "system", content: CHAT_DECISION_SYSTEM_PROMPT },
-                { role: "user", content: buildChatDecisionPrompt(input) },
+                {
+                  role: "user",
+                  content:
+                    attempt === 0
+                      ? buildChatDecisionPrompt(input)
+                      : `${buildChatDecisionPrompt(input)}
+
+IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
+                },
               ],
               ...(this.model ? { model: this.model } : {}),
-              response_format: { type: "json_object" },
+              response_format: responseFormat,
               temperature: 0,
             },
             attemptController.signal

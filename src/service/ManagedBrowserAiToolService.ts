@@ -11,6 +11,7 @@ import {
   type SemanticActionNode,
 } from "@/service/browserDecision/BrowserApprovalFingerprint";
 import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
@@ -1385,6 +1386,40 @@ export class ManagedBrowserAiToolService {
     // Hosted mode returned unavailable above; the runner runs on the
     // user's chat route only (no custom-to-hosted fallback, D-03).
     void route;
+    // D-FR-04: a stored `small`/`haiku` alias is resolved to a REAL model
+    // BEFORE the decision request — third-party providers 404 on the
+    // alias, and the decision must never depend on server-side aliasing.
+    let decisionModel: string | undefined = undefined;
+    try {
+      const { isSmallModelAlias } = await import(
+        "@/service/aiProvider/SmallModelAlias"
+      );
+      const resolved = new AIProviderResolver().resolveForChat();
+      if (resolved.canUse && resolved.kind === "local") {
+        const defaultModel = resolved.config.defaultModel;
+        if (isSmallModelAlias(defaultModel)) {
+          const { OpenAICompatibleProviderClient } = await import(
+            "@/service/aiProvider/OpenAICompatibleProviderClient"
+          );
+          const client = new OpenAICompatibleProviderClient(
+            resolved.config,
+            resolved.apiKey
+          );
+          const models = await client.listModels();
+          const real = (models.data ?? [])
+            .map((m) => (typeof m === "string" ? m : (m as { id?: string }).id))
+            .find(
+              (id): id is string =>
+                typeof id === "string" && !isSmallModelAlias(id)
+            );
+          decisionModel = real ?? undefined;
+          // No resolvable model: the decision route stays unaliased —
+          // the alias request would 404 downstream anyway.
+        }
+      }
+    } catch {
+      // Alias resolution is best-effort; the resolver default applies.
+    }
     const { providerConfigKey: currentProviderConfigKey } = await import(
       "@/service/aiProvider/AIProviderConfigVersion"
     );
@@ -1403,7 +1438,7 @@ export class ManagedBrowserAiToolService {
           { signal }
         )) as ChatCompletionLike;
       },
-      undefined, // model: use the resolver's default
+      decisionModel,
       // R01/D-FR-02: each decision call re-checks the frozen provider
       // config identity; a mid-task change returns provider_error.
       () => currentProviderConfigKey()
