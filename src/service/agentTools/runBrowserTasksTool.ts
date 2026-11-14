@@ -282,8 +282,10 @@ export async function runBrowserTasks(
             signal: childAbort.signal,
             // F06: a blocking handoff/credential wait freezes this
             // child's active-time deadline (D-21).
-            isUserWaiting: () =>
-              getDefaultToolJobRegistry().isAnyWaitingForUser(),
+            isUserWaiting: (childConversationId: string) =>
+              getDefaultToolJobRegistry().isConversationWaitingForUser(
+                childConversationId
+              ),
           }
         );
         // F17: the three abort sources classify DIFFERENTLY.

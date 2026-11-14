@@ -422,6 +422,23 @@ export class ToolJobRegistry {
     return false;
   }
 
+  /**
+   * C-FR-09: conversation-scoped wait probe — only jobs of THIS
+   * conversation freeze the deadline; a sibling conversation's user wait
+   * never stalls another task's clock.
+   */
+  isConversationWaitingForUser(conversationId: string): boolean {
+    for (const job of this.jobs.values()) {
+      if (
+        job.conversationId === conversationId &&
+        job.userWait?.waiting === true
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** PRD C-FR-09: mark a job as waiting for the user (or not). */
   setUserWait(jobId: string, waiting: boolean, reason?: string | null): void {
     const job = this.jobs.get(jobId);

@@ -149,7 +149,12 @@ export interface AgentRuntimeDeps {
    * F06: when true, the run's active-time deadline freezes (a blocking
    * user wait is in progress). Omit for the old wall-clock behavior.
    */
-  isUserWaiting?: () => boolean;
+  /**
+   * C-FR-09: conversation-scoped wait probe — the runtime passes its OWN
+   * conversation id so a sibling's user wait never freezes this child's
+   * active-time clock.
+   */
+  isUserWaiting?: (conversationId: string) => boolean;
   /** Optional. When provided, the runtime triggers auto-dream consolidation
    * after a completed task. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
@@ -533,7 +538,7 @@ export class AgentRuntime {
         clearInterval(timer);
         return;
       }
-      if (deps?.isUserWaiting?.()) {
+      if (deps?.isUserWaiting?.(agentConversationId)) {
         return;
       }
       activeRuntimeMs += deadlineTickMs;
@@ -797,7 +802,10 @@ export class AgentRuntime {
             outputId,
             ownerProfileId: "default",
             ownerConversationId: agentConversationId,
-            ownerAgentId: definition.id,
+            // M-FR-02: the outputs are OWNED by the agent TASK id (the
+            // preserve path above) — the grant must present the same
+            // identity, or authorizeAccess refuses it.
+            ownerAgentId: agentTaskId,
             granteeConversationId: request.parentConversationId,
             granteeAgentId: request.parentAgentId ?? "",
             grantReason: "child-agent-handoff",
