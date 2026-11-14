@@ -3,7 +3,6 @@ import {
   MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import type { ManagedBrowserErrorCode } from "@/entityTypes/managedBrowserTypes";
-import { classifyProxyError } from "@/service/browserProxy/BrowserProxySelectionService";
 import type {
   BrowserAction,
   BrowserActionProgram,
@@ -551,17 +550,12 @@ export class BrowserActionExecutor {
       // N05/P-FR-04: a Chromium proxy failure surfaces as a TYPED proxy
       // error (proxy_connect_failed / proxy_auth_failed / tunnel_failed)
       // instead of a generic internal_error. The navigation already
-      // started, so the effect stays unknown (7.3).
+      // started, so the effect stays unknown (7.3). The classifier is
+      // LOCAL to the worker bundle: importing the main-process proxy
+      // selection service here crosses the chunk boundary and panics
+      // rolldown during the E2E artifact build.
       const message = error instanceof Error ? error.message : String(error);
-      const proxyCode = classifyProxyError(message);
-      const classified =
-        proxyCode === "tunnel_failed"
-          ? ("tunnel_failed" as const)
-          : proxyCode === "proxy_auth_failed"
-            ? ("proxy_auth_failed" as const)
-            : proxyCode === "proxy_connect_failed"
-              ? ("proxy_connect_failed" as const)
-              : null;
+      const classified = classifyWorkerProxyError(message);
       if (classified) {
         return {
           success: false,
@@ -790,4 +784,24 @@ export function validateProgramLimits(
     return { ok: false, errorCode: "result_too_large" };
   }
   return { ok: true };
+}
+
+/**
+ * N05/P-FR-04: Chromium error message → structured proxy reason. Local
+ * copy of BrowserProxySelectionService.classifyProxyError — the worker
+ * bundle must not reach into main-process modules (chunking).
+ */
+function classifyWorkerProxyError(
+  message: string
+): "tunnel_failed" | "proxy_auth_failed" | "proxy_connect_failed" | null {
+  if (/ERR_TUNNEL_CONNECTION_FAILED/i.test(message)) {
+    return "tunnel_failed";
+  }
+  if (/407|proxy authentication/i.test(message)) {
+    return "proxy_auth_failed";
+  }
+  if (/ERR_PROXY_CONNECTION_FAILED/i.test(message)) {
+    return "proxy_connect_failed";
+  }
+  return null;
 }
