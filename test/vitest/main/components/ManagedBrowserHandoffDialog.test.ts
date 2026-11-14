@@ -21,6 +21,7 @@ function status(
     platformLabel: "YouTube",
       ownerConversationId: null,
       rootConversationId: null,
+      effectiveProxyId: null,
     state: "handoff",
     currentOrigin: null,
     pageTitle: null,

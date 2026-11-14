@@ -45,6 +45,7 @@ function status(
     platformLabel: "YouTube",
       ownerConversationId: null,
       rootConversationId: null,
+      effectiveProxyId: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",
