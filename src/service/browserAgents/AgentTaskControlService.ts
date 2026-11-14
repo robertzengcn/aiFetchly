@@ -317,6 +317,26 @@ export class AgentTaskControlService {
   }
 
   /**
+   * C-FR-14/D-FR-10: the startup sweep — every non-terminal control
+   * record is marked interrupted (partial results; no automatic resume).
+   * In-memory records cannot survive a restart, but the invariant is
+   * enforced at IPC-registration time so a future persistence layer (or
+   * a stale in-process record) can never leave a task running across a
+   * startup.
+   */
+  public sweepNonTerminalToInterrupted(reason = "startup_sweep"): number {
+    let swept = 0;
+    for (const [taskId, record] of [...this.tasks.entries()]) {
+      if (!TERMINAL_STATES.has(record.state)) {
+        this.setState(taskId, "interrupted", reason);
+        this.resolveAllWaiters(taskId);
+        swept++;
+      }
+    }
+    return swept;
+  }
+
+  /**
    * T24/C-FR-09: the 60-minute pause cap. A paused task past the cap is
    * marked interrupted (partial results; no automatic resume).
    */

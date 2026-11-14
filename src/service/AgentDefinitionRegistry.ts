@@ -145,6 +145,9 @@ const BUILT_INS: readonly AgentDefinitionView[] = [
       "browser_observe",
       "browser_navigate",
       "browser_run_actions",
+      // M-FR-01/12: the runner is the selected executor — the operator
+      // drives a task through the same bounded loop as chat.
+      "browser_execute_task",
       "browser_request_handoff",
       "browser_stop_session",
       "browser_sign_in",

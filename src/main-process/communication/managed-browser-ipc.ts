@@ -118,6 +118,9 @@ function sendToRenderer(
 export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   // T19/C-FR-14: on startup, every non-terminal browser task from a prior
   // run is marked interrupted — no automatic resume, no mutation replay.
+  // C-FR-14: the CONTROL records follow the task-row sweep — any
+  // non-terminal record is interrupted at startup (no automatic resume).
+  getDefaultAgentTaskControlService().sweepNonTerminalToInterrupted();
   void (async () => {
     try {
       const { getDefaultBrowserTaskModule } = await import(

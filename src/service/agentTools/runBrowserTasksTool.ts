@@ -306,9 +306,12 @@ export async function runBrowserTasks(
           parentCancelled ||
           ((returnNow || childStopped) && !hasUsableOutput)
         ) {
+          // C-FR-11: the RESULT says partial — the control record must
+          // agree (interrupted = partial results, no automatic resume),
+          // never `failed` for a return-now the user requested.
           control.setState(
             taskId,
-            returnNow ? "failed" : "cancelled",
+            returnNow ? "interrupted" : "cancelled",
             returnNow ? "return_now_partial" : "user_stop"
           );
           return {
