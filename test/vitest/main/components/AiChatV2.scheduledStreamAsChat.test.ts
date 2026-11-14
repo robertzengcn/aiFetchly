@@ -134,9 +134,9 @@ function mountChat() {
       plugins: [i18n],
       stubs: {
         AiChatV2Messages: {
-          props: ["messages", "activeAssistantMessageId"],
+          props: ["messages", "activeAssistantMessageId", "showTypingIndicator"],
           template:
-            '<div data-testid="chat-messages"><div v-for="m in messages" :key="m.id" :data-message-id="m.id" :data-active="m.id === activeAssistantMessageId ? \'true\' : \'false\'">{{ m.content }}</div></div>',
+            '<div data-testid="chat-messages"><div v-if="showTypingIndicator" data-testid="ai-chat-working-indicator">Working...</div><div v-for="m in messages" :key="m.id" :data-message-id="m.id" :data-active="m.id === activeAssistantMessageId ? \'true\' : \'false\'">{{ m.content }}</div></div>',
         },
         AiChatV2QuestionCard: true,
         AiChatV2PlanApprovalCard: true,
@@ -335,13 +335,12 @@ describe("AiChatV2 scheduled stream renders as normal chat", () => {
     const chatMessages = wrapper.find('[data-testid="chat-messages"]');
     expect(chatMessages.exists()).toBe(true);
 
-    // An empty assistant message must exist (the bubble), marked active so
-    // AiChatV2StreamStatus renders the "Generating…" loading indicator.
-    const activeMsg = chatMessages.find('[data-active="true"]');
-    expect(activeMsg.exists()).toBe(true);
-    expect(activeMsg.attributes("data-message-id")).toBe(
-      "scheduled-assistant-start-1"
-    );
+    // An empty assistant message bubble is suppressed before tokens arrive;
+    // instead, the working indicator shows while the turn is running.
+    expect(
+      chatMessages.find('[data-testid="ai-chat-working-indicator"]').exists()
+    ).toBe(true);
+    expect(chatMessages.findAll("[data-message-id]")).toHaveLength(0);
 
     // A subsequent token appends to the same bubble (no duplicate message).
     const token1: ChatV2ScheduledStreamEvent = {
