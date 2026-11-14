@@ -515,12 +515,13 @@ export class SocialAccountModule extends BaseModule {
   public async recordLoginFailure(
     accountId: number,
     reason: string,
-    now?: Date
+    options?: { siteId?: number; now?: Date }
   ): Promise<void> {
     await this.ensureConnection();
     await this.socialAccountModel.updateLoginFailure(accountId, {
-      last_login_failure_at: now ?? new Date(),
+      last_login_failure_at: options?.now ?? new Date(),
       last_login_failure_reason: reason.slice(0, 64),
+      last_login_failure_site: options?.siteId ?? null,
     });
   }
 
@@ -536,15 +537,25 @@ export class SocialAccountModule extends BaseModule {
   /** A-FR-10: cooldown check (1 automated attempt per account+site/window). */
   public async isSignInCoolingDown(
     accountId: number,
-    cooldownMs = 15 * 60_000,
-    now?: Date
+    options?: { siteId?: number; cooldownMs?: number; now?: Date }
   ): Promise<boolean> {
     await this.ensureConnection();
+    const cooldownMs = options?.cooldownMs ?? 15 * 60_000;
+    const nowDate = options?.now ?? new Date();
     const account = await this.socialAccountModel.findRowById(accountId);
     if (!account?.last_login_failure_at) {
       return false;
     }
-    const elapsed = (now ?? new Date()).getTime() - account.last_login_failure_at.getTime();
+    // A-FR-10: the window is per account AND SITE — a failure on site B
+    // never cools down attempts on site A.
+    if (
+      options?.siteId !== undefined &&
+      account.last_login_failure_site != null &&
+      account.last_login_failure_site !== options.siteId
+    ) {
+      return false;
+    }
+    const elapsed = nowDate.getTime() - account.last_login_failure_at.getTime();
     return elapsed >= 0 && elapsed < cooldownMs;
   }
 

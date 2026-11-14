@@ -569,7 +569,7 @@ export class BrowserCredentialLoginService {
     this.inFlightAccounts.add(attemptKey);
     this.inFlightAccounts.add(sessionKey);
     try {
-      if (await accountModule.isSignInCoolingDown(chosen.id)) {
+      if (await accountModule.isSignInCoolingDown(chosen.id, { siteId: site.siteId })) {
         return {
           status: "failed",
           accountId: chosen.id,
@@ -760,7 +760,11 @@ export class BrowserCredentialLoginService {
         // account stayed locked in `inFlightAccounts` until restart.
         try {
           this.inFlightAccounts.add(editedKey);
-          if (await accountModule.isSignInCoolingDown(chosen.id)) {
+          if (
+            await accountModule.isSignInCoolingDown(chosen.id, {
+              siteId: site.siteId,
+            })
+          ) {
             return {
               status: "failed",
               accountId: chosen.id,
@@ -942,11 +946,22 @@ export class BrowserCredentialLoginService {
           siteId: site.siteId,
         };
       }
-      // A-FR-10: record the failure with a reason (cooldown + UI).
-      if (credential.accountId !== null) {
+      // A-FR-10: record the failure with a reason (cooldown + UI) — but
+      // NOT for reasons that must never start a cooldown: form_not_found
+      // (the site's layout defeated us, not the credential) and the
+      // challenge handoff (2FA/CAPTCHA is not a credential failure).
+      const SKIP_COOLDOWN_REASONS = new Set([
+        "form_not_found",
+        "ambiguous_password_field",
+      ]);
+      const failureReason = result.reasonCode ?? result.outcome;
+      const startsCooldown =
+        result.outcome !== "challenge" && !SKIP_COOLDOWN_REASONS.has(failureReason);
+      if (credential.accountId !== null && startsCooldown) {
         await accountModule.recordLoginFailure(
           credential.accountId,
-          result.reasonCode ?? result.outcome
+          failureReason,
+          { siteId: site.siteId }
         );
       }
       // A-FR-16: safety failures in the password-field family NEVER

@@ -54,6 +54,10 @@ export class SocialAccountEntity extends AuditableEntity {
   @Column({ type: "datetime", nullable: true })
   last_login_failure_at!: Date | null;
 
+  /** A-FR-10: the site the last failure was ON — the cooldown is per account AND site. */
+  @Column({ type: "integer", nullable: true })
+  last_login_failure_site!: number | null;
+
   @Column({ type: "varchar", length: 64, nullable: true })
   last_login_failure_reason!: string | null;
 

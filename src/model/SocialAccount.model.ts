@@ -164,6 +164,7 @@ export class SocialAccountModel extends BaseDb {
     fields: {
       last_login_failure_at: Date | null;
       last_login_failure_reason: string | null;
+      last_login_failure_site?: number | null;
     }
   ): Promise<void> {
     await this.repository.update(accountId, fields);
