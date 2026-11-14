@@ -1539,6 +1539,20 @@ export class ManagedBrowserAiToolService {
         decisionClient,
         route,
         signal: context.signal,
+        // A-FR-14/N02: the runner's SIGN_IN operation routes through the
+        // privileged credential service (blocking card waits included).
+        signIn: async (signInInput) => {
+          const result = await getDefaultBrowserCredentialLoginService().signIn({
+            sessionId: signInInput.sessionId,
+            conversationId: signInInput.conversationId,
+            signal: signInInput.signal,
+            intent: "login",
+          });
+          return {
+            status: result.status,
+            ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
+          };
+        },
         // T14/C-FR-02: a handoff stop BLOCKS inside this job until the
         // user resolves the existing handoff dialog; user-wait time is
         // excluded from active budgets by the control service.

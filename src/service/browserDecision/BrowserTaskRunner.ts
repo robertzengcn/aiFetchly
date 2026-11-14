@@ -100,6 +100,19 @@ export interface RunnerDeps {
     taskId: string
   ) => Promise<"resolved" | "expired" | "cancelled">;
   /**
+   * A-FR-14/N02: when the runner hits a login wall, the credential
+   * service fills saved credentials (or opens the user card) — the model
+   * NEVER types a password. Absent in bare test fakes.
+   */
+  readonly signIn?: (input: {
+    readonly sessionId: string;
+    readonly conversationId: string;
+    readonly signal: AbortSignal;
+  }) => Promise<{
+    readonly status: string;
+    readonly reasonCode?: string;
+  }>;
+  /**
    * T19: durable cursor hooks (best-effort persistence; failures never
    * block execution but ARE logged by the module).
    */
@@ -197,6 +210,8 @@ export class BrowserTaskRunner {
   private pendingRecovery: BrowserDecisionResult | null = null;
   /** B16: the URL the task started on (documented DONE fallback). */
   private startUrl: string | null = null;
+  /** A-FR-14: bounded credential-service attempts per task. */
+  private signInAttempts = 0;
   /** B16/D-AC-09: the verification miss carried into the next decision. */
   private pendingSubgoal: string | null = null;
   /** T18: chat-route progress check (D-FR-19) — digest every 5 steps. */
@@ -412,6 +427,36 @@ export class BrowserTaskRunner {
           this.recoveryCalls++;
           this.pendingSubgoal = `previous DONE was NOT verified (check failed: ${verification.evidence}). Continue working toward the goal; DONE only when the criteria hold.`;
           evidence.push("done_unverified:continuing");
+          continue;
+        }
+        if (action.operation === "SIGN_IN") {
+          // A-FR-14/N02: the login wall routes to the credential service
+          // — never a typed password. Bounded: at most 2 attempts; the
+          // result re-observes so the next decision sees the wall state.
+          if (!this.deps.signIn) {
+            evidence.push("sign_in_unavailable");
+            continue;
+          }
+          if (this.signInAttempts >= 2) {
+            evidence.push("sign_in_budget_exhausted");
+            continue;
+          }
+          this.signInAttempts++;
+          evidence.push(`sign_in:attempt_${this.signInAttempts}`);
+          const signInResult = await this.deps.signIn({
+            sessionId: this.input.sessionId,
+            conversationId: this.input.conversationId,
+            signal,
+          });
+          if (signal.aborted) {
+            return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+          }
+          if (signInResult.status === "handoff_required") {
+            // The card cancel/user-handoff opened the handoff dialog —
+            // the runner must not keep deciding against that page.
+            return this.terminal("partial", "sign_in_handoff", evidence, extracted, observation);
+          }
+          observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
         if (action.operation === "ESCALATE") {

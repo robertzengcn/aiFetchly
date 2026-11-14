@@ -23,6 +23,7 @@ export type BrowserDecisionOperation =
   | "SCROLL_DOWN"
   | "WAIT"
   | "EXTRACT"
+  | "SIGN_IN"
   | "DONE"
   | "ESCALATE";
 

@@ -19,6 +19,7 @@ export const BROWSER_DECISION_OPERATIONS = [
   "SCROLL_DOWN",
   "WAIT",
   "EXTRACT",
+  "SIGN_IN",
   "DONE",
   "ESCALATE",
 ] as const;
@@ -43,7 +44,7 @@ export const decisionCandidateSchema = z.object({
   candidate_id: z.string().min(1).max(64),
   role: z.string().min(1).max(64),
   name: z.string().max(200),
-  allowed_operations: z.array(browserDecisionOperationSchema).max(13),
+  allowed_operations: z.array(browserDecisionOperationSchema).max(14),
   disabled: z.boolean().optional(),
   checked: z.boolean().optional(),
   selected: z.boolean().optional(),
@@ -77,7 +78,7 @@ export const decisionInputSchema = z.object({
       }),
     )
     .max(6),
-  allowed_operations: z.array(browserDecisionOperationSchema).max(13),
+  allowed_operations: z.array(browserDecisionOperationSchema).max(14),
   deadline_ms: z.number().int().positive().max(60000),
 });
 

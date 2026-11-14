@@ -1748,3 +1748,86 @@ describe("BrowserTaskRunner B13 resume instructions", () => {
     expect(result.evidence).toContain("resume_with_instructions");
   });
 });
+
+describe("BrowserTaskRunner A-FR-14 SIGN_IN operation", () => {
+  const signInEntry = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "SIGN_IN", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+  const clickGo = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("routes the login wall to the credential service and continues", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    const signInCalls: Array<Record<string, unknown>> = [];
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async (input) => {
+      signInCalls.push(input);
+      return { status: "signed_in" };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_signin-a",
+        conversationId: "conv-1",
+        goal: "check the logged-in feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(signInCalls).toHaveLength(1);
+    expect(result.evidence).toContain("sign_in:attempt_1");
+    expect(result.status).toBe("completed");
+  });
+
+  it("a handoff resolution from the card ends the task honestly", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_signin-b",
+        conversationId: "conv-1",
+        goal: "check the logged-in feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("sign_in_handoff");
+  });
+
+  it("the credential attempts are bounded at two", async () => {
+    const deps = makeRunnerDeps([
+      signInEntry(),
+      signInEntry(),
+      signInEntry(),
+      doneEntry(),
+    ]);
+    let calls = 0;
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async () => {
+      calls++;
+      return { status: "failed", reasonCode: "wrong_credential" };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_signin-c",
+        conversationId: "conv-1",
+        goal: "check the logged-in feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    await runner.run();
+    expect(calls).toBe(2);
+  });
+});

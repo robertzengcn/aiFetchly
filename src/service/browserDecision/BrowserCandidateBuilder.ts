@@ -52,6 +52,7 @@ export const RUNNER_OPERATIONS: readonly BrowserDecisionOperation[] = [
   "SCROLL_DOWN",
   "WAIT",
   "EXTRACT",
+  "SIGN_IN",
   "DONE",
   "ESCALATE",
 ];
