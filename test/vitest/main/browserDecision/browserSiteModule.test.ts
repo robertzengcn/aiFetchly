@@ -113,6 +113,19 @@ describe("BrowserSiteModule (S-FR-01..06)", () => {
     ).rejects.toThrow();
   });
 
+  it("S-FR-03: distinct rejection reasons for IP literals and public suffixes", async () => {
+    const module = new BrowserSiteModule();
+    await module.seedFromPlatformLists();
+    // An address literal is never a registrable domain.
+    await expect(
+      module.upsertSite({ name: "IP", url: "https://93.184.216.34/" })
+    ).rejects.toThrow("ip_address_not_allowed");
+    // A bare public suffix / single label cannot anchor a site.
+    await expect(
+      module.upsertSite({ name: "PS", url: "https://localhost/" })
+    ).rejects.toThrow("public_suffix_not_allowed");
+  });
+
   it("proposes additional domains only from visited list, applies on confirmation", async () => {
     const module = new BrowserSiteModule();
     await module.seedFromPlatformLists();

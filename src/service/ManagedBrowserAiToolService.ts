@@ -1733,10 +1733,18 @@ export class ManagedBrowserAiToolService {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // S-FR-03: the AI tool sees WHICH guard rejected the upsert.
+      const knownReasons = new Set([
+        "invalid_site_url",
+        "https_required",
+        "ip_address_not_allowed",
+        "public_suffix_not_allowed",
+        "browser_site_allocation_exhausted",
+      ]);
       throw new ManagedBrowserAiToolError(
         "internal_error",
         undefined,
-        message === "https_required" ? "https_required" : "site_upsert_failed"
+        knownReasons.has(message) ? message : "site_upsert_failed"
       );
     }
   }

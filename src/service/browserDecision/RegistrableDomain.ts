@@ -240,6 +240,22 @@ export function registrableDomainOf(hostname: string | null | undefined): string
 }
 
 /** Full identity of a URL string: null when the URL is not valid HTTPS/HTTP. */
+/**
+ * S-FR-03: distinct IP-literal detection for upsert rejections — a site
+ * (and its credential boundary) must be a registrable DOMAIN, never an
+ * address.
+ */
+export function hostnameIsIpAddress(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/\.$/, "");
+  // IPv4
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    return true;
+  }
+  // IPv6 literal (plain or bracketed) — the URL constructor already
+  // strips brackets for hostname, so [::1] arrives as ::1.
+  return host.includes(":");
+}
+
 export function parseUrlIdentity(rawUrl: string): ParsedUrlIdentity | null {
   return parseUrlIdentityWithOptions(rawUrl, {});
 }

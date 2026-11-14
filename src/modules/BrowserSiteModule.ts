@@ -227,12 +227,29 @@ export class BrowserSiteModule extends BaseModule {
     readonly createdInConversationId?: string | null;
   }): Promise<BrowserSiteUpsertResult> {
     await this.ensureSeeded();
-    const identity = parseUrlIdentity(input.url);
-    if (!identity) {
+    // S-FR-03: DISTINCT rejection reasons — the AI tool surfaces which
+    // guard failed (http_only / ip_address / public_suffix / invalid)
+    // instead of one collapsed site_upsert_failed.
+    let parsed: URL;
+    try {
+      parsed = new URL(input.url);
+    } catch {
       throw new Error("invalid_site_url");
     }
-    if (identity.protocol !== "https:") {
+    if (parsed.protocol !== "https:") {
       throw new Error("https_required");
+    }
+    const { hostnameIsIpAddress } = await import(
+      "@/service/browserDecision/RegistrableDomain"
+    );
+    if (hostnameIsIpAddress(parsed.hostname)) {
+      throw new Error("ip_address_not_allowed");
+    }
+    const identity = parseUrlIdentity(input.url);
+    if (!identity) {
+      // A valid https host with no registrable domain: a public suffix,
+      // a single label, or a loopback/private name.
+      throw new Error("public_suffix_not_allowed");
     }
     const model = await this.getModel();
     const existing = await model.getSiteByRegistrableDomain(
