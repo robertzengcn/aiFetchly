@@ -49,6 +49,17 @@ const nodeBuiltins = [
 export default ({ mode }) => {
     process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
     return defineConfig({
+        define: {
+            // Mirror vite.main.config.mjs: ContactExtractionAiClient reads
+            // process.env.VITE_LOGIN_URL at runtime, but the packaged app
+            // never has that env var (the main bundle only carries the
+            // build-time-inlined literal). Without this define the packaged
+            // worker fell back to http://localhost:3000 and every AI contact
+            // extraction failed with ECONNREFUSED ("AI extraction error: {}").
+            'process.env.VITE_LOGIN_URL': JSON.stringify(
+                process.env.VITE_LOGIN_URL || process.env.VITE_LOGIN_URL_TEST || ''
+            ),
+        },
         plugins: [
             alias(),
             nodeResolve(),

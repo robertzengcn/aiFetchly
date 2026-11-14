@@ -76,6 +76,20 @@ type GlobalLoggerState = typeof globalThis & {
 };
 
 /**
+ * Flatten a worker-log argument so it survives `process.send` JSON
+ * serialization. Error's message/stack are non-enumerable, so a raw Error
+ * arrives in the main process as `{}` (observed as "AI extraction error: {}"
+ * from the contact-extraction worker) — errors are flattened to readable
+ * text; everything else passes through unchanged.
+ */
+export function serializeWorkerLogArg(arg: unknown): unknown {
+  if (arg instanceof Error) {
+    return arg.stack || `${arg.name}: ${arg.message}`;
+  }
+  return arg;
+}
+
+/**
  * Worker-only: log proxy that forwards to main process via process.send.
  * Worker code must not use Electron or electron-log; main process handles actual logging.
  */
@@ -88,7 +102,11 @@ function createWorkerLogProxy(): {
   const send = (level: string, ...args: unknown[]) => {
     try {
       if (typeof process.send === "function") {
-        process.send({ type: "worker-log", level, args });
+        process.send({
+          type: "worker-log",
+          level,
+          args: args.map(serializeWorkerLogArg),
+        });
       }
     } catch (_) {
       // ignore send errors (e.g. channel closed)
