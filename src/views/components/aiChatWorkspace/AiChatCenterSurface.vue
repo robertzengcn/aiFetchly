@@ -91,6 +91,7 @@
         :messages="[...selectedStore.messages]"
         :active-assistant-message-id="selectedStore.activeAssistantMessageId"
         :stream-status="streamStatusForMessages"
+        :is-remote-working="selectedStore.runtimeStatus === 'running' || selectedStore.streamStatus === 'streaming'"
         :error-message="localizedBannerError ?? undefined"
         :show-reasoning="showReasoning"
         :plan-submit-error="planSubmitError"

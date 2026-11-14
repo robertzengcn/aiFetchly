@@ -20,6 +20,7 @@ const i18n = createI18n({
     en: {
       ui: { actions: { retry: "Retry" } },
       aiChatV2: {
+        ai_working: "Working…",
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
@@ -1334,5 +1335,75 @@ describe("AiChatWorkspaceTranscript i18n", () => {
     expect((fr as LangWithAiChatV2).aiChatV2?.ai_working).toBe("En cours…");
     expect((de as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Wird bearbeitet…");
     expect((ja as LangWithAiChatV2).aiChatV2?.ai_working).toBe("処理中…");
+  });
+});
+
+describe("AiChatWorkspaceTranscript remote working indicator & empty bubble suppression", () => {
+  it("suppresses empty assistant message bubble when content is empty and has no reasoning/tool", async () => {
+    const emptyAssistant: ChatV2MessageView = {
+      id: "a-empty",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [emptyAssistant],
+        activeAssistantMessageId: "a-empty",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const assistantMessages = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(assistantMessages).toHaveLength(0);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').text()).toContain("Working…");
+  });
+
+  it("renders assistant message normally once content or reasoning arrives", async () => {
+    const textAssistant: ChatV2MessageView = {
+      id: "a-text",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "Hello from LLM",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [textAssistant],
+        activeAssistantMessageId: "a-text",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+    expect(wrapper.text()).toContain("Hello from LLM");
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+  });
+
+  it("hides working indicator when remote is idle and not streaming", async () => {
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+        isRemoteWorking: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(false);
   });
 });
