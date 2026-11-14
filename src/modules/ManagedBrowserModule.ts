@@ -177,6 +177,13 @@ interface ActiveSessionRecord {
    * restore snapshot for a failed proxy switch.
    */
   readonly startProxySelection: BrowserProxySelection | null;
+  /**
+   * B08: the proxy row the session ACTUALLY launched through (null =
+   * direct). Restoring by id is deterministic — re-running an `auto`
+   * selector can resolve a DIFFERENT proxy. Assigned once the launch
+   * proxy is known (including the account-default fallback).
+   */
+  effectiveProxyId: number | null;
 }
 
 /**
@@ -192,6 +199,11 @@ export type ResolvedSessionProxy =
       readonly port: number;
       readonly username?: string;
       readonly password?: string;
+      /**
+       * B08: the proxy row this endpoint was resolved from — the
+       * authoritative id for health checks and deterministic restore.
+       */
+      readonly proxyId?: number;
     }
   | { readonly mode: "unresolvable"; readonly reasonCode: string };
 
@@ -732,6 +744,11 @@ export class ManagedBrowserModule {
         currentOrigin: null,
         currentUrl: null,
         startProxySelection: input.proxy ?? null,
+        effectiveProxyId:
+          explicitProxy &&
+          (explicitProxy.mode === "http" || explicitProxy.mode === "https")
+            ? (explicitProxy.proxyId ?? null)
+            : null,
         pageTitle: null,
         pageRevision: 0,
         authenticated: null,
@@ -811,6 +828,16 @@ export class ManagedBrowserModule {
             }
           : ({ mode: "direct" } as const);
       record.proxyActive = sessionProxy.mode !== "direct";
+      // B08: when the launch proxy came from the ACCOUNT default (no
+      // explicit selection), resolve its row id for deterministic restore.
+      if (
+        record.effectiveProxyId === null &&
+        sessionProxy.mode !== "direct" &&
+        effectiveProxy &&
+        (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
+      ) {
+        record.effectiveProxyId = effectiveProxy.proxyId ?? null;
+      }
       const reply = await client.request(
         {
           type: "START_SESSION",
@@ -2172,13 +2199,19 @@ record.currentUrl = message.observation.url || record.currentUrl;
         resolvedProxy.mode === "http" ||
         resolvedProxy.mode === "https"
       ) {
-        const matchedRow = linkedRows.find(
-          (row) =>
-            row.host === resolvedProxy.host &&
-            String(row.port) === String(resolvedProxy.port)
-        );
-        if (matchedRow) {
-          healthCheckId = matchedRow.id;
+        // B08: the resolved proxy carries its AUTHORITATIVE row id — an
+        // auto match is health-checked even when it is not in linkedRows.
+        if (resolvedProxy.proxyId != null) {
+          healthCheckId = resolvedProxy.proxyId;
+        } else {
+          const matchedRow = linkedRows.find(
+            (row) =>
+              row.host === resolvedProxy.host &&
+              String(row.port) === String(resolvedProxy.port)
+          );
+          if (matchedRow) {
+            healthCheckId = matchedRow.id;
+          }
         }
       }
     }
@@ -2188,21 +2221,23 @@ record.currentUrl = message.observation.url || record.currentUrl;
         throw new ManagedBrowserError("proxy_no_usable_proxy", "proxy_check_failed");
       }
     }
-    // R04/N02: the switch allowance is charged only AFTER validation and
-    // the health check succeeded — rejected switches never consume it.
-    this.proxySwitchCounts.set(lineageKey, priorCount + 1);
-    // N02: snapshot the OLD session's proxy selection + URL + ownership
-    // BEFORE the stop — the restore must rebuild the OLD session, not
-    // retry the failed NEW target.
+    // N02/B08: snapshot the OLD session's EFFECTIVE proxy id, selector,
+    // URL, and task ownership BEFORE the stop — the restore must rebuild
+    // the OLD session deterministically, not re-run a selector that can
+    // resolve a different proxy.
     const restoreSnapshot = {
       accountId: accountId > 0 ? accountId : undefined,
       conversation,
+      // Deterministic first: the concrete row the old session used.
+      effectiveProxyId: record.effectiveProxyId,
+      // Fallback when the row vanished: the original selector.
       proxySelection: record.startProxySelection,
+      agentTaskId: record.ownerAgentTaskId ?? undefined,
       lastUrl: lastUrl !== "about:blank" ? lastUrl : undefined,
     };
     await this.stop(sessionId, "user_stop");
     try {
-      return await this.start({
+      const started = await this.start({
         ...(accountId > 0 ? { accountId } : {}),
         purpose: "proxy_switch",
         proxy: target,
@@ -2211,21 +2246,32 @@ record.currentUrl = message.observation.url || record.currentUrl;
           ? { requestedStartUrl: lastUrl }
           : {}),
       });
+      // R04/B08: the switch allowance is charged only AFTER the new
+      // session is READY — a failed start (and its restore) never
+      // consumes it.
+      this.proxySwitchCounts.set(lineageKey, priorCount + 1);
+      return started;
     } catch (startError) {
-      // N02: restore the OLD session from the snapshot — the OLD proxy
-      // selection (account default when none), the full URL, and the
-      // task ownership. Never retry the failed new target.
+      // N02/B08: restore the OLD session — by its EFFECTIVE proxy id when
+      // known (deterministic; auto selectors can resolve another proxy),
+      // falling back to the original selector when the row is gone. The
+      // task ownership (agentTaskId) rides along.
+      const restoreSelection: BrowserProxySelection | undefined =
+        restoreSnapshot.effectiveProxyId != null
+          ? { kind: "proxy_id", proxyId: restoreSnapshot.effectiveProxyId }
+          : restoreSnapshot.proxySelection ?? undefined;
       try {
         await this.start({
           ...(restoreSnapshot.accountId
             ? { accountId: restoreSnapshot.accountId }
             : {}),
           purpose: "proxy_switch_restore",
-          ...(restoreSnapshot.proxySelection
-            ? { proxy: restoreSnapshot.proxySelection }
-            : {}),
+          ...(restoreSelection ? { proxy: restoreSelection } : {}),
           ...(restoreSnapshot.conversation
             ? { conversationId: restoreSnapshot.conversation }
+            : {}),
+          ...(restoreSnapshot.agentTaskId
+            ? { agentTaskId: restoreSnapshot.agentTaskId }
             : {}),
           ...(restoreSnapshot.lastUrl
             ? { requestedStartUrl: restoreSnapshot.lastUrl }
@@ -2625,6 +2671,7 @@ async function resolveAccountProxy(
             Array<{
               id: number;
               proxy?: Array<{
+                id?: number;
                 host: string;
                 port: string;
                 user?: string | null;
@@ -2661,6 +2708,7 @@ async function resolveAccountProxy(
           mode: protocol as "http" | "https",
           host: proxy.host,
           port,
+          ...(typeof proxy.id === "number" ? { proxyId: proxy.id } : {}),
           ...(proxy.user ? { username: proxy.user } : {}),
           ...(decrypted.password
                     ? { password: decrypted.password }

@@ -132,6 +132,45 @@ export class ProxyModule extends BaseModule implements IProxyApi {
   }
 
   /**
+   * B10/P-FR-07: renderer-safe detail — hasPassword only, never the
+   * stored (or legacy plaintext) secret. Main-process consumers that need
+   * the at-rest value keep using getProxyDetail.
+   */
+  async getProxyDetailSafe(
+    id: number
+  ): Promise<CommonApiresp<ProxyEntityType & { hasPassword?: boolean }>> {
+    try {
+      const proxy = await this.proxyModel.getProxyById(id);
+      if (!proxy) {
+        return { status: false, code: 404, msg: "Proxy not found" };
+      }
+      const decrypted = await ProxyCredentialCodec.decryptForUse(proxy.pass);
+      return {
+        status: true,
+        code: 200,
+        msg: "Success",
+        data: {
+          id: proxy.id,
+          host: proxy.host,
+          port: proxy.port,
+          user: proxy.user,
+          hasPassword: Boolean(decrypted.password),
+          protocol: proxy.protocol,
+          country_code: proxy.country_code,
+          addtime: proxy.addtime,
+        },
+      };
+    } catch (error) {
+      return {
+        status: false,
+        code: 500,
+        msg:
+          error instanceof Error ? error.message : "Failed to get proxy details",
+      };
+    }
+  }
+
+  /**
    * Save or update a proxy entity
    */
   async saveProxy(entity: ProxyEntityType): Promise<SaveProxyResp> {

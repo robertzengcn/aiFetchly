@@ -13,6 +13,8 @@ import type {
   BrowserDecisionInput,
   BrowserDecisionResult,
   BrowserDecisionRouteKind,
+  BrowserDecisionOperation,
+  BrowserRecentAction,
   BrowserProposedAction,
 } from "@/entityTypes/browserDecisionTypes";
 import { decisionInputSchema } from "@/schemas/api/browserDecision";
@@ -191,6 +193,10 @@ export class BrowserTaskRunner {
   private readonly maxEquivalentFailures: number;
   /** T18: a bounded recovery decision awaiting execution. */
   private pendingRecovery: BrowserDecisionResult | null = null;
+  /** B16: the URL the task started on (documented DONE fallback). */
+  private startUrl: string | null = null;
+  /** B16/D-AC-09: the verification miss carried into the next decision. */
+  private pendingSubgoal: string | null = null;
   /** T18: chat-route progress check (D-FR-19) — digest every 5 steps. */
   private lastProgressDigest: string | null = null;
   private stepsSinceProgressCheck = 0;
@@ -248,14 +254,20 @@ export class BrowserTaskRunner {
 
         const candidates = buildDecisionCandidates({ elements: observation.elements });
         const decisionInput = this.buildDecisionInput(observation, candidates);
+        this.pendingSubgoal = null;
+        if (this.startUrl === null) {
+          this.startUrl = observation.url;
+        }
         let decision: BrowserDecisionResult;
         const generationBeforeDecide = control.getResumeGeneration(this.taskId);
+        let decisionFromRecovery = false;
         if (this.pendingRecovery) {
           // T18: consume the bounded recovery decision through the normal
           // validate/execute path (no second execution machinery).
           decision = this.pendingRecovery;
           this.pendingRecovery = null;
           this.decisionRequests++;
+          decisionFromRecovery = true;
         } else
         try {
           // T09: each provider attempt is bounded by an abortable timer
@@ -377,15 +389,55 @@ export class BrowserTaskRunner {
           if (verification.verified) {
             return this.terminal("completed", "verified", [...evidence, verification.evidence], extracted, observation);
           }
-          // D-AC-09: a DONE without independent verification is not success.
+          // D-AC-09/B16: a DONE without independent verification is not
+          // success. The verification MISS goes into the next decision
+          // input (pendingSubgoal) so the model can close the gap.
           if (this.recoveryCalls >= this.budget.recoveryCalls) {
             return this.terminal("partial", "verification_failed_budget_exhausted", evidence, extracted, observation);
           }
           this.recoveryCalls++;
+          this.pendingSubgoal = `previous DONE was NOT verified (check failed: ${verification.evidence}). Continue working toward the goal; DONE only when the criteria hold.`;
           evidence.push("done_unverified:continuing");
           continue;
         }
         if (action.operation === "ESCALATE") {
+          // B16/D-FR-22 (design 11.3): ESCALATE is NOT an immediate
+          // terminal — it routes through the bounded recovery table: one
+          // recovery decision with the escalation as the subgoal. Only an
+          // exhausted recovery budget lands the escalation terminal. An
+          // ESCALATE that CAME FROM recovery is already the recovery
+          // outcome — routing it back would only burn budget.
+          if (!decisionFromRecovery && this.recoveryCalls < this.budget.recoveryCalls) {
+            const freshEscalationObservation = await this.deps.observe(
+              this.input.sessionId
+            );
+            if (freshEscalationObservation) {
+              const freshEscalationCandidates = buildDecisionCandidates({
+                elements: freshEscalationObservation.elements,
+              });
+              const recovered = await this.recoverOnce(
+                this.buildDecisionInput(
+                  freshEscalationObservation,
+                  freshEscalationCandidates
+                ),
+                "the decision ESCALATED; pick a concrete allowed operation that advances the goal, or repeat ESCALATE only if the task is truly stuck",
+                signal,
+                {
+                  operation: "ESCALATE",
+                  error_code: "escalated_by_decision",
+                } as {
+                  operation: BrowserDecisionOperation;
+                  error_code: string;
+                  target_descriptor: string | null;
+                }
+              );
+              if (recovered) {
+                observation = freshEscalationObservation;
+                evidence.push("escalate:routed_to_recovery");
+                continue;
+              }
+            }
+          }
           return this.terminal("partial", "escalated_by_decision", evidence, extracted, observation);
         }
         if (action.operation === "WAIT") {
@@ -569,14 +621,34 @@ export class BrowserTaskRunner {
         if (violation) {
           evidence.push(`invalid_decision:${violation}`);
           if (++this.consecutiveEquivalentFailures >= this.maxEquivalentFailures) {
-            const recovered = await this.recoverOnce(
-              decisionInput,
-              `previous decision was invalid (${violation}); choose a DIFFERENT operation or ESCALATE`,
-              signal
+            // B17/D-FR-25: recovery decides against the state it will
+            // execute on — re-observe and rebuild the candidates/input
+            // FIRST; the stale decision input never reaches the model.
+            const freshRecoveryObservation = await this.deps.observe(
+              this.input.sessionId
             );
-            if (recovered) {
-              this.consecutiveEquivalentFailures = 0;
-              continue;
+            if (freshRecoveryObservation) {
+              const freshRecoveryInput = this.buildDecisionInput(
+                freshRecoveryObservation,
+                buildDecisionCandidates({
+                  elements: freshRecoveryObservation.elements,
+                })
+              );
+              const recovered = await this.recoverOnce(
+                freshRecoveryInput,
+                `previous decision was invalid (${violation}); choose a DIFFERENT operation or ESCALATE`,
+                signal,
+                {
+                  operation: action.operation,
+                  error_code: violation,
+                  target_descriptor: null,
+                }
+              );
+              if (recovered) {
+                this.consecutiveEquivalentFailures = 0;
+                observation = freshRecoveryObservation;
+                continue;
+              }
             }
             return this.terminal("failed", `repeated_invalid_decision:${violation}`, evidence, extracted, observation);
           }
@@ -639,16 +711,36 @@ export class BrowserTaskRunner {
           // T18: a failures-exhausted stop gets ONE bounded recovery
           // before the terminal lands; policy stops never recover.
           if (processed.stop.reason.startsWith("three_equivalent_failures")) {
-            const recovered = await this.recoverOnce(
-              decisionInput,
-              `three equivalent failures on ${action.operation} ${target.name}: ${processed.stop.reason}`,
-              signal
+            // B17/D-FR-25: recovery sees the FRESH state — observe before
+            // the recovery decision, not only after it.
+            const freshRecoveryObservation = await this.deps.observe(
+              this.input.sessionId
             );
-            if (recovered) {
-              this.consecutiveEquivalentFailures = 0;
-              this.lastFailureKey = null;
+            if (freshRecoveryObservation) {
+              const freshRecoveryInput = this.buildDecisionInput(
+                freshRecoveryObservation,
+                buildDecisionCandidates({
+                  elements: freshRecoveryObservation.elements,
+                })
+              );
+              const recovered = await this.recoverOnce(
+                freshRecoveryInput,
+                `three equivalent failures on ${action.operation} ${target.name}: ${processed.stop.reason}`,
+                signal,
+                {
+                  operation: action.operation,
+                  error_code: processed.stop.reason.slice(0, 64),
+                  target_descriptor: `${target.role} "${target.name}"`,
+                }
+              );
+              if (recovered) {
+                this.consecutiveEquivalentFailures = 0;
+                this.lastFailureKey = null;
+                observation = freshRecoveryObservation;
+                continue;
+              }
+            } else {
               observation = await this.deps.observe(this.input.sessionId);
-              continue;
             }
           }
           return this.terminal(
@@ -758,7 +850,9 @@ export class BrowserTaskRunner {
       observation_id: observation.observationId,
       page_revision: observation.pageRevision,
       goal: this.input.goal.slice(0, 2000),
-      subgoal: null,
+      // B16/D-AC-09: a failed completion check puts its MISS into the
+      // next decision input so the model knows what was still missing.
+      subgoal: this.pendingSubgoal,
       constraints: [...(this.input.constraints ?? [])].slice(0, 16),
       // P1/D-FR-24: the model sees the completion criteria (DONE is
       // then an informed decision; verification stays independent).
@@ -784,7 +878,14 @@ export class BrowserTaskRunner {
   private async recoverOnce(
     decisionInput: BrowserDecisionInput,
     reason: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    // B17/D-FR-25: the REAL last action (operation + error class +
+    // descriptor) — never a fabricated entry.
+    lastAction?: {
+      readonly operation: BrowserDecisionOperation;
+      readonly error_code: string;
+      readonly target_descriptor?: string | null;
+    }
   ): Promise<boolean> {
     if (this.recoveryCalls >= this.budget.recoveryCalls) {
       return false;
@@ -797,11 +898,11 @@ export class BrowserTaskRunner {
       recent_actions: [
         ...decisionInput.recent_actions,
         {
-          operation: decisionInput.recent_actions.at(-1)?.operation ?? "CLICK",
-          target_descriptor: null,
+          operation: lastAction?.operation ?? "WAIT",
+          target_descriptor: lastAction?.target_descriptor ?? null,
           outcome: "failed" as const,
-          error_code: reason.slice(0, 64),
-        },
+          error_code: (lastAction?.error_code ?? reason).slice(0, 64),
+        } as BrowserRecentAction,
       ].slice(-6),
     };
     try {
@@ -1090,8 +1191,13 @@ export class BrowserTaskRunner {
   ): { verified: boolean; evidence: string } {
     const criteria = this.input.completionCriteria ?? [];
     if (criteria.length === 0) {
-      // No declared criteria: URL/title change vs the task start is weak
-      // evidence; report unverified so callers know.
+      // B16/D-AC-09 documented fallback: with NO declared criteria, DONE
+      // is verified deterministically by a URL change vs the task start
+      // (evidence: verified_by_url_change_fallback). An unchanged page
+      // stays unverified — a DONE on the landing page never completes.
+      if (this.startUrl !== null && observation.url !== this.startUrl) {
+        return { verified: true, evidence: "verified_by_url_change_fallback" };
+      }
       return { verified: false, evidence: "no_completion_criteria" };
     }
     for (const criterion of criteria) {

@@ -35,6 +35,11 @@ export type ProxyListEntity={
     googlePassName?:string
     /** PRD P-FR-07: HTTP/HTTPS proxies are usable by the managed browser. */
     browser_usable?:boolean
+    /**
+     * B10/P-FR-07: renderer rows NEVER carry the password — only whether
+     * one is stored. The secret stays in main-process storage.
+     */
+    hasPassword?:boolean
 }
 export type ProxylistResp={
     status:boolean,

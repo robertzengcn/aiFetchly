@@ -1134,6 +1134,13 @@ export class SearchModule extends BaseModule {
           const decrypted = await ProxyCredentialCodec.decryptForUse(
             item.pass
           );
+          // B09/P-FR-08: a FAILED decrypt (the row had a secret but it
+          // cannot be decrypted) is a HARD failure — launching with an
+          // empty password would silently connect unauthenticated. Only a
+          // row that genuinely stores no password launches without one.
+          if (decrypted.password === null && item.pass) {
+            throw new Error("proxy_decrypt_failed");
+          }
           return {
             host: item.host,
             port: item.port,
@@ -1242,18 +1249,28 @@ export class SearchModule extends BaseModule {
 
     // Update proxies if provided
     if (updates.proxys !== undefined) {
-      // For proxies, we'll recreate them
+      // B09/R07: REPLACE the task's proxy rows — the old code appended a
+      // second set alongside the originals.
+      await this.searchTaskProxyModel.deleteByTaskId(taskId);
       for (const proxy of updates.proxys) {
         const proxyEntity = new SearchTaskProxyEntity();
         proxyEntity.task_id = taskId;
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port.toString();
         proxyEntity.user = proxy.user || "";
-        // N04/P-FR-08: encrypt at rest.
-        proxyEntity.pass = proxy.pass
-          ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
-             proxy.pass)
-          : "";
+        // N04/P-FR-08/B09: encrypt at rest; a FAILED encryption aborts the
+        // write — the old `?? proxy.pass` fallback stored PLAINTEXT.
+        if (proxy.pass) {
+          const encrypted = await ProxyCredentialCodec.encryptForStorage(
+            proxy.pass
+          );
+          if (!encrypted) {
+            throw new Error("proxy_encrypt_failed");
+          }
+          proxyEntity.pass = encrypted;
+        } else {
+          proxyEntity.pass = "";
+        }
         await this.searchTaskProxyModel.create(proxyEntity);
       }
     }

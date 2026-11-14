@@ -65,8 +65,10 @@ export function registeProxyIpcHandlers() {
     PROXYDETAIL,
     proxyByIdInputSchema,
     async (input) => {
-      const proxyModule: IProxyApi = new ProxyModule();
-      const response = await proxyModule.getProxyDetail(input.id);
+      // B10/P-FR-07: the renderer gets hasPassword only — the stored
+      // secret (or a legacy PLAINTEXT row) never crosses IPC.
+      const proxyModule = new ProxyModule();
+      const response = await proxyModule.getProxyDetailSafe(input.id);
       if (!response.status || !response.data) {
         throw new Error(response.msg || "Failed to get proxy details");
       }

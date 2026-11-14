@@ -58,7 +58,10 @@ export class ProxyModel extends BaseDb {
         host: proxy.host,
         port: proxy.port,
         username: proxy.user,
-        password: decrypted.password ?? undefined,
+        // B10/P-FR-07: the renderer list NEVER receives the password —
+        // only whether one is stored (decryption above still drives the
+        // legacy-plaintext migration).
+        hasPassword: Boolean(decrypted.password),
         protocol: proxy.protocol,
         country_code: proxy.country_code,
         addtime: proxy.addtime || "",

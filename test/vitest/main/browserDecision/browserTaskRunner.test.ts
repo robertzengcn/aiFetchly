@@ -1495,3 +1495,200 @@ describe("BrowserTaskRunner B04 NAVIGATE per-URL provenance", () => {
     expect(result.status).toBe("completed");
   });
 });
+
+describe("BrowserTaskRunner B16 escalate/empty-criteria handling", () => {
+  const escalateEntry = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "ESCALATE", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+  const clickGo = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  function captureDecides(deps: ReturnType<typeof makeRunnerDeps>): Array<Record<string, unknown>> {
+    const calls: Array<Record<string, unknown>> = [];
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (
+      input: unknown,
+      signal: unknown
+    ) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown,
+        s: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input, signal);
+    }) as typeof deps.decisionClient.decide;
+    return calls;
+  }
+
+  it("ESCALATE routes through bounded recovery and completes on the recovery decision", async () => {
+    // Decision script: ESCALATE first; the RECOVERY call returns CLICK;
+    // the recovery decision is executed and DONE verifies.
+    const deps = makeRunnerDeps([escalateEntry(), clickGo(), doneEntry()]);
+    const decideCalls = captureDecides(deps);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16a",
+        conversationId: "conv-1",
+        goal: "Open search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The escalation did NOT terminate the task.
+    expect(result.status).toBe("completed");
+    expect(result.reason).not.toBe("escalated_by_decision");
+    expect(result.evidence).toContain("escalate:routed_to_recovery");
+    // The recovery decision input carried the escalation subgoal.
+    expect(String(decideCalls[1]?.subgoal)).toContain("ESCALATED");
+  });
+
+  it("ESCALATE with an exhausted recovery budget still lands the terminal", async () => {
+    // Both decisions escalate: the first consumes recovery (the recovery
+    // call escalates again), the second hits the exhausted budget.
+    const deps = makeRunnerDeps([escalateEntry(), escalateEntry(), escalateEntry()]);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16b",
+        conversationId: "conv-1",
+        goal: "Open search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated_by_decision");
+  });
+
+  it("empty criteria: a URL change verifies DONE via the documented fallback", async () => {
+    const deps = makeRunnerDeps(
+      [clickGo(), doneEntry()],
+      { url: "https://example.test/landing" }
+    );
+    // The task starts on /landing; the click MOVES the page to /other.
+    let landingSeen = false;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      if (!landingSeen) {
+        landingSeen = true;
+        return observation({ url: "https://example.test/landing" });
+      }
+      return observation({ url: "https://example.test/other" });
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16c",
+        conversationId: "conv-1",
+        goal: "go somewhere",
+        completionCriteria: [],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("verified_by_url_change_fallback");
+  });
+
+  it("empty criteria: DONE on an unchanged page never completes", async () => {
+    const deps = makeRunnerDeps(
+      [doneEntry(), doneEntry(), doneEntry()],
+      { url: "https://example.test/landing" }
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16d",
+        conversationId: "conv-1",
+        goal: "go somewhere",
+        completionCriteria: [],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+  });
+});
+
+describe("BrowserTaskRunner B17 recovery against fresh state", () => {
+  const clickGo = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("recovery builds its input from a FRESH observation with the real last action", async () => {
+    // Three structurally invalid FILL decisions trip the threshold; the
+    // recovery call must see the FRESH observation and the REAL failed
+    // action (FILL / text_required) — not a fabricated CLICK.
+    const invalidFill = (): BrowserDecisionResultWireLike => ({
+      status: "decided",
+      action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable" as const, confidence: null },
+    });
+    const deps = makeRunnerDeps([
+      invalidFill(),
+      invalidFill(),
+      invalidFill(),
+      // Recovery decision: click the button (valid in the fresh state).
+      clickGo(),
+      doneEntry(),
+    ]);
+    const calls: Array<Record<string, unknown>> = [];
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (
+      input: unknown,
+      signal: unknown
+    ) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown,
+        s: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input, signal);
+    }) as typeof deps.decisionClient.decide;
+    // The post-violation re-observation is FRESH: different id, fewer
+    // elements — the recovery input must be built from THIS state.
+    let first = true;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      if (first) {
+        first = false;
+        return observation({});
+      }
+      return observation({
+        observationId: "obs-fresh",
+        elements: [{ ref: "e_aaa", role: "textbox", name: "Search" }],
+      });
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b17",
+        conversationId: "conv-1",
+        goal: "open search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The invalid decisions never dispatched an action.
+    expect(result.counts.leafSteps).toBeLessThanOrEqual(1);
+    // Find the RECOVERY decide call (its subgoal names the violation).
+    const recoveryCall = calls.find((c) =>
+      String(c.subgoal).includes("previous decision was invalid")
+    );
+    expect(recoveryCall).toBeDefined();
+    // B17: the recovery input is built from the FRESH observation.
+    expect(recoveryCall?.observation_id).toBe("obs-fresh");
+    // B17: the recent action is the REAL failure — FILL/text_required —
+    // never the old fabricated CLICK.
+    const recent = recoveryCall?.recent_actions as Array<{
+      operation: string;
+      error_code?: string | null;
+    }>;
+    const last = recent.at(-1)!;
+    expect(last.operation).toBe("FILL");
+    expect(last.error_code).toBe("text_required");
+  });
+});

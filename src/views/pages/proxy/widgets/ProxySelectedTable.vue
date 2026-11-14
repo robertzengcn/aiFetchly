@@ -60,10 +60,12 @@ const headers: Array<any> = [
         key: 'username',
     },
     {
-        title: 'Pass',
+        // B10/P-FR-07: the renderer never receives the password — show
+        // only whether one is stored.
+        title: 'Pass Saved',
         align: 'start',
         sortable: false,
-        key: 'password',
+        key: 'hasPassword',
     },
     {
         title: 'Protocol',

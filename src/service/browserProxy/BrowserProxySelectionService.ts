@@ -93,6 +93,9 @@ async function toResolvedProxy(row: ProxyRow): Promise<ResolvedSessionProxy> {
     mode: protocol === "https" ? "https" : "http",
     host: row.host,
     port,
+    // B08: the authoritative row id — health checks and deterministic
+    // restore resolve by id, not by re-running a selector.
+    proxyId: row.id,
     ...(row.user ? { username: row.user } : {}),
     ...(decrypted.password ? { password: decrypted.password } : {}),
   };

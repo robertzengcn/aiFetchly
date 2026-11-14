@@ -149,9 +149,9 @@ const initialize = async () => {
       if(res.user){
       user.value = res.user.toString();
       }
-      if(res.pass){
-      pass.value = res.pass;
-      }
+      // B10/P-FR-07: the stored password is NEVER returned to the
+      // renderer — the field stays empty; the user types a password only
+      // to REPLACE it (an untouched submit keeps the stored one).
       if(res.host){
       host.value = res.host;
       }
@@ -202,9 +202,12 @@ async function onSubmit() {
       host: host.value,
       port: port.value,
       user: user.value,
-      pass: pass.value,
       protocol:protocol.value,
-      country_code:country_code.value,  
+      country_code:country_code.value,
+      // B10: submit a password ONLY when the user typed one — an omitted
+      // pass keeps the stored credential (the model's T11 semantics);
+      // `pass === ""` would CLEAR it, which is a deliberate act only.
+      ...(pass.value ? { pass: pass.value } : {}),
     };
     if ($route.params.id) {
       pe.id = parseInt($route.params.id.toString());
