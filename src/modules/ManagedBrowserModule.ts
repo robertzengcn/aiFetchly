@@ -208,6 +208,8 @@ export type ResolvedSessionProxy =
        * authoritative id for health checks and deterministic restore.
        */
       readonly proxyId?: number;
+      /** N05/P-FR-06: the row's country — aligns locale/timezone. */
+      readonly countryCode?: string;
     }
   | { readonly mode: "unresolvable"; readonly reasonCode: string };
 
@@ -833,6 +835,12 @@ export class ManagedBrowserModule {
             }
           : ({ mode: "direct" } as const);
       record.proxyActive = sessionProxy.mode !== "direct";
+      // N05/P-FR-06: the effective proxy's country code (locale/timezone).
+      const proxyCountry =
+        effectiveProxy &&
+        (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
+          ? (effectiveProxy.countryCode?.toUpperCase() ?? null)
+          : null;
       // B08: when the launch proxy came from the ACCOUNT default (no
       // explicit selection), resolve its row id for deterministic restore.
       if (
@@ -847,7 +855,20 @@ export class ManagedBrowserModule {
         {
           type: "START_SESSION",
           executable: resolution.descriptor,
-          launchPolicy: toWorkerLaunchPolicy(buildDefaultLaunchPolicy()),
+          launchPolicy: toWorkerLaunchPolicy(
+            buildDefaultLaunchPolicy({
+              // N05/P-FR-06: align the browser's locale and timezone with
+              // the proxy's country — a geo-consistent fingerprint.
+              locale:
+                proxyCountry != null
+                  ? (PROXY_LOCALE_BY_COUNTRY.get(proxyCountry) ?? null)
+                  : null,
+              timezoneId:
+                proxyCountry != null
+                  ? (PROXY_TIMEZONE_BY_COUNTRY.get(proxyCountry) ?? null)
+                  : null,
+            })
+          ),
           storagePolicy: { temporaryProfilePath, persistentCache },
           platform: toWorkerPlatform(manifest),
           proxy: sessionProxy,
@@ -2698,6 +2719,43 @@ function toWorkerLaunchPolicy(policy: BrowserLaunchPolicy): {
  * wins; an account whose proxies exist but are none-usable marks the
  * session unresolvable (fail-closed, never silent direct).
  */
+/**
+ * N05/P-FR-06: proxy country → browser locale/timezone alignment. Known
+ * countries map to their dominant locale and IANA zone; anything else
+ * stays null (Chromium defaults apply).
+ */
+export const PROXY_LOCALE_BY_COUNTRY = new Map<string, string>([
+  ["US", "en-US"],
+  ["GB", "en-GB"],
+  ["CA", "en-CA"],
+  ["AU", "en-AU"],
+  ["DE", "de-DE"],
+  ["FR", "fr-FR"],
+  ["ES", "es-ES"],
+  ["IT", "it-IT"],
+  ["NL", "nl-NL"],
+  ["BR", "pt-BR"],
+  ["JP", "ja-JP"],
+  ["SG", "en-SG"],
+  ["IN", "en-IN"],
+]);
+
+const PROXY_TIMEZONE_BY_COUNTRY = new Map<string, string>([
+  ["US", "America/New_York"],
+  ["GB", "Europe/London"],
+  ["CA", "America/Toronto"],
+  ["AU", "Australia/Sydney"],
+  ["DE", "Europe/Berlin"],
+  ["FR", "Europe/Paris"],
+  ["ES", "Europe/Madrid"],
+  ["IT", "Europe/Rome"],
+  ["NL", "Europe/Amsterdam"],
+  ["BR", "America/Sao_Paulo"],
+  ["JP", "Asia/Tokyo"],
+  ["SG", "Asia/Singapore"],
+  ["IN", "Asia/Kolkata"],
+]);
+
 async function resolveAccountProxy(
   accountId: number
 ): Promise<ResolvedSessionProxy> {
@@ -2716,6 +2774,7 @@ async function resolveAccountProxy(
                 user?: string | null;
                 pass?: string | null;
                 protocol?: string | null;
+                country_code?: string | null;
               }>;
             }>
           >;
@@ -2748,6 +2807,7 @@ async function resolveAccountProxy(
           host: proxy.host,
           port,
           ...(typeof proxy.id === "number" ? { proxyId: proxy.id } : {}),
+          ...(proxy.country_code ? { countryCode: proxy.country_code } : {}),
           ...(proxy.user ? { username: proxy.user } : {}),
           ...(decrypted.password
                     ? { password: decrypted.password }

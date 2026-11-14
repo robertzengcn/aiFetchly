@@ -96,6 +96,8 @@ async function toResolvedProxy(row: ProxyRow): Promise<ResolvedSessionProxy> {
     // B08: the authoritative row id — health checks and deterministic
     // restore resolve by id, not by re-running a selector.
     proxyId: row.id,
+    // N05/P-FR-06: the country drives locale/timezone alignment.
+    ...(row.country_code ? { countryCode: row.country_code } : {}),
     ...(row.user ? { username: row.user } : {}),
     ...(decrypted.password ? { password: decrypted.password } : {}),
   };
