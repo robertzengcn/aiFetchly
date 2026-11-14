@@ -351,6 +351,9 @@ describe("B06 challenge ordering in runActions", () => {
       async scrollIntoView(): Promise<void> {
         /* no-op */
       },
+      async isIntersectingViewport(): Promise<boolean> {
+        return true;
+      },
       async evaluate<T>(script: unknown): Promise<T> {
         const fnName = typeof script === "function" ? script.name : "";
         if (fnName === "readElementDescriptor") {
@@ -432,8 +435,9 @@ describe("B06 challenge ordering in runActions", () => {
     );
     raw.length = 0;
     // Observe first: registers the button ref and reports the revision.
-    session.observe("req-b06-obs");
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Awaited — the worker session serializes commands, so runActions
+    // below must not race the registration.
+    await session.observe("req-b06-obs");
     const observeRaw = raw.map((m) => JSON.parse(m) as Record<string, unknown>);
     const observation = observeRaw.find((m) => m.type === "OBSERVATION_RESULT") as
       | {
@@ -448,16 +452,14 @@ describe("B06 challenge ordering in runActions", () => {
     const pageRevision = observation!.observation.pageRevision;
     raw.length = 0;
 
-    session.runActions("req-b06-run", {
+    // Awaited: runActions resolves after the full message burst
+    // (ACTION_RESULT → CHALLENGE_DETECTED → HANDOFF_REQUIRED) is sent.
+    await session.runActions("req-b06-run", {
       actions: [{ type: "click", ref, pageRevision }],
     } as unknown as Extract<
       ManagedBrowserInboundMessage,
       { type: "RUN_ACTIONS" }
     >["program"]);
-    // Bounded wait for the message burst.
-    for (let waited = 0; waited < 2_000 && !raw.some((m) => m.includes('"HANDOFF_REQUIRED"')); waited += 25) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
     const messages = raw.map(
       (m) =>
         managedBrowserOutboundSchema().safeParse(JSON.parse(m) as unknown)
