@@ -50,6 +50,54 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
     for (const name of must) {
       expect(s).toContain(name);
     }
+    // D-FR-10c: the browser rows are gated — pass the FULL capability set
+    // so every browser family is covered here.
+    const full = buildBuiltInToolCapabilitiesSection({
+      managedBrowser: true,
+      runner: true,
+      signIn: true,
+      proxy: true,
+    });
+    for (const name of [
+      "browser_start_session",
+      "browser_execute_task",
+      "browser_sign_in",
+      "proxy_list",
+      "browser_site_upsert",
+      "run_browser_tasks",
+    ]) {
+      expect(full).toContain(name);
+    }
+  });
+
+  it("D-FR-10c: browser rows are feature-conditional", () => {
+    // No capability info at all: NO browser rows (fail closed).
+    const none = buildBuiltInToolCapabilitiesSection();
+    expect(none).not.toContain("browser_start_session");
+    expect(none).not.toContain("browser_execute_task");
+    // The managed browser without acceleration: the runner rows are
+    // hidden, the rest stay.
+    const basic = buildBuiltInToolCapabilitiesSection({
+      managedBrowser: true,
+      runner: false,
+      signIn: true,
+      proxy: true,
+    });
+    expect(basic).toContain("browser_start_session");
+    expect(basic).toContain("browser_sign_in");
+    expect(basic).toContain("browser_set_proxy");
+    expect(basic).not.toContain("browser_execute_task");
+    expect(basic).not.toContain("run_browser_tasks");
+    // Kill switches hide their own rows.
+    const noSignIn = buildBuiltInToolCapabilitiesSection({
+      managedBrowser: true,
+      runner: true,
+      signIn: false,
+      proxy: false,
+    });
+    expect(noSignIn).toContain("browser_execute_task");
+    expect(noSignIn).not.toContain("browser_sign_in");
+    expect(noSignIn).not.toContain("proxy_list");
   });
 
   it("teaches the model to load deferred tools via tool_catalog_search", () => {
@@ -141,7 +189,12 @@ describe("buildBuiltInToolCapabilitiesSection", () => {
 
 
 it("opens any website before asking the user to sign in, regardless of saved accounts", () => {
-  const section = buildBuiltInToolCapabilitiesSection();
+  const section = buildBuiltInToolCapabilitiesSection({
+    managedBrowser: true,
+    runner: true,
+    signIn: true,
+    proxy: true,
+  });
   expect(section).toContain("ANY website, including social networks and login-required sites");
   expect(section).toContain("Never refuse browser use because no saved account exists");
   expect(section).toContain("Open the site first, then hand off sign-in");

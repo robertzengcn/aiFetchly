@@ -703,6 +703,32 @@ export class BrowserActionExecutor {
         stopCode: "stale_page_reference",
       };
     }
+    // D-FR-15: revalidate the target is actually VISIBLE/interactable
+    // immediately before input — bring it into view first (the dispatch
+    // cases scroll again; idempotent), then probe. An occluded or
+    // off-viewport control is a proven no-effect failure (no input has
+    // been dispatched).
+    try {
+      await lookup.entry.element.scrollIntoView();
+      const intersecting = await lookup.entry.element.isIntersectingViewport();
+      if (!intersecting) {
+        return {
+          success: false,
+          errorCode: "stale_page_reference",
+          elementFound: true,
+          stopCode: "stale_page_reference",
+        };
+      }
+    } catch {
+      // A handle that cannot be scrolled/probed is detached — the
+      // fingerprint read above succeeded, so treat as invisible.
+      return {
+        success: false,
+        errorCode: "stale_page_reference",
+        elementFound: true,
+        stopCode: "stale_page_reference",
+      };
+    }
     const result = await fn(lookup.entry);
     return { ...result, elementFound: true };
   }

@@ -19,6 +19,8 @@ export interface ObservationElementLike {
   /** F14: observed SELECT options. */
   readonly option_ids?: readonly string[] | null;
   readonly option_labels?: readonly string[] | null;
+  /** D-FR-13: focused/dialog control — outranks plain page controls. */
+  readonly priority?: boolean;
 }
 
 const ROLE_OPERATIONS: Record<string, readonly BrowserDecisionOperation[]> = {
@@ -68,8 +70,16 @@ export function buildDecisionCandidates(
 ): BrowserDecisionCandidate[] {
   const allowed = input.allowedOperations ?? RUNNER_OPERATIONS;
   const max = input.maxCandidates ?? 16;
+  // D-FR-13/14: the shortlist is PRIORITY-ordered — focused/dialog
+  // controls first (stable within their group), then document order.
+  // Taking the first `max` from the raw document order previously
+  // crowded priority controls out of the shortlist entirely.
+  const ordered = [
+    ...input.elements.filter((el) => el.priority === true),
+    ...input.elements.filter((el) => el.priority !== true),
+  ];
   const candidates: BrowserDecisionCandidate[] = [];
-  for (const element of input.elements) {
+  for (const element of ordered) {
     if (candidates.length >= max) {
       break;
     }

@@ -509,9 +509,34 @@ export class AIChatContextAssembler {
     // block (~350 tokens) keeps the always-injected budget close to the
     // category-level approach preferred by tool-list-management design §20.
     try {
+      // D-FR-10c: the browser prompt rows are feature-conditional — the
+      // model must not be told browser_execute_task / run_browser_tasks /
+      // browser_sign_in / browser_set_proxy exist when the user's gate or
+      // kill switches keep them unavailable.
+      let browserCapabilities: import("@/service/BuiltInToolCapabilitiesPromptSection").BrowserPromptCapabilities | undefined;
+      try {
+        const { getDefaultBrowserAiAvailabilityService } = await import(
+          "@/service/browserDecision/BrowserAiAvailabilityService"
+        );
+        const { ManagedBrowserSettingsModule } = await import(
+          "@/modules/ManagedBrowserSettingsModule"
+        );
+        const settings = await new ManagedBrowserSettingsModule().getEffectiveSettings();
+        if (settings.browserEnabled) {
+          browserCapabilities = {
+            managedBrowser: true,
+            runner: getDefaultBrowserAiAvailabilityService().isAvailable(),
+            signIn: settings.signInEnabled !== false,
+            proxy: settings.proxySwitchEnabled !== false,
+          };
+        }
+      } catch {
+        // Capability probing is best-effort: without it the browser rows
+        // stay hidden (fail closed — never advertised when unknown).
+      }
       messages.push({
         role: "system",
-        content: buildBuiltInToolCapabilitiesSection(),
+        content: buildBuiltInToolCapabilitiesSection(browserCapabilities),
       });
     } catch (err) {
       log.error(

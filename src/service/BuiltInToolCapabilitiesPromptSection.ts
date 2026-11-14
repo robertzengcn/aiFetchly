@@ -28,7 +28,23 @@
  * Constraint: pure data, no Vue / Vue Router imports — safe for the main
  * process bundle (same contract as {@link ChatModePromptSection}).
  */
-export function buildBuiltInToolCapabilitiesSection(): string {
+/**
+ * D-FR-10c: the browser rows are feature-conditional. `runner` covers the
+ * acceleration features (browser_execute_task, run_browser_tasks) — they
+ * exist only when the provider-aware browser gate is open. `signIn` and
+ * `proxy` follow their settings kill switches. The generic managed-browser
+ * row stays whenever the managed browser is usable at all.
+ */
+export interface BrowserPromptCapabilities {
+  readonly managedBrowser: boolean;
+  readonly runner: boolean;
+  readonly signIn: boolean;
+  readonly proxy: boolean;
+}
+
+export function buildBuiltInToolCapabilitiesSection(
+  browser?: BrowserPromptCapabilities
+): string {
   return `# Built-in Tool Capabilities
 
 Most built-in tools are deferred — they are NOT in your tool list until you
@@ -58,16 +74,47 @@ load them. When a request matches one of the capabilities below:
 | Install / set up / register / update / repair a SKILL package from a repository URL or local folder — call \`skill_install_prepare\` directly; it owns acquisition and activation; NEVER clone with shell or copy with file tools, and never pass secrets | \`skill_install_prepare\` | \`install skill setup repository\` |
 | Browse/scrape search-engine result URLs; extract website contacts, then MUST call \`verify_contact_info\` before presenting/exporting emails or phones | \`scrape_urls_from_search_engine\`, \`extract_contact_info\`, \`verify_contact_info\`, \`read_url_content\` | \`scrape search extract verify validate email phone contact normalize\` |
 | Run a local shell command (needs confirmation). shell_execute is for executing commands the user asked for — do NOT use it as a substitute for file_write to create/export a data file (csv/xlsx/json) via echo/redirect, do NOT use it for image edits (use attach_local_images), and do NOT use it to read/write workspace files | \`shell_execute\` | \`shell command run\` |
-| Open a website using your own/built-in/managed browser: call browser_start_session with requested_start_url and purpose; omit account_id by default for ANY website, including social networks and login-required sites. Never refuse browser use because no saved account exists. Open the site first, then hand off sign-in/CAPTCHAs to the user. Do not list accounts or substitute read_url_content. Supply account_id only to reuse an existing saved login | \`browser_start_session\`, \`browser_observe\`, \`browser_navigate\`, \`browser_run_actions\`, \`browser_request_handoff\`, \`browser_get_status\` | \`managed browser open website public social youtube login\` |
-| Run a focused multi-step task on ONE page/site in the managed browser (search + filter, fill forms, paginate, extract) without extra chat rounds per action | \`browser_execute_task\` (one session, one verified result with a compact final observation) | \`browser task multi-step fast\` |
-| A login wall on the current site and the user likely has a saved account | \`browser_sign_in\` (the app fills credentials itself; you never see the password) — NOT \`browser_request_handoff\` | \`login wall sign in saved account\` |
-| A site is unreachable or geo-blocked and the user has proxies | \`proxy_list\` then \`browser_set_proxy\` (controlled switch; failing proxies return a structured reason and never fall back to direct) | \`proxy switch geo blocked\` |
-| The task needs a site that is not yet registered | \`browser_site_upsert\` with the homepage URL (domains beyond the site's own need user confirmation) | \`register site new website\` |
-| Several independent browser goals at once (research multiple sites) | \`run_browser_tasks\` (up to 5 tasks, parallel browsers, compact per-task results) | \`parallel browser batch tasks\` |
-| Single inspection or one-off action | existing \`browser_observe\`/\`browser_run_actions\` (unchanged) | \`observe click single action\` |
+${buildBrowserCapabilityRows(browser)}
 | Resume/continue interrupted work; previous tool results already run this chat | \`conversation_tool_history\` (always loaded) | n/a |
 
 If a capability you need is not listed and not exposed, search the catalog by
 keyword with \`tool_catalog_search\`. Prefer normal chat responses for simple
 questions; use these tools only when the user's request needs the capability.`;
+}
+
+/** D-FR-10c: the browser rows, gated on the user's actual feature set. */
+function buildBrowserCapabilityRows(
+  browser?: BrowserPromptCapabilities
+): string {
+  // No capability info (or the managed browser is off entirely): the
+  // model must not be told browser tools exist.
+  if (!browser || !browser.managedBrowser) {
+    return "";
+  }
+  const rows: string[] = [
+    "| Open a website using your own/built-in/managed browser: call browser_start_session with requested_start_url and purpose; omit account_id by default for ANY website, including social networks and login-required sites. Never refuse browser use because no saved account exists. Open the site first, then hand off sign-in/CAPTCHAs to the user. Do not list accounts or substitute read_url_content. Supply account_id only to reuse an existing saved login | `browser_start_session`, `browser_observe`, `browser_navigate`, `browser_run_actions`, `browser_request_handoff`, `browser_get_status` | `managed browser open website public social youtube login` |",
+    "| Single inspection or one-off action | existing `browser_observe`/`browser_run_actions` (unchanged) | `observe click single action` |",
+  ];
+  if (browser.runner) {
+    rows.push(
+      "| Run a focused multi-step task on ONE page/site in the managed browser (search + filter, fill forms, paginate, extract) without extra chat rounds per action | `browser_execute_task` (one session, one verified result with a compact final observation) | `browser task multi-step fast` |"
+    );
+    rows.push(
+      "| Several independent browser goals at once (research multiple sites) | `run_browser_tasks` (up to 5 tasks, parallel browsers, compact per-task results) | `parallel browser batch tasks` |"
+    );
+  }
+  if (browser.signIn) {
+    rows.push(
+      "| A login wall on the current site and the user likely has a saved account | `browser_sign_in` (the app fills credentials itself; you never see the password) — NOT `browser_request_handoff` | `login wall sign in saved account` |"
+    );
+  }
+  if (browser.proxy) {
+    rows.push(
+      "| A site is unreachable or geo-blocked and the user has proxies | `proxy_list` then `browser_set_proxy` (controlled switch; failing proxies return a structured reason and never fall back to direct) | `proxy switch geo blocked` |"
+    );
+  }
+  rows.push(
+    "| The task needs a site that is not yet registered | `browser_site_upsert` with the homepage URL (domains beyond the site's own need user confirmation) | `register site new website` |"
+  );
+  return rows.join("\n");
 }

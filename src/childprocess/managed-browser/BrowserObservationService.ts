@@ -58,6 +58,8 @@ export interface CollectedElementRecord {
   readonly hrefOrigin: string | null;
   /** B04: the normalized absolute link URL — full-URL NAVIGATE provenance. */
   readonly hrefFull: string | null;
+  /** D-FR-13: focused/dialog control — outranks plain page controls. */
+  readonly priority?: boolean;
   readonly visible: boolean;
   /** T21/A-AC-04: filled by the privileged login filler. */
   isCredential?: boolean;
@@ -133,10 +135,16 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
   const chosen = chosenVisible.concat(chosenHidden)
     .sort((a, b) => a.docIndex - b.docIndex)
     .slice(0, CAP * 2);
+  // D-FR-13/14: priority elements carry the flag downstream — the
+  // candidate builder orders the SHORTLIST by it (the record/handle
+  // pairing above stays in document order).
+  const priorityFlagged = chosen.map((entry) =>
+    priorityEls.has(entry.el) ? { ...entry, priority: true } : entry
+  );
   const truncated =
     scanTruncatedRaw || visibleOrdered.length > CAP || hiddenSet.length > CAP;
   const out = [];
-  chosen.forEach((entry, obsIndex) => {
+  priorityFlagged.forEach((entry, obsIndex) => {
     const htmlEl = entry.el;
     htmlEl.setAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}', String(obsIndex));
     const role = htmlEl.getAttribute('role')
@@ -184,6 +192,7 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
     }
     out.push({
       obsId: String(obsIndex),
+      ...(entry.priority === true ? { priority: true } : {}),
       tag: htmlEl.tagName.toLowerCase(),
       role,
       name,
@@ -267,6 +276,7 @@ export function shapeElementRecord(
   | "selected"
   | "hrefOrigin"
   | "hrefFull"
+  | "priority"
   | "option_ids"
   | "option_labels"
   | "option_values"
@@ -294,6 +304,8 @@ export function shapeElementRecord(
     ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
     // B04: full normalized URL rides the summary for NAVIGATE provenance.
     ...(record.hrefFull ? { hrefFull: record.hrefFull } : {}),
+    // D-FR-13: focused/dialog elements surface first in the shortlist.
+    ...(record.priority === true ? { priority: true } : {}),
     // F14: positional option ids (o_0..) plus sanitized labels/values
     // so the decision can pick an OBSERVED option and the runner can
     // map it back to the real value.
@@ -488,6 +500,7 @@ function toSummaryFields(
   if (shaped.selected != null) out.selected = shaped.selected;
   if (shaped.hrefOrigin != null) out.hrefOrigin = shaped.hrefOrigin;
   if (shaped.hrefFull != null) out.hrefFull = shaped.hrefFull;
+  if (shaped.priority != null) out.priority = shaped.priority;
   if (shaped.option_ids != null) out.option_ids = shaped.option_ids;
   if (shaped.option_labels != null) out.option_labels = shaped.option_labels;
   if (shaped.option_values != null) out.option_values = shaped.option_values;

@@ -348,6 +348,8 @@ export interface BrowserElementSummary {
   readonly hrefOrigin?: string;
   /** B04: the full normalized link URL — NAVIGATE provenance per URL. */
   readonly hrefFull?: string;
+  /** D-FR-13: focused/dialog control — the shortlist orders by it. */
+  readonly priority?: boolean;
   /** F14: observed SELECT options (positional o_N ids + labels/values). */
   readonly option_ids?: string[];
   readonly option_labels?: string[];

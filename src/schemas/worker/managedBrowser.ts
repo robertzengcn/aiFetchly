@@ -665,6 +665,8 @@ const elementSummarySchema = z.strictObject({
   hrefOrigin: z.string().max(512).optional(),
   // B04: full normalized link URL for per-URL NAVIGATE provenance.
   href_full: z.string().max(2048).optional(),
+  // D-FR-13: focused/dialog control — the candidate shortlist orders by it.
+  priority: z.boolean().optional(),
   // F14: observed SELECT options — ids are positional (o_N), labels
   // and values are the sanitized page-authored strings.
   option_ids: z.array(z.string().max(8)).max(20).optional(),
