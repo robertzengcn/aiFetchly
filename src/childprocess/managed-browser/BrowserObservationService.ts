@@ -334,6 +334,22 @@ export async function buildObservation(
   // main process can pin across pending approvals/handoffs.
   const observationId = randomUUID();
   input.registry.beginObservation(observationId);
+  // D-FR-15a edge: a throw AFTER beginObservation but BEFORE
+  // commitObservation must not leave the bucket implicitly pinned
+  // forever — a failed build commits (closes) its epoch so the refs
+  // expire normally, then the error propagates.
+  try {
+    return await buildObservationBody(input, observationId);
+  } catch (error) {
+    input.registry.commitObservation(observationId);
+    throw error;
+  }
+}
+
+async function buildObservationBody(
+  input: BuildObservationInput,
+  observationId: string
+): Promise<BrowserObservation> {
   const notices: BrowserNotice[] = [{ code: "untrusted_content" }];
   let records: CollectedElementRecord[] = [];
   let title = input.title ?? "";

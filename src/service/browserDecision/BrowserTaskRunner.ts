@@ -693,9 +693,30 @@ export class BrowserTaskRunner {
           observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
-        const execution = await this.deps.runActions(this.input.sessionId, {
-          actions: [programAction],
-        });
+        let execution: RunnerExecutionResult;
+        try {
+          execution = await this.deps.runActions(this.input.sessionId, {
+            actions: [programAction],
+          });
+        } catch (stepError) {
+          // N08/D-AC-07: a worker throw MID-STEP means the input MAY
+          // already have been dispatched — the page state is unknown.
+          // Classify as an unknown effect (partial) so nothing runs on
+          // top of it; never a generic runner_error that claims a clean
+          // failure.
+          const detail =
+            stepError instanceof Error ? stepError.message : "unknown";
+          await this.deps.persistActionOutcome?.("unknown").catch(
+            () => undefined
+          );
+          return this.terminal(
+            "partial",
+            "unknown_execution_effect",
+            [...evidence, `${action.operation}:worker_error:${detail.slice(0, 64)}`],
+            extracted,
+            observation
+          );
+        }
         await this.deps.persistActionOutcome?.(this.stepOutcomeOf(execution));
                 const processed = await this.processExecution(
           action.operation,

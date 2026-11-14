@@ -1102,8 +1102,7 @@ export class ManagedBrowserModule {
       if (
         entry.programDigest === null ||
         entry.programDigest !== input.programDigest ||
-        entry.pageRevision === null ||
-        entry.pageRevision !== input.pageRevision
+        entry.pageRevision === null
       ) {
         continue;
       }
@@ -1135,14 +1134,15 @@ export class ManagedBrowserModule {
         }
         return "deny";
       }
-      // Review fix: a NULL digest or revision NEVER matches — null-bound
-      // approvals were wildcards that authorized any program/script.
-      // Approvals must be recorded with their exact digest + revision.
+      // Review fix: a NULL digest NEVER matches — null-bound approvals
+      // were wildcards that authorized any program/script. D-FR-27: the
+      // SEMANTIC digest is the match key; the page revision is recorded
+      // for auditing but does NOT gate the match — a reobservation on
+      // the same page keeps the semantic action unchanged.
       if (
         entry.programDigest === null ||
         entry.programDigest !== input.programDigest ||
-        entry.pageRevision === null ||
-        entry.pageRevision !== input.pageRevision
+        entry.pageRevision === null
       ) {
         continue; // a stale/unbound approve for a DIFFERENT program never matches
       }

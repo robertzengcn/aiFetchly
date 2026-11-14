@@ -928,6 +928,8 @@ export class ManagedBrowserAiToolService {
         formatZodValidationError("browser_evaluate_script", parsed.error)
       );
     }
+    // F16/D-FR-08: an active runner owns this session — legacy tools wait.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context?.conversationId);
     // privileged_script: no permission mode may skip this confirmation.
     const assessment = this.classifier.classify({
@@ -1208,6 +1210,8 @@ export class ManagedBrowserAiToolService {
         "proxy_switch_disabled"
       );
     }
+    // F16/D-FR-08: an active runner owns this session — legacy tools wait.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context.conversationId);
     if (!this.browserModule.switchSessionProxy) {
       throw new ManagedBrowserAiToolError("internal_error");
@@ -1587,6 +1591,11 @@ export class ManagedBrowserAiToolService {
         taskId: runner.taskId,
         sessionId: parsed.data.session_id,
         conversationId: context.conversationId,
+        // D-FR-07: the task is traceable to its tool call, job, and the
+        // sub-agent that owns cancellation.
+        toolCallId: context.toolCallId,
+        jobId: context.jobId ?? null,
+        agentTaskId: context.ownerAgentId ?? null,
         providerMode: route,
         providerConfigKey: admissionProviderConfigKey(),
       });
@@ -1663,6 +1672,8 @@ export class ManagedBrowserAiToolService {
         "sign_in_disabled"
       );
     }
+    // F16/D-FR-08: an active runner owns this session — legacy tools wait.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context.conversationId);
     const result = await getDefaultBrowserCredentialLoginService().signIn({
       sessionId: parsed.data.session_id,
@@ -1739,6 +1750,8 @@ export class ManagedBrowserAiToolService {
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
+    // F16/D-FR-08: an active runner owns this session — legacy tools wait.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context?.conversationId);
     try {
       const status = await this.browserModule.stop(
@@ -1842,7 +1855,15 @@ export function buildSemanticActionDescriptors(
         action.type === "select" && action.values.length > 0
           ? // F13: CANONICAL serialization of the whole value list — a
             // join(',') collides ('a,b','c' vs 'a','b,c').
-            digestSecretValue(JSON.stringify(action.values))
+            // D-FR-27: the binding includes the RESOLVED live option
+            // values (expected_values), not only the o_N tokens — an
+            // approval for one option must never authorize another.
+            digestSecretValue(
+              JSON.stringify({
+                tokens: action.values,
+                expected: action.expected_values ?? null,
+              })
+            )
           : null,
     };
   };

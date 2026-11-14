@@ -475,6 +475,77 @@ describe("GAP-01 resolved-target approval", () => {
     });
   });
 
+  it("D-FR-27: a reobservation (new pageRevision) still consumes a digest-matching approval", async () => {
+    // The SEMANTIC digest is the match key — a reobservation on the same
+    // page keeps the semantic action unchanged, so the approval holds
+    // even though the page revision moved.
+    const module = moduleWithObservation();
+    const program = {
+      actions: [{ type: "click", ref: "e_pub", pageRevision: 7 }],
+    };
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (input: { programDigest: string; pageRevision: number }) =>
+        input.pageRevision === 7 ? "approve" : null
+    );
+    const service = makeService({ module });
+    const result = await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 7,
+        program,
+      },
+      CTX
+    );
+    expect(result.effect).toBe("known");
+    // The digest the caller computed was passed for the match.
+    const calls = (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>)
+      .mock.calls as unknown as Array<Record<string, unknown>>;
+    expect(calls[0]).toBeDefined();
+    expect(calls[0]![0]).toMatchObject({
+      sessionId: SESSION_ID,
+      pageRevision: 7,
+    });
+  });
+
+  it("D-FR-27: a SELECT approval binds the resolved option values, not only o_N tokens", async () => {
+    const digests: string[] = [];
+    const runSelect = async (expected: string[] | undefined): Promise<void> => {
+      const module = moduleWithObservation();
+      (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+        (input: { programDigest: string }) => {
+          digests.push(input.programDigest);
+          return null;
+        }
+      );
+      const service = makeService({ module });
+      await service
+        .runActions(
+          {
+            session_id: SESSION_ID,
+            page_revision: 4,
+            program: {
+              actions: [
+                {
+                  type: "select",
+                  ref: "e_pub",
+                  pageRevision: 4,
+                  values: ["o_0"],
+                  ...(expected ? { expected_values: expected } : {}),
+                },
+              ],
+            },
+          },
+          CTX
+        )
+        .catch(() => undefined);
+    };
+    await runSelect(["de"]);
+    await runSelect(["fr"]);
+    // Same o_N token, DIFFERENT resolved value → DIFFERENT fingerprint.
+    expect(digests).toHaveLength(2);
+    expect(digests[0]).not.toBe(digests[1]);
+  });
+
   it("full_access / skipPermissionCheck cannot bypass consequential approval (TODO-MSB-002)", async () => {
     const module = moduleWithObservation();
     const service = makeService({ module });

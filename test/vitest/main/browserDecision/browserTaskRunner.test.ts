@@ -755,14 +755,20 @@ describe("F05 lifecycle checks at every await boundary", () => {
 });
 
 describe("BrowserTaskRunner F07 persistence and terminal correctness", () => {
-  it("an execution exception finalizes failed — never completed", async () => {
+  it("a worker throw mid-step classifies an UNKNOWN effect — never a clean failure (N08/D-AC-07)", async () => {
     const deps = makeRunnerDeps([
       {
         status: "decided",
         action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
-        uncertainty: { source: "unavailable", confidence: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
       },
     ]);
+    const outcomes: Array<"confirmed" | "no_effect" | "unknown"> = [];
+    (deps as unknown as {
+      persistActionOutcome: (outcome: "confirmed" | "no_effect" | "unknown") => Promise<void>;
+    }).persistActionOutcome = async (outcome) => {
+      outcomes.push(outcome);
+    };
     deps.runActions = async (): Promise<RunnerExecutionResult> => {
       throw new Error("worker exited");
     };
@@ -771,8 +777,16 @@ describe("BrowserTaskRunner F07 persistence and terminal correctness", () => {
       deps
     );
     const result = await runner.run();
-    expect(result.status).toBe("failed");
-    expect(result.reason).toBe("runner_error:worker exited");
+    // The input may already have been dispatched — the page state is
+    // unknown, so the terminal is partial/unknown (never a generic
+    // runner_error that claims a clean failure).
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+    expect(
+      result.evidence.some((e) => e.includes("worker_error:worker exited"))
+    ).toBe(true);
+    // The journal records the honest unknown outcome.
+    expect(outcomes).toEqual(["unknown"]);
   });
 
   it("a known failed step journals no_effect — never confirmed", async () => {

@@ -31,6 +31,10 @@ export class BrowserTaskModule extends BaseModule {
     readonly agentTaskId?: string | null;
     readonly providerMode: string;
     readonly providerConfigKey: string | null;
+    /** D-FR-07: the tool call that started this task (traceability). */
+    readonly toolCallId?: string | null;
+    /** D-FR-07: the managed-async job driving the task, when any. */
+    readonly jobId?: string | null;
   }): Promise<void> {
     const model = await this.getModel();
     const entity = new BrowserTaskEntity();
@@ -38,6 +42,8 @@ export class BrowserTaskModule extends BaseModule {
     entity.sessionId = input.sessionId;
     entity.conversationId = input.conversationId;
     entity.agentTaskId = input.agentTaskId ?? null;
+    entity.toolCallId = input.toolCallId ?? null;
+    entity.jobId = input.jobId ?? null;
     entity.providerMode = input.providerMode;
     entity.providerConfigKey = input.providerConfigKey;
     entity.phase = "admitting";

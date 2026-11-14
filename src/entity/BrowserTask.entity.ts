@@ -35,6 +35,12 @@ export class BrowserTaskEntity extends AuditableEntity {
   /** Sub-agent task id when this task runs under a batch/agent. */
   @Column({ type: "varchar", length: 64, nullable: true })
   agentTaskId!: string | null;
+  /** D-FR-07: the tool call that started this task. */
+  @Column("text", { nullable: true })
+  toolCallId!: string | null;
+  /** D-FR-07: the managed-async job driving the task, when any. */
+  @Column("text", { nullable: true })
+  jobId!: string | null;
 
   /** admitting | planning | observing | deciding | validating | executing |
    *  reconciling | verifying | recovering | awaiting_approval | handoff |
