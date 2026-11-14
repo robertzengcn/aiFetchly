@@ -557,6 +557,11 @@ export class AgentRuntime {
     try {
       const loopInput = {
         conversationId: agentConversationId,
+        // B11/M-FR-07: sub-agent identity + the ROOT conversation. Browser
+        // sessions started by the agent record the agent task id and the
+        // parent chat (drive/takeover rights in ensureSession).
+        ownerAgentId: agentTaskId,
+        rootConversationId: request.parentConversationId ?? undefined,
         assistantMessageId: `agent-assistant-${agentTaskId}`,
         messages: [systemMessage, userMessage],
         request: {
