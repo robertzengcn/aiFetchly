@@ -20,6 +20,8 @@ export const browserCredentialRequestEventSchema = lazySchema(() =>
   siteDomain: z.string().min(1).max(253),
     mode: z.enum(["login", "register"]),
     prefillUsername: z.string().max(256).nullable(),
+    /** A-FR-05/N03: a username-only saved account asks for the password. */
+    passwordOnly: z.boolean(),
   })
 );
 

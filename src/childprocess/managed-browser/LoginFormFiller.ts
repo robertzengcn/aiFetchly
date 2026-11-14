@@ -390,6 +390,15 @@ export function fillLoginPageFunction(input: {
   setNativeValue(pw, input.password);
   stamps.push(stampOf(pw));
 
+  // A-FR-16/A-AC-04: a show-password toggle may have flipped the field to
+  // text DURING the value dispatch — the secret must never rest in a
+  // visible field. Re-check and refuse (no submit) when it no longer
+  // masks.
+  if (pw.type !== "password") {
+    setNativeValue(pw, "");
+    return { ok: false, reasonCode: "password_field_visible", stamps };
+  }
+
   // --- Layer B: per-field readback + independent tamper detection ------------
   if (pw.value.length !== input.password.length) {
     clearTouched();

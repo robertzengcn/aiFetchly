@@ -142,6 +142,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       siteDomain: request.siteDomain,
       mode: request.mode,
       prefillUsername: request.prefillUsername,
+      passwordOnly: request.passwordOnly,
     })
   );
 

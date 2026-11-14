@@ -103,6 +103,32 @@ describe("BrowserCredentialCard (A-FR-05)", () => {
     expect(wrapper.emitted("submitted")).toBeTruthy();
   });
 
+  it("A-FR-05: a password-only card disables the username and still submits", async () => {
+    const wrapper = mountCard({ passwordOnly: true });
+    await flushPromises();
+    const username = wrapper.find("input[data-testid='credential-username']");
+    expect((username.element as HTMLInputElement).disabled).toBe(true);
+    expect((username.element as HTMLInputElement).value).toBe(
+      "user@example.test"
+    );
+    await wrapper.find("input[data-testid='credential-password']").setValue("pw-only");
+    const submitBtn = wrapper
+      .findAll("button")
+      .find((b) => b.attributes("data-testid") === "credential-submit");
+    expect(submitBtn).toBeDefined();
+    await submitBtn!.trigger("click");
+    await flushPromises();
+    expect(submitBrowserLoginCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "cred_req_1",
+        conversationId: "conv-1",
+        username: "user@example.test",
+        password: "pw-only",
+        cancelled: false,
+      })
+    );
+  });
+
   it("cancelled submit ('I'll sign in myself') requests handoff (C-FR-13)", async () => {
     const wrapper = mountCard();
     await wrapper.find('[data-testid="credential-self"]').trigger("click");

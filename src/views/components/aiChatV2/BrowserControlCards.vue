@@ -42,6 +42,7 @@
     :site-domain="activeCredentialRequest.siteDomain"
     :mode="activeCredentialRequest.mode"
     :prefill-username="activeCredentialRequest.prefillUsername"
+    :password-only="activeCredentialRequest.passwordOnly"
     @submitted="clearCredentialRequest"
     @handoff="clearCredentialRequest"
     @cancelled="clearCredentialRequest"

@@ -297,6 +297,8 @@ export interface BrowserCredentialRequestEvent {
   readonly siteDomain: string;
   readonly mode: "login" | "register";
   readonly prefillUsername: string | null;
+  /** A-FR-05/N03: a username-only saved account asks for the password. */
+  readonly passwordOnly: boolean;
 }
 
 /**

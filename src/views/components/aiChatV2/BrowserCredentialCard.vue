@@ -12,6 +12,7 @@
         :label="t('browserSignIn.username') || 'Username'"
         density="compact"
         autocomplete="username"
+        :disabled="props.passwordOnly === true"
         data-testid="credential-username"
       />
       <v-text-field
@@ -61,6 +62,8 @@ const props = defineProps<{
   siteDomain: string;
   mode: "login" | "register";
   prefillUsername?: string | null;
+  /** A-FR-05: a username-only saved account asks for the PASSWORD only. */
+  passwordOnly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -78,6 +81,9 @@ const save = ref(true);
 const errorMessage = ref("");
 
 const canSubmit = computed(
+  // A-FR-05: on a password-only card the username field is DISABLED and
+  // prefilled with the saved account's username — the user supplies the
+  // password only.
   () => username.value.trim().length > 0 && password.value.length > 0
 );
 

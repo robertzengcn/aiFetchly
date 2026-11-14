@@ -47,6 +47,11 @@ export interface PendingCredentialRequest {
   readonly siteDomain: string;
   readonly mode: "login" | "register";
   readonly prefillUsername: string | null;
+  /**
+   * A-FR-05/N03: TRUE for a saved username-only account — the card asks
+   * for the PASSWORD only (the username is fixed by the account).
+   */
+  readonly passwordOnly: boolean;
   readonly resolve: (input: {
     username: string;
     password: string;
@@ -74,6 +79,7 @@ class CredentialCardWaitRegistry {
     readonly siteDomain: string;
     readonly mode: "login" | "register";
     readonly prefillUsername: string | null;
+    readonly passwordOnly?: boolean;
   }): {
     readonly request: PendingCredentialRequest;
     readonly promise: Promise<{
@@ -101,6 +107,7 @@ class CredentialCardWaitRegistry {
       siteDomain: input.siteDomain,
       mode: input.mode,
       prefillUsername: input.prefillUsername,
+      passwordOnly: input.passwordOnly ?? false,
       resolve,
       createdAt: Date.now(),
     };
@@ -670,6 +677,8 @@ export class BrowserCredentialLoginService {
         siteDomain: site.registrableDomain,
         mode: "login",
         prefillUsername: chosen.user,
+        // A-FR-05: a saved username-only account asks for its password.
+        passwordOnly: true,
       });
       void request;
       const onCardAbort = (): void => {
@@ -940,9 +949,19 @@ export class BrowserCredentialLoginService {
           result.reasonCode ?? result.outcome
         );
       }
+      // A-FR-16: safety failures in the password-field family NEVER
+      // return as a plain `failed` — the user takes over via handoff.
+      const SAFETY_FAILURE_REASONS = new Set([
+        "password_field_unsafe",
+        "password_field_visible",
+        "ambiguous_password_field",
+        "sensitive_field_visible",
+      ]);
       if (
         result.outcome === "wrong_credential" ||
-        result.outcome === "challenge"
+        result.outcome === "challenge" ||
+        (result.reasonCode != null &&
+          SAFETY_FAILURE_REASONS.has(result.reasonCode))
       ) {
         // A-FR-09: hand off with a clear reason; never retry automatically.
         await browserModule

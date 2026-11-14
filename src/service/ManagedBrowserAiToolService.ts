@@ -1675,6 +1675,25 @@ export class ManagedBrowserAiToolService {
     // F16/D-FR-08: an active runner owns this session — legacy tools wait.
     this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context.conversationId);
+    // A-FR-04/N03: the hint reaches the card and encrypted storage only
+    // when it is NOT secret-shaped — reject before anything is shown or
+    // stored.
+    if (parsed.data.username_hint !== undefined) {
+      const { rejectSecretShaped } = await import(
+        "@/entityTypes/skillInstallationTypes"
+      );
+      const problems = rejectSecretShaped(
+        parsed.data.username_hint,
+        ["username_hint"]
+      );
+      if (problems.length > 0) {
+        throw new ManagedBrowserAiToolError(
+          "invalid_tool_arguments",
+          undefined,
+          "username_hint_rejected"
+        );
+      }
+    }
     const result = await getDefaultBrowserCredentialLoginService().signIn({
       sessionId: parsed.data.session_id,
       conversationId: context.conversationId,
