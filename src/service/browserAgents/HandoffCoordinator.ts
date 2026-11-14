@@ -122,13 +122,19 @@ export async function awaitUserResolution(
     control.endIntervention(input.taskId);
     setUserWait(false);
     // B12/C-FR-02: the control gate is reopened ONLY on a USER RESOLUTION.
-    // After `expired` or `cancelled` the task maps to interrupted (the
-    // caller marks it) — resuming would let the task continue past a
-    // window the user never resolved.
+    // After `expired` the task maps to INTERRUPTED (partial results; no
+    // automatic resume) — resuming would let the task continue past a
+    // window the user never resolved. `cancelled` keeps the cancel state
+    // the stop path already recorded.
     if (resolution === "resolved") {
       const record = control.get(input.taskId);
       if (record?.state === "waiting_for_user") {
         control.resume(input.taskId);
+      }
+    } else if (resolution === "expired") {
+      const record = control.get(input.taskId);
+      if (record?.state === "waiting_for_user") {
+        control.setState(input.taskId, "interrupted", "handoff_expired");
       }
     }
   }
