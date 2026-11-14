@@ -451,7 +451,8 @@ async function onSubmit() {
     if ($route.params.id) {
       soacc.id = parseInt($route.params.id.toString());
     }
-    console.log(soacc);
+    // B15/A-FR-15: the object carries `pass` — never print it to the
+    // renderer console (D-13: no secret in logs).
     await saveSocialAccount(soacc)
       .then((res) => {
         loading.value = false;

@@ -24,6 +24,8 @@ import {
   MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
   MANAGED_BROWSER_CREDENTIAL_REQUEST,
+  MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
+  MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_RESUME,
   BROWSER_TASK_STOP,
@@ -285,10 +287,53 @@ export async function browserBatchReturnNow(input: {
 
 export interface BrowserCredentialRequestEvent {
   readonly requestId: string;
+  /** B01: owner conversation — the card is conversation-scoped. */
+  readonly conversationId: string;
   readonly sessionId: string;
+  /** B01: creation time (epoch ms) — the renderer prunes expired cards. */
+  readonly createdAt: number;
   readonly siteDomain: string;
   readonly mode: "login" | "register";
   readonly prefillUsername: string | null;
+}
+
+/**
+ * B02/A-FR-03: submit the account-picker card. The user's choice resolves
+ * the in-job picker wait; the account id travels alone (no secrets).
+ */
+export async function submitBrowserAccountPicker(input: {
+  requestId: string;
+  conversationId: string;
+  accountId: number | null;
+  cancelled: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER, input);
+}
+
+export interface BrowserAccountPickerRequestEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly sessionId: string;
+  readonly siteDomain: string;
+  readonly candidates: ReadonlyArray<{
+    id: number;
+    user: string;
+    name: string;
+  }>;
+  readonly createdAt: number;
+}
+
+/** B02: live account-picker requests (multi-account sign-in path). */
+export function onManagedBrowserAccountPickerRequest(
+  callback: (request: BrowserAccountPickerRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserAccountPickerRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, handler);
+  };
 }
 
 /** N07: live credential-card requests (no-account sign-in path). */

@@ -11,18 +11,29 @@
     @stop="onStop"
   />
 
-  <!-- N07: live credential card (no-account / username-only sign-in).
-       Renders while a sign-in request is pending for this conversation. -->
+  <!-- B02/A-FR-03: account-picker card (multi-account sign-in).
+       Renders the pending picker of THIS conversation only. -->
+  <BrowserAccountPickerCard
+    v-if="activePickerRequest !== null"
+    :site-domain="activePickerRequest.siteDomain"
+    :accounts="activePickerRequest.candidates"
+    @selected="onAccountPicked"
+    @other="onAccountPickerOther"
+  />
+
+  <!-- N07/B01: live credential card (no-account / username-only sign-in).
+       Renders the pending request of THIS conversation only — a request
+       opened in another chat never renders here (A-FR-05). -->
   <BrowserCredentialCard
-    v-if="credentialRequest !== null"
-    :request-id="credentialRequest.requestId"
-    :conversation-id="credentialRequest.conversationId"
-    :site-domain="credentialRequest.siteDomain"
-    :mode="credentialRequest.mode"
-    :prefill-username="credentialRequest.prefillUsername"
-    @submitted="credentialRequest = null"
-    @handoff="credentialRequest = null"
-    @cancelled="credentialRequest = null"
+    v-if="activeCredentialRequest !== null"
+    :request-id="activeCredentialRequest.requestId"
+    :conversation-id="activeCredentialRequest.conversationId"
+    :site-domain="activeCredentialRequest.siteDomain"
+    :mode="activeCredentialRequest.mode"
+    :prefill-username="activeCredentialRequest.prefillUsername"
+    @submitted="clearCredentialRequest"
+    @handoff="clearCredentialRequest"
+    @cancelled="clearCredentialRequest"
   />
 </template>
 
@@ -30,15 +41,19 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import BrowserTaskBatchCard from "./BrowserTaskBatchCard.vue";
 import BrowserCredentialCard from "./BrowserCredentialCard.vue";
+import BrowserAccountPickerCard from "./BrowserAccountPickerCard.vue";
 import {
   browserBatchReturnNow,
   onManagedBrowserBatchEvent,
+  onManagedBrowserAccountPickerRequest,
   onManagedBrowserCredentialRequest,
   pauseBrowserTask,
   resumeBrowserTask,
   stopBrowserTask,
+  submitBrowserAccountPicker,
   type BrowserBatchEvent,
   type BrowserCredentialRequestEvent,
+  type BrowserAccountPickerRequestEvent,
 } from "@/views/api/managedBrowser";
 import { useI18n } from "vue-i18n";
 
@@ -89,8 +104,85 @@ const activeBatch = computed<BatchState | null>(() => {
   return newest;
 });
 const finishedBatches = new Map<string, number>();
-// N07: the live credential-card request (null = none pending).
-const credentialRequest = ref<BrowserCredentialRequestEvent | null>(null);
+// B01: pending credential requests are kept PER CONVERSATION — the newest
+// request of the active conversation renders; switching chats shows that
+// chat's own card, never another conversation's.
+const credentialRequests = ref(new Map<string, BrowserCredentialRequestEvent>());
+
+const activeCredentialRequest = computed<BrowserCredentialRequestEvent | null>(() => {
+  let newest: BrowserCredentialRequestEvent | null = null;
+  for (const request of credentialRequests.value.values()) {
+    if (props.conversationId != null && request.conversationId !== props.conversationId) {
+      continue;
+    }
+    newest = request;
+  }
+  return newest;
+});
+
+function clearCredentialRequest(): void {
+  const active = activeCredentialRequest.value;
+  if (active !== null) {
+    credentialRequests.value.delete(active.requestId);
+  }
+}
+
+// B02: pending account-picker requests, kept per conversation like the
+// credential cards so switching chats never shows another chat's picker.
+const pickerRequests = ref(new Map<string, BrowserAccountPickerRequestEvent>());
+
+const activePickerRequest = computed<BrowserAccountPickerRequestEvent | null>(
+  () => {
+    let newest: BrowserAccountPickerRequestEvent | null = null;
+    for (const request of pickerRequests.value.values()) {
+      if (
+        props.conversationId != null &&
+        request.conversationId !== props.conversationId
+      ) {
+        continue;
+      }
+      newest = request;
+    }
+    return newest;
+  }
+);
+
+function clearPickerRequest(): void {
+  const active = activePickerRequest.value;
+  if (active !== null) {
+    pickerRequests.value.delete(active.requestId);
+  }
+}
+
+async function onAccountPicked(accountId: number): Promise<void> {
+  const active = activePickerRequest.value;
+  if (active === null) {
+    return;
+  }
+  await submitBrowserAccountPicker({
+    requestId: active.requestId,
+    conversationId: active.conversationId,
+    accountId,
+    cancelled: false,
+  });
+  clearPickerRequest();
+}
+
+async function onAccountPickerOther(): Promise<void> {
+  const active = activePickerRequest.value;
+  if (active === null) {
+    return;
+  }
+  // "Use another account": no saved account fits — the in-job wait resolves
+  // with accountId null and the sign-in opens the handoff dialog.
+  await submitBrowserAccountPicker({
+    requestId: active.requestId,
+    conversationId: active.conversationId,
+    accountId: null,
+    cancelled: false,
+  });
+  clearPickerRequest();
+}
 
 const LABEL_FALLBACK = "Browser task";
 
@@ -136,15 +228,22 @@ function applyEvent(event: BrowserBatchEvent): void {
 
 let unsubscribe: (() => void) | null = null;
 let unsubscribeCredential: (() => void) | null = null;
+let unsubscribePicker: (() => void) | null = null;
 let pruneTimer: number | null = null;
 
 onMounted(() => {
   unsubscribe = onManagedBrowserBatchEvent(applyEvent);
   unsubscribeCredential = onManagedBrowserCredentialRequest(
     (request) => {
-      credentialRequest.value = request;
+      // B01: requests arrive with their owner conversation; keep every
+      // pending request so a second conversation's card does not clobber
+      // this one. The main-process TTL resolves the wait after 10 minutes.
+      credentialRequests.value.set(request.requestId, request);
     }
   );
+  unsubscribePicker = onManagedBrowserAccountPickerRequest((request) => {
+    pickerRequests.value.set(request.requestId, request);
+  });
   pruneTimer = window.setInterval(() => {
     // Finished batches linger 30s for review, then the card disappears.
     for (const [batchId, finishedAt] of finishedBatches) {
@@ -153,12 +252,26 @@ onMounted(() => {
         batches.value.delete(batchId);
       }
     }
+    // B01: drop credential cards past the main-process TTL (10 min) so a
+    // dead request never lingers in the UI.
+    for (const [requestId, request] of credentialRequests.value) {
+      if (Date.now() - request.createdAt > 10 * 60_000) {
+        credentialRequests.value.delete(requestId);
+      }
+    }
+    // B02: same TTL sweep for account pickers.
+    for (const [requestId, request] of pickerRequests.value) {
+      if (Date.now() - request.createdAt > 10 * 60_000) {
+        pickerRequests.value.delete(requestId);
+      }
+    }
   }, 5_000);
 });
 
 onBeforeUnmount(() => {
   unsubscribe?.();
   unsubscribeCredential?.();
+  unsubscribePicker?.();
   if (pruneTimer !== null) {
     window.clearInterval(pruneTimer);
   }

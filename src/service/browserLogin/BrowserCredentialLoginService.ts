@@ -146,6 +146,86 @@ export function getCredentialCardWaitRegistry(): CredentialCardWaitRegistry {
   return registry;
 }
 
+/** A pending account-picker card (B02/A-FR-03: the user picks the account). */
+export interface PendingAccountPickerRequest {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly sessionId: string;
+  readonly siteDomain: string;
+  readonly candidates: ReadonlyArray<{ id: number; user: string; name: string }>;
+  readonly resolve: (input: {
+    accountId: number | null;
+    cancelled: boolean;
+  }) => void;
+  readonly createdAt: number;
+}
+
+class AccountPickerWaitRegistry {
+  private readonly pending = new Map<string, PendingAccountPickerRequest>();
+  private sink: ((request: PendingAccountPickerRequest) => void) | null = null;
+
+  public setSink(sink: (request: PendingAccountPickerRequest) => void): void {
+    this.sink = sink;
+  }
+
+  public create(input: {
+    readonly conversationId: string;
+    readonly sessionId: string;
+    readonly siteDomain: string;
+    readonly candidates: ReadonlyArray<{ id: number; user: string; name: string }>;
+  }): {
+    readonly request: PendingAccountPickerRequest;
+    readonly promise: Promise<{ accountId: number | null; cancelled: boolean }>;
+  } {
+    let resolve!: PendingAccountPickerRequest["resolve"];
+    const promise = new Promise<{ accountId: number | null; cancelled: boolean }>(
+      (res) => {
+        resolve = res;
+      }
+    );
+    const requestId = `pick_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    const request: PendingAccountPickerRequest = {
+      requestId,
+      conversationId: input.conversationId,
+      sessionId: input.sessionId,
+      siteDomain: input.siteDomain,
+      candidates: input.candidates,
+      resolve,
+      createdAt: Date.now(),
+    };
+    this.pending.set(requestId, request);
+    this.sink?.(request);
+    setTimeout(() => {
+      const entry = this.pending.get(requestId);
+      if (entry) {
+        this.pending.delete(requestId);
+        entry.resolve({ accountId: null, cancelled: true });
+      }
+    }, PENDING_TTL_MS).unref?.();
+    return { request, promise };
+  }
+
+  /** Single-use, owner-conversation-bound consume (mirrors the credential card). */
+  public consume(input: {
+    readonly requestId: string;
+    readonly conversationId: string;
+  }): PendingAccountPickerRequest | null {
+    const entry = this.pending.get(input.requestId);
+    if (!entry || entry.conversationId !== input.conversationId) {
+      return null;
+    }
+    this.pending.delete(input.requestId);
+    return entry;
+  }
+}
+
+const pickerRegistry = new AccountPickerWaitRegistry();
+
+/** Renderer-facing accessor for the account-picker IPC handler. */
+export function getAccountPickerWaitRegistry(): AccountPickerWaitRegistry {
+  return pickerRegistry;
+}
+
 export class BrowserCredentialLoginService {
   /**
    * A-FR-10/F12: one automated attempt per account (and per session for
@@ -287,13 +367,76 @@ export class BrowserCredentialLoginService {
         accountId: newAccountId,
       });
     } else {
-      // A-FR-03: several matches — the LLM may choose by account_id; it did
-      // not, so the user picks. Return the eligible list for the picker card.
-      return {
-        status: "awaiting_user_credentials",
-        siteId: site.siteId,
-        reasonCode: "account_picker_required",
+      // B02/A-FR-03: several matches — the LLM may choose by account_id; it
+      // did not, so the USER picks. Post the picker card and wait INSIDE
+      // the job (like the credential card) instead of returning a
+      // picker-required stub the user can never see.
+      const { request, promise } = pickerRegistry.create({
+        conversationId: input.conversationId,
+        sessionId: input.sessionId,
+        siteDomain: site.registrableDomain,
+        candidates: candidates.map((c) => ({
+          id: c.id,
+          user: c.user,
+          name: c.user,
+        })),
+      });
+      void request;
+      // C-FR-09: the job is waiting for the user — freeze the parent's
+      // poll deadline for the duration of the picker wait.
+      const { getDefaultToolJobRegistry } = await import(
+        "@/service/ToolJobRegistry"
+      );
+      const jobId = input.jobId ?? null;
+      if (jobId) {
+        getDefaultToolJobRegistry().setUserWait(jobId, true, "account_picker");
+      }
+      const onAbort = (): void => {
+        pickerRegistry
+          .consume({
+            requestId: request.requestId,
+            conversationId: input.conversationId,
+          })
+          ?.resolve({ accountId: null, cancelled: true });
       };
+      input.signal?.addEventListener("abort", onAbort, { once: true });
+      let choice: { accountId: number | null; cancelled: boolean };
+      try {
+        choice = await promise;
+      } finally {
+        input.signal?.removeEventListener("abort", onAbort);
+        if (jobId) {
+          getDefaultToolJobRegistry().setUserWait(jobId, false);
+        }
+      }
+      if (choice.cancelled || choice.accountId === null) {
+        if (input.signal?.aborted) {
+          // F12: a STOP terminates — never a handoff.
+          return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
+        }
+        // Cancel / "use another account" opens the handoff dialog
+        // (C-FR-13) — the credential card then takes over if wanted.
+        await browserModule
+          .requestHandoff(input.sessionId, "user_requested")
+          .catch(() => undefined);
+        return {
+          status: "handoff_required",
+          siteId: site.siteId,
+          reasonCode: "user_cancelled",
+        };
+      }
+      if (input.signal?.aborted) {
+        return { status: "failed", siteId: site.siteId, reasonCode: "cancelled" };
+      }
+      const picked = candidates.find((c) => c.id === choice.accountId);
+      if (!picked) {
+        return {
+          status: "failed",
+          siteId: site.siteId,
+          reasonCode: "account_not_eligible",
+        };
+      }
+      chosen = picked;
     }
 
     // A-FR-10/N05: reserve FIRST (synchronously) — BOTH the account and
@@ -421,9 +564,6 @@ export class BrowserCredentialLoginService {
       }
       // T16: a username-only account (saved without a password) asks for
       // the password through the card instead of failing.
-      // N05: capture the pre-card identity — the password-only card may
-      // edit the username, which switches the account reservation.
-      const initialChosenUser = chosen.user;
       const { request, promise: cardPromise } = registry.create({
         conversationId: input.conversationId,
         sessionId: input.sessionId,
@@ -506,17 +646,39 @@ export class BrowserCredentialLoginService {
             reasonCode: "cooldown",
           };
         }
-        this.inFlightAccounts.add(editedKey);
-        if (await accountModule.isSignInCoolingDown(chosen.id)) {
-          return {
-            status: "failed",
+        // B14/A-FR-10: the switched account's reservation is released on
+        // EVERY return below — including the cooldown refusal. The old
+        // code returned `cooldown` after `add` without the delete, so the
+        // account stayed locked in `inFlightAccounts` until restart.
+        try {
+          this.inFlightAccounts.add(editedKey);
+          if (await accountModule.isSignInCoolingDown(chosen.id)) {
+            return {
+              status: "failed",
+              accountId: chosen.id,
+              siteId: site.siteId,
+              reasonCode: "cooldown",
+            };
+          }
+          if (submitted.save) {
+            // R21: update the EXISTING account's password, not a new row.
+            await accountModule.updatePasswordForAccount(
+              chosen.id,
+              submitted.password
+            );
+          }
+          return this.fillAndAssess(input, site, {
+            username: submitted.username,
+            password: submitted.password,
             accountId: chosen.id,
-            siteId: site.siteId,
-            reasonCode: "cooldown",
-          };
+          });
+        } finally {
+          this.inFlightAccounts.delete(editedKey);
         }
       }
-      try {
+      // B14: the switched account's reservation is handled by the
+      // try/finally INSIDE the edited-username branch above; the
+      // non-edited path holds no extra account key.
       if (submitted.save) {
         // R21: update the EXISTING account's password, not a new row.
         await accountModule.updatePasswordForAccount(
@@ -529,14 +691,6 @@ export class BrowserCredentialLoginService {
         password: submitted.password,
         accountId: chosen.id,
       });
-      } finally {
-        // N05: release the switched account's extra reservation.
-        if (submitted.username !== initialChosenUser) {
-          this.inFlightAccounts.delete(
-            BrowserCredentialLoginService.accountAttemptKey(chosen.id)
-          );
-        }
-      }
     }
     return this.fillAndAssess(input, site, {
       username: credentialResult.username,

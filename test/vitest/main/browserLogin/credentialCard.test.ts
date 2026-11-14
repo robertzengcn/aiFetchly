@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   getCredentialCardWaitRegistry,
+  getAccountPickerWaitRegistry,
   BrowserCredentialLoginService,
 } from "@/service/browserLogin/BrowserCredentialLoginService";
 
@@ -66,8 +67,8 @@ vi.mock("@/modules/socialAccountModule", () => {
       async getAccountsForSite() {
         return fakeAccounts;
       }
-      async isSignInCoolingDown() {
-        return fakeCoolingDown();
+      async isSignInCoolingDown(accountId?: number) {
+        return fakeCoolingDown(accountId);
       }
       async getCredentialForLogin() {
         return fakeCredential;
@@ -94,7 +95,7 @@ let fakeCredential: unknown = {
   ok: false as const,
   reason: "credential_unavailable" as const,
 };
-let fakeCoolingDown: () => boolean | Promise<boolean> = () => false;
+let fakeCoolingDown: (accountId?: number) => boolean | Promise<boolean> = () => false;
 
 describe("credential card wait registry (A-FR-05/06)", () => {
   it("creates a request bound to the conversation and consumes it once", async () => {
@@ -300,5 +301,194 @@ describe("F12 attempt reservation, stop-vs-cancel, refusal reasons", () => {
       requestHandoff: ReturnType<typeof vi.fn>;
     };
     expect(module.requestHandoff).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B02: the account-picker wait registry and the blocking multi-account path.
+// ---------------------------------------------------------------------------
+
+describe("account picker wait registry (B02/A-FR-03)", () => {
+  it("creates a picker bound to the conversation and resolves the choice once", async () => {
+    const reg = getAccountPickerWaitRegistry();
+    const seen: Array<{
+      requestId: string;
+      conversationId: string;
+      candidates: unknown;
+    }> = [];
+    reg.setSink((request) => seen.push(request));
+    const { request, promise } = reg.create({
+      conversationId: "conv-pick",
+      sessionId: "mb_signin0001",
+      siteDomain: "example.test",
+      candidates: [
+        { id: 1, user: "alice", name: "alice" },
+        { id: 2, user: "bob", name: "bob" },
+      ],
+    });
+    // The sink received the request WITH its owner conversation (B01 parity).
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.conversationId).toBe("conv-pick");
+    expect(seen[0]!.candidates).toHaveLength(2);
+    const consume = reg.consume({
+      requestId: request.requestId,
+      conversationId: "conv-pick",
+    });
+    expect(consume).not.toBeNull();
+    consume!.resolve({ accountId: 2, cancelled: false });
+    await expect(promise).resolves.toEqual({ accountId: 2, cancelled: false });
+    // Single use.
+    expect(
+      reg.consume({ requestId: request.requestId, conversationId: "conv-pick" })
+    ).toBeNull();
+  });
+
+  it("rejects a pick from a different conversation", () => {
+    const reg = getAccountPickerWaitRegistry();
+    const { request } = reg.create({
+      conversationId: "conv-pick-2",
+      sessionId: "mb_signin0001",
+      siteDomain: "example.test",
+      candidates: [{ id: 1, user: "alice", name: "alice" }],
+    });
+    expect(
+      reg.consume({ requestId: request.requestId, conversationId: "conv-OTHER" })
+    ).toBeNull();
+  });
+});
+
+describe("BrowserCredentialLoginService multi-account picker path (B02)", () => {
+  beforeEach(() => {
+    fakeAccounts.length = 0;
+    fakeCredential = { ok: false as const, reason: "credential_unavailable" as const };
+    fakeCoolingDown = () => false;
+  });
+
+  it("blocks inside signIn until the user picks, then signs in with that account", async () => {
+    fakeAccounts.push(
+      { id: 201, user: "alice@example.test" },
+      { id: 202, user: "bob@example.test" }
+    );
+    fakeCredential = {
+      ok: true as const,
+      username: "bob@example.test",
+      password: "sentinel-picker-password",
+    };
+    const reg = getAccountPickerWaitRegistry();
+    const seen: Array<{ requestId: string; conversationId: string; candidates: unknown }> = [];
+    reg.setSink((request) => seen.push(request));
+    const service = new BrowserCredentialLoginService();
+    const pendingPromise = service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-picker",
+      intent: "login",
+    });
+    // The picker card is posted while the job waits INSIDE signIn.
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]!.conversationId).toBe("conv-picker");
+    expect(seen[0]!.candidates).toHaveLength(2);
+    const consume = reg.consume({
+      requestId: seen[0]!.requestId,
+      conversationId: "conv-picker",
+    });
+    expect(consume).not.toBeNull();
+    consume!.resolve({ accountId: 202, cancelled: false });
+    const result = await pendingPromise;
+    expect(result.status).toBe("signed_in");
+    expect(result.accountId).toBe(202);
+    expect(result.username).toBe("bob@example.test");
+    // The password never appears in the tool result.
+    expect(JSON.stringify(result)).not.toContain("sentinel-picker-password");
+  });
+
+  it("a cancelled picker opens the handoff instead of signing in", async () => {
+    fakeAccounts.push(
+      { id: 211, user: "alice@example.test" },
+      { id: 212, user: "bob@example.test" }
+    );
+    const reg = getAccountPickerWaitRegistry();
+    const seen: Array<{ requestId: string; conversationId: string }> = [];
+    reg.setSink((request) => seen.push(request));
+    const service = new BrowserCredentialLoginService();
+    const pendingPromise = service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-picker-cancel",
+      intent: "login",
+    });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    reg.consume({
+      requestId: seen[0]!.requestId,
+      conversationId: "conv-picker-cancel",
+    })!.resolve({ accountId: null, cancelled: true });
+    const result = await pendingPromise;
+    expect(result.status).toBe("handoff_required");
+    expect(result.reasonCode).toBe("user_cancelled");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B14: an edited username that lands in cooldown must NOT leak the
+// inFlightAccounts reservation (previously locked until restart).
+// ---------------------------------------------------------------------------
+
+describe("edited-username cooldown reservation release (B14)", () => {
+  beforeEach(() => {
+    fakeAccounts.length = 0;
+    fakeCredential = { ok: false as const, reason: "credential_unavailable" as const };
+    fakeCoolingDown = () => false;
+  });
+
+  it("releases the switched account's lock after a cooldown refusal", async () => {
+    fakeAccounts.push(
+      { id: 301, user: "carol@example.test" },
+      { id: 302, user: "dave@example.test" }
+    );
+    // The first attempt: account carol (username-only) — the card comes
+    // back EDITED to dave, whose cooldown is active.
+    fakeCredential = { ok: false as const, reason: "credential_unavailable" as const };
+    fakeCoolingDown = (accountId?: number) => accountId === 302;
+    const credReg = getCredentialCardWaitRegistry();
+    const seen: Array<{ requestId: string; conversationId: string }> = [];
+    credReg.setSink((request) => seen.push(request));
+    const service = new BrowserCredentialLoginService();
+
+    const first = service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-b14",
+      intent: "login",
+      accountId: 301,
+    });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    credReg
+      .consume({
+        requestId: seen[0]!.requestId,
+        conversationId: "conv-b14",
+      })!
+      .resolve({
+        username: "dave@example.test",
+        password: "sentinel-b14-password",
+        save: false,
+        cancelled: false,
+      });
+    const firstResult = await first;
+    expect(firstResult.status).toBe("failed");
+    expect(firstResult.reasonCode).toBe("cooldown");
+
+    // The cooldown clears; a DIRECT attempt on dave must NOT be refused by
+    // a leaked in-flight reservation — it signs in.
+    fakeCoolingDown = () => false;
+    fakeCredential = {
+      ok: true as const,
+      username: "dave@example.test",
+      password: "sentinel-b14-password",
+    };
+    const second = await service.signIn({
+      sessionId: "mb_signin0001",
+      conversationId: "conv-b14",
+      intent: "login",
+      accountId: 302,
+    });
+    expect(second.status).toBe("signed_in");
+    expect(second.accountId).toBe(302);
   });
 });

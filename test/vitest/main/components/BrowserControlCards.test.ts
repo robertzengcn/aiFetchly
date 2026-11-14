@@ -11,6 +11,7 @@ const batchListeners = new Set<(event: unknown) => void>();
 const invokeMock = vi.fn();
 
 const credentialListeners = new Set<(request: unknown) => void>();
+const pickerListeners = new Set<(request: unknown) => void>();
 
 vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/views/api/managedBrowser")>();
@@ -23,6 +24,14 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
     onManagedBrowserCredentialRequest: (cb: (request: unknown) => void) => {
       credentialListeners.add(cb);
       return () => credentialListeners.delete(cb);
+    },
+    onManagedBrowserAccountPickerRequest: (cb: (request: unknown) => void) => {
+      pickerListeners.add(cb);
+      return () => pickerListeners.delete(cb);
+    },
+    submitBrowserAccountPicker: (input: unknown) => {
+      invokeMock("MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER", input);
+      return Promise.resolve({ accepted: true });
     },
     browserBatchReturnNow: (input: { batchId: string }) => {
       invokeMock("BROWSER_BATCH_RETURN_NOW", input);
@@ -61,6 +70,9 @@ const i18n = createI18n({
         missingFields: "Enter a username and password.",
         expired: "Expired",
         disclosure: "Disclosure",
+        pickAccount: "Choose an account",
+        pickAccountHint: "Several saved accounts match {domain}.",
+        useAnother: "Use another account",
       },
       browserTasks: {
         batchTitle: "Parallel browser tasks",
@@ -97,9 +109,16 @@ function emitCredential(request: unknown): void {
   }
 }
 
+function emitPicker(request: unknown): void {
+  for (const listener of pickerListeners) {
+    listener(request);
+  }
+}
+
 beforeEach(() => {
   batchListeners.clear();
   credentialListeners.clear();
+  pickerListeners.clear();
   invokeMock.mockClear();
 });
 
@@ -242,10 +261,12 @@ describe("BrowserControlCards credential card (N07)", () => {
     );
     emitCredential({
       requestId: "cred-1",
+      conversationId: "conv-a",
       sessionId: "mb_cred0000001",
       siteDomain: "example.test",
       mode: "login",
       prefillUsername: null,
+      createdAt: Date.now(),
     });
     await flushPromises();
     const card = wrapper.findComponent({ name: "BrowserCredentialCard" });
@@ -260,10 +281,12 @@ describe("BrowserControlCards credential card (N07)", () => {
     });
     emitCredential({
       requestId: "cred-2",
+      conversationId: "conv-a",
       sessionId: "mb_cred0000001",
       siteDomain: "example.test",
       mode: "login",
       prefillUsername: null,
+      createdAt: Date.now(),
     });
     await flushPromises();
     const card = wrapper.findComponent({ name: "BrowserCredentialCard" });
@@ -272,5 +295,137 @@ describe("BrowserControlCards credential card (N07)", () => {
     expect(wrapper.findComponent({ name: "BrowserCredentialCard" }).exists()).toBe(
       false
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B01: credential-card conversation binding — the event carries
+// conversationId, the card receives it, and another conversation never
+// renders the request.
+// ---------------------------------------------------------------------------
+
+describe("BrowserControlCards credential conversation binding (B01)", () => {
+  function mountWith(conversationId: string | null) {
+    return mount(BrowserControlCards, {
+      props: { conversationId },
+      global: { plugins: [i18n] },
+    });
+  }
+
+  it("passes conversationId from the request event to the card", async () => {
+    const wrapper = mountWith("conv-a");
+    emitCredential({
+      requestId: "cred-b01",
+      conversationId: "conv-a",
+      sessionId: "mb_cred0000002",
+      siteDomain: "example.test",
+      mode: "login",
+      prefillUsername: "alice",
+      createdAt: Date.now(),
+    });
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserCredentialCard" });
+    expect(card.exists()).toBe(true);
+    expect(card.props("conversationId")).toBe("conv-a");
+  });
+
+  it("a request from another conversation does not render here", async () => {
+    const wrapperA = mountWith("conv-a");
+    const wrapperB = mountWith("conv-b");
+    emitCredential({
+      requestId: "cred-b01b",
+      conversationId: "conv-b",
+      sessionId: "mb_cred0000003",
+      siteDomain: "example.test",
+      mode: "login",
+      prefillUsername: null,
+      createdAt: Date.now(),
+    });
+    await flushPromises();
+    // conv-a never renders conv-b's request…
+    expect(
+      wrapperA.findComponent({ name: "BrowserCredentialCard" }).exists()
+    ).toBe(false);
+    // …and the owning conversation does.
+    expect(
+      wrapperB.findComponent({ name: "BrowserCredentialCard" }).exists()
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B02: account-picker card mounting and submit routing.
+// ---------------------------------------------------------------------------
+
+describe("BrowserControlCards account picker (B02)", () => {
+  function mountWith(conversationId: string | null) {
+    return mount(BrowserControlCards, {
+      props: { conversationId },
+      global: { plugins: [i18n] },
+    });
+  }
+
+  const pickerRequest = {
+    requestId: "pick-b02",
+    conversationId: "conv-a",
+    sessionId: "mb_cred0000004",
+    siteDomain: "example.test",
+    candidates: [
+      { id: 1, user: "alice", name: "alice" },
+      { id: 2, user: "bob", name: "bob" },
+    ],
+    createdAt: Date.now(),
+  };
+
+  it("mounts the picker for the owning conversation with candidates", async () => {
+    const wrapper = mountWith("conv-a");
+    emitPicker(pickerRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserAccountPickerCard" });
+    expect(card.exists()).toBe(true);
+    expect(card.props("siteDomain")).toBe("example.test");
+    expect(card.props("accounts")).toHaveLength(2);
+  });
+
+  it("another conversation does not render the picker", async () => {
+    const wrapper = mountWith("conv-other");
+    emitPicker(pickerRequest);
+    await flushPromises();
+    expect(
+      wrapper.findComponent({ name: "BrowserAccountPickerCard" }).exists()
+    ).toBe(false);
+  });
+
+  it("selection submits through the validated channel and clears the card", async () => {
+    const wrapper = mountWith("conv-a");
+    emitPicker(pickerRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserAccountPickerCard" });
+    card.vm.$emit("selected", 2);
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER", {
+      requestId: "pick-b02",
+      conversationId: "conv-a",
+      accountId: 2,
+      cancelled: false,
+    });
+    expect(
+      wrapper.findComponent({ name: "BrowserAccountPickerCard" }).exists()
+    ).toBe(false);
+  });
+
+  it('"use another account" submits accountId null', async () => {
+    const wrapper = mountWith("conv-a");
+    emitPicker(pickerRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserAccountPickerCard" });
+    card.vm.$emit("other");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER", {
+      requestId: "pick-b02",
+      conversationId: "conv-a",
+      accountId: null,
+      cancelled: false,
+    });
   });
 });

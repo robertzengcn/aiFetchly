@@ -12,7 +12,11 @@ import { lazySchema } from "@/utils/lazySchema";
 export const browserCredentialRequestEventSchema = lazySchema(() =>
   z.strictObject({
   requestId: z.string().min(1).max(128),
+  /** B01: owner conversation — the submit schema requires it (A-FR-06). */
+  conversationId: z.string().min(1).max(128),
   sessionId: z.string().min(1).max(64),
+  /** B01: creation time (epoch ms) — the renderer prunes expired cards. */
+  createdAt: z.number().int().positive(),
   siteDomain: z.string().min(1).max(253),
     mode: z.enum(["login", "register"]),
     prefillUsername: z.string().max(256).nullable(),
@@ -33,4 +37,42 @@ export const browserCredentialSubmitSchema = lazySchema(() =>
 
 export type BrowserCredentialSubmitInput = z.infer<
   ReturnType<typeof browserCredentialSubmitSchema>
+>;
+
+/**
+ * B02/A-FR-03: saved-account picker card. Usernames and display names are
+ * user-visible by design (A-FR-04); no secret rides this channel.
+ */
+export const accountPickerRequestEventSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1).max(128),
+    conversationId: z.string().min(1).max(128),
+    sessionId: z.string().min(1).max(64),
+    siteDomain: z.string().min(1).max(253),
+    candidates: z
+      .array(
+        z.strictObject({
+          id: z.number().int().positive(),
+          user: z.string().min(1).max(256),
+          name: z.string().max(256),
+        })
+      )
+      .min(1)
+      .max(20),
+    createdAt: z.number().int().positive(),
+  })
+);
+
+export const accountPickerSubmitSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1).max(128),
+    conversationId: z.string().min(1).max(128),
+    /** null = "use another account" → the credential card flow. */
+    accountId: z.number().int().positive().nullable(),
+    cancelled: z.boolean(),
+  })
+);
+
+export type AccountPickerSubmitInput = z.infer<
+  ReturnType<typeof accountPickerSubmitSchema>
 >;

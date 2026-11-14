@@ -19,6 +19,8 @@ import {
   MANAGED_BROWSER_UPDATE_SETTINGS,
   MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
   MANAGED_BROWSER_CREDENTIAL_REQUEST,
+  MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
+  MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_TAKE_CONTROL,
   BROWSER_TASK_RESUME,
@@ -35,8 +37,11 @@ import {
 import {
   registerValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";
-import { browserCredentialSubmitSchema } from "@/schemas/ipc/browserCredential";
-import { getCredentialCardWaitRegistry } from "@/service/browserLogin/BrowserCredentialLoginService";
+import { browserCredentialSubmitSchema, accountPickerSubmitSchema } from "@/schemas/ipc/browserCredential";
+import {
+  getCredentialCardWaitRegistry,
+  getAccountPickerWaitRegistry,
+} from "@/service/browserLogin/BrowserCredentialLoginService";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import {
   listEligibleAccountsInputSchema,
@@ -121,10 +126,28 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   getCredentialCardWaitRegistry().setSink((request) =>
     sendToRenderer(win, MANAGED_BROWSER_CREDENTIAL_REQUEST, {
       requestId: request.requestId,
+      // B01: the card must submit the owner conversation or the submit
+      // schema (min(1)) rejects it before `consume` — the wait never
+      // resolves and the job dies at the card TTL.
+      conversationId: request.conversationId,
       sessionId: request.sessionId,
+      createdAt: request.createdAt,
       siteDomain: request.siteDomain,
       mode: request.mode,
       prefillUsername: request.prefillUsername,
+    })
+  );
+
+  // B02/A-FR-03: account-picker requests stream to the owning conversation
+  // the same way; the submit resolves the in-job picker wait.
+  getAccountPickerWaitRegistry().setSink((request) =>
+    sendToRenderer(win, MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, {
+      requestId: request.requestId,
+      conversationId: request.conversationId,
+      sessionId: request.sessionId,
+      siteDomain: request.siteDomain,
+      candidates: request.candidates,
+      createdAt: request.createdAt,
     })
   );
 
@@ -287,6 +310,25 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
         username: input.username,
         password: input.password,
         save: input.save,
+        cancelled: input.cancelled,
+      });
+      return { accepted: true };
+    }
+  );
+
+  registerValidatedHandler(
+    MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
+    accountPickerSubmitSchema,
+    async (input) => {
+      const entry = getAccountPickerWaitRegistry().consume({
+        requestId: input.requestId,
+        conversationId: input.conversationId,
+      });
+      if (!entry) {
+        return { accepted: false };
+      }
+      entry.resolve({
+        accountId: input.accountId,
         cancelled: input.cancelled,
       });
       return { accepted: true };

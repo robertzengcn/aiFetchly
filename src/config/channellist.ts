@@ -741,6 +741,13 @@ export const MANAGED_BROWSER_CREDENTIAL_REQUEST =
   "managed-browser:credential-request";
 export const MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL =
   "managed-browser:submit-login-credential";
+// B02/A-FR-03: account picker card. The request event lists the saved
+// accounts the USER may choose; the submit channel is renderer-only and
+// single-use like the credential card.
+export const MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST =
+  "managed-browser:account-picker-request";
+export const MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER =
+  "managed-browser:submit-account-picker";
 // PRD C-FR-04: renderer-only task control (user actions; no model tool).
 export const BROWSER_TASK_PAUSE = "browser-task:pause";
 export const BROWSER_TASK_TAKE_CONTROL = "browser-task:take-control";
