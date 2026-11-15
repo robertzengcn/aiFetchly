@@ -187,13 +187,13 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
       deps
     );
     const result = await runner.run();
-    // 3 failing decide() calls + 1 recovery decide() call; the recovered
-    // decision is consumed WITHOUT a new call (pendingRecovery), and its
-    // follow-up sees the exhausted script -> llm_required (decisionRequests 5).
-    expect(calls).toBe(4);
-    expect(result.counts.recoveryCalls).toBe(1);
-    // The recovered decision also failed; the follow-up decision saw the
-    // exhausted script and escalated honestly -> partial, not failed.
+    // 3 failing decide() calls + 2 recovery decide() calls: the first
+    // recovery fires after three equivalent failures; its recovered CLICK
+    // fails again, the follow-up sees the exhausted script -> llm_required,
+    // which (G01/D-FR-19) now ALSO routes through the recovery table. The
+    // recovery-sourced llm_required terminates honestly.
+    expect(calls).toBe(5);
+    expect(result.counts.recoveryCalls).toBe(2);
     expect(result.status).toBe("partial");
     expect(result.reason).toBe("escalated:script_end");
   });

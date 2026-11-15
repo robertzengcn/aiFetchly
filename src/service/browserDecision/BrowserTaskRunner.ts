@@ -441,7 +441,37 @@ export class BrowserTaskRunner {
         }
 
         if (decision.status !== "decided") {
+          // G01/D-FR-19: llm_required is the wire form of ESCALATE — it
+          // routes through the SAME bounded recovery table (one recovery
+          // decision; the recovery-sourced outcome still terminates)
+          // instead of an immediate terminal.
           if (decision.status === "llm_required") {
+            if (
+              !decisionFromRecovery &&
+              this.recoveryCalls < this.budget.recoveryCalls
+            ) {
+              const freshLlmObservation = await this.deps.observe(
+                this.input.sessionId
+              );
+              if (freshLlmObservation) {
+                const recovered = await this.recoverOnce(
+                  this.buildDecisionInput(
+                    freshLlmObservation,
+                    buildDecisionCandidates({
+                      elements: freshLlmObservation.elements,
+                    })
+                  ),
+                  `the model answered llm_required (${decision.reason_code}); pick a concrete allowed operation that advances the goal`,
+                  signal,
+                  { operation: "WAIT", error_code: "llm_required" }
+                );
+                if (recovered) {
+                  observation = freshLlmObservation;
+                  evidence.push(`llm_required:routed_to_recovery`);
+                  continue;
+                }
+              }
+            }
             return this.terminal(
               "partial",
               `escalated:${decision.reason_code}`,

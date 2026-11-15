@@ -48,6 +48,10 @@ const HANDOFF_DEAD_STATES: ReadonlySet<ManagedBrowserSessionState> = new Set(
   ["stopping", "stopped", "failed"]
 );
 
+function nowValue(): number {
+  return Date.now();
+}
+
 export async function awaitUserResolution(
   input: AwaitUserResolutionInput
 ): Promise<HandoffResolution> {
@@ -114,7 +118,16 @@ export async function awaitUserResolution(
         resolution = "resolved";
         return "resolved";
       }
-      control.enforcePauseCap(input.taskId);
+      // G05/C-FR-09: the 60-minute pause cap must NOT shorten an extended
+      // handoff window — the effective cap is the LATER of the two
+      // expiries (the pause-cap clock vs the handoff window deadline).
+      const windowExpiry = status.handoffExpiresAtEpochMs ?? null;
+      if (
+        windowExpiry === null ||
+        nowValue() < windowExpiry - 1_000
+      ) {
+        control.enforcePauseCap(input.taskId, 60 * 60_000 + 60 * 60_000);
+      }
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }
   } finally {

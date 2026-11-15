@@ -118,12 +118,17 @@ export class AgentTaskControlService {
     }
     // F07: failed/completed are FINAL — no failed→completed overwrites.
     // A cancelled record may still be REFINED by the collector: Return-
-    // now pre-cancels a batch, and the real per-task outcome (failed /
-    // completed with usable output) replaces the pre-cancellation mark.
+    // now pre-cancels a batch, and the real per-task outcome (interrupted
+    // with partial results / failed / completed with usable output)
+    // replaces the pre-cancellation mark. G05/C-FR-11: the interrupted
+    // refinement is REQUIRED — the batch result says partial and the
+    // control record must agree.
     if (TERMINAL_STATES.has(record.state)) {
       const refinementAllowed =
         record.state === "cancelled" &&
-        (state === "failed" || state === "completed");
+        (state === "failed" ||
+          state === "completed" ||
+          state === "interrupted");
       if (refinementAllowed) {
         record.state = state;
         record.reason = reason ?? record.reason;

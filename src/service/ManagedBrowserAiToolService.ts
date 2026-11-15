@@ -1120,6 +1120,9 @@ export class ManagedBrowserAiToolService {
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
+    // G01/D-FR-08: an active runner owns this session — the model tool
+    // does not fight the runner for the dialog.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context?.conversationId);
     // B12/E04/C-FR-02/09 (design 18.2): inside an agent turn, the handoff
     // BLOCKS in the tool call until the user resolves, the window expires,
@@ -1193,6 +1196,9 @@ export class ManagedBrowserAiToolService {
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
+    // G01/D-FR-08: an active runner owns this session — no model-driven
+    // resume (also unreachable: resume was removed from the tool list).
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     this.ensureSession(parsed.data.session_id, context?.conversationId);
     try {
       const status = await this.browserModule.resumeAfterHandoff(
@@ -2066,6 +2072,9 @@ export class ManagedBrowserAiToolService {
     if (!parsed.success) {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
+    // G01/D-FR-08: an active runner owns this session — no cache clear
+    // under it.
+    this.assertNoRunnerOwnership(parsed.data.session_id);
     const status = this.ensureSession(parsed.data.session_id, context?.conversationId);
     if (status.accountId === 0) return { cleared: false, reasonCode: "ephemeral_public_browser" };
     try {
