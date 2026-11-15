@@ -321,7 +321,7 @@ describe("BrowserActionExecutor V06 disabled/occlusion revalidation", () => {
       registry,
     );
     expect(outcome.effect).toBe("known");
-    expect(outcome.stopCode).toBeNull();
+    expect(outcome.stopCode).toBe("completed");
     expect(outcome.results[0]?.success).toBe(false);
     expect(outcome.results[0]?.errorCode).toBe("element_disabled");
   });
