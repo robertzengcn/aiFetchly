@@ -11,7 +11,14 @@ describe("sign-in cooldown scope (A-FR-10)", () => {
   it("same account, different site: no cooldown", async () => {
     const module = new SocialAccountModule();
     const fixed = new Date("2026-11-14T12:00:00Z");
-    // Fake the row lookup through the model seam the module reads.
+    // G06: fully isolate the fixture — stub ensureConnection (no TypeORM
+    // schema init; parallel workers no longer race the shared SQLite file)
+    // and the row lookup through the model seam the module reads.
+    (
+      module as unknown as {
+        ensureConnection: () => Promise<void>;
+      }
+    ).ensureConnection = async () => undefined;
     (
       module as unknown as {
         socialAccountModel: { findRowById: (id: number) => Promise<unknown> };
