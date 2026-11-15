@@ -1906,3 +1906,68 @@ describe("BrowserTaskRunner N02 planner", () => {
     expect(result.counts.decisionRequests).toBe(0);
   });
 });
+
+describe("BrowserTaskRunner E05 secret-field fill refusal", () => {
+  const fillEntry = (target: string): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "FILL", target_id: target, option_id: null, key: null, url: null, text: "model-secret" },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("a FILL into a password-named field is refused with NO dispatch", async () => {
+    // A text field NAMED like a credential but NOT flagged password-like
+    // (so it IS a candidate) — the runner must still refuse the fill.
+    const deps = makeRunnerDeps(
+      [fillEntry("e_ccc"), doneEntry()],
+      {
+        elements: [
+          { ref: "e_aaa", role: "textbox", name: "Search" },
+          { ref: "e_ccc", role: "textbox", name: "Card number" },
+          { ref: "e_bbb", role: "button", name: "Go" },
+        ],
+      }
+    );
+    const dispatched: RunnerAction[] = [];
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_e05a",
+        conversationId: "conv-1",
+        goal: "fill the form",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // NOTHING was dispatched — the model's text never reached the page.
+    expect(dispatched).toEqual([]);
+    expect(result.evidence.some((e) => e.startsWith("fill_refused:secret_field"))).toBe(true);
+  });
+
+  it("a non-secret FILL still dispatches normally", async () => {
+    const dispatched: RunnerAction[] = [];
+    const deps = makeRunnerDeps(
+      [fillEntry("e_aaa"), doneEntry()],
+      {},
+      (action) => dispatched.push(action)
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_e05b",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(dispatched.map((a) => a.type)).toContain("fill");
+    expect(result.status).toBe("completed");
+  });
+});

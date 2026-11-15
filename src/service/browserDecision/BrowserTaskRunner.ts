@@ -29,6 +29,7 @@ import {
   RUNNER_OPERATIONS,
 } from "@/service/browserDecision/BrowserCandidateBuilder";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import { fieldIsForbiddenToFill } from "@/service/browserDecision/FieldValueService";
 
 export interface CompletionCriterion {
   readonly kind: "url_contains" | "element_present" | "extract_nonempty" | "text_contains";
@@ -810,6 +811,18 @@ export class BrowserTaskRunner {
         let programAction = this.toRunnerAction(action, target, observation);
         if (!programAction) {
           evidence.push(`unsupported_operation:${action.operation}`);
+          continue;
+        }
+        // E05/D-FR-20: a field whose NAME is secret-shaped (password,
+        // OTP, card, security code) is NEVER filled with the model's
+        // text — the step ends as a known no-effect refusal and the
+        // model must re-decide (SIGN_IN / ESCALATE). The credential
+        // service owns those fields.
+        if (
+          programAction.type === "fill" &&
+          fieldIsForbiddenToFill(target.name)
+        ) {
+          evidence.push(`fill_refused:secret_field:${target.role}`);
           continue;
         }
         // N02/D-FR-20/21: FILL text resolution — trusted plan bindings

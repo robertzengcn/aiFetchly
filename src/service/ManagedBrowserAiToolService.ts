@@ -1678,16 +1678,58 @@ export class ManagedBrowserAiToolService {
           }
           return plan;
         },
-        // N02/D-FR-20/21: FILL text from trusted plan bindings / bounded
-        // helper; secret-shaped text is rejected inside the service.
+        // N02/E05/D-FR-20/21: FILL text from trusted plan bindings /
+        // bounded helper; secret-shaped text is rejected inside the
+        // service. The helper uses the SAME decision client (bounded,
+        // simple-string output) and only runs when the field is not
+        // forbidden.
         resolveFieldText: async (fieldInput) => {
-          const { getDefaultBrowserFieldValueService } = await import(
-            "@/service/browserDecision/FieldValueService"
-          );
+          const { getDefaultBrowserFieldValueService, fieldIsForbiddenToFill } =
+            await import("@/service/browserDecision/FieldValueService");
+          if (fieldIsForbiddenToFill(fieldInput.fieldName)) {
+            return null;
+          }
           return await getDefaultBrowserFieldValueService().resolveText({
             fieldName: fieldInput.fieldName,
             goal: fieldInput.goal,
             bindings: runnerPlan?.bindings ?? [],
+            helper: async (helperInput) => {
+              const helperDecision = await decisionClient.decide(
+                {
+                  schema_version: 1,
+                  request_id: `helper_${Math.random().toString(36).slice(2, 10)}`,
+                  task_id: `helper_${Math.random().toString(36).slice(2, 10)}`,
+                  step_id: "helper_1",
+                  observation_id: "helper_virtual",
+                  page_revision: 1,
+                  goal: helperInput.goal.slice(0, 2_000),
+                  subgoal: `FIELD TEXT HELPER: return DONE with text = the single string to type into the "${helperInput.field.slice(0, 200)}" field. Plain value only, max 2000 chars, no prose.`,
+                  constraints: [],
+                  completion_criteria: [],
+                  url: "",
+                  title: "",
+                  candidates: [],
+                  recent_actions: helperInput.context.map((entry) => ({
+                    operation: "WAIT" as const,
+                    target_descriptor: entry.slice(0, 120),
+                    outcome: "executed" as const,
+                    error_code: null,
+                  })),
+                  allowed_operations: ["DONE"],
+                  deadline_ms: 8_000,
+                },
+                context.signal ?? new AbortController().signal
+              );
+              if (
+                helperDecision.status === "decided" &&
+                helperDecision.action.operation === "DONE" &&
+                helperDecision.action.text &&
+                helperDecision.action.text.length > 0
+              ) {
+                return helperDecision.action.text;
+              }
+              return null;
+            },
           });
         },
         invalidateFieldCache: (fieldName) => {
