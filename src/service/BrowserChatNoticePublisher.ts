@@ -24,6 +24,8 @@ export interface BrowserChatNoticeInput {
   readonly transitionNonce: string;
   readonly messageArgs?: Readonly<Record<string, string | number | boolean>>;
   readonly requiresUserAction: boolean;
+  /** W06/M-FR-08: the owning task's label ("Browser task 2/3"), if known. */
+  readonly taskLabel?: string | null;
 }
 
 export interface BrowserChatNoticeSink {
@@ -40,6 +42,9 @@ const ALLOWED_ARG_KEYS: ReadonlySet<string> = new Set([
   "sessionSaved",
   "reasonCode",
   "minutes",
+  // W06/M-FR-08: the owning batch task's label — a safe display label
+  // provided by the module (never user/page content).
+  "taskLabel",
 ]);
 
 const SEVERITY_BY_TYPE: Readonly<Record<BrowserChatNoticeType, SafeBrowserChatNotice["severity"]>> = {
@@ -97,6 +102,11 @@ export class BrowserChatNoticePublisher {
     } = {
       eventId: uuidv4(),
       sessionId: input.sessionId,
+      // W06/M-FR-08: the notice CARRIES its conversation — the publisher
+      // input is the ROOT conversation for sub-agent-owned sessions, so
+      // the renderer can show it in the parent chat (and filter it out
+      // of sibling conversations).
+      conversationId: input.conversationId,
       type: input.type,
       messageKey: `managedBrowser.notice.${input.type}`,
       severity: SEVERITY_BY_TYPE[input.type],
@@ -104,6 +114,7 @@ export class BrowserChatNoticePublisher {
         input.requiresUserAction || REQUIRES_ACTION_TYPES.has(input.type),
       createdAt: new Date().toISOString(),
       messageArgs: sanitizeNoticeArgs(input.messageArgs),
+      taskLabel: input.taskLabel ?? null,
     };
     this.sink(notice);
     return notice;

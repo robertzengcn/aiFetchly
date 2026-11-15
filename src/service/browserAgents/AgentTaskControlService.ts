@@ -437,3 +437,21 @@ export function setDefaultAgentTaskControlServiceForTest(
 ): void {
   defaultService = service;
 }
+
+// W06/M-FR-08: user-visible task labels per agent task. Notices published
+// for a sub-agent-owned browser session carry the label ("Browser task
+// 2/3") into the ROOT conversation. Bounded: labels are transient state
+// and the map is cleared at capacity.
+const agentTaskLabels = new Map<string, string>();
+const MAX_TASK_LABELS = 500;
+
+export function registerAgentTaskLabel(agentTaskId: string, label: string): void {
+  if (agentTaskLabels.size >= MAX_TASK_LABELS) {
+    agentTaskLabels.clear();
+  }
+  agentTaskLabels.set(agentTaskId, label);
+}
+
+export function getAgentTaskLabel(agentTaskId: string): string | null {
+  return agentTaskLabels.get(agentTaskId) ?? null;
+}

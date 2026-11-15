@@ -25,6 +25,7 @@ import {
   type AcquireLeaseResult,
 } from "@/service/ManagedBrowserLeaseService";
 import { ManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
+import { registerAgentTaskLabel } from "@/service/browserAgents/AgentTaskControlService";
 import {
   ManagedBrowserWorkerClient,
   type OutboundEvent,
@@ -856,6 +857,46 @@ describe("ManagedBrowserModule cookie bridge", () => {
     );
     expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
   });
+
+  // W06/M-FR-08: a SUB-AGENT session's notice publishes on the ROOT
+  // (parent) conversation and NAMES the task — never on the hidden
+  // agent-v2 conversation the chat UI does not show.
+  it("publishes a sub-agent session notice on the root conversation with the task label", async () => {
+    registerAgentTaskLabel("agt-w06-label", "Browser task 2/3");
+    const h = makeHarness({
+      persistSnapshot: async () => {
+        throw new Error("disk full");
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "agent-v2-hidden-1",
+      rootConversationId: "conv-parent-1",
+      agentTaskId: "agt-w06-label",
+    });
+    h.clients[0].deps.onRefreshedCookies([
+      {
+        domain: "youtube.com",
+        path: "/",
+        name: "SID",
+        value: "refreshed-secret",
+        secure: true,
+        httpOnly: true,
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(noticeTypes(h.notices)).toContain("session_persistence_failed")
+    );
+    const notice = h.notices.find(
+      (n) =>
+        n.type === "session_persistence_failed" &&
+        n.sessionId === status.sessionId
+    );
+    expect(notice).toBeDefined();
+    expect(notice!.conversationId).toBe("conv-parent-1");
+    expect(notice!.taskLabel).toBe("Browser task 2/3");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1190,6 +1231,9 @@ describe("ManagedBrowserModule renderer sinks", () => {
         riskClass: "consequential_write",
         messageKey: "managedBrowser.approval.required",
         contentSummary: "Publish video",
+        // W06/M-FR-08: the ROOT conversation the prompt is published on
+        // (null for an unregistered session).
+        conversationId: null,
       },
     ]);
   });

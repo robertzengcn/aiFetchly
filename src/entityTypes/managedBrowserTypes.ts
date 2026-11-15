@@ -293,11 +293,20 @@ export type BrowserChatNoticeType =
 export interface SafeBrowserChatNotice {
   readonly eventId: string;
   readonly sessionId: string;
+  /**
+   * W06/M-FR-08: the conversation the notice is PUBLISHED ON — the ROOT
+   * (parent) conversation for sub-agent-owned sessions, so a challenge
+   * or login notice surfaces in the chat the user actually sees. Null
+   * only for legacy sinks.
+   */
+  readonly conversationId?: string | null;
   readonly type: BrowserChatNoticeType;
   readonly messageKey: string;
   readonly severity: "info" | "warning" | "success" | "error";
   readonly requiresUserAction: boolean;
   readonly createdAt: string;
+  /** W06/M-FR-08: the owning batch task's label ("Browser task 2/3"). */
+  readonly taskLabel?: string | null;
 }
 
 // ---------------------------------------------------------------------------

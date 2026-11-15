@@ -211,6 +211,8 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       riskClass: request.riskClass,
       messageKey: request.messageKey,
       contentSummary: request.contentSummary,
+      // W06/M-FR-08: the ROOT conversation the prompt is published on.
+      conversationId: request.conversationId,
     })
   );
 

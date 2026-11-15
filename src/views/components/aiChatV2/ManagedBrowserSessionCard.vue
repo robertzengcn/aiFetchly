@@ -160,7 +160,8 @@
         :key="notice.eventId"
         :class="`mb-session-card__notice--${notice.severity}`"
       >
-        {{ t(`managedBrowser.notices.${notice.type}`) || notice.type }}
+        <!-- W06/M-FR-08: the notice NAMES the owning task when known. -->
+        {{ notice.taskLabel ? `${notice.taskLabel} · ` : '' }}{{ t(`managedBrowser.notices.${notice.type}`) || notice.type }}
       </li>
     </ul>
 
@@ -298,6 +299,7 @@ const recentNotices = ref<
     readonly eventId: string;
     readonly type: string;
     readonly severity: string;
+    readonly taskLabel: string | null;
   }>
 >([]);
 const progressLine = ref<string | null>(null);
@@ -610,12 +612,19 @@ onMounted(() => {
   });
   // GAP-08: structured chat notices — latest three, localized.
   unsubscribeNotices = onManagedBrowserChatNotice((notice) => {
+    // W06/M-FR-08: a notice is only shown on the card of the session it
+    // belongs to — root-conversation publishing means a sibling chat's
+    // displayed session never shows another conversation's challenge.
+    if (status.value && notice.sessionId !== status.value.sessionId) {
+      return;
+    }
     recentNotices.value = [
       ...recentNotices.value.filter((n) => n.eventId !== notice.eventId),
       {
         eventId: notice.eventId,
         type: notice.type,
         severity: notice.severity,
+        taskLabel: notice.taskLabel ?? null,
       },
     ].slice(-3);
   });

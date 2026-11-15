@@ -458,6 +458,8 @@ export interface ManagedBrowserApprovalRequest {
   readonly riskClass: string;
   readonly messageKey: string;
   readonly contentSummary: string | null;
+  /** W06/M-FR-08: the ROOT conversation the prompt is published on. */
+  readonly conversationId?: string | null;
 }
 
 export function onManagedBrowserApprovalRequired(

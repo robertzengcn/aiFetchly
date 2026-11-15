@@ -39,6 +39,12 @@ export interface CompletionCriterion {
 export interface BrowserTaskInput {
   readonly sessionId: string;
   readonly conversationId: string;
+  /**
+   * W06/M-FR-08: the ROOT (parent) conversation for sub-agent-owned
+   * tasks — user-visible waits (credential card) publish on it while
+   * ownership keeps using conversationId.
+   */
+  readonly rootConversationId?: string;
   readonly goal: string;
   readonly constraints?: readonly string[];
   readonly completionCriteria?: readonly CompletionCriterion[];
@@ -590,7 +596,10 @@ export class BrowserTaskRunner {
           evidence.push(`sign_in:attempt_${this.signInAttempts}`);
           const signInResult = await this.deps.signIn({
             sessionId: this.input.sessionId,
-            conversationId: this.input.conversationId,
+            // W06/M-FR-08: the credential card is published on the ROOT
+            // conversation — the hidden agent conversation is never shown.
+            conversationId:
+              this.input.rootConversationId ?? this.input.conversationId,
             signal,
           });
           if (signal.aborted) {

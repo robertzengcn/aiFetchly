@@ -286,6 +286,10 @@ export async function runBrowserTasks(
                 constraints: { allowInteractivePermissionPrompts: false },
               },
               parentConversationId: conversationId,
+              // W06/M-FR-08: user-visible label — notices published for
+              // this child's session (challenge/login/handoff) NAME the
+              // task in the parent conversation.
+              taskLabel: `Browser task ${index + 1}/${tasks.length}`,
             } as unknown as Parameters<typeof runtime.runSync>[0],
             {
               ...getDefaultAgentRuntimeDeps(),

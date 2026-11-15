@@ -1,6 +1,6 @@
 // src/service/AgentRuntime.ts
 import { randomUUID } from "crypto";
-import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import { getDefaultAgentTaskControlService, registerAgentTaskLabel } from "@/service/browserAgents/AgentTaskControlService";
 import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
@@ -239,6 +239,9 @@ export class AgentRuntime {
     // C-FR-05: the agent task joins the control service so user pause/
     // stop reaches the loop between tool calls (not only the runner).
     getDefaultAgentTaskControlService().register(agentTaskId, agentConversationId);
+    // W06/M-FR-08: register the user-visible label so notices published
+    // for sessions this agent owns NAME the task in the parent chat.
+    registerAgentTaskLabel(agentTaskId, request.taskLabel ?? definition.name);
     const transcript = new AgentTranscriptService(this.taskModule);
 
     // Normalize constraints — AI-generated taskPackets may omit this object.

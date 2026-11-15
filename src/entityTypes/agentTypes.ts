@@ -172,6 +172,13 @@ export interface RunAgentRequest {
   taskPacket: AgentTaskPacket;
   parentConversationId?: string;
   /**
+   * W06/M-FR-08: a user-visible label for this run ("Browser task 2/3").
+   * Registered with the agent task id and carried on user-wait notices
+   * published for sessions this agent owns. Absent runs fall back to the
+   * agent definition's display name.
+   */
+  taskLabel?: string;
+  /**
    * The parent agent's id. Used (with {@link parentConversationId}) to issue
    * inter-agent handoff grants so the parent can read the child's preserved
    * tool outputs (T15b). Absent for top-level / user-driven runs.

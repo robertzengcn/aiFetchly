@@ -1401,7 +1401,6 @@ export class ManagedBrowserAiToolService {
     );
     const providerMode = new AIProviderSettingsService().getMode();
     const route: "hosted" | "chat" = providerMode === "hosted" ? "hosted" : "chat";
-    void sessionStatus;
     const { providerConfigKey: currentProviderConfigKey } = await import(
       "@/service/aiProvider/AIProviderConfigVersion"
     );
@@ -1577,6 +1576,9 @@ export class ManagedBrowserAiToolService {
       {
         sessionId: parsed.data.session_id,
         conversationId: context.conversationId,
+        // W06/M-FR-08: user-visible waits (credential card) publish on
+        // the ROOT conversation for sub-agent-owned sessions.
+        rootConversationId: sessionStatus.rootConversationId ?? undefined,
         goal: parsed.data.goal,
         constraints: parsed.data.constraints ?? [],
         completionCriteria: (parsed.data.completion_criteria ?? []) as CompletionCriterion[],

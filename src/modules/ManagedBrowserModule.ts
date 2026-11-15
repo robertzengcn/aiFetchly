@@ -70,6 +70,7 @@ import {
 import { normalizedCookieArraySchema } from "@/schemas/accountCookies";
 import { decideCaptchaResolution } from "@/service/CaptchaResolutionPolicy";
 import { getDefaultCaptchaProviderService } from "@/service/CaptchaProviderService";
+import { getAgentTaskLabel } from "@/service/browserAgents/AgentTaskControlService";
 import type { NormalizedCookie } from "@/schemas/accountCookies";
 import type {
   BrowserActionProgram,
@@ -360,6 +361,8 @@ export class ManagedBrowserModule {
           readonly riskClass: string;
           readonly messageKey: string;
           readonly contentSummary: string | null;
+          /** W06/M-FR-08: the ROOT conversation the prompt is published on. */
+          readonly conversationId: string | null;
         }
       ) => void)
     | null = null;
@@ -426,6 +429,8 @@ export class ManagedBrowserModule {
       readonly riskClass: string;
       readonly messageKey: string;
       readonly contentSummary: string | null;
+      /** W06/M-FR-08: the ROOT conversation the prompt is published on. */
+      readonly conversationId: string | null;
     }) => void
   ): void {
     this.externalApprovalSink = sink;
@@ -476,6 +481,9 @@ export class ManagedBrowserModule {
     readonly pageRevision?: number;
   }): void {
     if (this.externalApprovalSink) {
+      const record = this.sessions.get(input.sessionId);
+      // W06/M-FR-08: the prompt is published on the ROOT conversation —
+      // a sub-agent's approval card must surface in the parent chat.
       this.externalApprovalSink({
         sessionId: input.sessionId,
         requestId: input.requestId,
@@ -484,6 +492,8 @@ export class ManagedBrowserModule {
         riskClass: input.riskClass,
         messageKey: "managedBrowser.approval.required",
         contentSummary: input.contentSummary ?? null,
+        conversationId:
+          record?.rootConversationId ?? record?.conversationId ?? null,
       });
     }
   }
@@ -1850,13 +1860,24 @@ record.currentUrl = message.observation.url || record.currentUrl;
     messageArgs: Readonly<Record<string, string | number | boolean>> = {},
     requiresUserAction = true
   ): void {
+    // W06/M-FR-08: the notice is PUBLISHED ON the ROOT conversation — for
+    // a sub-agent-owned session `record.conversationId` is the hidden
+    // agent-v2 conversation the chat UI never shows. Ownership checks
+    // keep using record.conversationId (they already allow the root).
+    const noticeConversationId =
+      record.rootConversationId ?? record.conversationId ?? "workspace";
+    // The task label names the task in the parent chat ("Browser task 2/3").
+    const taskLabel = record.ownerAgentTaskId
+      ? getAgentTaskLabel(record.ownerAgentTaskId)
+      : null;
     const notice = this.noticePublisher.publish({
       sessionId: record.sessionId,
-      conversationId: record.conversationId ?? "workspace",
+      conversationId: noticeConversationId,
       type,
       transitionNonce,
       messageArgs,
       requiresUserAction,
+      ...(taskLabel ? { taskLabel } : {}),
     });
     if (notice && this.externalNoticeSink) {
       this.externalNoticeSink(notice);
