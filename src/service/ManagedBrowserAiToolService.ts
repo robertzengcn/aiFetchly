@@ -1455,26 +1455,39 @@ export class ManagedBrowserAiToolService {
       );
       hostedClient.freezeRoute(currentProviderConfigKey());
       decisionClient = hostedClient;
-    } else {
+    } else if (decisionClient === undefined) {
+      // E01: the chat client is built ONLY when no native client was
+      // already assigned — the native profile route must reach the runner
+      // intact (design §9.3), never overwritten by chat completions.
       // N01: the runner runs on the user's chat route only (no
       // custom-to-hosted fallback, D-03).
-      // D-FR-04: a stored `small`/`haiku` alias is resolved to a REAL
-      // model BEFORE the decision request — third-party providers 404 on
-      // the alias, and the decision must never depend on server-side
-      // aliasing. The /models listing routes through AiChatApi (no direct
-      // provider client import — cross-chunk edges panicked rolldown).
+      //
+      // E02/D-FR-04: the decision model is, in order:
+      //   1. the stored decisionRoute.chatDecisionModel override (when it
+      //      is NOT itself an alias);
+      //   2. the configured chat default, with `small`/`haiku` resolved to
+      //      a REAL model via /models;
+      //   3. if no real model can be resolved, the task FAILS with a
+      //      structured reason instead of sending the alias.
+      const isAliasModel = (model: unknown): boolean =>
+        typeof model === "string" &&
+        ["haiku", "small"].includes(model.trim().toLowerCase());
       let decisionModel: string | undefined = undefined;
-      try {
-        // D-FR-04 note: the alias check is LOCAL — importing the shared
-        // SmallModelAlias module here crosses a chunk boundary and panics
-        // rolldown during artifact builds.
-        const isSmallModelAlias = (model: unknown): boolean =>
-          typeof model === "string" &&
-          ["haiku", "small"].includes(model.trim().toLowerCase());
+      const storedOverride = settings.decisionRoute.chatDecisionModel;
+      if (storedOverride && !isAliasModel(storedOverride)) {
+        decisionModel = storedOverride;
+      } else if (storedOverride && isAliasModel(storedOverride)) {
+        // An alias override is a configuration error — fail structured.
+        throw new ManagedBrowserAiToolError(
+          "ai_disabled",
+          undefined,
+          "decision_model_alias_unresolved"
+        );
+      } else {
         const resolved = new AIProviderResolver().resolveForChat();
         if (resolved.canUse && resolved.kind === "local") {
           const defaultModel = resolved.config.defaultModel;
-          if (isSmallModelAlias(defaultModel)) {
+          if (isAliasModel(defaultModel)) {
             const { AiChatApi } = await import("@/api/aiChatApi");
             const api = new AiChatApi();
             const models = await api.listOpenAIModels();
@@ -1484,15 +1497,20 @@ export class ManagedBrowserAiToolService {
               )
               .find(
                 (id): id is string =>
-                  typeof id === "string" && !isSmallModelAlias(id)
+                  typeof id === "string" && !isAliasModel(id)
               );
-            decisionModel = real ?? undefined;
-            // No resolvable model: the decision route stays unaliased —
-            // the alias request would 404 downstream anyway.
+            if (!real) {
+              // E02: never send the alias — fail the task with a
+              // structured reason instead.
+              throw new ManagedBrowserAiToolError(
+                "ai_disabled",
+                undefined,
+                "decision_model_alias_unresolved"
+              );
+            }
+            decisionModel = real;
           }
         }
-      } catch {
-        // Alias resolution is best-effort; the resolver default applies.
       }
       const chatClient = new ChatCompletionDecisionClient(
         async (request, signal) => {

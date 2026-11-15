@@ -18,6 +18,8 @@ const DEFAULT_DECISION_ROUTE = {
  */
 
 const scriptedDecisions: string[] = [];
+/** E01/E02: per-test decision-route override (null = default follow_chat). */
+let EXECUTE_TASK_DECISION_ROUTE: import("@/entityTypes/managedBrowserTypes").EffectiveManagedBrowserSettings["decisionRoute"] | null = null;
 let observeUrl = "https://www.youtube.com/watch?v=abc";
 const dispatchedPrograms: Array<{ actions: Array<Record<string, unknown>> }> = [];
 
@@ -276,7 +278,7 @@ function makeService(browserModule: ReturnType<typeof makeModule>) {
         proxySwitchEnabled: true,
         parallelAgentsEnabled: true,
         browserDecisionEnabled: true,
-        decisionRoute: DEFAULT_DECISION_ROUTE,
+        decisionRoute: EXECUTE_TASK_DECISION_ROUTE ?? DEFAULT_DECISION_ROUTE,
       }),
     } as unknown as ManagedBrowserSettingsModule,
     classifier: new BrowserActionRiskClassifier(),
@@ -287,6 +289,7 @@ function makeService(browserModule: ReturnType<typeof makeModule>) {
 describe("executeTask integration (P0-1 acceptance)", () => {
   beforeEach(() => {
     scriptedDecisions.length = 0;
+    EXECUTE_TASK_DECISION_ROUTE = null;
     dispatchedPrograms.length = 0;
     observeUrl = "https://www.youtube.com/watch?v=abc";
   });
@@ -320,5 +323,251 @@ describe("executeTask integration (P0-1 acceptance)", () => {
     // NOTE: journal capture is covered by the runner + module suites
     // (the BrowserTaskModule mock scope is import-site dependent under
     // vitest — the recordTerminal site reaches the real module).
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E01: a complete native profile produces SystemOne requests and ZERO chat
+// completions; an incomplete profile is refused; hosted+native is refused.
+// E02: the stored chatDecisionModel override rides the decision request.
+// ---------------------------------------------------------------------------
+
+describe("executeTask native route + model override (E01/E02)", () => {
+  it("E02: the stored chatDecisionModel override is sent as the model", async () => {
+    EXECUTE_TASK_DECISION_ROUTE = {
+      version: 1,
+      mode: "follow_chat",
+      chatDecisionModel: "my-cheap-browser-model",
+      nativeProfile: null,
+      requestTimeoutMs: null,
+    };
+    const modelsRequested: string[] = [];
+    vi.doMock("@/api/aiChatApi", () => ({
+      AiChatApi: class {
+        public async openAIChatCompletion(request: {
+          messages: ReadonlyArray<{ role: string; content: string }>;
+          model?: string;
+        }): Promise<unknown> {
+          if (request.model) {
+            modelsRequested.push(request.model);
+          }
+          const prompt = request.messages[1]?.content ?? "";
+          if (prompt.includes("PLAN ONCE")) {
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      operation: "DONE",
+                      target_id: null,
+                      option_id: null,
+                      key: null,
+                      url: null,
+                      text: JSON.stringify({
+                        completion_criteria: [],
+                        bindings: [],
+                        first_subgoal: "go",
+                      }),
+                    }),
+                  },
+                },
+              ],
+            };
+          }
+          return {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    operation: "DONE",
+                    target_id: null,
+                    option_id: null,
+                    key: null,
+                    url: null,
+                    text: null,
+                  }),
+                },
+              },
+            ],
+          };
+        }
+        public async listOpenAIModels(): Promise<{ data: Array<{ id: string }> }> {
+          return { data: [{ id: "real-model-1" }, { id: "small" }] };
+        }
+        public async probeDecisionModels(): Promise<{ advertised: boolean }> {
+          return { advertised: false };
+        }
+        public async postDecisionEnvelope(): Promise<unknown> {
+          return {};
+        }
+      },
+    }));
+    vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
+      AIProviderResolver: class {
+        public resolveForChat(): { canUse: boolean; kind: string; config: { defaultModel: string } } {
+          return {
+            canUse: true,
+            kind: "local",
+            config: { defaultModel: "small" },
+          };
+        }
+      },
+    }));
+    const service = makeService(makeModule());
+    const result = (await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "do it",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      CTX
+    )) as Record<string, unknown>;
+    expect(result.status).toBe("completed");
+    // Every chat decision carried the OVERRIDE model — not the alias, not
+    // the first /models id.
+    expect(modelsRequested.length).toBeGreaterThan(0);
+    for (const model of modelsRequested) {
+      expect(model).toBe("my-cheap-browser-model");
+    }
+  });
+
+  it("E01: a complete native profile sends native requests and zero chat calls", async () => {
+    EXECUTE_TASK_DECISION_ROUTE = {
+      version: 1,
+      mode: "native_profile",
+      chatDecisionModel: null,
+      nativeProfile: {
+        displayName: "Native",
+        baseUrl: "https://native.example.test/v1",
+        model: "jev-1",
+        apiKeyRef: "chat",
+      },
+      requestTimeoutMs: null,
+    };
+    const nativePosts: Array<{ endpoint: string }> = [];
+    let chatCalls = 0;
+    vi.doMock("@/api/aiChatApi", () => ({
+      AiChatApi: class {
+        public async openAIChatCompletion(): Promise<unknown> {
+          chatCalls++;
+          return {};
+        }
+        public async probeDecisionModels(): Promise<{ advertised: boolean }> {
+          return { advertised: false };
+        }
+        public async postDecisionEnvelope(): Promise<unknown> {
+          return {};
+        }
+        public async listOpenAIModels(): Promise<{ data: Array<{ id: string }> }> {
+          return { data: [{ id: "real-model-1" }] };
+        }
+      },
+    }));
+    let nativeCalls = 0;
+    vi.doMock("@/modules/lib/httpclient", () => ({
+      HttpClient: class {
+        public async postJson(endpoint: string): Promise<unknown> {
+          nativePosts.push({ endpoint });
+          nativeCalls++;
+          // First native call = the PLANNER (plan JSON); the rest = loop
+          // decisions (DONE — the criteria are then verified).
+          if (nativeCalls === 1) {
+            return {
+              status: "decided",
+              action: {
+                operation: "DONE",
+                target_id: null,
+                option_id: null,
+                key: null,
+                url: null,
+                text: JSON.stringify({
+                  completion_criteria: [
+                    { kind: "url_contains", value: "/results" },
+                  ],
+                  bindings: [],
+                  first_subgoal: "click search",
+                }),
+              },
+              uncertainty: { source: "native_distribution", confidence: 0.7 },
+            };
+          }
+          return {
+            status: "decided",
+            action: {
+              operation: "DONE",
+              target_id: null,
+              option_id: null,
+              key: null,
+              url: null,
+              text: null,
+            },
+            uncertainty: { source: "native_distribution", confidence: 0.7 },
+          };
+        }
+        public async get(): Promise<unknown> {
+          return {};
+        }
+      },
+    }));
+    vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
+      AIProviderResolver: class {
+        public resolveForChat(): { canUse: boolean; kind: string; config: { defaultModel: string } } {
+          return {
+            canUse: true,
+            kind: "local",
+            config: { defaultModel: "real-model-1" },
+          };
+        }
+      },
+    }));
+    const service = makeService(makeModule());
+    const result = (await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "do it",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      CTX
+    )) as Record<string, unknown>;
+    expect(result.status).toBe("completed");
+    expect(nativePosts.length).toBeGreaterThan(0);
+    // ZERO chat completions — the native route reached the runner intact.
+    expect(chatCalls).toBe(0);
+  });
+
+  it("E01: an incomplete native profile is refused with native_profile_incomplete", async () => {
+    EXECUTE_TASK_DECISION_ROUTE = {
+      version: 1,
+      mode: "native_profile",
+      chatDecisionModel: null,
+      nativeProfile: {
+        displayName: "Native",
+        baseUrl: "https://native.example.test/v1",
+        model: "jev-1",
+        apiKeyRef: "none",
+      },
+      requestTimeoutMs: null,
+    };
+    vi.doMock("@/modules/lib/httpclient", () => ({
+      HttpClient: class {
+        public async postJson(): Promise<unknown> {
+          return {};
+        }
+        public async get(): Promise<unknown> {
+          return {};
+        }
+      },
+    }));
+    const service = makeService(makeModule());
+    await expect(
+      service.executeTask(
+        {
+          session_id: SESSION_ID,
+          goal: "do it",
+          completion_criteria: [{ kind: "url_contains", value: "/results" }],
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ reasonCode: "native_profile_incomplete" });
   });
 });
