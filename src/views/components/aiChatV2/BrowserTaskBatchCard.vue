@@ -49,7 +49,7 @@
               size="x-small"
               variant="text"
               :data-testid="`task-resume-${task.taskId}`"
-              @click="emit('resume', { taskId: task.taskId, sessionId: task.sessionId })"
+              @click="openResumeDialog(task)"
             >
               {{ t('browserTasks.resume') || 'Resume' }}
             </v-btn>
@@ -66,10 +66,48 @@
         </v-list-item>
       </v-list>
     </v-card-text>
+
+    <!-- C-FR-04/G05: "Resume with instructions" — the user's text rides
+         BROWSER_TASK_RESUME and the runner folds it into the next
+         decision subgoal (consume-once). -->
+    <v-dialog
+      v-model="resumeDialogOpen"
+      max-width="420"
+      data-testid="mb-resume-dialog"
+    >
+      <v-card>
+        <v-card-title class="text-subtitle-1">
+          {{ t('browserTasks.resume_with_instructions') || 'Resume with instructions' }}
+        </v-card-title>
+        <v-card-text>
+          <input
+            v-model="resumeInstructions"
+            type="text"
+            class="managed-browser-settings__account-select"
+            data-testid="mb-resume-instructions"
+            :placeholder="t('browserTasks.resume_instructions_label') || 'Instructions (optional)'"
+            @keyup.enter="submitResume"
+          />
+        </v-card-text>
+        <v-card-actions>
+          <v-btn
+            color="primary"
+            data-testid="mb-resume-confirm"
+            @click="submitResume"
+          >
+            {{ t('common.submit') || 'Resume' }}
+          </v-btn>
+          <v-btn variant="text" data-testid="mb-resume-cancel" @click="resumeDialogOpen = false">
+            {{ t('common.cancel') || 'Cancel' }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-card>
 </template>
 
 <script setup lang="ts">
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 export interface BrowserBatchTaskRow {
@@ -88,9 +126,39 @@ const emit = defineEmits<{
   (event: "returnNow", batchId: string): void;
   (event: "pause", payload: { taskId: string; sessionId?: string }): void;
   (event: "takeControl", payload: { taskId: string; sessionId?: string }): void;
-  (event: "resume", payload: { taskId: string; sessionId?: string }): void;
+  (
+    event: "resume",
+    payload: { taskId: string; sessionId?: string; instructions?: string }
+  ): void;
   (event: "stop", payload: { taskId: string; sessionId?: string }): void;
 }>();
+
+// C-FR-04/G05: the resume-with-instructions dialog.
+const resumeDialogOpen = ref(false);
+const resumeDialogTaskId = ref<string | null>(null);
+const resumeDialogSessionId = ref<string | undefined>(undefined);
+const resumeInstructions = ref("");
+
+function openResumeDialog(task: BrowserBatchTaskRow): void {
+  resumeDialogTaskId.value = task.taskId;
+  resumeDialogSessionId.value = task.sessionId;
+  resumeInstructions.value = "";
+  resumeDialogOpen.value = true;
+}
+
+function submitResume(): void {
+  if (resumeDialogTaskId.value === null) {
+    return;
+  }
+  emit("resume", {
+    taskId: resumeDialogTaskId.value,
+    sessionId: resumeDialogSessionId.value,
+    instructions: resumeInstructions.value,
+  });
+  resumeDialogTaskId.value = null;
+  resumeInstructions.value = "";
+  resumeDialogOpen.value = false;
+}
 
 const { t } = useI18n();
 

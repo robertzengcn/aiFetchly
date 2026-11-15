@@ -89,8 +89,11 @@ const i18n = createI18n({
         warning: "Prompt-injected requests cannot add domains.",
         apply: "Confirm selected domains",
       },
+      common: { cancel: "Cancel", submit: "Resume" },
       browserTasks: {
         batchTitle: "Parallel browser tasks",
+        resume_with_instructions: "Resume with instructions",
+        resume_instructions_label: "Instructions (optional)",
         returnResultsNow: "Return results now",
         taskRunning: "Running",
         taskWaitingForYou: "Waiting for you",
@@ -532,5 +535,102 @@ describe("BrowserControlCards site confirm (B03)", () => {
       domains: [],
       cancelled: true,
     });
+  });
+});
+
+describe("BrowserTaskBatchCard resume-with-instructions dialog (V01/C-FR-04)", () => {
+  function mountCardWithTask() {
+    const wrapper = mount(BrowserControlCards, {
+      global: {
+        plugins: [i18n],
+        stubs: {
+          "v-dialog": {
+            props: ["modelValue"],
+            template: '<div v-if="modelValue"><slot /></div>',
+          },
+          "v-card": { template: "<div><slot /></div>" },
+          "v-card-title": { template: "<div><slot /></div>" },
+          "v-card-text": { template: "<div><slot /></div>" },
+          "v-card-actions": { template: "<div><slot /></div>" },
+          "v-btn": { template: "<button @click=\"$emit('click')\"><slot /></button>" },
+          "v-chip": { template: "<span><slot /></span>" },
+          "v-spacer": { template: "<span />" },
+          "v-list": { template: "<div><slot /></div>" },
+          "v-list-item": {
+            template: '<div><slot /><slot name="append" /></div>',
+          },
+          "v-list-item-title": { template: "<div><slot /></div>" },
+        },
+      },
+    });
+    emit({ batchId: "batch_v01", conversationId: "conv-a", phase: "started" });
+    emit({
+      batchId: "batch_v01",
+      phase: "task",
+      taskId: "batch_v01:0",
+      label: "task a",
+      state: "running",
+    });
+    return wrapper;
+  }
+
+  it("the real Resume button opens the instructions dialog (no direct emit)", async () => {
+    const wrapper = mountCardWithTask();
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    await card.find("button[data-testid='task-resume-batch_v01:0']").trigger("click");
+    await flushPromises();
+    // The dialog is open (no resume IPC yet).
+    expect(
+      wrapper.find("[data-testid='mb-resume-instructions']").exists()
+    ).toBe(true);
+    expect(invokeMock).not.toHaveBeenCalledWith("BROWSER_TASK_RESUME", expect.anything());
+  });
+
+  it("submitting the dialog resumes with the typed instructions", async () => {
+    const wrapper = mountCardWithTask();
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    await card.find("button[data-testid='task-resume-batch_v01:0']").trigger("click");
+    await wrapper.find("input[data-testid='mb-resume-instructions']").setValue("check the second result");
+    await wrapper.find("button[data-testid='mb-resume-confirm']").trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith(
+      "BROWSER_TASK_RESUME",
+      expect.objectContaining({
+        taskId: "batch_v01:0",
+        instructions: "check the second result",
+      })
+    );
+    // The dialog closes.
+    expect(
+      wrapper.find("[data-testid='mb-resume-instructions']").exists()
+    ).toBe(false);
+  });
+
+  it("cancel closes the dialog without resuming", async () => {
+    const wrapper = mountCardWithTask();
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    await card.find("button[data-testid='task-resume-batch_v01:0']").trigger("click");
+    await wrapper.find("button[data-testid='mb-resume-cancel']").trigger("click");
+    await flushPromises();
+    expect(invokeMock).not.toHaveBeenCalledWith("BROWSER_TASK_RESUME", expect.anything());
+    expect(
+      wrapper.find("[data-testid='mb-resume-instructions']").exists()
+    ).toBe(false);
+  });
+
+  it("empty instructions still resume (optional field)", async () => {
+    const wrapper = mountCardWithTask();
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    await card.find("button[data-testid='task-resume-batch_v01:0']").trigger("click");
+    await wrapper.find("button[data-testid='mb-resume-confirm']").trigger("click");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith(
+      "BROWSER_TASK_RESUME",
+      expect.objectContaining({ taskId: "batch_v01:0", instructions: "" })
+    );
   });
 });

@@ -152,7 +152,9 @@ const BUILT_INS: readonly AgentDefinitionView[] = [
       "browser_stop_session",
       "browser_sign_in",
       "browser_set_proxy",
-      "browser_site_upsert",
+      // M-FR-11: children do NOT write shared tables — browser_site_upsert
+      // is removed from the child allow-list (the parent dedupes and
+      // persists extracted rows).
     ],
     mode: "specialist",
     maxToolCalls: 40,

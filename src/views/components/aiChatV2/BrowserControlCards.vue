@@ -380,7 +380,11 @@ async function onTakeControl(payload: { taskId: string; sessionId?: string }): P
   await pauseBrowserTask(payload);
 }
 
-async function onResume(payload: { taskId: string; sessionId?: string }): Promise<void> {
+async function onResume(payload: {
+  taskId: string;
+  sessionId?: string;
+  instructions?: string;
+}): Promise<void> {
   await resumeBrowserTask(payload);
 }
 
