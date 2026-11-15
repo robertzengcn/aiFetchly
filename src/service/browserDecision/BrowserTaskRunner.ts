@@ -512,6 +512,11 @@ export class BrowserTaskRunner {
           if (gateMessage === "task_failed") {
             return this.terminal("failed", "task_failed", evidence, extracted, observation);
           }
+          // W02: a task refined to the partial terminal state rejects its
+          // waiters with task_partial — not a user cancellation either.
+          if (gateMessage === "task_partial") {
+            return this.terminal("partial", "task_partial", evidence, extracted, observation);
+          }
           return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
         }
         if (signal.aborted) {
@@ -1563,11 +1568,10 @@ export class BrowserTaskRunner {
     observation: RunnerObservation | null
   ): BrowserTaskResult {
     const control = this.deps.control ?? getDefaultAgentTaskControlService();
-    control.setState(
-      this.taskId,
-      status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed",
-      reason
-    );
+    // W02/D-FR-09/C-FR-11/12: the control record carries the REAL terminal
+    // status — partial and interrupted are their own states (the returned
+    // tool result and the record must agree), never rewritten failed.
+    control.setState(this.taskId, status, reason);
     // T19/F07: the TERMINAL cursor carries the real counters and the
     // frozen active time. Best-effort: persistence never blocks the
     // result.

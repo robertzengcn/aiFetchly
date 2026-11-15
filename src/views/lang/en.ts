@@ -4547,6 +4547,8 @@ export default {
     taskPaused: "Paused by you",
     taskCompleted: "Completed",
     taskFailed: "Failed",
+    taskInterrupted: "Interrupted",
+    taskPartial: "Partial",
     taskCancelled: "Stopped",
     returnResultsNow: "Return results now",
     pause: "Pause",

@@ -4577,6 +4577,8 @@ export default {
     taskPaused: "Von Ihnen pausiert",
     taskCompleted: "Abgeschlossen",
     taskFailed: "Fehlgeschlagen",
+    taskInterrupted: "Unterbrochen",
+    taskPartial: "Teilweise",
     taskCancelled: "Gestoppt",
     returnResultsNow: "Ergebnisse jetzt zurückgeben",
     pause: "Pausieren",

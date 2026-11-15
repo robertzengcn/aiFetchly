@@ -260,7 +260,9 @@ export interface BrowserBatchEvent {
     | "completed"
     | "failed"
     | "cancelled"
-    | "interrupted";
+    | "interrupted"
+    // W02: a partial runner ending reaches the card as its own state.
+    | "partial";
   readonly summary?: string;
 }
 

@@ -22,7 +22,10 @@ export type AgentTaskControlState =
   | "completed"
   | "failed"
   | "cancelled"
-  | "interrupted";
+  | "interrupted"
+  // W02/D-FR-09: a partial runner ending (verification miss, escalation,
+  // runtime exhausted) is its own terminal state — never rewritten failed.
+  | "partial";
 
 export interface UserIntervention {
   readonly reason: string;
@@ -57,6 +60,7 @@ const TERMINAL_STATES: ReadonlySet<AgentTaskControlState> = new Set([
   "failed",
   "cancelled",
   "interrupted",
+  "partial",
 ]);
 
 export class AgentTaskControlService {
@@ -128,7 +132,10 @@ export class AgentTaskControlService {
         record.state === "cancelled" &&
         (state === "failed" ||
           state === "completed" ||
-          state === "interrupted");
+          state === "interrupted" ||
+          // W02: a Return-now pre-cancellation can be refined to the real
+          // partial outcome (usable output landed before the abort).
+          state === "partial");
       if (refinementAllowed) {
         record.state = state;
         record.reason = reason ?? record.reason;

@@ -47,6 +47,8 @@ export class BrowserTaskModel extends BaseDb {
       "failed",
       "cancelled",
       "interrupted",
+      // W02/D-FR-09: partial is terminal — never rewritten on startup.
+      "partial",
     ];
     return await repository
       .createQueryBuilder("task")

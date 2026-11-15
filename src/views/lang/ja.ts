@@ -4463,6 +4463,8 @@ export default {
     taskPaused: "一時停止中",
     taskCompleted: "完了",
     taskFailed: "失敗",
+    taskInterrupted: "中断",
+    taskPartial: "部分完了",
     taskCancelled: "停止済み",
     returnResultsNow: "結果を今返す",
     pause: "一時停止",

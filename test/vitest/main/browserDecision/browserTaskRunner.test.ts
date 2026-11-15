@@ -212,6 +212,83 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
   });
 });
 
+// W02/D-FR-09: the tool result and the control record must AGREE — a
+// partial ending stays partial, an interrupted one stays interrupted;
+// neither is rewritten failed.
+describe("BrowserTaskRunner W02 terminal state agreement", () => {
+  it("a partial ending keeps partial on BOTH the result and the record", async () => {
+    const control = new AgentTaskControlService();
+    const deps = makeRunnerDeps([{ status: "llm_required", reason_code: "escalated" }]);
+    deps.control = control;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_w02a", conversationId: "conv-1", goal: "ambiguous" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated:escalated");
+    // The record agrees (was: collapsed to failed).
+    expect(control.getState(runner.taskId)).toBe("partial");
+  });
+
+  it("a pause-expiry ending keeps interrupted on the record with a partial result", async () => {
+    let now = 0;
+    const control = new AgentTaskControlService(() => now);
+    const deps = makeRunnerDeps([]);
+    deps.control = control;
+    // The decision HANGS until we release it — the interruption lands
+    // while inference is in flight, deterministically.
+    let releaseDecide: () => void = () => undefined;
+    const decideGate = new Promise<void>((resolve) => {
+      releaseDecide = resolve;
+    });
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async () => {
+        await decideGate;
+        return {
+          status: "decided" as const,
+          action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable" as const, confidence: null },
+        };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_w02b", conversationId: "conv-1", goal: "click go" },
+      deps
+    );
+    const runPromise = runner.run();
+    // The runner is now inside decide; pause and expire the cap.
+    control.beginIntervention(runner.taskId, "user_paused");
+    now = 61 * 60_000;
+    expect(control.enforcePauseCap(runner.taskId)).toBe(true);
+    releaseDecide();
+    const result = await runPromise;
+    // The runner reports partial results (interrupted = partial results,
+    // no automatic resume) while the RECORD stays interrupted — neither
+    // layer says failed.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("task_interrupted");
+    expect(control.getState(runner.taskId)).toBe("interrupted");
+  });
+
+  it("a failed ending still records failed (failures keep their state)", async () => {
+    const control = new AgentTaskControlService();
+    const deps = makeRunnerDeps([]);
+    deps.control = control;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      throw new Error("worker crashed");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_w02c", conversationId: "conv-1", goal: "anything" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(control.getState(runner.taskId)).toBe("failed");
+  });
+});
+
 describe("BrowserTaskRunner policy stops (D-AC-05)", () => {
   it("terminates partial on approval_required without retrying", async () => {
     const deps = makeRunnerDeps([

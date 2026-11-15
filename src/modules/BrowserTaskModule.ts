@@ -131,7 +131,13 @@ export class BrowserTaskModule extends BaseModule {
   /** Terminal phase. */
   public async recordTerminal(input: {
     readonly taskId: string;
-    readonly phase: "completed" | "failed" | "cancelled" | "interrupted";
+    readonly phase:
+      | "completed"
+      | "failed"
+      | "cancelled"
+      | "interrupted"
+      // W02/D-FR-09: a partial ending persists as partial.
+      | "partial";
     readonly reason: string;
   }): Promise<void> {
     const model = await this.getModel();

@@ -269,7 +269,9 @@ describe("runBrowserTasks F17 semantics", () => {
     // ...the unfinished one is PARTIAL (not cancelled) with evidence.
     expect(results[1]!.status).toBe("partial");
     expect(results[1]!.evidence).toContain("return_now:error");
-    expect(control.get(control.registered[1]!)?.state).toBe("failed");
+    // W02: a Return-now crash is interrupted (= partial results, the same
+    // convention as return_now_partial) — never failed.
+    expect(control.get(control.registered[1]!)?.state).toBe("interrupted");
   });
 
   it("Return-now keeps a child's usable output when the work already finished", async () => {

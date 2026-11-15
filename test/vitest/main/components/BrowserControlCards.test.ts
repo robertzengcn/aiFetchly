@@ -62,6 +62,7 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
 });
 
 import BrowserControlCards from "@/views/components/aiChatV2/BrowserControlCards.vue";
+import BrowserTaskBatchCard from "@/views/components/aiChatV2/BrowserTaskBatchCard.vue";
 
 const i18n = createI18n({
   legacy: false,
@@ -101,6 +102,8 @@ const i18n = createI18n({
         taskCompleted: "Completed",
         taskFailed: "Failed",
         taskCancelled: "Stopped",
+        taskInterrupted: "Interrupted",
+        taskPartial: "Partial",
         pause: "Pause",
         resume: "Resume",
         stop: "Stop",
@@ -190,6 +193,79 @@ describe("BrowserControlCards (F21 live batch card)", () => {
     expect(
       (card.props("tasks") as Array<{ state: string }>)[0]!.state
     ).toBe("completed");
+  });
+
+  // W02/D-FR-09: interrupted and partial endings are NOT failures —
+  // the row state passes through unchanged and each shows its OWN label.
+  it("labels interrupted and partial endings as their own states", async () => {
+    const wrapper = mountCard();
+    emit({ batchId: "batch_w02", conversationId: "conv-a", phase: "started" });
+    emit({
+      batchId: "batch_w02",
+      phase: "task",
+      taskId: "batch_w02:0",
+      label: "Return-now task",
+      state: "interrupted",
+    });
+    emit({
+      batchId: "batch_w02",
+      phase: "task",
+      taskId: "batch_w02:1",
+      label: "Verification miss",
+      state: "partial",
+    });
+    emit({
+      batchId: "batch_w02",
+      phase: "task",
+      taskId: "batch_w02:2",
+      label: "Real failure",
+      state: "failed",
+    });
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    expect(card.exists()).toBe(true);
+    // The card receives the record's real states (no collapse to failed).
+    const states = (card.props("tasks") as Array<{ state: string }>).map(
+      (row) => row.state
+    );
+    expect(states).toEqual(["interrupted", "partial", "failed"]);
+
+    // The chip label map: interrupted/partial render their own labels.
+    const direct = mount(BrowserTaskBatchCard, {
+      props: {
+        batchId: "batch_w02",
+        tasks: [
+          { taskId: "t0", label: "Return-now task", state: "interrupted" },
+          { taskId: "t1", label: "Verification miss", state: "partial" },
+          { taskId: "t2", label: "Real failure", state: "failed" },
+        ] as never,
+      },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          "v-card": { template: "<div><slot /></div>" },
+          "v-card-title": { template: "<div><slot /></div>" },
+          "v-card-text": { template: "<div><slot /></div>" },
+          "v-spacer": { template: "<span></span>" },
+          "v-btn": { template: "<button><slot /></button>" },
+          "v-list": { template: "<div><slot /></div>" },
+          "v-list-item": {
+            template:
+              "<div><slot name='prepend' /><slot /><slot name='append' /></div>",
+          },
+          "v-list-item-title": { template: "<div><slot /></div>" },
+          "v-list-item-subtitle": { template: "<div><slot /></div>" },
+          "v-chip": { template: "<span><slot /></span>" },
+          "v-dialog": { template: "<div><slot /></div>" },
+          "v-textarea": { template: "<textarea />" },
+        },
+      },
+    });
+    const chips = direct.findAll("[data-testid^='task-state-']");
+    expect(chips.length).toBe(3);
+    expect(chips[0]!.text()).toBe("Interrupted");
+    expect(chips[1]!.text()).toBe("Partial");
+    expect(chips[2]!.text()).toBe("Failed");
   });
 
   it("control verbs call the validated task-control IPC", async () => {

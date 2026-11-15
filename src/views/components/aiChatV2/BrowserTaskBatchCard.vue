@@ -114,7 +114,17 @@ export interface BrowserBatchTaskRow {
   taskId: string;
   sessionId?: string;
   label: string;
-  state: "running" | "waiting_for_user" | "paused" | "cancelling" | "completed" | "failed" | "cancelled" | "interrupted";
+  state:
+    | "running"
+    | "waiting_for_user"
+    | "paused"
+    | "cancelling"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
+    // W02: partial endings are their own state, never failed.
+    | "partial";
 }
 
 defineProps<{
@@ -171,14 +181,18 @@ function stateLabel(state: BrowserBatchTaskRow["state"]): string {
     completed: t('browserTasks.taskCompleted') || "Completed",
     failed: t('browserTasks.taskFailed') || "Failed",
     cancelled: t('browserTasks.taskCancelled') || "Stopped",
-    interrupted: t('browserTasks.taskFailed') || "Failed",
+    // W02: interrupted/partial endings are NOT failures — they carry
+    // partial results (C-FR-11/12, D-FR-09).
+    interrupted: t('browserTasks.taskInterrupted') || "Interrupted",
+    partial: t('browserTasks.taskPartial') || "Partial",
   };
   return map[state];
 }
 
 function stateColor(state: BrowserBatchTaskRow["state"]): string {
   if (state === "completed") return "success";
-  if (state === "failed" || state === "interrupted" || state === "cancelled") return "error";
+  if (state === "failed" || state === "cancelled") return "error";
+  if (state === "interrupted" || state === "partial") return "warning";
   if (state === "waiting_for_user") return "warning";
   if (state === "paused") return "info";
   return "primary";

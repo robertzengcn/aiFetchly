@@ -87,7 +87,9 @@ interface BrowserBatchTaskRow {
     | "completed"
     | "failed"
     | "cancelled"
-    | "interrupted";
+    | "interrupted"
+    // W02: partial endings are their own state, never failed.
+    | "partial";
   summary?: string;
 }
 

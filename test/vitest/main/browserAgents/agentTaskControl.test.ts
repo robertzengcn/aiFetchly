@@ -142,3 +142,47 @@ describe("AgentTaskControlService F07 return-now refinement", () => {
     expect(service.getState("f07-refine")).toBe("failed");
   });
 });
+
+// W02/D-FR-09: partial and interrupted are THEIR OWN terminal states —
+// never rewritten failed by a stray overwrite or the terminal writer.
+describe("AgentTaskControlService W02 partial terminal state", () => {
+  it("a partial record persists as partial and is final", () => {
+    const service = new AgentTaskControlService();
+    service.register("w02-partial", "conv-1");
+    service.setState("w02-partial", "partial", "verification_failed_budget_exhausted");
+    expect(service.getState("w02-partial")).toBe("partial");
+    // A later failed overwrite (e.g. a stray catch) is refused.
+    service.setState("w02-partial", "failed");
+    expect(service.getState("w02-partial")).toBe("partial");
+    service.setState("w02-partial", "running");
+    expect(service.getState("w02-partial")).toBe("partial");
+  });
+
+  it("an interrupted record persists as interrupted and is final", () => {
+    const service = new AgentTaskControlService();
+    service.register("w02-interrupted", "conv-1");
+    service.setState("w02-interrupted", "interrupted", "pause_expired");
+    expect(service.getState("w02-interrupted")).toBe("interrupted");
+    service.setState("w02-interrupted", "failed");
+    expect(service.getState("w02-interrupted")).toBe("interrupted");
+  });
+
+  it("a cancelled record may be refined to the real partial outcome", () => {
+    const service = new AgentTaskControlService();
+    service.register("w02-refine-partial", "conv-1");
+    service.setState("w02-refine-partial", "cancelled", "batch_return_now");
+    service.setState("w02-refine-partial", "partial", "return_now_partial");
+    expect(service.getState("w02-refine-partial")).toBe("partial");
+  });
+
+  it("activeTimeMs freezes when a task ends partial", () => {
+    let now = 0;
+    const service = new AgentTaskControlService(() => now);
+    service.register("w02-clock", "conv-1");
+    now = 4_000;
+    service.setState("w02-clock", "partial", "no_progress");
+    expect(service.activeTimeMs("w02-clock")).toBe(4_000);
+    now = 900_000;
+    expect(service.activeTimeMs("w02-clock")).toBe(4_000);
+  });
+});

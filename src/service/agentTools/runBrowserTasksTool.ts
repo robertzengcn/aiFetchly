@@ -181,7 +181,9 @@ export interface BrowserBatchEvent {
     | "completed"
     | "failed"
     | "cancelled"
-    | "interrupted";
+    | "interrupted"
+    // W02: a partial runner ending reaches the card as its own state.
+    | "partial";
   readonly summary?: string;
 }
 type BatchEventSink = (event: BrowserBatchEvent) => void;
@@ -389,10 +391,9 @@ export async function runBrowserTasks(
                 ? "partial"
                 : "completed";
         // F17: cancellation is a CONTROL state, not a failure.
-        control.setState(
-          taskId,
-          finalStatus === "completed" ? "completed" : "failed"
-        );
+        // W02: the control record carries the result's real status — a
+        // needs_user partial is terminal partial, not failed.
+        control.setState(taskId, finalStatus);
         const outputSessionId = (
           result.output as { session_id?: string } | null
         )?.session_id;
@@ -432,9 +433,15 @@ export async function runBrowserTasks(
         const returnNow = !parentCancelled && batchAbort.signal.aborted;
         const childStopped =
           !parentCancelled && !returnNow && childAbort.signal.aborted;
+        // W02: a Return-now crash is interrupted (= partial results, the
+        // same convention as the try block), not failed.
         control.setState(
           taskId,
-          parentCancelled || childStopped ? "cancelled" : "failed",
+          parentCancelled || childStopped
+            ? "cancelled"
+            : returnNow
+              ? "interrupted"
+              : "failed",
           error instanceof Error ? error.message : "task_error"
         );
         return {
@@ -465,19 +472,29 @@ export async function runBrowserTasks(
     signal.removeEventListener("abort", onOuterAbort);
   }
   // F21: the card shows final per-task states.
+  // W02: the event carries the CONTROL RECORD state — partial and
+  // interrupted endings agree with the record instead of collapsing to
+  // failed. Lanes skipped before registration have no record; their
+  // result status (cancelled) is used directly.
+  const eventTerminalStates: ReadonlySet<string> = new Set([
+    "completed",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "partial",
+  ]);
   for (const result of results) {
+    const rowTaskId = `${batchId}:${result.task_index}`;
+    const recordState = control.getState(rowTaskId);
     emitBatchEvent({
       batchId,
       conversationId,
       phase: "task",
-      taskId: `${batchId}:${result.task_index}`,
-      state: result.status === "completed"
-        ? "completed"
-        : result.status === "failed"
-          ? "failed"
-          : result.status === "cancelled"
-            ? "cancelled"
-            : "interrupted",
+      taskId: rowTaskId,
+      state:
+        recordState && eventTerminalStates.has(recordState)
+          ? recordState
+          : result.status,
       summary: result.summary,
     });
   }

@@ -1887,18 +1887,25 @@ export class ManagedBrowserAiToolService {
         );
         await getDefaultBrowserTaskModule().recordTerminal({
           taskId: result.taskId,
+          // W02/D-FR-09: partial and interrupted persist AS those phases —
+          // handoff expiry/cancel keep interrupted (X4), a verification
+          // miss or exhausted budget stays partial, never rewritten failed.
           phase:
             result.status === "completed"
               ? "completed"
               : result.status === "cancelled"
                 ? "cancelled"
-                : result.status === "partial" &&
-                    (result.reason === "handoff_expired" ||
-                      result.reason === "handoff_cancelled")
-                  // X4: PRD requires interrupted for expiry/cancel —
-                  // NOT failed.
+                : result.status === "interrupted"
                   ? "interrupted"
-                  : "failed",
+                  : result.status === "partial" &&
+                      (result.reason === "handoff_expired" ||
+                        result.reason === "handoff_cancelled")
+                    // X4: PRD requires interrupted for expiry/cancel —
+                    // NOT failed.
+                    ? "interrupted"
+                    : result.status === "partial"
+                      ? "partial"
+                      : "failed",
           reason: result.reason,
         });
       } catch {

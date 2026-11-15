@@ -4300,6 +4300,8 @@ export default {
     taskPaused: "已由您暂停",
     taskCompleted: "已完成",
     taskFailed: "失败",
+    taskInterrupted: "已中断",
+    taskPartial: "部分完成",
     taskCancelled: "已停止",
     returnResultsNow: "立即返回结果",
     pause: "暂停",
