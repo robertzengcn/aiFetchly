@@ -11,7 +11,6 @@ import {
   type SemanticActionNode,
 } from "@/service/browserDecision/BrowserApprovalFingerprint";
 import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
-import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
@@ -1513,32 +1512,25 @@ export class ManagedBrowserAiToolService {
           "decision_model_alias_unresolved"
         );
       } else {
+        // W05/D-FR-04/05: with no override, the chat default is used AS
+        // CONFIGURED. An alias default (`small`/`haiku`) fails closed —
+        // it is never silently replaced by whichever model `/models`
+        // happens to list first (that model is neither the user's chat
+        // choice nor a browser-specific decision).
+        const { AIProviderResolver } = await import(
+          "@/service/aiProvider/AIProviderResolver"
+        );
         const resolved = new AIProviderResolver().resolveForChat();
         if (resolved.canUse && resolved.kind === "local") {
           const defaultModel = resolved.config.defaultModel;
           if (isAliasModel(defaultModel)) {
-            const { AiChatApi } = await import("@/api/aiChatApi");
-            const api = new AiChatApi();
-            const models = await api.listOpenAIModels();
-            const real = (models.data ?? [])
-              .map((m) =>
-                typeof m === "string" ? m : (m as { id?: string }).id
-              )
-              .find(
-                (id): id is string =>
-                  typeof id === "string" && !isAliasModel(id)
-              );
-            if (!real) {
-              // E02: never send the alias — fail the task with a
-              // structured reason instead.
-              throw new ManagedBrowserAiToolError(
-                "ai_disabled",
-                undefined,
-                "decision_model_alias_unresolved"
-              );
-            }
-            decisionModel = real;
+            throw new ManagedBrowserAiToolError(
+              "ai_disabled",
+              undefined,
+              "decision_model_alias_unresolved"
+            );
           }
+          decisionModel = defaultModel;
         }
       }
       const chatClient = new ChatCompletionDecisionClient(

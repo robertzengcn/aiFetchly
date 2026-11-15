@@ -570,4 +570,165 @@ describe("executeTask native route + model override (E01/E02)", () => {
       )
     ).rejects.toMatchObject({ reasonCode: "native_profile_incomplete" });
   });
+
+  // W05/D-FR-04/05: with NO override, an alias chat default fails closed —
+  // it is never replaced by whichever model /models lists first.
+  it("W05: an alias chat default with no override fails decision_model_alias_unresolved", async () => {
+    EXECUTE_TASK_DECISION_ROUTE = {
+      version: 1,
+      mode: "follow_chat",
+      chatDecisionModel: null,
+      nativeProfile: null,
+      requestTimeoutMs: null,
+    };
+    let chatCalls = 0;
+    vi.doMock("@/api/aiChatApi", () => ({
+      AiChatApi: class {
+        public async openAIChatCompletion(): Promise<unknown> {
+          chatCalls++;
+          return {};
+        }
+        public async listOpenAIModels(): Promise<{ data: Array<{ id: string }> }> {
+          // A tempting first id — the old code picked it for the task.
+          return { data: [{ id: "real-model-1" }, { id: "small" }] };
+        }
+        public async probeDecisionModels(): Promise<{ advertised: boolean }> {
+          return { advertised: false };
+        }
+        public async postDecisionEnvelope(): Promise<unknown> {
+          return {};
+        }
+      },
+    }));
+    vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
+      AIProviderResolver: class {
+        public resolveForChat(): {
+          canUse: boolean;
+          kind: string;
+          config: { defaultModel: string };
+        } {
+          return {
+            canUse: true,
+            kind: "local",
+            config: { defaultModel: "small" },
+          };
+        }
+      },
+    }));
+    const service = makeService(makeModule());
+    await expect(
+      service.executeTask(
+        {
+          session_id: SESSION_ID,
+          goal: "do it",
+          completion_criteria: [{ kind: "url_contains", value: "/results" }],
+        },
+        CTX
+      )
+    ).rejects.toMatchObject({ reasonCode: "decision_model_alias_unresolved" });
+    // No doomed chat call was made with a substituted model.
+    expect(chatCalls).toBe(0);
+  });
+
+  // W05: with no override, a REAL chat default rides the decision request
+  // exactly as configured.
+  it("W05: a real chat default with no override is sent as the model", async () => {
+    EXECUTE_TASK_DECISION_ROUTE = {
+      version: 1,
+      mode: "follow_chat",
+      chatDecisionModel: null,
+      nativeProfile: null,
+      requestTimeoutMs: null,
+    };
+    const modelsRequested: string[] = [];
+    vi.doMock("@/api/aiChatApi", () => ({
+      AiChatApi: class {
+        public async openAIChatCompletion(request: {
+          messages: ReadonlyArray<{ role: string; content: string }>;
+          model?: string;
+        }): Promise<unknown> {
+          if (request.model) {
+            modelsRequested.push(request.model);
+          }
+          const prompt = request.messages[1]?.content ?? "";
+          if (prompt.includes("PLAN ONCE")) {
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      operation: "DONE",
+                      target_id: null,
+                      option_id: null,
+                      key: null,
+                      url: null,
+                      text: JSON.stringify({
+                        completion_criteria: [],
+                        bindings: [],
+                        first_subgoal: "go",
+                      }),
+                    }),
+                  },
+                },
+              ],
+            };
+          }
+          return {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    operation: "DONE",
+                    target_id: null,
+                    option_id: null,
+                    key: null,
+                    url: null,
+                    text: null,
+                  }),
+                },
+              },
+            ],
+          };
+        }
+        public async listOpenAIModels(): Promise<{ data: Array<{ id: string }> }> {
+          return { data: [{ id: "real-model-1" }] };
+        }
+        public async probeDecisionModels(): Promise<{ advertised: boolean }> {
+          return { advertised: false };
+        }
+        public async postDecisionEnvelope(): Promise<unknown> {
+          return {};
+        }
+      },
+    }));
+    vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
+      AIProviderResolver: class {
+        public resolveForChat(): {
+          canUse: boolean;
+          kind: string;
+          config: { defaultModel: string };
+        } {
+          return {
+            canUse: true,
+            kind: "local",
+            config: { defaultModel: "gpt-4o-mini" },
+          };
+        }
+      },
+    }));
+    const service = makeService(makeModule());
+    const result = (await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "do it",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      CTX
+    )) as Record<string, unknown>;
+    expect(result.status).toBe("completed");
+    expect(modelsRequested.length).toBeGreaterThan(0);
+    for (const model of modelsRequested) {
+      expect(model).toBe("gpt-4o-mini");
+    }
+  });
 });
