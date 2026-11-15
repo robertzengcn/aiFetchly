@@ -59,6 +59,18 @@ conversation-scoped release (E20). CI run 43684430278 at `5a1f0dc8d`.
 
 Each box is open. Close it only when the production path behaves as the requirement states and a regression covers that path.
 
+**2026-11-15 sixth pass (G01/G05/G04/G06 items):** commits
+`0f30bb07d`→`d3ee8afd3` — ownership guards on handoff/resume/clearCache
+(G01/D-FR-08); cancelled→interrupted refinement so the control record
+agrees with the partial batch result (G05/C-FR-11); the pause cap no
+longer shortens an extended handoff window (G05/C-FR-09); llm_required
+routes through the bounded recovery table (G01/D-FR-19);
+browser_site_upsert removed from the child allow-list (G04/M-FR-11);
+Resume-with-instructions dialog on the batch card wired end-to-end
+(G05/C-FR-04); concurrent-browsers session cap in the settings panel
+(G06/M-FR-06, PRD §7) with component tests and six-language strings.
+CI run 43697743380 SUCCESS on all three jobs at `d3ee8afd3`.
+
 ### E01 — P0 — a native decision profile is built and then replaced by the chat client
 
 - [x] After a complete `native_profile` is selected, pass `SystemOneDecisionClient` to the runner. Do not enter the chat-client branch. Refuse an incomplete profile. Never send chat aliases (`small`, `haiku`) on the native protocol.
