@@ -236,6 +236,8 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
 export function readElementDescriptor(el: Element): {
   role: string;
   name: string;
+  disabled: boolean;
+  occluded: boolean;
 } {
   const htmlEl = el as HTMLElement;
   const role = htmlEl.getAttribute('role')
@@ -252,12 +254,35 @@ export function readElementDescriptor(el: Element): {
     || htmlEl.getAttribute('value')
     || '';
   name = name.replace(/\s+/g, ' ').trim().slice(0, 200);
-  return { role, name };
+  // V06/D-FR-15: disabled/read-only state, and an elementFromPoint hit
+  // test — a control covered by an overlay (or detached mid-check) is
+  // reported occluded so the executor refuses BEFORE dispatch.
+  const disabled =
+    htmlEl.hasAttribute('disabled') ||
+    htmlEl.getAttribute('aria-disabled') === 'true' ||
+    ((htmlEl as HTMLInputElement).readOnly === true);
+  let occluded = false;
+  try {
+    const rect = htmlEl.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      occluded = true;
+    } else {
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      occluded = hit !== null && !htmlEl.contains(hit) && hit !== htmlEl;
+    }
+  } catch {
+    occluded = true;
+  }
+  return { role, name, disabled, occluded };
 }
 
 export interface LiveElementDescriptor {
   readonly role: string;
   readonly name: string;
+  readonly disabled: boolean;
+  readonly occluded: boolean;
 }
 
 export interface ObservationPageLike {

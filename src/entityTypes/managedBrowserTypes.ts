@@ -81,6 +81,8 @@ export type ManagedBrowserErrorCode =
   | "challenge_provider_timeout"
   | "challenge_resolution_failed"
   | "stale_page_reference"
+  | "element_disabled"
+  | "element_occluded"
   | "action_not_allowed"
   | "user_has_control"
   | "challenge_in_progress"

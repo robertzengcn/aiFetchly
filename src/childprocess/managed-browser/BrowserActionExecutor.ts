@@ -759,6 +759,24 @@ export class BrowserActionExecutor {
         stopCode: "stale_page_reference",
       };
     }
+    // V06/D-FR-15: revalidate the ENABLED state and hit-testability
+    // immediately before input — a control that became disabled or was
+    // covered after observation is a proven no-effect refusal (no input
+    // dispatched).
+    if (live.disabled === true) {
+      return {
+        success: false,
+        errorCode: "element_disabled",
+        elementFound: true,
+      };
+    }
+    if (live.occluded === true) {
+      return {
+        success: false,
+        errorCode: "element_occluded",
+        elementFound: true,
+      };
+    }
     // D-FR-15: revalidate the target is actually VISIBLE/interactable
     // immediately before input — bring it into view first (the dispatch
     // cases scroll again; idempotent), then probe. An occluded or

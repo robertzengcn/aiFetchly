@@ -19,6 +19,9 @@ function makeElement(overrides: {
   descriptor?: { role: string; name: string };
   inputType?: string | null;
   select?: (...values: string[]) => Promise<string[]>;
+  /** V06: the live descriptor's disabled/occluded state. */
+  disabled?: boolean;
+  occluded?: boolean;
   /** B07: route page-function evaluates by script name. */
   onEvaluate?: (fnName: string) => Promise<unknown>;
 }): ExecutorElementHandle {
@@ -53,7 +56,12 @@ function makeElement(overrides: {
       // F02: identify page functions by name (stable across transpilation).
       const fnName = typeof script === "function" ? script.name : "";
       if (fnName === "readElementDescriptor") {
-        return descriptor as unknown as T;
+        return {
+          role: overrides.descriptor?.role ?? "button",
+          name: overrides.descriptor?.name ?? "Go",
+          disabled: overrides.disabled ?? false,
+          occluded: overrides.occluded ?? false,
+        } as unknown as T;
       }
       if (fnName === "probeInputElementTypeFn") {
         return (overrides.inputType ?? null) as unknown as T;
@@ -297,5 +305,39 @@ describe("BrowserActionExecutor B07 SELECT stale-option classification", () => {
     );
     expect(outcome.effect).toBe("unknown");
     expect(outcome.stopCode).toBe("unknown_effect");
+  });
+});
+
+describe("BrowserActionExecutor V06 disabled/occlusion revalidation", () => {
+  it("a control that became DISABLED after observation is a known no-effect", async () => {
+    const element = makeElement({
+      descriptor: { role: "button", name: "Go" },
+      disabled: true,
+    });
+    const { registry, ref } = makeRegistry(element);
+    const outcome = await run(
+      [{ type: "click", ref, pageRevision: 3 }],
+      makePage({}),
+      registry,
+    );
+    expect(outcome.effect).toBe("known");
+    expect(outcome.stopCode).toBeNull();
+    expect(outcome.results[0]?.success).toBe(false);
+    expect(outcome.results[0]?.errorCode).toBe("element_disabled");
+  });
+
+  it("a control COVERED by an overlay is a known no-effect refusal", async () => {
+    const element = makeElement({
+      descriptor: { role: "button", name: "Go" },
+      occluded: true,
+    });
+    const { registry, ref } = makeRegistry(element);
+    const outcome = await run(
+      [{ type: "click", ref, pageRevision: 3 }],
+      makePage({}),
+      registry,
+    );
+    expect(outcome.results[0]?.errorCode).toBe("element_occluded");
+    expect(outcome.effect).toBe("known");
   });
 });
