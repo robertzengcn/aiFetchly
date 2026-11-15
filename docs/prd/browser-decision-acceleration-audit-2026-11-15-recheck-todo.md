@@ -116,6 +116,21 @@ No local Forge packaging was attempted. The latest user-provided AGENTS.md forbi
 
 ## Requirement mapping
 
+**Sixth pass continuation (2026-11-15):** commits `7f4681cc9`→`309df90f0`
+— G01/D-FR-12: DISABLED candidates are EXPOSED as disabled instead of
+omitted; G01/D-FR-14: task-lexical shortlist ranking threaded through
+all five builder call sites; G03/P-FR-09: session-card proxy
+host/country labels + Direct-traffic badge (no credentials, six
+languages); G05/C-FR-16: session-card pause/take-over resolves the
+runner task and drives BOTH layers (control gate + intervention);
+G06: the cooldownScope fixture is fully isolated from TypeORM init —
+the observed SQLite-lock failure was test interference. CI run
+43717139584 SUCCESS on all three jobs at `309df90f0`. Remaining:
+V07 negotiation/verification configuration matrices, V08 opt-in UI +
+registry consumers + sentinel scope, V09 proxy presentation matrix,
+V10 batch confirmation card + concurrency + root-conversation notices,
+real E2E drivers, held-out evaluation.
+
 | Requirement IDs | Open work |
 | --- | --- |
 | D-FR-01–04 | V03/V07 provider configuration, capability and model behavior |
