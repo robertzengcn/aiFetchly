@@ -65,6 +65,19 @@ const i18n = createI18n({
       managedBrowser: {
         settings: {
           title: "Managed Browser",
+          decision_route_title: "Decision route (browser acceleration)",
+          decision_route_disclosure: "Page data and usernames travel to your selected provider.",
+          decision_route_mode: "Decision route",
+          decision_route_follow_chat: "Use my chat provider",
+          decision_route_native: "Native profile (advanced)",
+          decision_route_model_override: "Decision model override",
+          decision_route_model_hint: "optional real model id",
+          native_profile_url: "Native endpoint (https://)",
+          native_profile_model: "Native model",
+          native_profile_credential: "Credential",
+          native_profile_cred_none: "None configured (profile inert)",
+          native_profile_cred_chat: "Reuse my chat credential",
+          native_profile_incomplete: "The native profile is incomplete.",
           description: "Control the built-in social browser.",
           browser_enabled: "Enable the managed browser",
           cache_enabled: "Keep a disk cache between sessions",
@@ -521,5 +534,71 @@ describe("ManagedBrowserSettingsPanel feature switches (T25/T29)", () => {
         browserDecisionEnabled: false,
       })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N09/design 5.3: the decision-route settings section.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserSettingsPanel decision route (N09)", () => {
+  it("renders the follow_chat route by default (chat provider default)", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    const mode = wrapper.find("select[data-testid='mb-decision-route-mode']");
+    expect(mode.exists()).toBe(true);
+    expect((mode.element as HTMLSelectElement).value).toBe("follow_chat");
+    // The native profile fields are hidden in follow_chat mode.
+    expect(
+      wrapper.find("input[data-testid='mb-native-base-url']").exists()
+    ).toBe(false);
+  });
+
+  it("switching to native_profile exposes the inert profile fields and the incomplete warning", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper
+      .find("select[data-testid='mb-decision-route-mode']")
+      .setValue("native_profile");
+    await flushPromises();
+    expect(
+      wrapper.find("input[data-testid='mb-native-base-url']").exists()
+    ).toBe(true);
+    // No URL yet → the INERT warning shows.
+    expect(wrapper.find("[data-testid='mb-native-incomplete']").exists()).toBe(
+      true
+    );
+    // The incomplete profile is NOT persisted (no nativeProfile sent).
+    const calls = apiMocks.updateBrowserPreferences.mock
+      .calls as Array<[{ decisionRoute?: { nativeProfile?: unknown } }]>;
+    const last = calls.at(-1)![0].decisionRoute;
+    expect(last?.nativeProfile).toBeUndefined();
+  });
+
+  it("a complete native profile persists through updateBrowserPreferences", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper
+      .find("select[data-testid='mb-decision-route-mode']")
+      .setValue("native_profile");
+    await wrapper
+      .find("input[data-testid='mb-native-base-url']")
+      .setValue("https://native.example.test/v1");
+    await wrapper
+      .find("input[data-testid='mb-native-model']")
+      .setValue("jev-1");
+    await wrapper
+      .find("select[data-testid='mb-native-credential']")
+      .setValue("chat");
+    await flushPromises();
+    const calls = apiMocks.updateBrowserPreferences.mock
+      .calls as Array<[{ decisionRoute?: { mode?: string; nativeProfile?: Record<string, string> } }]>;
+    const last = calls.at(-1)![0].decisionRoute;
+    expect(last?.mode).toBe("native_profile");
+    expect(last?.nativeProfile).toMatchObject({
+      baseUrl: "https://native.example.test/v1",
+      model: "jev-1",
+      apiKeyRef: "chat",
+    });
   });
 });

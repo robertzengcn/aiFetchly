@@ -147,6 +147,21 @@ export interface ManagedBrowserPreferencePatch {
   readonly proxySwitchEnabled?: boolean;
   readonly parallelAgentsEnabled?: boolean;
   readonly browserDecisionEnabled?: boolean;
+  /**
+   * N01/design 5.3: the decision-route patch. Merged into the stored
+   * versioned JSON; fields the caller omits keep their stored values.
+   */
+  readonly decisionRoute?: {
+    readonly mode?: "follow_chat" | "native_profile";
+    readonly chatDecisionModel?: string | null;
+    readonly nativeProfile?: {
+      readonly displayName: string;
+      readonly baseUrl: string;
+      readonly model: string;
+      readonly apiKeyRef: "chat" | "none";
+    } | null;
+    readonly requestTimeoutMs?: number | null;
+  };
 }
 
 export class ManagedBrowserSettingsModule {
@@ -318,6 +333,51 @@ export class ManagedBrowserSettingsModule {
         this.writeStoredValue(
           MANAGED_BROWSER_SETTING_KEYS.cacheClearOnExit,
           patch.clearCacheOnExit ? "1" : "0"
+        )
+      );
+    }
+    // N01/design 5.3: merge the decision-route patch into the stored
+    // versioned JSON and persist.
+    if (patch.decisionRoute !== undefined) {
+      const current = parseDecisionRouteRaw(
+        await this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.decisionRoute
+        )
+      );
+      const patchRoute = patch.decisionRoute;
+      const nativeProfile =
+        patchRoute.nativeProfile !== undefined
+          ? patchRoute.nativeProfile
+          : current.nativeProfile;
+      const merged = {
+        version: 1 as const,
+        mode: patchRoute.mode ?? current.mode,
+        chatDecisionModel:
+          patchRoute.chatDecisionModel !== undefined
+            ? patchRoute.chatDecisionModel === null
+              ? null
+              : patchRoute.chatDecisionModel.trim().slice(0, 200) || null
+            : current.chatDecisionModel,
+        nativeProfile:
+          nativeProfile === null
+            ? null
+            : {
+                displayName: nativeProfile.displayName.trim().slice(0, 100),
+                baseUrl: nativeProfile.baseUrl.trim(),
+                model: nativeProfile.model.trim().slice(0, 200),
+                apiKeyRef: nativeProfile.apiKeyRef,
+              },
+        requestTimeoutMs:
+          patchRoute.requestTimeoutMs !== undefined
+            ? patchRoute.requestTimeoutMs === null
+              ? null
+              : Math.min(Math.floor(patchRoute.requestTimeoutMs), 10_000)
+            : current.requestTimeoutMs,
+      };
+      writes.push(
+        this.writeStoredValue(
+          MANAGED_BROWSER_SETTING_KEYS.decisionRoute,
+          JSON.stringify(merged)
         )
       );
     }

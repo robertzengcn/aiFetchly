@@ -109,6 +109,109 @@
       @update:model-value="onToggleFeature('browserDecisionEnabled', $event)"
     />
 
+    <!-- N09/design 5.3: the decision route. "Use my chat provider" is the
+         default; a native profile is INERT until every field is configured
+         and the user explicitly selects the native mode. -->
+    <div
+      v-if="browserDecisionEnabled"
+      class="managed-browser-settings__decision-route mt-3"
+      data-testid="mb-decision-route"
+    >
+      <p class="text-subtitle-2 mb-2">
+        {{ t("managedBrowser.settings.decision_route_title") }}
+      </p>
+      <p class="text-caption text-grey-darken-1 mb-2">
+        {{ t("managedBrowser.settings.decision_route_disclosure") }}
+      </p>
+      <div class="d-flex align-center ga-3 flex-wrap">
+        <span class="text-body-2">
+          {{ t("managedBrowser.settings.decision_route_mode") }}
+        </span>
+        <select
+          v-model="decisionRouteMode"
+          class="managed-browser-settings__account-select"
+          data-testid="mb-decision-route-mode"
+          :aria-label="t('managedBrowser.settings.decision_route_mode')"
+          @change="onDecisionRouteChange"
+        >
+          <option value="follow_chat">
+            {{ t("managedBrowser.settings.decision_route_follow_chat") }}
+          </option>
+          <option value="native_profile">
+            {{ t("managedBrowser.settings.decision_route_native") }}
+          </option>
+        </select>
+      </div>
+      <div class="d-flex align-center ga-3 flex-wrap mt-2">
+        <span class="text-body-2">
+          {{ t("managedBrowser.settings.decision_route_model_override") }}
+        </span>
+        <input
+          v-model="chatDecisionModel"
+          type="text"
+          class="managed-browser-settings__account-select"
+          data-testid="mb-decision-route-model"
+          :placeholder="t('managedBrowser.settings.decision_route_model_hint')"
+          :aria-label="t('managedBrowser.settings.decision_route_model_override')"
+          @change="onDecisionRouteChange"
+        />
+      </div>
+      <template v-if="decisionRouteMode === 'native_profile'">
+        <div class="d-flex align-center ga-3 flex-wrap mt-2">
+          <span class="text-body-2">
+            {{ t("managedBrowser.settings.native_profile_url") }}
+          </span>
+          <input
+            v-model="nativeBaseUrl"
+            type="text"
+            class="managed-browser-settings__account-select"
+            data-testid="mb-native-base-url"
+            :aria-label="t('managedBrowser.settings.native_profile_url')"
+            @change="onDecisionRouteChange"
+          />
+        </div>
+        <div class="d-flex align-center ga-3 flex-wrap mt-2">
+          <span class="text-body-2">
+            {{ t("managedBrowser.settings.native_profile_model") }}
+          </span>
+          <input
+            v-model="nativeModel"
+            type="text"
+            class="managed-browser-settings__account-select"
+            data-testid="mb-native-model"
+            :aria-label="t('managedBrowser.settings.native_profile_model')"
+            @change="onDecisionRouteChange"
+          />
+        </div>
+        <div class="d-flex align-center ga-3 flex-wrap mt-2">
+          <span class="text-body-2">
+            {{ t("managedBrowser.settings.native_profile_credential") }}
+          </span>
+          <select
+            v-model="nativeApiKeyRef"
+            class="managed-browser-settings__account-select"
+            data-testid="mb-native-credential"
+            :aria-label="t('managedBrowser.settings.native_profile_credential')"
+            @change="onDecisionRouteChange"
+          >
+            <option value="none">
+              {{ t("managedBrowser.settings.native_profile_cred_none") }}
+            </option>
+            <option value="chat">
+              {{ t("managedBrowser.settings.native_profile_cred_chat") }}
+            </option>
+          </select>
+        </div>
+        <p
+          v-if="decisionRouteIncomplete"
+          class="text-caption text-warning mt-1"
+          data-testid="mb-native-incomplete"
+        >
+          {{ t("managedBrowser.settings.native_profile_incomplete") }}
+        </p>
+      </template>
+    </div>
+
     <div class="d-flex align-center ga-3 flex-wrap mt-2">
       <span class="text-body-2">
         {{ t("managedBrowser.settings.cache_max_label") }}
@@ -347,6 +450,18 @@ const siteUpsertEnabled = ref(true);
 const proxySwitchEnabled = ref(true);
 const parallelAgentsEnabled = ref(true);
 const browserDecisionEnabled = ref(true);
+// N09/design 5.3: the decision route (follow_chat default; inert native).
+const decisionRouteMode = ref<"follow_chat" | "native_profile">("follow_chat");
+const chatDecisionModel = ref("");
+const nativeBaseUrl = ref("");
+const nativeModel = ref("");
+const nativeApiKeyRef = ref<"none" | "chat">("none");
+const decisionRouteIncomplete = computed(
+  () =>
+    decisionRouteMode.value === "native_profile" &&
+    (!nativeBaseUrl.value.trim().startsWith("https://") ||
+      nativeModel.value.trim().length === 0)
+);
 const clearCacheOnExit = ref(false);
 const loading = ref(false);
 const clearInProgress = ref(false);
@@ -425,6 +540,13 @@ async function reload(): Promise<void> {
     proxySwitchEnabled.value = effective.proxySwitchEnabled;
     parallelAgentsEnabled.value = effective.parallelAgentsEnabled;
     browserDecisionEnabled.value = effective.browserDecisionEnabled;
+    // N09/design 5.3: load the decision route.
+    decisionRouteMode.value = effective.decisionRoute.mode;
+    chatDecisionModel.value = effective.decisionRoute.chatDecisionModel ?? "";
+    nativeBaseUrl.value = effective.decisionRoute.nativeProfile?.baseUrl ?? "";
+    nativeModel.value = effective.decisionRoute.nativeProfile?.model ?? "";
+    nativeApiKeyRef.value =
+      effective.decisionRoute.nativeProfile?.apiKeyRef ?? "none";
     cacheMaxMb.value = Math.round(effective.cacheMaxBytes / (1024 * 1024));
     cacheStatus.value = cache;
     // GAP-10: eligible accounts for per-account clearing (ungated read).
@@ -567,6 +689,29 @@ async function onDisableDecision(
     activeSessionDialog.value = false;
   }
 }
+
+  /** N09/design 5.3: persist the decision route (merged server-side). */
+  function onDecisionRouteChange(): Promise<void> {
+    const complete =
+      nativeBaseUrl.value.trim().startsWith("https://") &&
+      nativeModel.value.trim().length > 0;
+    return persist({
+      decisionRoute: {
+        mode: decisionRouteMode.value,
+        chatDecisionModel: chatDecisionModel.value.trim() || null,
+        ...(decisionRouteMode.value === "native_profile" && complete
+          ? {
+              nativeProfile: {
+                displayName: "Native",
+                baseUrl: nativeBaseUrl.value.trim(),
+                model: nativeModel.value.trim(),
+                apiKeyRef: nativeApiKeyRef.value,
+              },
+            }
+          : {}),
+      },
+    });
+  }
 
   /** T25/T29: generic per-feature switch handler. */
   function onToggleFeature(

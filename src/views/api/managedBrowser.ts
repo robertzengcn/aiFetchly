@@ -169,6 +169,23 @@ export async function updateBrowserPreferences(patch: {
   cacheEnabled?: boolean;
   cacheMaxSizeMb?: number;
   clearCacheOnExit?: boolean;
+  signInEnabled?: boolean;
+  siteUpsertEnabled?: boolean;
+  proxySwitchEnabled?: boolean;
+  parallelAgentsEnabled?: boolean;
+  browserDecisionEnabled?: boolean;
+  /** N01/design 5.3: the decision-route patch (merged into the store). */
+  decisionRoute?: {
+    mode?: "follow_chat" | "native_profile";
+    chatDecisionModel?: string | null;
+    nativeProfile?: {
+      displayName: string;
+      baseUrl: string;
+      model: string;
+      apiKeyRef: "chat" | "none";
+    } | null;
+    requestTimeoutMs?: number | null;
+  };
 }): Promise<EffectiveManagedBrowserSettings> {
   return await windowInvoke(MANAGED_BROWSER_UPDATE_SETTINGS, patch);
 }
