@@ -1111,6 +1111,11 @@ export class ManagedBrowserAiToolService {
     }
   }
 
+  /** C-FR-16: the runner task id that owns this session, when any. */
+  public runnerTaskIdForSession(sessionId: string): string | null {
+    return this.runnerOwnedSessions.get(sessionId) ?? null;
+  }
+
   public async requestHandoff(
     args: Record<string, unknown>,
     context?: BrowserToolExecutionContext

@@ -81,6 +81,7 @@ import {
 } from "@/modules/ManagedBrowserCacheModule";
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
+import { getDefaultManagedBrowserAiToolService } from "@/service/ManagedBrowserAiToolService";
 import type { SafeBrowserChatNotice } from "@/entityTypes/managedBrowserTypes";
 
 /**
@@ -230,13 +231,31 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   // the agent loop stops at its next safe point via the control gate.
   const controlService = getDefaultAgentTaskControlService();
   const pauseOrTakeControl = async (input: {
-    taskId: string;
+    taskId?: string;
     sessionId?: string;
   }): Promise<{ ok: boolean }> => {
-    controlService.setState(input.taskId, "paused", "user_paused");
+    // C-FR-16: the session card sends sessionId only — resolve the
+    // runner task that owns the session so the CONTROL layer pauses too
+    // (not just the browser session).
+    const resolvedTaskId =
+      input.taskId ??
+      (input.sessionId
+        ? (getDefaultManagedBrowserAiToolService().runnerTaskIdForSession(
+            input.sessionId
+          ) ?? undefined)
+        : undefined);
+    if (resolvedTaskId === undefined) {
+      // Session-only pause without a runner task: the browser session
+      // pause below still applies (user control layer).
+      controlService.sweepNonTerminalToInterrupted("orphan_session_pause");
+      return { ok: true };
+    }
+    controlService.setState(resolvedTaskId, "paused", "user_paused");
     // F06: the 60-minute pause cap only covers pauses with an open
     // intervention record — explicit pause opens one.
-    controlService.beginIntervention(input.taskId, "user_paused");
+    if (resolvedTaskId !== undefined) {
+      controlService.beginIntervention(resolvedTaskId, "user_paused");
+    }
     if (input.sessionId) {
       // T24/C-FR-05: PAUSE_REQUEST stops the in-flight program between
       // actions (executed results preserved), then the session moves to

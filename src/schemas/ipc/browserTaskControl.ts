@@ -11,7 +11,9 @@ import { lazySchema } from "@/utils/lazySchema";
 
 export const browserTaskPauseSchema = lazySchema(() =>
   z.strictObject({
-    taskId: z.string().min(1).max(160),
+    // C-FR-16: EITHER taskId or sessionId is required — the session card
+    // sends sessionId only, and the main process resolves the runner task.
+    taskId: z.string().min(1).max(160).optional(),
     sessionId: z.string().min(1).max(64).optional(),
   })
 );
