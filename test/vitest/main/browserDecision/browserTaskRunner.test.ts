@@ -192,7 +192,10 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     // fails again, the follow-up sees the exhausted script -> llm_required,
     // which (G01/D-FR-19) now ALSO routes through the recovery table. The
     // recovery-sourced llm_required terminates honestly.
-    expect(calls).toBe(5);
+    // `calls` counts DISPATCHES (runActions): 3 failing CLICKs + the
+    // recovered CLICK. The G01 llm_required recovery only decides — it
+    // does not dispatch.
+    expect(calls).toBe(4);
     expect(result.counts.recoveryCalls).toBe(2);
     expect(result.status).toBe("partial");
     expect(result.reason).toBe("escalated:script_end");
