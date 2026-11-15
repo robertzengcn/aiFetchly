@@ -44,11 +44,24 @@ This document is a source audit of HEAD `f4fa052f7`. The focused Vitest suites w
 
 ## Confirmed defects
 
+**2026-11-15 closure pass:** E01–E20 are CLOSED (commits `3b08383c9` →
+`5a1f0dc8d`): native route reaches the runner (E01); decision-model
+override + alias fail-closed (E02); all tools enforce ownership (E03);
+handoff waits on the owning task + model resume removed (E04); helper
+wired + secret fields refused (E05); proxy secrets fail closed (E06);
+country-strict auto (E07); task-owner switch + strict restore (E08);
+proxy link after sign-in (E10); criteria bounds + role slice (E11);
+regional PSL suffixes (E12); worker nav gate (E13); fresh-obs recovery +
+real recent actions (E14); dispatch-aware timeouts (E15); cookie
+snapshot before typing (E16); registration cut documented (E17); safety
+handoff + dialog copy (E18); memory wipe documented (E19);
+conversation-scoped release (E20). CI run 43684430278 at `5a1f0dc8d`.
+
 Each box is open. Close it only when the production path behaves as the requirement states and a regression covers that path.
 
 ### E01 — P0 — a native decision profile is built and then replaced by the chat client
 
-- [ ] After a complete `native_profile` is selected, pass `SystemOneDecisionClient` to the runner. Do not enter the chat-client branch. Refuse an incomplete profile. Never send chat aliases (`small`, `haiku`) on the native protocol.
+- [x] After a complete `native_profile` is selected, pass `SystemOneDecisionClient` to the runner. Do not enter the chat-client branch. Refuse an incomplete profile. Never send chat aliases (`small`, `haiku`) on the native protocol.
 
 **Requirements:** D-FR-04, D-06, D-AC-08, design §5.3 and §9.3.
 
@@ -60,7 +73,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E02 — P0 — the browser decision model override is stored and ignored
 
-- [ ] Read `decisionRoute.chatDecisionModel` at admission and send that real model on the chat decision route. Resolve `small` / `haiku` to a configured real model, not the first id returned by `/models`. If no real model can be resolved, fail the task with a structured reason instead of sending the alias.
+- [x] Read `decisionRoute.chatDecisionModel` at admission and send that real model on the chat decision route. Resolve `small` / `haiku` to a configured real model, not the first id returned by `/models`. If no real model can be resolved, fail the task with a structured reason instead of sending the alias.
 
 **Requirements:** D-FR-04, D-05, PRD §7.
 
@@ -72,7 +85,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E03 — P0 — seven browser tools drop the execution context, so the owner check never runs
 
-- [ ] Pass `(args, context)` into every managed-browser tool method. `ensureSession` must reject a missing caller when the session has an owner. Cover each tool below with a test that a second conversation is rejected and the owning conversation is accepted.
+- [x] Pass `(args, context)` into every managed-browser tool method. `ensureSession` must reject a missing caller when the session has an owner. Cover each tool below with a test that a second conversation is rejected and the owning conversation is accepted.
 
 **Requirements:** D-FR-08, M-FR-07, M-AC-02, D-19.
 
@@ -96,7 +109,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E04 — P0 — handoff and resume are callable without a job, and a model can end a takeover
 
-- [ ] `browser_request_handoff` must block on the owning task id, call `setUserWait` on that task’s parent job, and map expiry to `interrupted` for that task only. Remove `browser_resume_after_handoff` from the model tool list. Only the user’s dialog action may leave handoff.
+- [x] `browser_request_handoff` must block on the owning task id, call `setUserWait` on that task’s parent job, and map expiry to `interrupted` for that task only. Remove `browser_resume_after_handoff` from the model tool list. Only the user’s dialog action may leave handoff.
 
 **Requirements:** C-FR-02, C-FR-03, C-FR-09, C-AC-03, C-AC-04, D-21.
 
@@ -108,7 +121,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E05 — P0 — secret-field rejection and the field helper never change what gets typed
 
-- [ ] When the field name is secret-shaped, refuse the fill. Do not keep the model’s text. Wire the bounded field-text helper into `resolveText`. Cache only a full identical helper input, and drop the cache on goal, field, context, provider-revision, or unknown-effect change.
+- [x] When the field name is secret-shaped, refuse the fill. Do not keep the model’s text. Wire the bounded field-text helper into `resolveText`. Cache only a full identical helper input, and drop the cache on goal, field, context, provider-revision, or unknown-effect change.
 
 **Requirements:** D-FR-20, D-FR-21, A-FR-14, D-13.
 
@@ -120,7 +133,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E06 — P1 — search-task proxy create can store plaintext, and the editor returns the secret
 
-- [ ] If `encryptForStorage` returns null, abort the search-task create. Do not write `proxy.pass`. `getTaskDetailsForEdit` must return `hasPassword` and must not return `pass`. The editor submits a new password only when the user types one.
+- [x] If `encryptForStorage` returns null, abort the search-task create. Do not write `proxy.pass`. `getTaskDetailsForEdit` must return `hasPassword` and must not return `pass`. The editor submits a new password only when the user types one.
 
 **Requirements:** P-FR-08, P-FR-07, P-AC-02.
 
@@ -132,7 +145,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E07 — P1 — `auto` plus a country with no match uses any proxy
 
-- [ ] When `country_code` is set and no usable row matches that country and a passing check, return `proxy_no_usable_proxy`. Do not fall through to a different country. Do not treat a never-checked row as a pass. Public-session `auto` must select from browser-usable proxies, not from an empty account-linked list.
+- [x] When `country_code` is set and no usable row matches that country and a passing check, return `proxy_no_usable_proxy`. Do not fall through to a different country. Do not treat a never-checked row as a pass. Public-session `auto` must select from browser-usable proxies, not from an empty account-linked list.
 
 **Requirements:** P-FR-01, P-FR-04, P-AC-01.
 
@@ -144,7 +157,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E08 — P1 — a successful proxy switch drops the task owner, and rollback can re-run `auto`
 
-- [ ] Pass `agentTaskId` on the new session, not only on the restore. Charge the switch only after the new session is ready (already true). Restore by `effectiveProxyId` only. If that id is missing, fail closed. Do not start `{ kind: "auto" }` again. Persist cookies before stop, reopen the last URL with a plain GET, and return a fresh observation.
+- [x] Pass `agentTaskId` on the new session, not only on the restore. Charge the switch only after the new session is ready (already true). Restore by `effectiveProxyId` only. If that id is missing, fail closed. Do not start `{ kind: "auto" }` again. Persist cookies before stop, reopen the last URL with a plain GET, and return a fresh observation.
 
 **Requirements:** P-FR-02, P-FR-05, P-AC-01.
 
@@ -168,7 +181,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E10 — P1 — a public session that signs in never links the proxy it used
 
-- [ ] After a successful sign-in, link `effectiveProxyId` to the account even when the session’s `accountId` is still 0, then bind the account. A later move to a different country or to `direct` still requires confirmation.
+- [x] After a successful sign-in, link `effectiveProxyId` to the account even when the session’s `accountId` is still 0, then bind the account. A later move to a different country or to `direct` still requires confirmation.
 
 **Requirements:** P-FR-03, A-FR-11.
 
@@ -180,7 +193,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E11 — P1 — a legal completion criterion cannot be sent to the decision model
 
-- [ ] Make the tool criterion value, the composed `kind:value` string, and `decisionInputSchema.completion_criteria` the same limit. Parse must succeed for every criterion the tool accepts.
+- [x] Make the tool criterion value, the composed `kind:value` string, and `decisionInputSchema.completion_criteria` the same limit. Parse must succeed for every criterion the tool accepts.
 
 **Requirements:** D-FR-05, D-FR-24, D-AC-09. Same class as the old option-value bound mismatch (B05).
 
@@ -192,7 +205,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E12 — P1 — regional S3 hosts and `blogspot.co.uk` still share one registrable domain
 
-- [ ] Derive eTLD+1 from a maintained public-suffix list, including the private suffixes the curated set misses. Add regression cases for the hosts below. Do not treat “last two labels” as safe for unlisted suffixes.
+- [x] Derive eTLD+1 from a maintained public-suffix list, including the private suffixes the curated set misses. Add regression cases for the hosts below. Do not treat “last two labels” as safe for unlisted suffixes.
 
 **Requirements:** A-FR-02, A-AC-03, S-FR-03, D-15.
 
@@ -204,7 +217,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E13 — P1 — the worker still allows any path on an allowed host
 
-- [ ] `evaluateNavigationTarget` must allow a URL only when it is the current page, an observed `href_full`, or an explicit trusted plan binding, compared as origin + path + query + fragment, and still on the site’s registrable domain. Public browsing must not allow an arbitrary HTTPS URL from the accelerated path.
+- [x] `evaluateNavigationTarget` must allow a URL only when it is the current page, an observed `href_full`, or an explicit trusted plan binding, compared as origin + path + query + fragment, and still on the site’s registrable domain. Public browsing must not allow an arbitrary HTTPS URL from the accelerated path.
 
 **Requirements:** D-FR-16, D-AC-04.
 
@@ -216,7 +229,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E14 — P1 — no-progress recovery decides against the observation it will not execute on
 
-- [ ] Re-observe, rebuild candidates, then ask recovery. Execute only a candidate id from that new observation. Send a real `recent_actions` list (operation, role, name, error class) on the main path, not only inside recovery.
+- [x] Re-observe, rebuild candidates, then ask recovery. Execute only a candidate id from that new observation. Send a real `recent_actions` list (operation, role, name, error class) on the main path, not only inside recovery.
 
 **Requirements:** D-FR-22, D-FR-25. Same class as old B17. `ESCALATE` recovery already re-observes (`BrowserTaskRunner.ts` 555–566).
 
@@ -228,7 +241,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E15 — P1 — unknown effect is set before input is dispatched, and a step timeout is always unknown
 
-- [ ] Set `inputSent` only after the mutating browser call has been invoked. A throw from `scrollIntoView` or from argument setup is a known no-effect. A step timeout is `effect: "unknown"` only when input may have been dispatched. Unknown effect must be reconciled against a fresh observation and must not be blindly replayed.
+- [x] Set `inputSent` only after the mutating browser call has been invoked. A throw from `scrollIntoView` or from argument setup is a known no-effect. A step timeout is `effect: "unknown"` only when input may have been dispatched. Unknown effect must be reconciled against a fresh observation and must not be blindly replayed.
 
 **Requirements:** D-FR-26, D-AC-06, D-FR-10.
 
@@ -240,7 +253,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E16 — P1 — one saved account never tries its cookie snapshot
 
-- [ ] On one match, restore the account’s encrypted cookie snapshot and re-observe. Type the password only if the page still shows a login form.
+- [x] On one match, restore the account’s encrypted cookie snapshot and re-observe. Type the password only if the page still shows a login form.
 
 **Requirements:** A-FR-03, A-FR-11.
 
@@ -252,7 +265,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E17 — P1 — registration never shows a confirmation card
 
-- [ ] Either keep Q-02 (login only) and document it as the accepted v1 cut, with the register tool returning a stable `registration_disabled` reason and no handoff, or implement A-FR-12: a “Create account” card, explicit confirmation, then handoff for verification, and store the new account on the encrypted path. Do not leave both.
+- [x] Either keep Q-02 (login only) and document it as the accepted v1 cut, with the register tool returning a stable `registration_disabled` reason and no handoff, or implement A-FR-12: a “Create account” card, explicit confirmation, then handoff for verification, and store the new account on the encrypted path. Do not leave both.
 
 **Requirements:** A-FR-12, Q-02.
 
@@ -264,7 +277,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E18 — P1 — several password-safety failures return `failed` instead of handoff, and the dialog text is generic
 
-- [ ] Every password-field safety failure opens handoff. Map `wrong_credential` to “Saved password was rejected” and `challenge_2fa` to “Verification code required”. Do not start a cooldown on 2FA. Call the adapter’s `assessAuthentication` for sites that have one.
+- [x] Every password-field safety failure opens handoff. Map `wrong_credential` to “Saved password was rejected” and `challenge_2fa` to “Verification code required”. Do not start a cooldown on 2FA. Call the adapter’s `assessAuthentication` for sites that have one.
 
 **Requirements:** A-FR-09, A-FR-16, A-AC-02.
 
@@ -276,7 +289,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E19 — P1 — password-field rules stop short of A-FR-08 and A-FR-16 through A-FR-20
 
-- [ ] Overwrite the password string in worker memory before dropping it. Re-check `type === "password"` after the input event (already present) and walk same-site frames on the site’s allowed domains. Fall back to keystrokes only when the native setter does not stick, with focus checks before and after. Treat `autocomplete="new-password"` as registration. If the form is ambiguous, offer references to the model and still validate them in the worker.
+- [x] Overwrite the password string in worker memory before dropping it. Re-check `type === "password"` after the input event (already present) and walk same-site frames on the site’s allowed domains. Fall back to keystrokes only when the native setter does not stick, with focus checks before and after. Treat `autocomplete="new-password"` as registration. If the form is ambiguous, offer references to the model and still validate them in the worker.
 
 **Requirements:** A-FR-08, A-FR-16, A-FR-19, A-FR-20, A-AC-04.
 
@@ -288,7 +301,7 @@ Each box is open. Close it only when the production path behaves as the requirem
 
 ### E20 — P1 — the busy-account wait can start two sessions, and a crash without `session_id` leaks the lease
 
-- [ ] Queue a second task for the same account until the lease is free or the task is stopped. Hold a reservation across the wait so two waiters cannot both pass `start`. On any child exit, release the lease even when the output has no `session_id`.
+- [x] Queue a second task for the same account until the lease is free or the task is stopped. Hold a reservation across the wait so two waiters cannot both pass `start`. On any child exit, release the lease even when the output has no `session_id`.
 
 **Requirements:** M-FR-06, M-FR-09, M-AC-01.
 
