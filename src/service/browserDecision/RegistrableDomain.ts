@@ -53,6 +53,22 @@ const MULTI_LABEL_PUBLIC_SUFFIXES: ReadonlySet<string> = new Set([
   "appspot.com", "firebaseapp.com", "firebaseio.com",
   "azurewebsites.net", "azurestaticapps.net", "cloudfront.net",
   "s3.amazonaws.com", "s3.dualstack.amazonaws.com",
+  // E12/A-FR-02: regional S3 buckets are SEPARATE registrable domains —
+  // evil.s3.us-east-1.amazonaws.com must not share credentials with
+  // victim.s3.eu-west-1.amazonaws.com. Same for blogspot country
+  // tenants (blogspot.co.uk vs blogspot.com).
+  "s3.us-east-1.amazonaws.com", "s3.eu-west-1.amazonaws.com",
+  "s3.us-west-1.amazonaws.com", "s3.us-west-2.amazonaws.com",
+  "s3.ap-southeast-1.amazonaws.com", "s3.ap-southeast-2.amazonaws.com",
+  "s3.ap-northeast-1.amazonaws.com", "s3.eu-central-1.amazonaws.com",
+  "s3.sa-east-1.amazonaws.com", "s3.ca-central-1.amazonaws.com",
+  "s3.dualstack.us-east-1.amazonaws.com",
+  "s3.dualstack.eu-west-1.amazonaws.com",
+  "s3.dualstack.ap-southeast-1.amazonaws.com",
+  "s3-website.us-east-1.amazonaws.com", "s3-website.eu-west-1.amazonaws.com",
+  "blogspot.co.uk", "blogspot.de", "blogspot.fr", "blogspot.it",
+  "blogspot.es", "blogspot.nl", "blogspot.se", "blogspot.dk",
+  "blogspot.jp", "blogspot.br", "blogspot.in", "blogspot.au",
   "workers.dev", "r2.dev", "fastly.net", "edgekey.net",
   "ghost.io", "surge.sh", "now.sh", "reinterpretapp.com",
   // X1: country second-level suffixes missing from the original list.

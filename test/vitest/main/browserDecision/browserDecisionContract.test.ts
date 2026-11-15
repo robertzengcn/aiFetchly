@@ -226,4 +226,35 @@ describe("N01 longest-match suffix rules", () => {
     expect(registrableDomainOf("db.internal")).toBeNull();
     expect(registrableDomainOf("example")).toBeNull();
   });
+
+describe("E12 regional PSL collisions", () => {
+  it("regional S3 endpoints no longer collapse into amazonaws.com", () => {
+    // The regional endpoint is the PUBLIC suffix; the bucket host is one
+    // more label, so evil.us-east-1 and victim.eu-west-1 are DIFFERENT
+    // registrable domains (previously both fell to "amazonaws.com").
+    const evil = registrableDomainOf("evil.s3.us-east-1.amazonaws.com");
+    const victim = registrableDomainOf("victim.s3.eu-west-1.amazonaws.com");
+    expect(evil).not.toBe("amazonaws.com");
+    expect(victim).not.toBe("amazonaws.com");
+    expect(evil).not.toBe(victim);
+  });
+
+  it("blogspot country tenants stay distinct per tenant", () => {
+    // blogspot.co.uk is a PUBLIC suffix (like blogspot.com): each tenant
+    // is its own registrable domain — a credential saved for one tenant
+    // can never be offered to another.
+    expect(registrableDomainOf("tenant.blogspot.co.uk")).toBe(
+      "tenant.blogspot.co.uk"
+    );
+    expect(registrableDomainOf("other.blogspot.co.uk")).toBe(
+      "other.blogspot.co.uk"
+    );
+    expect(registrableDomainOf("tenant.blogspot.com")).toBe(
+      "tenant.blogspot.com"
+    );
+    expect(registrableDomainOf("tenant.blogspot.de")).toBe(
+      "tenant.blogspot.de"
+    );
+  });
+});
 });
