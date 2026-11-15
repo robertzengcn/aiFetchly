@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/** N01: the default follow-chat decision route for settings fixtures. */
+const DEFAULT_DECISION_ROUTE = {
+  version: 1 as const,
+  mode: "follow_chat" as const,
+  chatDecisionModel: null,
+  nativeProfile: null,
+  requestTimeoutMs: null,
+};
+
 /**
  * P0-1 acceptance: executeTask drives the REAL runner through the REAL
  * service — one CLICK decision, one ACTION_RESULT through the unguarded
@@ -243,6 +252,7 @@ function makeService(browserModule: ReturnType<typeof makeModule>) {
         proxySwitchEnabled: true,
         parallelAgentsEnabled: true,
         browserDecisionEnabled: true,
+        decisionRoute: DEFAULT_DECISION_ROUTE,
       }),
     } as unknown as ManagedBrowserSettingsModule,
     classifier: new BrowserActionRiskClassifier(),

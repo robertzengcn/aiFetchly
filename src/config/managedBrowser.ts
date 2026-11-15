@@ -246,6 +246,8 @@ export const MANAGED_BROWSER_SETTING_KEYS = {
   proxySwitchEnabled: "managed-browser-proxy-switch-enabled",
   parallelAgentsEnabled: "managed-browser-parallel-agents-enabled",
   browserDecisionEnabled: "managed-browser-decision-enabled",
+  // N01/design 5.3: the versioned browser DECISION route settings.
+  decisionRoute: "managed-browser-decision-route",
 } as const;
 
 // ---------------------------------------------------------------------------

@@ -1377,7 +1377,54 @@ export class ManagedBrowserAiToolService {
     const { providerConfigKey: currentProviderConfigKey } = await import(
       "@/service/aiProvider/AIProviderConfigVersion"
     );
-    let decisionClient: BrowserDecisionClient;
+    // N01/design 5.3: the EXPLICIT native route — only when the user
+    // configured mode native_profile with a complete profile. Never
+    // inferred; an unusable profile is a structured refusal.
+    let nativeProfileError: string | null = null;
+    const settings = await this.settings.getEffectiveSettings();
+    const nativeProfile =
+      settings.decisionRoute.mode === "native_profile"
+        ? settings.decisionRoute.nativeProfile
+        : null;
+    let decisionClient: BrowserDecisionClient | undefined;
+    if (route === "chat" && nativeProfile) {
+      if (nativeProfile.apiKeyRef === "none") {
+        nativeProfileError = "native_profile_incomplete";
+      } else {
+        const { SystemOneDecisionClient } = await import(
+          "@/service/browserDecision/SystemOneDecisionClient"
+        );
+        const { HttpClient } = await import("@/modules/lib/httpclient");
+        const httpClient = new HttpClient();
+        const nativeClient = new SystemOneDecisionClient(
+          nativeProfile,
+          {
+            postQuestion: async (endpoint, body, signal) =>
+              httpClient.postJson(endpoint, body, { signal }),
+          },
+          () => currentProviderConfigKey()
+        );
+        nativeClient.freezeRoute(currentProviderConfigKey());
+        decisionClient = nativeClient;
+      }
+    }
+    if (nativeProfileError !== null) {
+      throw new ManagedBrowserAiToolError(
+        "ai_disabled",
+        undefined,
+        nativeProfileError
+      );
+    }
+    if (decisionClient !== undefined && route === "hosted") {
+      // A native profile at a DIFFERENT user-chosen endpoint must never
+      // silently become the hosted route (design 5.2: explicit route
+      // bundles; no cross-credential reuse).
+      throw new ManagedBrowserAiToolError(
+        "ai_disabled",
+        undefined,
+        "native_profile_hosted_mode"
+      );
+    }
     if (route === "hosted") {
       // N01 (design 9.2): the hosted route requires the decision
       // contract. Probe the capability endpoint first — an older server
@@ -1469,6 +1516,14 @@ export class ManagedBrowserAiToolService {
       );
       chatClient.freezeRoute(currentProviderConfigKey());
       decisionClient = chatClient;
+    }
+    if (decisionClient === undefined) {
+      // Defensive: every route bundle above assigns a client.
+      throw new ManagedBrowserAiToolError(
+        "internal_error",
+        undefined,
+        "decision_route_unresolved"
+      );
     }
     const awaitedResultRef: { taskId?: string } = {};
     // T17/D-FR-02: freeze the provider route at admission.

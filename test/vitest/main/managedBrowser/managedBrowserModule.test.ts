@@ -1,4 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+
+/** N01: the default follow-chat decision route for settings fixtures. */
+const DEFAULT_DECISION_ROUTE = {
+  version: 1 as const,
+  mode: "follow_chat" as const,
+  chatDecisionModel: null,
+  nativeProfile: null,
+  requestTimeoutMs: null,
+};
 import { evaluateNavigationTarget } from "@/childprocess/managed-browser/NavigationPolicy";
 import { browserStartSessionToolSchema } from "@/schemas/aiTools/managedBrowser";
 import { managedBrowserStartInputSchema } from "@/schemas/ipc/managedBrowser";
@@ -447,6 +456,7 @@ function makeHarness(
     proxySwitchEnabled: true,
     parallelAgentsEnabled: true,
     browserDecisionEnabled: true,
+    decisionRoute: DEFAULT_DECISION_ROUTE,
     ...overrides.settings,
   };
   const module = new ManagedBrowserModule({

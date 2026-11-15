@@ -21,6 +21,90 @@ import type { EffectiveManagedBrowserSettings } from "@/entityTypes/managedBrows
  * worker creation (enforced by ManagedBrowserModule's start order).
  */
 
+/**
+ * N01/design 5.3: parse the stored decision-route settings. The stored
+ * value is a version-1 JSON object; unparseable/foreign-version input
+ * falls back to `follow_chat` with no profile (never a broken route).
+ */
+function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSettings["decisionRoute"] {
+  const fallback: EffectiveManagedBrowserSettings["decisionRoute"] = {
+    version: 1,
+    mode: "follow_chat",
+    chatDecisionModel: null,
+    nativeProfile: null,
+    requestTimeoutMs: null,
+  };
+  if (raw == null || raw.trim() === "") {
+    return fallback;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) {
+      return fallback;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (record.version !== 1) {
+      return fallback;
+    }
+    const mode =
+      record.mode === "native_profile" ? "native_profile" : "follow_chat";
+    const chatDecisionModel =
+      typeof record.chatDecisionModel === "string" &&
+      record.chatDecisionModel.trim().length > 0 &&
+      record.chatDecisionModel.length <= 200
+        ? record.chatDecisionModel.trim()
+        : null;
+    // The native profile is honored ONLY in native mode with a complete,
+    // explicitly-configured record — native support is never inferred.
+    let nativeProfile: EffectiveManagedBrowserSettings["decisionRoute"]["nativeProfile"] = null;
+    const rawProfile = record.nativeProfile;
+    if (
+      mode === "native_profile" &&
+      typeof rawProfile === "object" &&
+      rawProfile !== null
+    ) {
+      const profile = rawProfile as Record<string, unknown>;
+      const displayName =
+        typeof profile.displayName === "string" &&
+        profile.displayName.trim().length > 0
+          ? profile.displayName.trim().slice(0, 100)
+          : null;
+      const baseUrl =
+        typeof profile.baseUrl === "string" &&
+        /^https:\/\//.test(profile.baseUrl.trim()) &&
+        profile.baseUrl.trim().length <= 500
+          ? profile.baseUrl.trim()
+          : null;
+      const model =
+        typeof profile.model === "string" && profile.model.trim().length > 0
+          ? profile.model.trim().slice(0, 200)
+          : null;
+      const apiKeyRef =
+        profile.apiKeyRef === "chat" || profile.apiKeyRef === "none"
+          ? profile.apiKeyRef
+          : null;
+      if (displayName && baseUrl && model && apiKeyRef) {
+        nativeProfile = { displayName, baseUrl, model, apiKeyRef };
+      }
+    }
+    const requestTimeoutMs =
+      typeof record.requestTimeoutMs === "number" &&
+      Number.isFinite(record.requestTimeoutMs) &&
+      record.requestTimeoutMs > 0
+        ? Math.min(Math.floor(record.requestTimeoutMs), 10_000)
+        : null;
+    return {
+      version: 1,
+      mode,
+      chatDecisionModel,
+      nativeProfile: mode === "native_profile" ? nativeProfile : null,
+      requestTimeoutMs,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** Parse a bounded positive integer setting; null when unset/invalid. */
 function parseBoundedInt(raw: string | null, min: number, max: number): number | null {
   if (raw === null || raw.trim() === "") {
@@ -164,6 +248,13 @@ export class ManagedBrowserSettingsModule {
       proxySwitchEnabled: parseStoredToggle(proxySwitchRaw, true),
       parallelAgentsEnabled: parseStoredToggle(parallelRaw, true),
       browserDecisionEnabled: parseStoredToggle(decisionRaw, true),
+      // N01/design 5.3: the versioned decision-route settings (validated;
+      // anything unparseable falls back to follow_chat with no profile).
+      decisionRoute: parseDecisionRouteRaw(
+        await this.reader.getSettingValue(
+          MANAGED_BROWSER_SETTING_KEYS.decisionRoute
+        )
+      ),
     };
   }
 

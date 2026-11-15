@@ -314,6 +314,26 @@ export interface EffectiveManagedBrowserSettings {
   readonly proxySwitchEnabled: boolean;
   readonly parallelAgentsEnabled: boolean;
   readonly browserDecisionEnabled: boolean;
+  /**
+   * N01/design §5.3: the versioned browser DECISION route settings
+   * (additive). `mode` is `follow_chat` by default; `native_profile` is
+   * ONLY used when an explicit profile with a usable credential is
+   * configured — native support is never inferred.
+   */
+  readonly decisionRoute: {
+    readonly version: 1;
+    readonly mode: "follow_chat" | "native_profile";
+    /** Optional real model id at the user's chat endpoint. */
+    readonly chatDecisionModel: string | null;
+    readonly nativeProfile: {
+      readonly displayName: string;
+      readonly baseUrl: string;
+      readonly model: string;
+      /** Which stored credential the user explicitly selected. */
+      readonly apiKeyRef: "chat" | "none";
+    } | null;
+    readonly requestTimeoutMs: number | null;
+  };
 }
 
 /** Renderer-safe cache status (approximate sizes only, no paths/URLs). */

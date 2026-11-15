@@ -1,4 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+/** N01: the default follow-chat decision route for settings fixtures. */
+const DEFAULT_DECISION_ROUTE = {
+  version: 1 as const,
+  mode: "follow_chat" as const,
+  chatDecisionModel: null,
+  nativeProfile: null,
+  requestTimeoutMs: null,
+};
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
 import { defineComponent } from "vue";
@@ -27,6 +36,7 @@ const baseSettings: EffectiveManagedBrowserSettings = {
       proxySwitchEnabled: true,
       parallelAgentsEnabled: true,
       browserDecisionEnabled: true,
+      decisionRoute: DEFAULT_DECISION_ROUTE,
 };
 
 const apiMocks = vi.hoisted(() => ({
