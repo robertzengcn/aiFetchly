@@ -89,26 +89,47 @@ export class SystemOneDecisionClient implements BrowserDecisionClient {
     if (this.configChanged()) {
       return { status: "provider_error", reason_code: "provider_config_changed" };
     }
+    // V03/D-FR-02: the config watch ABORTS the in-flight call when the
+    // provider configuration changes mid-request (mirrors the chat
+    // client's polling abort).
+    const attemptController = new AbortController();
+    const onOuterAbort = (): void => attemptController.abort();
+    signal.addEventListener("abort", onOuterAbort, { once: true });
+    const configWatch = this.getConfigKey
+      ? setInterval(() => {
+          if (this.configChanged()) {
+            attemptController.abort();
+          }
+        }, 500)
+      : null;
+    let raw: unknown;
     try {
-      const raw = await this.endpoints.postQuestion(
+      raw = await this.endpoints.postQuestion(
         this.profile.baseUrl,
         {
           model: this.profile.model,
           question: input,
         },
-        signal
+        attemptController.signal
       );
-      if (signal.aborted) {
-        return { status: "provider_error", reason_code: "request_aborted" };
+    } finally {
+      if (configWatch !== null) {
+        clearInterval(configWatch);
       }
-      if (this.configChanged()) {
-        return {
-          status: "provider_error",
-          reason_code: "provider_config_changed",
-        };
-      }
-      // Native distribution IS allowed here — the profile is an explicit
-      // native route (design §9.1: source-tagged uncertainty).
+      signal.removeEventListener("abort", onOuterAbort);
+    }
+    if (signal.aborted) {
+      return { status: "provider_error", reason_code: "request_aborted" };
+    }
+    if (this.configChanged()) {
+      return {
+        status: "provider_error",
+        reason_code: "provider_config_changed",
+      };
+    }
+    // Native distribution IS allowed here — the profile is an explicit
+    // native route (design §9.1: source-tagged uncertainty).
+    try {
       return normalizeWireResult(raw, { allowNativeDistribution: true });
     } catch {
       return { status: "provider_error", reason_code: "native_request_failed" };

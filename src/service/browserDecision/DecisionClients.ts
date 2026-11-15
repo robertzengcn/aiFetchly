@@ -136,6 +136,11 @@ export class HostedDecisionClient implements BrowserDecisionClient {
       if (signal.aborted) {
         return { status: "provider_error", reason_code: "request_aborted" };
       }
+      // V03/D-FR-02: the frozen config is re-checked after the response —
+      // a provider change DURING the request discards the result.
+      if (this.configChanged()) {
+        return { status: "provider_error", reason_code: "provider_config_changed" };
+      }
       // N01 (design §9.2): the echoed correlation must match the request —
       // a replayed/misrouted response is never accepted.
       const record = (raw ?? {}) as Record<string, unknown>;
