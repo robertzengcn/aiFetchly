@@ -1,5 +1,6 @@
 // src/service/AgentRuntime.ts
 import { randomUUID } from "crypto";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
@@ -235,6 +236,9 @@ export class AgentRuntime {
 
     const agentTaskId = `agt-${randomUUID()}`;
     const agentConversationId = `agent-v2-${randomUUID()}`;
+    // C-FR-05: the agent task joins the control service so user pause/
+    // stop reaches the loop between tool calls (not only the runner).
+    getDefaultAgentTaskControlService().register(agentTaskId, agentConversationId);
     const transcript = new AgentTranscriptService(this.taskModule);
 
     // Normalize constraints — AI-generated taskPackets may omit this object.
@@ -379,6 +383,28 @@ export class AgentRuntime {
         };
       }
       executedToolCalls += 1;
+      // C-FR-05: the per-task control gate is honored before EVERY tool
+      // call — pause (user_paused) blocks at this safe point; cancel
+      // fails the call immediately so the loop wraps up.
+      const controlRecord = getDefaultAgentTaskControlService().get(agentTaskId);
+      if (controlRecord) {
+        if (controlRecord.state === "cancelled") {
+          throw new Error("task_cancelled");
+        }
+        if (controlRecord.state === "paused" || controlRecord.state === "interrupted") {
+          return {
+            tool_call_id: ctx.toolCallId,
+            tool_name: name,
+            success: false,
+            result: {
+              agentTaskPaused: true,
+              state: controlRecord.state,
+              reason: `the task is ${controlRecord.state} by the user — the agent stops making progress until resumed`,
+            },
+            execution_time_ms: Date.now() - startedAt,
+          };
+        }
+      }
       const res = await executeClaudeCompatibleTool(
         name,
         args,
