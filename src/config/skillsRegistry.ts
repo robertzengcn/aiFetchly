@@ -4987,7 +4987,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().getStatus(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().getStatus(a, c),
           args,
           context
         ),
@@ -5041,7 +5041,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "browser",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().navigate(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().navigate(a, c),
           args,
           context
         ),
@@ -5120,7 +5120,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().requestHandoff(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().requestHandoff(a, c),
           args,
           context
         ),
@@ -5143,7 +5143,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().resumeAfterHandoff(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().resumeAfterHandoff(a, c),
           args,
           context
         ),
@@ -5168,7 +5168,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "browser",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().captureScreenshot(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().captureScreenshot(a, c),
           args,
           context
         ),
@@ -5251,7 +5251,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().stopSession(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().stopSession(a, c),
           args,
           context
         ),
@@ -5483,7 +5483,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "browser",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().clearCache(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().clearCache(a, c),
           args,
           context
         ),

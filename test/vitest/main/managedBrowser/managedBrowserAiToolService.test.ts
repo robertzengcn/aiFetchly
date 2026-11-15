@@ -1293,3 +1293,100 @@ describe("ManagedBrowserAiToolService blocking handoff (B12)", () => {
     expect(record?.state).toBe("interrupted");
   });
 });
+
+// ---------------------------------------------------------------------------
+// E03: EVERY browser tool enforces session ownership — a foreign
+// conversation receives session_not_owned; the owning conversation passes.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService ownership on all tools (E03)", () => {
+  function ownedModule() {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({ ownerConversationId: "conv-owner", rootConversationId: null })
+        : null
+    );
+    return module;
+  }
+
+  const OWNER_CTX = { conversationId: "conv-owner", toolCallId: "call-owner" };
+  const FOREIGN_CTX = {
+    conversationId: "conv-stranger",
+    toolCallId: "call-stranger",
+  };
+
+  it("browser_get_status rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.getStatus({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+    const ok = await service.getStatus({ session_id: SESSION_ID }, OWNER_CTX);
+    expect(ok.sessionId).toBe(SESSION_ID);
+  });
+
+  it("browser_request_handoff rejects a foreign conversation", async () => {
+    const module = ownedModule();
+    const service = makeService({ module });
+    await expect(
+      service.requestHandoff({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+    void module;
+  });
+
+  it("browser_resume_after_handoff rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.resumeAfterHandoff({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("browser_screenshot rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.captureScreenshot({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("browser_stop_session rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.stopSession({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("browser_clear_cache rejects a foreign conversation", async () => {
+    const module = ownedModule();
+    const service = makeService({
+      module,
+      cacheModule: { clearCache: vi.fn(async () => ({ state: "cleared" })) },
+    });
+    await expect(
+      service.clearCache(
+        {
+          session_id: SESSION_ID,
+          confirmation_id: "confirmation-12345678",
+        } as never,
+        FOREIGN_CTX
+      )
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("the ROOT conversation of a sub-agent session is accepted", async () => {
+    const module = ownedModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({
+            ownerConversationId: "agent-v2-child",
+            rootConversationId: "conv-parent",
+          })
+        : null
+    );
+    const service = makeService({ module });
+    const ok = await service.getStatus({ session_id: SESSION_ID }, {
+      ...CTX,
+      conversationId: "conv-parent",
+    });
+    expect(ok.sessionId).toBe(SESSION_ID);
+  });
+});
