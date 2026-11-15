@@ -130,8 +130,29 @@ export class HostedDecisionClient implements BrowserDecisionClient {
     if (this.configChanged()) {
       return { status: "provider_error", reason_code: "provider_config_changed" };
     }
+    // W01/D-FR-02: the config watch ABORTS the in-flight hosted call when
+    // the provider configuration changes mid-request (mirrors the chat and
+    // native clients) — the body cannot complete and act after the change.
+    const attemptController = new AbortController();
+    const onOuterAbort = (): void => attemptController.abort();
+    signal.addEventListener("abort", onOuterAbort, { once: true });
+    const configWatch = this.getConfigKey
+      ? setInterval(() => {
+          if (this.configChanged()) {
+            attemptController.abort();
+          }
+        }, 500)
+      : null;
     try {
-      const raw = await this.postDecision(input, signal);
+      let raw: unknown;
+      try {
+        raw = await this.postDecision(input, attemptController.signal);
+      } finally {
+        if (configWatch !== null) {
+          clearInterval(configWatch);
+        }
+        signal.removeEventListener("abort", onOuterAbort);
+      }
       // F05: a late response after the deadline is discarded.
       if (signal.aborted) {
         return { status: "provider_error", reason_code: "request_aborted" };
@@ -176,6 +197,14 @@ export class HostedDecisionClient implements BrowserDecisionClient {
       }
       return normalizeWireResult(raw);
     } catch (error) {
+      if (this.configChanged()) {
+        // W01/D-FR-02: the config watch aborted the held-open request —
+        // report the re-admission reason, not a generic transport error.
+        return { status: "provider_error", reason_code: "provider_config_changed" };
+      }
+      if (attemptController.signal.aborted || signal.aborted) {
+        return { status: "provider_error", reason_code: "request_aborted" };
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (/404|not[_ ]found|unavailable/i.test(message)) {
         // Older hosted server without the decision endpoints.

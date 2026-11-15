@@ -148,4 +148,55 @@ describe("HostedDecisionClient config-version re-check (D-FR-02)", () => {
     }
     expect(posts).toBe(0);
   });
+
+  // W01/D-FR-02: a request HELD OPEN by the provider must be aborted when
+  // the configuration changes mid-flight — the late body cannot act.
+  it("aborts a held-open request when the config changes mid-flight", async () => {
+    let configKey: string | null = "cfg-1";
+    const client = new HostedDecisionClient(
+      async () => ({ advertised: true }),
+      async (_input, signal) =>
+        await new Promise<never>((_resolve, reject) => {
+          // Simulate a hung upstream: it only settles when aborted.
+          signal.addEventListener("abort", () => {
+            reject(new Error("This operation was aborted"));
+          });
+        }),
+      () => configKey
+    );
+    client.freezeRoute("cfg-1");
+    const decisionPromise = client.decide(baseInput, new AbortController().signal);
+    // The config watch polls every 500ms; flip the key after the request
+    // is already in flight.
+    setTimeout(() => {
+      configKey = "cfg-2";
+    }, 50);
+    const decision = await decisionPromise;
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("provider_config_changed");
+    }
+  });
+
+  it("treats an outer-abort rejection as request_aborted, not a transport failure", async () => {
+    const client = new HostedDecisionClient(
+      async () => ({ advertised: true }),
+      async (_input, signal) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("This operation was aborted"));
+          });
+        })
+    );
+    const controller = new AbortController();
+    const decisionPromise = client.decide(baseInput, controller.signal);
+    setTimeout(() => {
+      controller.abort();
+    }, 50);
+    const decision = await decisionPromise;
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
 });
