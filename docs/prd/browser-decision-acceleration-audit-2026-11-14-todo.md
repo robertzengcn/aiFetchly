@@ -46,10 +46,20 @@ Second pass (same day), commits `15f4a34fc` → `90979e32e`:
 | `90979e32e` | build: proxy classifier moved inside the worker bundle (rolldown chunk panic) |
 
 Still open: N01's full hosted rollout needs the hosted decision
-contract deployed (external — the desktop client is DONE); the deep N06
-items (batch confirmation card, busy-account queueing, per-provider
-concurrency), N09's settings UI section, real E2E drivers, and the
-paired held-out evaluation (external).
+contract deployed (external — the desktop client is DONE); the batch
+confirmation card and per-provider concurrency (N06); real E2E drivers;
+and the paired held-out evaluation (external).
+
+## Fifth pass (2026-11-15): Phase E + busy-account queueing
+
+| Commit | Phase | Items |
+| --- | --- | --- |
+| settings | E (N09/design 5.3) | Decision-route settings section: Use my chat provider (default), optional real-model override, inert native profile (URL/model/credential + incomplete warning); patch merges into the versioned store; six-language strings + component tests |
+| `queue` commit | D (M-FR-06) | A busy-account batch task is queued once (bounded 8s wait surfaced as a waiting batch event) and retried exactly once instead of failing account_in_use; the wait is injectable for tests |
+
+Verification: 1609 component tests, 370 agent tests, `tsc --incremental
+false` clean; CI run 43669583551 SUCCESS (all three jobs) at
+`7d06e8c98`.
 
 ## Fourth pass (2026-11-15): the PRD implementation plan, phases A–D
 
