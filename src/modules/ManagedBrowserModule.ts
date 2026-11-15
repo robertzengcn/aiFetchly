@@ -986,6 +986,34 @@ export class ManagedBrowserModule {
     return null;
   }
 
+  /**
+   * E20/M-FR-09: release every session whose owner conversation matches —
+   * a crashed/cancelled batch child may exit WITHOUT reporting a
+   * session_id, leaving the account lease and the global slot held. Best
+   * effort: sessions already stopped are no-ops.
+   */
+  public async stopAllForConversation(
+    conversationId: string,
+    reason: "cancelled" | "user_stop" = "cancelled"
+  ): Promise<number> {
+    let stopped = 0;
+    for (const status of this.listActiveSessions()) {
+      const owned =
+        status.ownerConversationId === conversationId ||
+        status.rootConversationId === conversationId;
+      if (!owned) {
+        continue;
+      }
+      try {
+        await this.stop(status.sessionId, reason);
+        stopped++;
+      } catch {
+        /* best effort */
+      }
+    }
+    return stopped;
+  }
+
   public listActiveSessions(): readonly SafeManagedBrowserStatus[] {
     return [...this.sessions.values()].map((record) =>
       this.toSafeStatus(record)

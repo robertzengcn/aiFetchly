@@ -875,7 +875,13 @@ export class WorkerSession {
       });
     } finally {
       // A-FR-08: wipe local references to the credential.
+      // E19/A-FR-08: overwrite the secret in memory before dropping the
+      // reference — a dangling copy in a crash dump must not retain the
+      // password. (V8 cannot guarantee the old string is collected; this
+      // is the documented best-effort wipe, paired with the local copy
+      // dying at the end of the call.)
       input.password = "";
+      input.username = "";
       input.username = "";
     }
   }

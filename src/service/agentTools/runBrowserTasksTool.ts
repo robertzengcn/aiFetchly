@@ -396,15 +396,22 @@ export async function runBrowserTasks(
         const outputSessionId = (
           result.output as { session_id?: string } | null
         )?.session_id;
-        if (!task.keep_open && typeof outputSessionId === "string" && outputSessionId) {
-          // F17: the collector — not the agent prompt — owns cleanup of
-          // sessions the child opened (bounded: outputs that carry the
-          // session id; crash/cancel without an id is F16's map).
-          void import("@/modules/ManagedBrowserModule")
-            .then(({ getDefaultManagedBrowserModule }) =>
-              getDefaultManagedBrowserModule().stop(outputSessionId, "cancelled")
-            )
-            .catch(() => undefined);
+        if (!task.keep_open) {
+          // F17/E20: the collector owns cleanup. A child that reported a
+          // session_id is stopped directly; a child that CRASHED or was
+          // cancelled before reporting one releases every session the
+          // conversation owns (M-AC-01: no leaked lease or global slot).
+          void (async () => {
+            const { getDefaultManagedBrowserModule } = await import(
+              "@/modules/ManagedBrowserModule"
+            );
+            const module = getDefaultManagedBrowserModule();
+            if (typeof outputSessionId === "string" && outputSessionId) {
+              await module.stop(outputSessionId, "cancelled");
+            } else {
+              await module.stopAllForConversation(conversationId, "cancelled");
+            }
+          })().catch(() => undefined);
         }
         return {
           task_index: index,
