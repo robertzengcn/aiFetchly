@@ -861,8 +861,40 @@ export class BrowserCredentialLoginService {
     }
   ): Promise<BrowserSignInResult> {
     const browserModule = getDefaultManagedBrowserModule();
+    const accountModule = new SocialAccountModule();
     const recipe = site.loginRecipe ? safeParseRecipe(site.loginRecipe) : null;
     try {
+      // E16/A-FR-03/A-FR-11: restore the account's cookie snapshot and
+      // re-observe FIRST — a still-valid cookie session reaches
+      // authenticated WITHOUT typing the password (saving the 15-minute
+      // attempt budget). An expired snapshot still fills the form once.
+      if (credential.accountId !== null) {
+        try {
+          const restored = await browserModule.restoreAccountCookies?.(
+            input.sessionId,
+            credential.accountId
+          );
+          if (restored?.applied) {
+            const postStatus = browserModule.getStatus(input.sessionId);
+            if (postStatus?.authenticated === true) {
+              if (credential.accountId !== null) {
+                await accountModule.recordLoginFailureClear(credential.accountId);
+              }
+              // E16: the session is authenticated through the snapshot.
+              void this.postSiteDomainConfirmation(input, site).catch(() => undefined);
+              return {
+                status: "signed_in",
+                ...(credential.accountId !== null ? { accountId: credential.accountId } : {}),
+                username: credential.username,
+                siteId: site.siteId,
+                reasonCode: "cookie_snapshot",
+              };
+            }
+          }
+        } catch {
+          // Cookie restore is best-effort — the fill proceeds normally.
+        }
+      }
       const result = await browserModule.fillLoginForm(input.sessionId, {
         mode: input.intent,
         allowedDomainSuffixes: [...site.allowedDomainSuffixes],
@@ -870,7 +902,6 @@ export class BrowserCredentialLoginService {
         username: credential.username,
         password: credential.password,
       });
-      const accountModule = new SocialAccountModule();
       if (result.outcome === "success") {
         await getDefaultBrowserSiteModule().markVerified(site.siteId);
         // T21: save the learned login recipe (fingerprints only).

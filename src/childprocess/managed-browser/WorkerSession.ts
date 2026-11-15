@@ -954,6 +954,51 @@ export class WorkerSession {
     return this.currentDispatchFlag?.inputDispatched === true;
   }
 
+  /**
+   * E16/A-FR-03: apply an account's cookie snapshot on the LIVE session
+   * (before a password fill) so a still-valid cookie session reaches
+   * authenticated WITHOUT typing the password.
+   */
+  public async setCookies(
+    requestId: string,
+    cookies: readonly { domain: string; name: string; value: string; expires?: number; httpOnly?: boolean; secure?: boolean; path?: string }[]
+  ): Promise<void> {
+    const page = this.page;
+    if (!page) {
+      this.emitError(requestId, "worker_exited", "no active page");
+      return;
+    }
+    try {
+      const context = this.browser?.defaultBrowserContext();
+      if (!context) {
+        this.emitError(requestId, "internal_error", "no browser context");
+        return;
+      }
+      const batch = convertCookieBatch(cookies as never);
+      let applied = 0;
+      for (const cookie of batch.accepted) {
+        try {
+          await context.setCookie(cookie as unknown as Record<string, unknown>);
+          applied++;
+        } catch {
+          /* per-cookie failure is non-fatal */
+        }
+      }
+      await page.goto("about:blank", { waitUntil: "load" }).catch(() => undefined);
+      // Re-navigate to the verification URL so the refreshed cookie state
+      // is visible (a reload of about:blank would not carry cookies).
+      await page.goto(this.adapter.verificationUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+      this.send({
+        ...this.base(requestId),
+        type: "SESSION_STATE_CHANGED",
+        state: this.runtime.getState(),
+        reasonCode: `cookies_applied:${applied}`,
+      });
+    } catch (error) {
+      this.emitError(requestId, "internal_error", toSafeErrorMessage(error));
+    }
+  }
+
   public async stop(requestId: string, reason: string): Promise<void> {
     // Stop is idempotent in every state.
     this.runtime.transition("stopping", reason);

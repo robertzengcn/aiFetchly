@@ -201,6 +201,14 @@ parentPort.on("message", async (event: { data: unknown }) => {
       case "RESUME_HANDOFF":
         await session.resumeFromHandoff(message.requestId);
         return;
+      case "SET_COOKIES": {
+        const cookiesMsg = message as Extract<
+          ManagedBrowserInboundMessage,
+          { type: "SET_COOKIES" }
+        >;
+        await session.setCookies(cookiesMsg.requestId, cookiesMsg.cookies);
+        return;
+      }
       case "VERIFY_MANUAL_LOGIN":
         await session.verifyManualLogin(message.requestId);
         return;

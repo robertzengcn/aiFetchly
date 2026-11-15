@@ -1427,6 +1427,37 @@ record.currentUrl = message.observation.url || record.currentUrl;
    * Manual-login verification (§13.2): publish the notice lifecycle and
    * resume ONLY after the adapter confirms authentication.
    */
+  /**
+   * E16/A-FR-03: restore an account's cookie snapshot onto the LIVE
+   * session and re-observe — a still-valid cookie session reaches
+   * authenticated WITHOUT typing the password (A-FR-11).
+   */
+  public async restoreAccountCookies(
+    sessionId: string,
+    accountId: number
+  ): Promise<{ applied: boolean; authenticated: boolean | null }> {
+    const record = this.requireSession(sessionId);
+    this.guard(record, "OBSERVE");
+    const snapshot = await this.sessionService.getDecryptedSnapshot(accountId);
+    const manifest =
+      (await this.deriveManifestFromSite(record.platformId)) ??
+      (getPlatformManifest(record.platformId) ?? undefined);
+    const allowedCookies = snapshot.cookies.filter((cookie) =>
+      matchesAllowedDomain(cookie.domain, manifest?.allowedDomainSuffixes ?? [])
+    );
+    if (allowedCookies.length === 0) {
+      return { applied: false, authenticated: record.authenticated };
+    }
+    await this.requestWorker(
+      record,
+      { type: "SET_COOKIES", cookies: allowedCookies } as never,
+      MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+      (m) => m.type === "SESSION_STATE_CHANGED"
+    );
+    const reObserved = await this.observe(sessionId);
+    return { applied: true, authenticated: reObserved ? record.authenticated : null };
+  }
+
   public async verifyManualLogin(
     sessionId: string
   ): Promise<SafeManagedBrowserStatus> {

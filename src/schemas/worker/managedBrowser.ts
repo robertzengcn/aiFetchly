@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
-import { normalizedCookieSchema } from "@/schemas/accountCookies";
+import { normalizedCookieSchema, normalizedCookieArraySchema } from "@/schemas/accountCookies";
 import {
   MANAGED_BROWSER_ACTION_LIMITS,
   MANAGED_BROWSER_MESSAGE_LIMITS,
@@ -518,6 +518,12 @@ const bindPlatformMessageSchema = z.strictObject({
   captureCookies: z.boolean(),
 });
 
+const setCookiesMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("SET_COOKIES"),
+  cookies: normalizedCookieArraySchema.max(500),
+});
+
 const observeMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("OBSERVE"),
@@ -626,6 +632,7 @@ const evaluateScriptMessageSchema = z.strictObject({
 
 export const managedBrowserInboundSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
+  setCookiesMessageSchema,
     startSessionMessageSchema,
     bindPlatformMessageSchema,
     observeMessageSchema,
