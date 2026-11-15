@@ -351,6 +351,28 @@
         </details>
         <div v-if="generatedImages.length > 0" class="v2-message__images">
           <div
+            v-if="generatedImages.length > 1"
+            class="v2-message__images-toolbar"
+          >
+            <button
+              type="button"
+              class="v2-message__save-all-images-btn"
+              data-testid="generated-image-save-all"
+              :aria-label="saveAllImagesLabel"
+              @click="emitSaveAllGeneratedImages"
+            >
+              <v-icon
+                icon="mdi-content-save-all-outline"
+                size="16"
+                aria-hidden="true"
+              />
+              <span>{{ saveAllShortLabel }}</span>
+              <v-tooltip activator="parent" location="top" :open-delay="250">
+                {{ saveAllImagesLabel }}
+              </v-tooltip>
+            </button>
+          </div>
+          <div
             v-for="image in generatedImages"
             :key="image.key"
             class="v2-message__generated-image"
@@ -392,33 +414,48 @@
             <div class="v2-message__image-actions">
               <button
                 type="button"
-                class="v2-message__use-reference-btn"
-                :aria-label="t('aiChatV2.generatedImageRefs.useAsReference') || 'Use as reference'"
+                class="v2-message__use-reference-btn v2-message__image-action-btn"
+                :aria-label="useAsReferenceLabel"
                 @click="emitUseGeneratedImage(image)"
               >
-                {{ t("aiChatV2.generatedImageRefs.useAsReference") || "Use as reference" }}
+                <v-icon
+                  icon="mdi-image-plus-outline"
+                  size="16"
+                  aria-hidden="true"
+                />
+                <v-tooltip activator="parent" location="top" :open-delay="250">
+                  {{ useAsReferenceLabel }}
+                </v-tooltip>
               </button>
               <button
                 type="button"
-                class="v2-message__edit-image-btn"
-                :aria-label="t('aiChatV2.generatedImageRefs.edit') || 'Edit'"
+                class="v2-message__edit-image-btn v2-message__image-action-btn"
+                :aria-label="editImageLabel"
                 @click="emitEditGeneratedImage(image)"
               >
-                {{ t("aiChatV2.generatedImageRefs.edit") || "Edit" }}
+                <v-icon
+                  icon="mdi-image-edit-outline"
+                  size="16"
+                  aria-hidden="true"
+                />
+                <v-tooltip activator="parent" location="top" :open-delay="250">
+                  {{ editImageLabel }}
+                </v-tooltip>
               </button>
               <button
                 type="button"
-                class="v2-message__save-image-btn"
-                :aria-label="
-                  t('aiChatV2.generatedImageRefs.saveToWorkspace') ||
-                  'Save to workspace'
-                "
+                class="v2-message__save-image-btn v2-message__image-action-btn"
+                :aria-label="saveImageLabel"
                 @click="emitSaveGeneratedImage(image)"
               >
-                {{
-                  t("aiChatV2.generatedImageRefs.saveToWorkspace") ||
-                  "Save to workspace"
-                }}
+                <v-icon
+                  icon="mdi-content-save-outline"
+                  size="16"
+                  aria-hidden="true"
+                />
+                <v-tooltip activator="parent" location="top" :open-delay="250">
+                  {{ saveImageLabel }}
+                </v-tooltip>
               </button>
             </div>
           </div>
@@ -652,6 +689,10 @@ const emit = defineEmits<{
     reference: ChatV2GeneratedImageReference
   ): void;
   (
+    e: "save-all-generated-images",
+    references: ChatV2GeneratedImageReference[]
+  ): void;
+  (
     e: "retry-generated-image-batch",
     payload: {
       references: ChatV2GeneratedImageReference[];
@@ -786,6 +827,26 @@ interface RenderableGeneratedImage {
   localPath?: string;
 }
 
+const useAsReferenceLabel = computed(
+  (): string =>
+    t("aiChatV2.generatedImageRefs.useAsReference") || "Use as reference"
+);
+const editImageLabel = computed(
+  (): string => t("aiChatV2.generatedImageRefs.edit") || "Edit"
+);
+const saveImageLabel = computed(
+  (): string =>
+    t("aiChatV2.generatedImageRefs.saveToWorkspace") || "Save to workspace"
+);
+const saveAllShortLabel = computed(
+  (): string => t("aiChatV2.generatedImageRefs.saveAll") || "Save all"
+);
+const saveAllImagesLabel = computed(
+  (): string =>
+    t("aiChatV2.generatedImageRefs.saveAllToWorkspace") ||
+    "Save all images to workspace"
+);
+
 const generatedImages = computed<RenderableGeneratedImage[]>(() => {
   return (props.message.metadata?.generatedImages ?? [])
     .map((image, index) => {
@@ -823,6 +884,16 @@ function emitSaveGeneratedImage(image: RenderableGeneratedImage): void {
     messageId: image.messageId,
     imageIndex: image.imageIndex,
   });
+}
+
+function emitSaveAllGeneratedImages(): void {
+  const references: ChatV2GeneratedImageReference[] = generatedImages.value.map(
+    (image): ChatV2GeneratedImageReference => ({
+      messageId: image.messageId,
+      imageIndex: image.imageIndex,
+    })
+  );
+  emit("save-all-generated-images", references);
 }
 
 interface RenderableAttachment {
@@ -2054,21 +2125,51 @@ const pastedChips = computed<PastedChip[]>(() => {
   line-height: 18px;
   text-align: center;
 }
+.v2-message__images-toolbar {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
 .v2-message__image-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   margin-top: 4px;
 }
-.v2-message__use-reference-btn,
-.v2-message__edit-image-btn {
-  flex: 1 1 auto;
-  padding: 3px 8px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+.v2-message__image-action-btn,
+.v2-message__save-all-images-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.16);
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.85);
-  color: inherit;
-  font-size: 12px;
+  background: rgba(var(--v-theme-surface), 0.72);
+  color: rgba(var(--v-theme-on-surface), 0.78);
   cursor: pointer;
+}
+.v2-message__image-action-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.v2-message__save-all-images-btn {
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px 0 6px;
+  font-size: 12px;
+  line-height: 1;
+}
+.v2-message__image-action-btn:hover,
+.v2-message__image-action-btn:focus-visible,
+.v2-message__save-all-images-btn:hover,
+.v2-message__save-all-images-btn:focus-visible {
+  background: rgba(var(--v-theme-primary), 0.12);
+  border-color: rgba(var(--v-theme-primary), 0.4);
+  color: rgb(var(--v-theme-primary));
+  outline: none;
+}
+.v2-message__image-action-btn:focus-visible,
+.v2-message__save-all-images-btn:focus-visible {
+  box-shadow: 0 0 0 2px rgba(var(--v-theme-primary), 0.35);
 }
 /* User-sent attachment previews. Images use a smaller max-height than
    AI-generated images so multi-attachment user bubbles stay compact. */

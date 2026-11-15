@@ -243,6 +243,7 @@
         @use-generated-image="onUseGeneratedImage"
         @edit-generated-image="onEditGeneratedImage"
         @save-generated-image="onSaveGeneratedImage"
+        @save-all-generated-images="onSaveAllGeneratedImages"
         @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @stop-batch="onStop"
         @report="onSingleReportRequest"
@@ -1481,6 +1482,79 @@ async function onSaveGeneratedImage(
 ): Promise<void> {
   const conversationId = activeConversationId.value ?? ensureWorkspaceConversationId();
   await attemptGeneratedImageExport(conversationId, reference);
+}
+
+/** Serializes save-all so a second click cannot start a parallel copy. */
+let saveAllGeneratedImagesInFlight = false;
+
+function generatedImageExportErrorDetail(err: unknown): string {
+  return err instanceof Error && err.message.length > 0 ? err.message : "";
+}
+
+/**
+ * Save every rendered image from one assistant turn. Stops at the first
+ * missing workspace and queues the rest for the existing approval retry.
+ */
+async function onSaveAllGeneratedImages(
+  references: readonly ChatV2GeneratedImageReference[]
+): Promise<void> {
+  if (references.length === 0 || saveAllGeneratedImagesInFlight) return;
+  saveAllGeneratedImagesInFlight = true;
+  const conversationId =
+    activeConversationId.value ?? ensureWorkspaceConversationId();
+  try {
+    let saved = 0;
+    let failureDetail = "";
+    for (let index = 0; index < references.length; index += 1) {
+      const reference = references[index];
+      if (!reference) continue;
+      try {
+        const result = await exportGeneratedImage(conversationId, reference);
+        if (result.status === "workspace_required") {
+          for (const remaining of references.slice(index)) {
+            enqueuePendingGeneratedImageExport(conversationId, remaining);
+          }
+          ensureWorkspaceConversationId();
+          conversationWorkspace.requestSetup();
+          showGeneratedImageToast(
+            t("aiChatV2.imageTool.errors.workspaceRequired") ||
+              "An approved workspace is required first."
+          );
+          return;
+        }
+        saved += 1;
+      } catch (err: unknown) {
+        if (failureDetail.length === 0) {
+          failureDetail = generatedImageExportErrorDetail(err);
+        }
+      }
+    }
+    if (saved === references.length) {
+      showGeneratedImageToast(
+        t("aiChatV2.artifactExport.savedAllToWorkspace", { count: saved }) ||
+          `Saved ${saved} images to your workspace.`
+      );
+      return;
+    }
+    if (saved > 0) {
+      showGeneratedImageToast(
+        t("aiChatV2.artifactExport.savedSomeToWorkspace", {
+          saved,
+          total: references.length,
+        }) ||
+          `Saved ${saved} of ${references.length} images to your workspace.`
+      );
+      return;
+    }
+    showGeneratedImageToast(
+      failureDetail.length > 0
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${failureDetail})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+            "Could not save to workspace."
+    );
+  } finally {
+    saveAllGeneratedImagesInFlight = false;
+  }
 }
 
 /**

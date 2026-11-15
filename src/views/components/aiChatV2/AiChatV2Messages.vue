@@ -44,6 +44,10 @@
           (reference: ChatV2GeneratedImageReference) =>
             emit('save-generated-image', reference)
         "
+        @save-all-generated-images="
+          (references: ChatV2GeneratedImageReference[]) =>
+            emit('save-all-generated-images', references)
+        "
         @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @stop-batch="emit('stop-batch')"
       />
@@ -174,6 +178,10 @@ const emit = defineEmits<{
   (
     e: "save-generated-image",
     reference: ChatV2GeneratedImageReference
+  ): void;
+  (
+    e: "save-all-generated-images",
+    references: ChatV2GeneratedImageReference[]
   ): void;
   (
     e: "retry-generated-image-batch",

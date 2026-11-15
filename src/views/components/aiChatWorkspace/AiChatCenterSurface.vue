@@ -100,6 +100,7 @@
         :reported-message-ids="reportedMessageIds"
         @report="onSingleReportRequest"
         @save-generated-image="onSaveGeneratedImage"
+        @save-all-generated-images="onSaveAllGeneratedImages"
         @stop-batch="onStopBatch"
         @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @approve-plan="onLegacyPlanAction('approve-plan')"
@@ -1813,6 +1814,94 @@ async function onSaveGeneratedImage(
   const conversation = conversationId.value;
   if (!conversation) return;
   await attemptGeneratedImageExport(conversation, reference);
+}
+
+/** Serializes save-all so a second click cannot start a parallel copy. */
+let saveAllGeneratedImagesInFlight = false;
+
+function generatedImageExportErrorDetail(err: unknown): string {
+  return err instanceof Error && err.message.length > 0 ? err.message : "";
+}
+
+function requestWorkspaceForImageExport(conversation: string): void {
+  if (conversationId.value === conversation) {
+    onRequestWorkspaceSetup();
+    return;
+  }
+  deferredImageExportSetupIds.value = new Set([
+    ...deferredImageExportSetupIds.value,
+    conversation,
+  ]);
+}
+
+/**
+ * Save every rendered image from one message. A missing workspace queues the
+ * unsaved remainder and opens the same setup card as a single save.
+ */
+async function onSaveAllGeneratedImages(
+  references: readonly ChatV2GeneratedImageReference[]
+): Promise<void> {
+  const conversation = conversationId.value;
+  if (!conversation || references.length === 0 || saveAllGeneratedImagesInFlight) {
+    return;
+  }
+  saveAllGeneratedImagesInFlight = true;
+  try {
+    let saved = 0;
+    let failureDetail = "";
+    for (let index = 0; index < references.length; index += 1) {
+      const reference = references[index];
+      if (!reference) continue;
+      try {
+        const result = await exportGeneratedImage(conversation, reference);
+        if (result.status === "workspace_required") {
+          for (const remaining of references.slice(index)) {
+            enqueuePendingImageExport(conversation, remaining);
+          }
+          queueDeferredImageNotice(
+            conversation,
+            t("aiChatV2.imageTool.errors.workspaceRequired") ||
+              "An approved workspace is required first."
+          );
+          requestWorkspaceForImageExport(conversation);
+          return;
+        }
+        saved += 1;
+      } catch (err: unknown) {
+        if (failureDetail.length === 0) {
+          failureDetail = generatedImageExportErrorDetail(err);
+        }
+      }
+    }
+    if (saved === references.length) {
+      queueDeferredImageNotice(
+        conversation,
+        t("aiChatV2.artifactExport.savedAllToWorkspace", { count: saved }) ||
+          `Saved ${saved} images to your workspace.`
+      );
+      return;
+    }
+    if (saved > 0) {
+      queueDeferredImageNotice(
+        conversation,
+        t("aiChatV2.artifactExport.savedSomeToWorkspace", {
+          saved,
+          total: references.length,
+        }) ||
+          `Saved ${saved} of ${references.length} images to your workspace.`
+      );
+      return;
+    }
+    queueDeferredImageNotice(
+      conversation,
+      failureDetail.length > 0
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${failureDetail})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+            "Could not save to workspace."
+    );
+  } finally {
+    saveAllGeneratedImagesInFlight = false;
+  }
 }
 
 /** FR-IMG-012: stop preserves completed outputs; the run cancel owns the rest. */
