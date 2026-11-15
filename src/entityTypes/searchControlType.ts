@@ -85,7 +85,13 @@ export type TaskDetailsForEdit = {
   concurrency: number;
   notShowBrowser: boolean;
   localBrowser: string;
-  proxys: Array<{ host: string; port: number; user: string; pass: string }>;
+  proxys: Array<{
+    host: string;
+    port: number;
+    user: string;
+    /** E06/P-AC-02: the edit payload NEVER carries the stored secret. */
+    hasPassword: boolean;
+  }>;
   accounts: Array<number>;
   status: SearchTaskStatusValue;
   record_time: string;

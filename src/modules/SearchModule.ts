@@ -609,12 +609,19 @@ export class SearchModule extends BaseModule {
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port;
         proxyEntity.user = proxy.user ? proxy.user : "";
-        // N04/P-FR-08: encrypt at rest — search-task proxy rows must
-        // never persist plaintext passwords.
-        proxyEntity.pass = proxy.pass
-          ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
-             proxy.pass)
-          : "";
+        // E06/P-FR-08: encrypt at rest — a FAILED encryption aborts the
+        // create; the password is never persisted in plaintext.
+        if (proxy.pass) {
+          const encrypted = await ProxyCredentialCodec.encryptForStorage(
+            proxy.pass
+          );
+          if (!encrypted) {
+            throw new Error("proxy_encrypt_failed");
+          }
+          proxyEntity.pass = encrypted;
+        } else {
+          proxyEntity.pass = "";
+        }
 
         await this.searchTaskProxyModel.create(proxyEntity);
       }
@@ -661,7 +668,8 @@ export class SearchModule extends BaseModule {
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port;
         proxyEntity.user = proxy.user || "";
-        // N04/P-FR-08: encrypt at rest.
+        // N04/P-FR-08: encrypt at rest — search-task proxy rows must
+        // never persist plaintext passwords.
         proxyEntity.pass = proxy.pass
           ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
              proxy.pass)
@@ -1251,6 +1259,11 @@ export class SearchModule extends BaseModule {
     if (updates.proxys !== undefined) {
       // B09/R07: REPLACE the task's proxy rows — the old code appended a
       // second set alongside the originals.
+      // E06/P-AC-02: capture the OLD rows first — an omitted pass keeps
+      // the stored credential (rows are recreated below).
+      const existingRows = await this.searchTaskProxyModel.getItemsByTaskId(
+        taskId
+      );
       await this.searchTaskProxyModel.deleteByTaskId(taskId);
       for (const proxy of updates.proxys) {
         const proxyEntity = new SearchTaskProxyEntity();
@@ -1265,11 +1278,18 @@ export class SearchModule extends BaseModule {
             proxy.pass
           );
           if (!encrypted) {
+            // Cleanup: nothing was written for this proxy yet, but the
+            // delete above already ran — surface the failure.
             throw new Error("proxy_encrypt_failed");
           }
           proxyEntity.pass = encrypted;
         } else {
-          proxyEntity.pass = "";
+          // E06: an omitted pass keeps the stored secret for the SAME
+          // host:port; a genuinely new row starts empty.
+          const previous = existingRows.find(
+            (row) => row.host === proxy.host && String(row.port) === String(proxy.port)
+          );
+          proxyEntity.pass = previous?.pass ?? "";
         }
         await this.searchTaskProxyModel.create(proxyEntity);
       }
@@ -1372,7 +1392,9 @@ export class SearchModule extends BaseModule {
         host: item.host,
         port: parseInt(item.port, 10),
         user: item.user,
-        pass: item.pass,
+        // E06/P-AC-02: the edit payload NEVER carries the stored secret —
+        // the editor submits a new password only when the user types one.
+        hasPassword: Boolean(item.pass),
       })),
       accounts: accounts.map((item) => item.account_id),
       status: taskEntity.status as SearchTaskStatusValue,

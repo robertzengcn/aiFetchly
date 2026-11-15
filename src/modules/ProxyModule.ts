@@ -287,6 +287,18 @@ export class ProxyModule extends BaseModule implements IProxyApi {
       const decrypted = await ProxyCredentialCodec.decryptForUse(
         row.pass ?? null
       );
+      // E06/P-FR-04: a FAILED decrypt on a row that HAD a secret must not
+      // launch or check with an empty password. The row carries a
+      // structured failure marker: user = decrypt-failed sentinel so the
+      // check path reports an auth failure for this proxy only.
+      if (decrypted.password === null && row.pass) {
+        out.push({
+          ...row,
+          pass: "",
+          user: "__decrypt_failed__",
+        });
+        continue;
+      }
       out.push({ ...row, pass: decrypted.password ?? "" });
     }
     return out;
