@@ -169,6 +169,7 @@ export async function updateBrowserPreferences(patch: {
   cacheEnabled?: boolean;
   cacheMaxSizeMb?: number;
   clearCacheOnExit?: boolean;
+  maxConcurrentSessions?: number;
   signInEnabled?: boolean;
   siteUpsertEnabled?: boolean;
   proxySwitchEnabled?: boolean;

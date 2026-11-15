@@ -229,6 +229,24 @@
       <span class="text-caption text-grey-darken-1">100–2048 MB</span>
     </div>
 
+    <!-- G06/PRD §7/M-FR-06: concurrent browsers (default 3, max 5). -->
+    <div class="d-flex align-center ga-3 flex-wrap mt-2">
+      <span class="text-body-2">
+        {{ t("managedBrowser.settings.max_concurrent_label") }}
+      </span>
+      <input
+        v-model.number="maxConcurrentSessions"
+        type="number"
+        class="managed-browser-settings__account-select"
+        data-testid="mb-max-concurrent-input"
+        :min="1"
+        :max="5"
+        :aria-label="t('managedBrowser.settings.max_concurrent_label')"
+        @change="onMaxConcurrentChange"
+      />
+      <span class="text-caption text-grey-darken-1">1–5</span>
+    </div>
+
     <v-divider class="my-4" />
 
     <div class="d-flex align-center ga-3 flex-wrap">
@@ -456,6 +474,7 @@ const chatDecisionModel = ref("");
 const nativeBaseUrl = ref("");
 const nativeModel = ref("");
 const nativeApiKeyRef = ref<"none" | "chat">("none");
+const maxConcurrentSessions = ref(3);
 const decisionRouteIncomplete = computed(
   () =>
     decisionRouteMode.value === "native_profile" &&
@@ -548,6 +567,8 @@ async function reload(): Promise<void> {
     nativeApiKeyRef.value =
       effective.decisionRoute.nativeProfile?.apiKeyRef ?? "none";
     cacheMaxMb.value = Math.round(effective.cacheMaxBytes / (1024 * 1024));
+    // G06/M-FR-06: the session cap from effective settings.
+    maxConcurrentSessions.value = effective.maxConcurrentSessions;
     cacheStatus.value = cache;
     // GAP-10: eligible accounts for per-account clearing (ungated read).
     accounts.value = await listEligibleAccounts().catch(() => []);
@@ -604,6 +625,17 @@ async function persist(patch: {
   browserEnabled?: boolean;
   cacheEnabled?: boolean;
   clearCacheOnExit?: boolean;
+  maxConcurrentSessions?: number;
+  decisionRoute?: {
+    mode?: "follow_chat" | "native_profile";
+    chatDecisionModel?: string | null;
+    nativeProfile?: {
+      displayName: string;
+      baseUrl: string;
+      model: string;
+      apiKeyRef: "chat" | "none";
+    } | null;
+  };
 }): Promise<void> {
   loading.value = true;
   try {
@@ -728,6 +760,16 @@ function onToggleCache(value: boolean | null): void {
     void persist({ cacheEnabled: value });
   }
 }
+
+  /** G06/M-FR-06: persist the concurrent-browser cap (clamped 1..5). */
+  function onMaxConcurrentChange(): void {
+    const clamped = Math.max(
+      1,
+      Math.min(5, Math.floor(maxConcurrentSessions.value || 3))
+    );
+    maxConcurrentSessions.value = clamped;
+    void persist({ maxConcurrentSessions: clamped });
+  }
 
 function onToggleClearOnExit(value: boolean | null): void {
   if (value !== null) {

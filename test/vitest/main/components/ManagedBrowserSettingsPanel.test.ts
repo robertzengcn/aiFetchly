@@ -602,3 +602,38 @@ describe("ManagedBrowserSettingsPanel decision route (N09)", () => {
     });
   });
 });
+
+describe("ManagedBrowserSettingsPanel session settings (G06)", () => {
+  it("renders the concurrent-browsers control with the effective value", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    const input = wrapper.find("input[data-testid='mb-max-concurrent-input']");
+    expect(input.exists()).toBe(true);
+    expect((input.element as HTMLInputElement).value).toBe("3");
+  });
+
+  it("persists the clamped cap through updateBrowserPreferences", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    const input = wrapper.find("input[data-testid='mb-max-concurrent-input']");
+    await input.setValue("5");
+    await input.trigger("change");
+    await flushPromises();
+    const calls = apiMocks.updateBrowserPreferences.mock
+      .calls as Array<[{ maxConcurrentSessions?: number }]>;
+    const last = calls.at(-1)![0];
+    expect(last.maxConcurrentSessions).toBe(5);
+  });
+
+  it("clamps values above 5 down to 5", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    const input = wrapper.find("input[data-testid='mb-max-concurrent-input']");
+    await input.setValue("9");
+    await input.trigger("change");
+    await flushPromises();
+    const calls = apiMocks.updateBrowserPreferences.mock
+      .calls as Array<[{ maxConcurrentSessions?: number }]>;
+    expect(calls.at(-1)![0].maxConcurrentSessions).toBe(5);
+  });
+});
