@@ -4214,8 +4214,6 @@ export default {
       parallel_agents_enabled: "並列ブラウザタスク",
       browser_decision_enabled: "高速ブラウザ判定",
       max_concurrent_label: "同時ブラウザウィンドウ",
-      resume_with_instructions: "指示を付けて再開",
-      resume_instructions_label: "指示（任意）",
       decision_route_title: "決定ルート（ブラウザ高速化）",
       decision_route_disclosure: "ページデータとユーザー名は選択したプロバイダーに送信されます。チャットプロバイダーを使用がデフォルトで、ネイティブプロファイルは完全に設定されるまで無効です。パスワードがプロバイダーに送信されることはありません。",
       decision_route_mode: "決定ルート",
@@ -4457,6 +4455,8 @@ export default {
   },
   browserTasks: {
     batchTitle: "並列ブラウザタスク",
+    resume_with_instructions: "指示を付けて再開",
+    resume_instructions_label: "指示（任意）",
     taskRunning: "実行中",
     taskWaitingForYou: "あなたの操作を待っています",
     taskPaused: "一時停止中",

@@ -4295,8 +4295,6 @@ export default {
       parallel_agents_enabled: "Tâches parallèles du navigateur",
       browser_decision_enabled: "Décisions rapides du navigateur",
       max_concurrent_label: "Fenêtres de navigateur simultanées",
-      resume_with_instructions: "Reprendre avec instructions",
-      resume_instructions_label: "Instructions (facultatif)",
       decision_route_title: "Route de décision (accélération du navigateur)",
       decision_route_disclosure: "Les données de page et les noms d'utilisateur sont envoyés au fournisseur choisi. Utiliser mon fournisseur de chat est la valeur par défaut ; un profil natif reste inerte tant qu'il n'est pas entièrement configuré. Les mots de passe n'atteignent jamais un fournisseur.",
       decision_route_mode: "Route de décision",
@@ -4547,6 +4545,8 @@ export default {
   },
   browserTasks: {
     batchTitle: "Tâches parallèles du navigateur",
+    resume_with_instructions: "Reprendre avec instructions",
+    resume_instructions_label: "Instructions (facultatif)",
     taskRunning: "En cours",
     taskWaitingForYou: "En attente de vous",
     taskPaused: "Mis en pause par vous",

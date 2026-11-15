@@ -4292,8 +4292,6 @@ export default {
       parallel_agents_enabled: "Parallel browser tasks",
       browser_decision_enabled: "Fast browser decisions",
       max_concurrent_label: "Concurrent browser windows",
-      resume_with_instructions: "Resume with instructions",
-      resume_instructions_label: "Instructions (optional)",
       decision_route_title: "Decision route (browser acceleration)",
       decision_route_disclosure: "Page data and usernames travel to your selected provider. Use my chat provider is the default; a native profile is inert until fully configured. Passwords never reach any provider.",
       decision_route_mode: "Decision route",
@@ -4541,6 +4539,8 @@ export default {
   },
   browserTasks: {
     batchTitle: "Parallel browser tasks",
+    resume_with_instructions: "Resume with instructions",
+    resume_instructions_label: "Instructions (optional)",
     taskRunning: "Running",
     taskWaitingForYou: "Waiting for you",
     taskPaused: "Paused by you",
