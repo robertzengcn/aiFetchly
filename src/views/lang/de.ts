@@ -4286,7 +4286,8 @@ export default {
       cancel_task: "Aufgabe abbrechen",
       close: "Schließen",
       reasons: {
-        login_required: "Die Seite erfordert eine Anmeldung, um fortzufahren.",
+        login_required: "Das gespeicherte Passwort wurde abgelehnt — die Seite verlangt eine Anmeldung. Geben Sie es selbst im Browserfenster ein.",
+        challenge_2fa: "Die Seite hat einen Bestätigungscode (2FA) verlangt — geben Sie ihn im Browserfenster ein.",
         login_expired: "Die gespeicherte Anmeldung ist abgelaufen.",
         captcha_sensitive_flow:
           "Dieser Schritt braucht eine menschliche Bestätigung.",

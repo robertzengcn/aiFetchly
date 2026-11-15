@@ -4285,7 +4285,8 @@ export default {
       cancel_task: "Cancelar tarea",
       close: "Cerrar",
       reasons: {
-        login_required: "El sitio requiere iniciar sesión para continuar.",
+        login_required: "La contraseña guardada fue rechazada — el sitio pide un inicio de sesión. Escríbala usted mismo en la ventana del navegador.",
+        challenge_2fa: "El sitio pidió un código de verificación (2FA) — escríbalo en la ventana del navegador.",
         login_expired: "La sesión guardada ha caducado.",
         captcha_sensitive_flow: "Este paso necesita confirmación humana.",
         mfa_prompt: "El sitio solicitó autenticación multifactor.",

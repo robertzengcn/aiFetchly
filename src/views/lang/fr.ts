@@ -4268,7 +4268,8 @@ export default {
       cancel_task: "Annuler la tâche",
       close: "Fermer",
       reasons: {
-        login_required: "Le site exige une connexion pour continuer.",
+        login_required: "Le mot de passe enregistré a été refusé — le site demande une connexion. Saisissez-le vous-même dans la fenêtre du navigateur.",
+        challenge_2fa: "Le site a demandé un code de vérification (2FA) — saisissez-le dans la fenêtre du navigateur.",
         login_expired: "La session enregistrée a expiré.",
         captcha_sensitive_flow: "Cette étape exige une confirmation humaine.",
         mfa_prompt: "Le site a demandé l'authentification à deux facteurs.",

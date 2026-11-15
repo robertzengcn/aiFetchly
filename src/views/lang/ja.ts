@@ -4188,7 +4188,8 @@ export default {
       cancel_task: "タスクをキャンセル",
       close: "閉じる",
       reasons: {
-        login_required: "続行にはログインが必要です。",
+        login_required: "保存されたパスワードが拒否されました — サイトがログインを要求しています。ブラウザウィンドウでご自身で入力してください。",
+        challenge_2fa: "サイトが確認コード（2FA）を要求しました — ブラウザウィンドウで入力してください。",
         login_expired: "保存されたログインセッションの有効期限が切れました。",
         captcha_sensitive_flow: "このステップには人の確認が必要です。",
         mfa_prompt: "サイトが多要素認証を要求しました。",

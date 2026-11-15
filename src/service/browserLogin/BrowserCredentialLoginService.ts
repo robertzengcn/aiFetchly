@@ -355,10 +355,13 @@ export class BrowserCredentialLoginService {
     // an agent can NEVER auto-register with saved or card credentials.
     // The session hands off so the user can register themselves.
     if (input.intent === "register") {
-      await browserModule
-        .requestHandoff(input.sessionId, "recovery_flow")
-        .catch(() => undefined);
-      return { status: "handoff_required", reasonCode: "registration_not_confirmed" };
+      // E17/Q-02 decision: automated v1 is LOGIN-ONLY. Registration is out
+      // of scope (an agent can NEVER auto-register with saved or card
+      // credentials), so the tool returns a STABLE reason and opens no
+      // handoff — the model reports the limitation instead of spawning a
+      // dialog the user did not ask for. The card's "Create account" label
+      // is unreachable by design (documented cut, PRD Q-02).
+      return { status: "failed", reasonCode: "registration_disabled" };
     }
     const status = browserModule.getStatus(input.sessionId);
     if (!status) {
@@ -995,8 +998,13 @@ export class BrowserCredentialLoginService {
       const SAFETY_FAILURE_REASONS = new Set([
         "password_field_unsafe",
         "password_field_visible",
+        "password_field_mutated",
         "ambiguous_password_field",
         "sensitive_field_visible",
+        "insecure_page",
+        "unexpected_field_change",
+        "challenge_2fa",
+        "wrong_password",
       ]);
       if (
         result.outcome === "wrong_credential" ||
@@ -1005,11 +1013,18 @@ export class BrowserCredentialLoginService {
           SAFETY_FAILURE_REASONS.has(result.reasonCode))
       ) {
         // A-FR-09: hand off with a clear reason; never retry automatically.
+        // E18/A-FR-09: the dialog reason matches the failure — a rejected
+        // password is NOT a generic login wall; 2FA is NOT a CAPTCHA.
+        const handoffReason =
+          result.outcome === "wrong_credential" ||
+          result.reasonCode === "wrong_password"
+            ? ("login_required" as const)
+            : result.reasonCode === "challenge_2fa" ||
+                result.reasonCode === "otp"
+              ? ("login_required" as const)
+              : ("captcha_sensitive_flow" as const);
         await browserModule
-          .requestHandoff(
-            input.sessionId,
-            result.outcome === "wrong_credential" ? "login_required" : "captcha_sensitive_flow"
-          )
+          .requestHandoff(input.sessionId, handoffReason)
           .catch(() => undefined);
         return {
           status: "handoff_required",

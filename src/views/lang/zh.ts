@@ -4041,7 +4041,8 @@ export default {
       cancel_task: "取消任务",
       close: "关闭",
       reasons: {
-        login_required: "站点要求登录后才能继续。",
+        login_required: "保存的密码被拒绝——网站要求登录。请在浏览器窗口中自行输入。",
+        challenge_2fa: "网站要求验证码（2FA）——请在浏览器窗口中输入。",
         login_expired: "已保存的登录会话已过期。",
         captcha_sensitive_flow: "此步骤需要人工确认。",
         mfa_prompt: "站点要求多因素认证。",

@@ -4265,7 +4265,8 @@ export default {
       cancel_task: "Cancel task",
       close: "Close",
       reasons: {
-        login_required: "The site requires a login to continue.",
+        login_required: "The saved password was rejected — the site is asking for a login. Type it yourself in the browser window.",
+        challenge_2fa: "The site asked for a verification code (2FA) — enter it in the browser window.",
         login_expired: "The saved login session has expired.",
         captcha_sensitive_flow: "This step needs a human confirmation.",
         mfa_prompt: "The site asked for multi-factor authentication.",
