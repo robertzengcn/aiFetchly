@@ -182,10 +182,19 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       const opts = htmlEl.querySelectorAll('option');
       for (let oi = 0; oi < opts.length && options.length < 20; oi++) {
         const opt = opts[oi];
+        const rawValue = String(opt.value ?? '');
+        // V05/D-FR-12/17: an option whose native value exceeds the wire
+        // bound (512) can NEVER be exactly verified at dispatch — the
+        // truncated value would mismatch the full native value and fail
+        // stale_select_option. Such options are OMITTED (explicitly
+        // unsupported) rather than offered unmatchable.
+        if (rawValue.length > 512) {
+          continue;
+        }
         options.push({
           // R05: exact native value (bounded by the wire schema's 512)
           // — the value IS the option identity used for verification.
-          v: String(opt.value ?? '').slice(0, 512),
+          v: rawValue,
           l: String(opt.text ?? '').replace(/\\s+/g, ' ').trim().slice(0, 200),
         });
       }
@@ -323,9 +332,9 @@ export function shapeElementRecord(
           // R05: option VALUES stay EXACT (bounded) — they are the
           // identity verified against the live element at dispatch;
           // only the display LABELS are redacted.
-          option_values: record.options.map((o) =>
-            (o.v || "").slice(0, 512)
-          ),
+          option_values: record.options
+            .filter((o) => (o.v || "").length <= 512)
+            .map((o) => o.v || ""),
         }
       : {}),
     ...(record.value != null && record.value !== ""
