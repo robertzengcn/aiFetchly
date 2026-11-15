@@ -53,6 +53,30 @@ vi.mock("@/api/aiChatApi", () => ({
       messages: ReadonlyArray<{ role: string; content: string }>;
     }): Promise<unknown> {
       const prompt = request.messages[1]?.content ?? "";
+      // N02: the PLANNER call (subgoal starts with "PLAN ONCE") gets a
+      // plan JSON so the runner proceeds; the scripted loop decisions follow.
+      if (prompt.includes("PLAN ONCE")) {
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  operation: "DONE",
+                  target_id: null,
+                  option_id: null,
+                  key: null,
+                  url: null,
+                  text: JSON.stringify({
+                    completion_criteria: [],
+                    bindings: [],
+                    first_subgoal: "click search",
+                  }),
+                }),
+              },
+            },
+          ],
+        };
+      }
       let operation = "DONE";
       let targetId: string | null = null;
       if (scriptedDecisions.length > 0) {
