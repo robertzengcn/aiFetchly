@@ -4,6 +4,7 @@ import {
   abortBatch,
   runBrowserTasks,
   runWithConcurrency,
+  type BrowserBatchTaskInput,
   type BrowserBatchTaskResult,
 } from "@/service/agentTools/runBrowserTasksTool";
 import { AgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
@@ -389,5 +390,59 @@ describe("runBrowserTasksForTool F20 admission", () => {
     );
     expect(batchId).toMatch(/^batch_/);
     expect(results[0]!.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M-FR-06: a busy account is queued once (bounded wait + retry) instead of
+// failing account_in_use immediately.
+// ---------------------------------------------------------------------------
+
+describe("runBrowserTasks busy-account queueing (M-FR-06)", () => {
+  it("retries once when the first attempt reports account_in_use", async () => {
+      let attempts = 0;
+      const runtime = {
+        runSync: vi.fn(async () => {
+          attempts++;
+          if (attempts === 1) {
+            return {
+              status: "completed",
+              output: {
+                status: "failed",
+                reason: "account_in_use",
+                summary: "busy",
+                extracted: [],
+                final_url: null,
+                evidence: [],
+              },
+            };
+          }
+          return {
+            status: "completed",
+            output: {
+              status: "completed",
+              summary: "done after queue",
+              extracted: [],
+              final_url: "https://www.youtube.com/",
+              evidence: [],
+              session_id: null,
+            },
+          };
+        }),
+      };
+      const { results } = await runBrowserTasks(
+        [
+          {
+            goal: "check the feed",
+            account_id: 101,
+          } as unknown as BrowserBatchTaskInput,
+        ],
+        1,
+        "conv-queue",
+        new AbortController().signal,
+        { runAgent: () => runtime as never, busyQueueWaitMs: 10 }
+      );
+      expect(attempts).toBe(2);
+      expect(results[0]?.status).toBe("completed");
   });
 });

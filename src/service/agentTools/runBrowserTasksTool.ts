@@ -150,6 +150,8 @@ export async function runWithConcurrency<T, R>(
 export interface RunBrowserTasksDeps {
   readonly runAgent?: typeof AgentRuntimeRegistry.getRuntime;
   readonly control?: ReturnType<typeof getDefaultAgentTaskControlService>;
+  /** M-FR-06: the busy-account queue wait (default 8s; tests shrink it). */
+  readonly busyQueueWaitMs?: number;
 }
 
 /** T13: live batch abort trees — renderer Stop/Return-now abort children. */
@@ -266,28 +268,70 @@ export async function runBrowserTasks(
       try {
         const prompt = buildTaskPrompt(task, index, tasks.length);
         const runtime = (deps.runAgent ?? AgentRuntimeRegistry.getRuntime)();
-        const result = await runtime.runSync(
-          {
-            agentId: "agent-browser-operator",
-            prompt,
-            taskPacket: {
-              userGoal: prompt,
-              requiredOutputSchema: BROWSER_OPERATOR_OUTPUT_SCHEMA,
-              constraints: { allowInteractivePermissionPrompts: false },
-            },
-            parentConversationId: conversationId,
-          } as unknown as Parameters<typeof runtime.runSync>[0],
-          {
-            ...getDefaultAgentRuntimeDeps(),
-            signal: childAbort.signal,
-            // F06: a blocking handoff/credential wait freezes this
-            // child's active-time deadline (D-21).
-            isUserWaiting: (childConversationId: string) =>
-              getDefaultToolJobRegistry().isConversationWaitingForUser(
-                childConversationId
-              ),
+        // M-FR-06: an account-backed task whose account is BUSY is queued
+        // once (bounded wait) instead of failing account_in_use — the
+        // sibling holding the account typically finishes within seconds.
+        const runOnce = async (): Promise<
+          Awaited<ReturnType<typeof runtime.runSync>>
+        > =>
+          runtime.runSync(
+            {
+              agentId: "agent-browser-operator",
+              prompt,
+              taskPacket: {
+                userGoal: prompt,
+                requiredOutputSchema: BROWSER_OPERATOR_OUTPUT_SCHEMA,
+                constraints: { allowInteractivePermissionPrompts: false },
+              },
+              parentConversationId: conversationId,
+            } as unknown as Parameters<typeof runtime.runSync>[0],
+            {
+              ...getDefaultAgentRuntimeDeps(),
+              signal: childAbort.signal,
+              // F06: a blocking handoff/credential wait freezes this
+              // child's active-time deadline (D-21).
+              isUserWaiting: (childConversationId: string) =>
+                getDefaultToolJobRegistry().isConversationWaitingForUser(
+                  childConversationId
+                ),
+            }
+          );
+        let result = await runOnce();
+        const resultFailedCode = (
+          result.output as { reason?: string } | null
+        )?.reason;
+        const accountBusy =
+          typeof task.account_id === "number" &&
+          !childAbort.signal.aborted &&
+          !batchAbort.signal.aborted &&
+          !signal.aborted &&
+          (resultFailedCode === "account_in_use" ||
+            JSON.stringify(result.output ?? {}).includes("account_in_use"));
+        if (accountBusy) {
+          // Bounded queue: wait for the holder, then retry exactly once.
+          emitBatchEvent({
+            batchId,
+            conversationId,
+            phase: "task",
+            taskId,
+            state: "waiting_for_user",
+            summary: "account in use — queued behind the active session",
+          });
+          await new Promise((resolve) =>
+            setTimeout(resolve, deps.busyQueueWaitMs ?? 8_000)
+          );
+          if (!childAbort.signal.aborted && !batchAbort.signal.aborted && !signal.aborted) {
+            emitBatchEvent({
+              batchId,
+              conversationId,
+              phase: "task",
+              taskId,
+              state: "running",
+              summary: "queued task retrying",
+            });
+            result = await runOnce();
           }
-        );
+        }
         // F17: the three abort sources classify DIFFERENTLY.
         //  - parent signal → whole batch cancelled (T13 semantics);
         //  - batchAbort alone → Return-results-now: unfinished tasks
