@@ -4078,6 +4078,7 @@ export default {
     platform_fallback: "ソーシャル",
     unknown_account: "不明なアカウント",
     proxy_active: "プロキシ",
+    direct_traffic: "直接接続（プロキシなし）",
     scope_global: "共有ブラウザ",
     scope_global_hint:
       "このブラウザセッションはアカウントに属し、チャットを切り替えても表示されたままになります。",

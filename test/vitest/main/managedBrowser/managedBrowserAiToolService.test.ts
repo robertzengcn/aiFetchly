@@ -46,6 +46,8 @@ function status(
       ownerConversationId: null,
       rootConversationId: null,
       effectiveProxyId: null,
+      proxyHostLabel: null,
+      proxyCountry: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",

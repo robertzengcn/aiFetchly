@@ -252,6 +252,9 @@ export interface SafeManagedBrowserStatus {
    * id — never credentials). Null for direct sessions.
    */
   readonly effectiveProxyId: number | null;
+  /** P-FR-09: session-card proxy labels — host:port and country, no creds. */
+  readonly proxyHostLabel: string | null;
+  readonly proxyCountry: string | null;
   readonly pageTitle: string | null;
   readonly pageRevision: number;
   readonly authenticated: boolean | null;

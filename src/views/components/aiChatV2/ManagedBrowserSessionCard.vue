@@ -14,7 +14,20 @@
         data-testid="mb-session-proxy"
       >
         <v-icon size="x-small" aria-hidden="true">mdi-shield-outline</v-icon>
-        {{ t("managedBrowser.proxy_active") }}
+        {{
+          status.proxyHostLabel
+            ? `${t("managedBrowser.proxy_active")} · ${status.proxyHostLabel}${
+                status.proxyCountry ? ` (${status.proxyCountry})` : ""
+              }`
+            : t("managedBrowser.proxy_active")
+        }}
+      </span>
+      <span
+        v-if="!status.proxyActive"
+        class="mb-session-card__proxy mb-session-card__proxy--direct"
+        data-testid="mb-session-direct"
+      >
+        {{ t("managedBrowser.direct_traffic") }}
       </span>
       <span
         class="mb-session-card__state"

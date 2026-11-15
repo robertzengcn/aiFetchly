@@ -4171,6 +4171,7 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Cuenta desconocida",
     proxy_active: "Proxy",
+    direct_traffic: "Tráfico directo (sin proxy)",
     scope_global: "Navegador compartido",
     scope_global_hint:
       "Esta sesión del navegador pertenece a la cuenta y sigue visible al cambiar de chat.",

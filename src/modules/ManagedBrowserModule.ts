@@ -188,6 +188,9 @@ interface ActiveSessionRecord {
    * proxy is known (including the account-default fallback).
    */
   effectiveProxyId: number | null;
+  /** P-FR-09: the proxy host:port summary and country for the card. */
+  proxyHostLabel: string | null;
+  proxyCountry: string | null;
 }
 
 /**
@@ -768,6 +771,16 @@ export class ManagedBrowserModule {
           (explicitProxy.mode === "http" || explicitProxy.mode === "https")
             ? (explicitProxy.proxyId ?? null)
             : null,
+        proxyHostLabel:
+          explicitProxy &&
+          (explicitProxy.mode === "http" || explicitProxy.mode === "https")
+            ? `${explicitProxy.host}:${explicitProxy.port}`
+            : null,
+        proxyCountry:
+          explicitProxy &&
+          (explicitProxy.mode === "http" || explicitProxy.mode === "https")
+            ? (explicitProxy.countryCode ?? null)
+            : null,
         pageTitle: null,
         pageRevision: 0,
         authenticated: null,
@@ -862,6 +875,8 @@ export class ManagedBrowserModule {
         (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
       ) {
         record.effectiveProxyId = effectiveProxy.proxyId ?? null;
+        record.proxyHostLabel = `${effectiveProxy.host}:${effectiveProxy.port}`;
+        record.proxyCountry = effectiveProxy.countryCode ?? null;
       }
       const reply = await client.request(
         {
@@ -2525,6 +2540,8 @@ record.currentUrl = message.observation.url || record.currentUrl;
       rootConversationId: record.rootConversationId,
       /** N05/P-FR-03: which proxy row the session launched through. */
       effectiveProxyId: record.effectiveProxyId,
+      proxyHostLabel: record.proxyHostLabel,
+      proxyCountry: record.proxyCountry,
       pageRevision: record.pageRevision,
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,

@@ -4155,6 +4155,7 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Unknown account",
     proxy_active: "Proxy",
+    direct_traffic: "Direct traffic (no proxy)",
     scope_global: "Shared browser",
     scope_global_hint:
       "This browser session belongs to the account and stays visible when you switch chats.",

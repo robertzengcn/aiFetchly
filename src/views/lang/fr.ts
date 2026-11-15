@@ -4154,6 +4154,7 @@ export default {
     platform_fallback: "Social",
     unknown_account: "Compte inconnu",
     proxy_active: "Proxy",
+    direct_traffic: "Trafic direct (sans proxy)",
     scope_global: "Navigateur partagé",
     scope_global_hint:
       "Cette session de navigation appartient au compte et reste visible quand vous changez de conversation.",

@@ -22,6 +22,8 @@ function status(
       ownerConversationId: null,
       rootConversationId: null,
       effectiveProxyId: null,
+      proxyHostLabel: null,
+      proxyCountry: null,
     state: "handoff",
     currentOrigin: null,
     pageTitle: null,
