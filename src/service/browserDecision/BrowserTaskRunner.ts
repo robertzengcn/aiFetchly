@@ -494,7 +494,21 @@ export class BrowserTaskRunner {
         // (C-FR-06); a fresh decision happens after the gate reopens.
         try {
           await gate.waitUntilOpen(signal);
-        } catch {
+        } catch (gateError) {
+          // V04/D-FR-09/C-FR-08: exact terminal-reason mapping — pause
+          // expiry (interrupted) and failed states are NOT user
+          // cancellations and must not be labelled task_cancelled.
+          if (signal.aborted) {
+            return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+          }
+          const gateMessage =
+            gateError instanceof Error ? gateError.message : "unknown";
+          if (gateMessage === "task_interrupted") {
+            return this.terminal("partial", "task_interrupted", evidence, extracted, observation);
+          }
+          if (gateMessage === "task_failed") {
+            return this.terminal("failed", "task_failed", evidence, extracted, observation);
+          }
           return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
         }
         if (signal.aborted) {
