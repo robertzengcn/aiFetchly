@@ -1,5 +1,5 @@
 import { log } from "@/modules/Logger";
-import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
+import { ProxyCredentialCodec, PROXY_DECRYPT_FAILED_USER } from "@/modules/browserProxy/ProxyCredentialCodec";
 import { IProxyApi } from "./interface/IProxyApi";
 import { ProxyModel } from "@/model/Proxy.model";
 import {
@@ -295,7 +295,7 @@ export class ProxyModule extends BaseModule implements IProxyApi {
         out.push({
           ...row,
           pass: "",
-          user: "__decrypt_failed__",
+          user: PROXY_DECRYPT_FAILED_USER,
         });
         continue;
       }

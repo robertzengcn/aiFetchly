@@ -166,6 +166,12 @@ export interface ProxyCheckProgress {
   readonly basic?: "pass" | "failure";
   readonly googlePass?: "pass" | "fail";
   readonly error?: string;
+  /**
+   * W04/P-FR-04: typed failure reason (proxy_connect_failed |
+   * proxy_auth_failed | tunnel_failed | proxy_check_failed) so the
+   * switch/rollback can report WHY a proxy is unusable.
+   */
+  readonly reasonCode?: string;
 }
 
 export interface ProxyCheckItemInternal {
@@ -173,6 +179,8 @@ export interface ProxyCheckItemInternal {
   readonly basic?: "pass" | "failure";
   readonly googlePass?: "pass" | "fail";
   readonly error?: string;
+  /** W04/P-FR-04: typed failure reason threaded through switch/rollback. */
+  readonly reasonCode?: string;
 }
 
 export interface ProxyCheckBatchResult {

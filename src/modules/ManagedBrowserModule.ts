@@ -2290,9 +2290,15 @@ record.currentUrl = message.observation.url || record.currentUrl;
 
   /**
    * T22/P-FR-04: basic-mode health check for one proxy id. Uses the same
-   * batch checker the UI/AI paths use; any failure is fail-closed false.
+   * batch checker the UI/AI paths use; any failure is fail-closed false —
+   * WITH its typed reason (W04: proxy_auth_failed for a 407 or a failed
+   * credential decrypt, proxy_connect_failed for transport failures,
+   * tunnel_failed where reported) instead of one undifferentiated false.
    */
-  private async checkProxyHealthy(proxyId: number): Promise<boolean> {
+  private async checkProxyHealth(proxyId: number): Promise<{
+    healthy: boolean;
+    reasonCode: string;
+  }> {
     try {
       const { ProxyController } = await import("@/controller/proxy-controller");
       const controller = new ProxyController();
@@ -2303,15 +2309,26 @@ record.currentUrl = message.observation.url || record.currentUrl;
         mode: "basic" as const,
         concurrency: 1,
         timeoutMs: 10_000,
-      });      const results = result.results ?? [];
-      return results.some((item) => item.basic === "pass");
+      });
+      const results = result.results ?? [];
+      if (results.some((item) => item.basic === "pass")) {
+        return { healthy: true, reasonCode: "proxy_healthy" };
+      }
+      // W04: the FIRST typed reason wins (setup errors carry the decrypt
+      // sentinel's proxy_auth_failed; check failures carry the classified
+      // connect/auth/tunnel reason).
+      const typed = results.find((item) => item.reasonCode !== undefined);
+      if (typed?.reasonCode) {
+        return { healthy: false, reasonCode: typed.reasonCode };
+      }
+      return { healthy: false, reasonCode: "proxy_check_failed" };
     } catch (error) {
       log.warn(
         `[ManagedBrowserModule] proxy health check failed: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
-      return false;
+      return { healthy: false, reasonCode: "proxy_check_failed" };
     }
   }
 
@@ -2427,9 +2444,13 @@ record.currentUrl = message.observation.url || record.currentUrl;
       }
     }
     if (healthCheckId !== null) {
-      const healthy = await this.checkProxyHealthy(healthCheckId);
-      if (!healthy) {
-        throw new ManagedBrowserError("proxy_no_usable_proxy", "proxy_check_failed");
+      // W04/P-FR-04: the typed check reason flows into the switch error —
+      // a 407 reports proxy_auth_failed (not proxy_check_failed) so the
+      // model can choose another proxy for the right reason. The check
+      // runs BEFORE the stop: a refused switch never falls back to direct.
+      const health = await this.checkProxyHealth(healthCheckId);
+      if (!health.healthy) {
+        throw new ManagedBrowserError("proxy_no_usable_proxy", health.reasonCode);
       }
     }
     // N02/B08: snapshot the OLD session's EFFECTIVE proxy id, selector,

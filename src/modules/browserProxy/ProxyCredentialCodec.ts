@@ -2,6 +2,14 @@ import { FieldCipher } from "@/modules/fieldCipher/FieldCipher";
 import { userSecretKeyService } from "@/modules/fieldCipher";
 
 /**
+ * W04/P-FR-04: sentinel carried in `user` by getProxiesByIds when a row
+ * HAD a stored secret but decryptForUse failed. The check path MUST read
+ * this and fail the proxy with proxy_auth_failed instead of launching a
+ * doomed check with an empty password.
+ */
+export const PROXY_DECRYPT_FAILED_USER = "__decrypt_failed__";
+
+/**
  * Proxy credential encryption at rest (PRD P-FR-08).
  *
  * `proxy.pass` historically stored plaintext. New writes are encrypted with

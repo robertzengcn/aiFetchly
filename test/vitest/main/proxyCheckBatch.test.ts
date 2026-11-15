@@ -159,4 +159,74 @@ describe("ProxyController.checkProxyBatch", () => {
     expect(result.results).toHaveLength(1);
     expect(result.results[0].error).toBeDefined();
   });
+
+  // W04/P-FR-04: a row whose password could NOT be decrypted (the
+  // getProxiesByIds sentinel) fails with proxy_auth_failed and the checker
+  // is NEVER called — no doomed check with an empty password.
+  it("fails a decrypt-sentinel proxy with proxy_auth_failed without checking", async () => {
+    const checkProxy = vi.fn(async () => ({
+      status: true,
+      msg: "",
+      data: true,
+    })) as never;
+    const controller = makeControllerWith({
+      proxyApi: {
+        getProxiesByIds: async (ids) =>
+          ids.map((id) => ({
+            id,
+            host: `h-${id}`,
+            port: "8080",
+            protocol: "http",
+            user: "__decrypt_failed__",
+            pass: "",
+          })),
+      },
+      checkProxy,
+    });
+
+    const result = await controller.checkProxyBatch({
+      proxyIds: [7],
+      mode: "basic",
+      timeoutMs: 1000,
+      concurrency: 1,
+    });
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].basic).toBe("failure");
+    expect(result.results[0].reasonCode).toBe("proxy_auth_failed");
+    expect(result.results[0].error).toBe("proxy_password_decrypt_failed");
+    // The checker never ran.
+    expect(checkProxy).not.toHaveBeenCalled();
+  });
+
+  // W04/P-FR-04: typed reasons survive the check — a 407 classifies as
+  // proxy_auth_failed, a transport failure as proxy_connect_failed.
+  it("classifies check failures into typed reason codes", async () => {
+    const controller = makeControllerWith({
+      checkProxy: vi.fn(async (proxy: { host: string }) => {
+        const id = Number(proxy.host.split("-")[1]);
+        return {
+          status: false,
+          msg:
+            id === 1
+              ? "407 proxy authentication required"
+              : "connect timeout",
+          data: false,
+        } as ProxyCheckres;
+      }),
+    });
+
+    const result = await controller.checkProxyBatch({
+      proxyIds: [1, 2],
+      mode: "basic",
+      timeoutMs: 1000,
+      concurrency: 2,
+    });
+
+    const authFailed = result.results.find((r) => r.proxyId === 1);
+    expect(authFailed?.basic).toBe("failure");
+    expect(authFailed?.reasonCode).toBe("proxy_auth_failed");
+    const connectFailed = result.results.find((r) => r.proxyId === 2);
+    expect(connectFailed?.reasonCode).toBe("proxy_connect_failed");
+  });
 });
