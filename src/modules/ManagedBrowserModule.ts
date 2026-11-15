@@ -542,6 +542,16 @@ export class ManagedBrowserModule {
           "platform_not_in_pilot"
         );
       }
+      // N04/S-FR-05: eligibility is a VERIFIED recipe or the GENERIC
+      // adapter — a bare registry row is not enough. YouTube (platformId
+      // 2, dedicated adapter) requires a verified recipe; every other
+      // registered site runs on the generic sign-in adapter.
+      if (account.platformId === 2 && siteMatch.status !== "verified") {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "site_not_verified"
+        );
+      }
     }
     const manifest: PlatformSessionDefinition | undefined = publicBrowsing
       ? {
