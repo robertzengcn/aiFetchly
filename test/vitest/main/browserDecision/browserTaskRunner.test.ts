@@ -490,10 +490,13 @@ describe("DecisionClients (D-FR-16..19)", () => {
   });
 
   it("hosted client reports unavailable on a 404 (D-AC-11)", async () => {
-    const client = new HostedDecisionClient(async () => {
-      const error = new Error("404 not found");
-      throw error;
-    });
+    const client = new HostedDecisionClient(
+      async () => ({ advertised: false }),
+      async () => {
+        const error = new Error("404 not found");
+        throw error;
+      }
+    );
     const decision = await client.decide(
       {
         schema_version: 1,
@@ -738,6 +741,7 @@ describe("F05 lifecycle checks at every await boundary", () => {
   it("hosted client never posts on an already-aborted signal", async () => {
     let calls = 0;
     const client = new HostedDecisionClient(
+      async () => ({ advertised: true }),
       async () => {
         calls++;
         return {};

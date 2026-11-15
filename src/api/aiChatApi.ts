@@ -2042,6 +2042,71 @@ export class AiChatApi {
     return this.listOpenAIModelsHosted();
   }
 
+  /**
+   * N01 (design §9.2): probe the hosted decision capability endpoint
+   * (`GET /api/ai/v1/decision-models`). A 404 means an older server
+   * WITHOUT the decision contract — hosted acceleration is honestly
+   * unavailable (D-AC-11); any other transport failure THROWS so the
+   * caller can distinguish.
+   */
+  async probeDecisionModels(options?: {
+    signal?: AbortSignal;
+  }): Promise<{
+    advertised: boolean;
+    operations?: string[];
+    maxCandidates?: number;
+    deadlineDefaultMs?: number;
+    deadlineHardMs?: number;
+    templateRevision?: string | null;
+  }> {
+    try {
+      const raw = await this._httpClient.get<Record<string, unknown>>(
+        "/api/ai/v1/decision-models",
+        { signal: options?.signal }
+      );
+      const rawOps = (raw as { operations?: unknown }).operations;
+      const operations = Array.isArray(rawOps)
+        ? (rawOps.filter((o) => typeof o === "string") as string[])
+        : undefined;
+      const record = raw as Record<string, unknown>;
+      return {
+        advertised: true,
+        ...(operations ? { operations } : {}),
+        ...(typeof record.max_candidates === "number"
+          ? { maxCandidates: record.max_candidates }
+          : {}),
+        ...(typeof record.deadline_default_ms === "number"
+          ? { deadlineDefaultMs: record.deadline_default_ms }
+          : {}),
+        ...(typeof record.deadline_hard_ms === "number"
+          ? { deadlineHardMs: record.deadline_hard_ms }
+          : {}),
+        ...(typeof record.template_revision === "string"
+          ? { templateRevision: record.template_revision }
+          : {}),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/404|not[_ ]found/i.test(message)) {
+        return { advertised: false };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * N01 (design §9.2): submit a canonical v1 decision envelope to
+   * `/api/ai/v1/decisions` over the existing authenticated transport.
+   */
+  async postDecisionEnvelope(
+    body: unknown,
+    options?: { signal?: AbortSignal }
+  ): Promise<unknown> {
+    return await this._httpClient.postJson("/api/ai/v1/decisions", body, {
+      signal: options?.signal,
+    });
+  }
+
   /** Hosted aiFetchly model listing, wrapped in dev's model-list retry policy. */
   private async listOpenAIModelsHosted(): Promise<OpenAIModelsResponse> {
     return this.withModelListRetry(async () => {

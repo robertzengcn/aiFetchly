@@ -184,6 +184,12 @@ export interface BrowserDecisionClient {
 
 /** Advertised capabilities of a decision route (advisory only). */
 export interface BrowserDecisionCapabilities {
+  /**
+   * N01/D-AC-11: whether the route actually ADVERTISED a decision
+   * contract (e.g. the hosted decision-models endpoint exists). False
+   * means honest unavailability — no runner run is started.
+   */
+  readonly advertised: boolean;
   readonly operations: readonly BrowserDecisionOperation[];
   readonly supportsStructuredJsonSchema: boolean;
   readonly supportsForcedToolDecision: boolean;

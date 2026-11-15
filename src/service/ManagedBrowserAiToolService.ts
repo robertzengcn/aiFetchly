@@ -15,6 +15,7 @@ import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
+import type { BrowserDecisionClient } from "@/entityTypes/browserDecisionTypes";
 import { browserSetProxyToolSchema } from "@/schemas/aiTools/browserProxy";
 import { browserSiteUpsertToolSchema } from "@/schemas/aiTools/browserSite";
 import { getDefaultBrowserSiteModule } from "@/modules/BrowserSiteModule";
@@ -1373,79 +1374,105 @@ export class ManagedBrowserAiToolService {
     const providerMode = new AIProviderSettingsService().getMode();
     const route: "hosted" | "chat" = providerMode === "hosted" ? "hosted" : "chat";
     void sessionStatus;
-    if (route === "hosted") {
-      // D-AC-11: honest unavailability — no doomed runner run, no wasted
-      // observation. Existing hosted browser tools remain available.
-      return {
-        status: "unavailable",
-        reason: "hosted_decision_unavailable",
-        message:
-          "Hosted decision acceleration is not available on this server yet. Use browser_run_actions for this task.",
-      };
-    }
-    // Hosted mode returned unavailable above; the runner runs on the
-    // user's chat route only (no custom-to-hosted fallback, D-03).
-    void route;
-    // D-FR-04: a stored `small`/`haiku` alias is resolved to a REAL model
-    // BEFORE the decision request — third-party providers 404 on the
-    // alias, and the decision must never depend on server-side aliasing.
-    // The /models listing routes through AiChatApi (no direct provider
-    // client import — cross-chunk edges panicked rolldown's chunker).
-    let decisionModel: string | undefined = undefined;
-    try {
-      // D-FR-04 note: the alias check is LOCAL — importing the shared
-      // SmallModelAlias module here crosses a chunk boundary and panics
-      // rolldown during artifact builds.
-      const isSmallModelAlias = (model: unknown): boolean =>
-        typeof model === "string" &&
-        ["haiku", "small"].includes(model.trim().toLowerCase());
-      const resolved = new AIProviderResolver().resolveForChat();
-      if (resolved.canUse && resolved.kind === "local") {
-        const defaultModel = resolved.config.defaultModel;
-        if (isSmallModelAlias(defaultModel)) {
-          const { AiChatApi } = await import("@/api/aiChatApi");
-          const api = new AiChatApi();
-          const models = await api.listOpenAIModels();
-          const real = (models.data ?? [])
-            .map((m) => (typeof m === "string" ? m : (m as { id?: string }).id))
-            .find(
-              (id): id is string =>
-                typeof id === "string" && !isSmallModelAlias(id)
-            );
-          decisionModel = real ?? undefined;
-          // No resolvable model: the decision route stays unaliased —
-          // the alias request would 404 downstream anyway.
-        }
-      }
-    } catch {
-      // Alias resolution is best-effort; the resolver default applies.
-    }
     const { providerConfigKey: currentProviderConfigKey } = await import(
       "@/service/aiProvider/AIProviderConfigVersion"
     );
-    const decisionClient = new ChatCompletionDecisionClient(
-      async (request, signal) => {
-        const { AiChatApi } = await import("@/api/aiChatApi");
-        const api = new AiChatApi();
-        return (await api.openAIChatCompletion(
-          {
-            messages: request.messages as never,
-            ...(request.model ? { model: request.model } : {}),
-            stream: false,
-            temperature: request.temperature,
-            response_format: request.response_format,
-          },
-          { signal }
-        )) as ChatCompletionLike;
-      },
-      decisionModel,
-      // R01/D-FR-02: each decision call re-checks the frozen provider
-      // config identity; a mid-task change returns provider_error.
-      () => currentProviderConfigKey()
-    );
+    let decisionClient: BrowserDecisionClient;
+    if (route === "hosted") {
+      // N01 (design 9.2): the hosted route requires the decision
+      // contract. Probe the capability endpoint first — an older server
+      // (404) reports honest unavailability with NO doomed runner run
+      // (D-AC-11); existing hosted browser tools remain available.
+      const { AiChatApi } = await import("@/api/aiChatApi");
+      const api = new AiChatApi();
+      const probe = await api.probeDecisionModels({
+        signal: context.signal,
+      });
+      if (!probe.advertised) {
+        return {
+          status: "unavailable",
+          reason: "hosted_decision_unavailable",
+          message:
+            "Hosted decision acceleration is not available on this server yet. Use browser_run_actions for this task.",
+        };
+      }
+      const { HostedDecisionClient } = await import(
+        "@/service/browserDecision/DecisionClients"
+      );
+      const hostedClient = new HostedDecisionClient(
+        async (probeSignal) => api.probeDecisionModels({ signal: probeSignal }),
+        async (body, signal) => api.postDecisionEnvelope(body, { signal }),
+        // R01/D-FR-02: the hosted client re-checks the frozen provider
+        // config identity around every request.
+        () => currentProviderConfigKey()
+      );
+      hostedClient.freezeRoute(currentProviderConfigKey());
+      decisionClient = hostedClient;
+    } else {
+      // N01: the runner runs on the user's chat route only (no
+      // custom-to-hosted fallback, D-03).
+      // D-FR-04: a stored `small`/`haiku` alias is resolved to a REAL
+      // model BEFORE the decision request — third-party providers 404 on
+      // the alias, and the decision must never depend on server-side
+      // aliasing. The /models listing routes through AiChatApi (no direct
+      // provider client import — cross-chunk edges panicked rolldown).
+      let decisionModel: string | undefined = undefined;
+      try {
+        // D-FR-04 note: the alias check is LOCAL — importing the shared
+        // SmallModelAlias module here crosses a chunk boundary and panics
+        // rolldown during artifact builds.
+        const isSmallModelAlias = (model: unknown): boolean =>
+          typeof model === "string" &&
+          ["haiku", "small"].includes(model.trim().toLowerCase());
+        const resolved = new AIProviderResolver().resolveForChat();
+        if (resolved.canUse && resolved.kind === "local") {
+          const defaultModel = resolved.config.defaultModel;
+          if (isSmallModelAlias(defaultModel)) {
+            const { AiChatApi } = await import("@/api/aiChatApi");
+            const api = new AiChatApi();
+            const models = await api.listOpenAIModels();
+            const real = (models.data ?? [])
+              .map((m) =>
+                typeof m === "string" ? m : (m as { id?: string }).id
+              )
+              .find(
+                (id): id is string =>
+                  typeof id === "string" && !isSmallModelAlias(id)
+              );
+            decisionModel = real ?? undefined;
+            // No resolvable model: the decision route stays unaliased —
+            // the alias request would 404 downstream anyway.
+          }
+        }
+      } catch {
+        // Alias resolution is best-effort; the resolver default applies.
+      }
+      const chatClient = new ChatCompletionDecisionClient(
+        async (request, signal) => {
+          const { AiChatApi } = await import("@/api/aiChatApi");
+          const api = new AiChatApi();
+          return (await api.openAIChatCompletion(
+            {
+              messages: request.messages as never,
+              ...(request.model ? { model: request.model } : {}),
+              stream: false,
+              temperature: request.temperature,
+              response_format: request.response_format,
+            },
+            { signal }
+          )) as ChatCompletionLike;
+        },
+        decisionModel,
+        // R01/D-FR-02: each decision call re-checks the frozen provider
+        // config identity; a mid-task change returns provider_error.
+        () => currentProviderConfigKey()
+      );
+      chatClient.freezeRoute(currentProviderConfigKey());
+      decisionClient = chatClient;
+    }
     const awaitedResultRef: { taskId?: string } = {};
     // T17/D-FR-02: freeze the provider route at admission.
-    decisionClient.freezeRoute(currentProviderConfigKey());
+    void currentProviderConfigKey;
     const runner = new BrowserTaskRunner(
       {
         sessionId: parsed.data.session_id,

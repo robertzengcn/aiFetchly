@@ -23,27 +23,99 @@ import {
 } from "@/schemas/api/browserDecision";
 import type { BrowserProposedAction } from "@/entityTypes/browserDecisionTypes";
 
+/**
+ * N01/D-FR-16: the hosted decision contract v1 client (design §9.2).
+ *
+ * Capabilities are discovered via `GET /api/ai/v1/decision-models` — a
+ * missing endpoint (older server) reports hosted acceleration as
+ * UNAVAILABLE without a doomed run. Decisions POST the canonical v1
+ * envelope to `/api/ai/v1/decisions`; the echoed correlation
+ * (request/task/step/observation/revision) is validated before any
+ * result is accepted — a replay/mismatched response is a provider error.
+ */
 export class HostedDecisionClient implements BrowserDecisionClient {
   constructor(
+    private readonly getCapabilitiesProbe: (
+      signal: AbortSignal
+    ) => Promise<{
+      readonly advertised: boolean;
+      readonly operations?: readonly string[];
+      readonly maxCandidates?: number;
+      readonly deadlineDefaultMs?: number;
+      readonly deadlineHardMs?: number;
+      readonly templateRevision?: string | null;
+    }>,
     private readonly postDecision: (
       body: unknown,
       signal: AbortSignal
-    ) => Promise<unknown>
+    ) => Promise<unknown>,
+    private readonly getConfigKey?: () => string | null
   ) {}
 
+  private frozenConfigKey: string | null = null;
+
+  /** Freeze the route at admission (call once before the loop). */
+  public freezeRoute(configKey: string | null): void {
+    this.frozenConfigKey = configKey;
+  }
+
+  /** F05: has the provider configuration changed since admission? */
+  private configChanged(): boolean {
+    return (
+      this.getConfigKey !== undefined &&
+      this.frozenConfigKey !== null &&
+      this.getConfigKey() !== this.frozenConfigKey
+    );
+  }
+
   public async getCapabilities(signal: AbortSignal): Promise<BrowserDecisionCapabilities> {
-    void signal;
-    return {
-      operations: [],
-      supportsStructuredJsonSchema: false,
-      supportsForcedToolDecision: false,
-      supportsJsonObject: false,
-      nativeDecision: true,
-      maxCandidates: 120,
-      deadlineDefaultMs: 3_000,
-      deadlineHardMs: 10_000,
-      cacheable: true,
-    };
+    if (signal.aborted) {
+      return { advertised: false, operations: [], supportsStructuredJsonSchema: false, supportsForcedToolDecision: false, supportsJsonObject: false, nativeDecision: true, maxCandidates: 0, deadlineDefaultMs: 0, deadlineHardMs: 0, cacheable: true } as BrowserDecisionCapabilities;
+    }
+    try {
+      const probe = await this.getCapabilitiesProbe(signal);
+      if (!probe.advertised) {
+        return {
+          advertised: false,
+          operations: [],
+          supportsStructuredJsonSchema: false,
+          supportsForcedToolDecision: false,
+          supportsJsonObject: false,
+          nativeDecision: true,
+          maxCandidates: 0,
+          deadlineDefaultMs: 0,
+          deadlineHardMs: 0,
+          cacheable: true,
+        } as BrowserDecisionCapabilities;
+      }
+      return {
+        advertised: true,
+        operations: (probe.operations ?? []) as BrowserDecisionCapabilities["operations"],
+        supportsStructuredJsonSchema: true,
+        supportsForcedToolDecision: true,
+        supportsJsonObject: true,
+        nativeDecision: true,
+        maxCandidates: probe.maxCandidates ?? 120,
+        deadlineDefaultMs: probe.deadlineDefaultMs ?? 3_000,
+        deadlineHardMs: probe.deadlineHardMs ?? 10_000,
+        cacheable: true,
+      } as BrowserDecisionCapabilities;
+    } catch {
+      // A probe failure is honest unavailability (D-AC-11) — never a
+      // doomed runner run.
+      return {
+        advertised: false,
+        operations: [],
+        supportsStructuredJsonSchema: false,
+        supportsForcedToolDecision: false,
+        supportsJsonObject: false,
+        nativeDecision: true,
+        maxCandidates: 0,
+        deadlineDefaultMs: 0,
+        deadlineHardMs: 0,
+        cacheable: true,
+      } as BrowserDecisionCapabilities;
+    }
   }
 
   public async decide(
@@ -54,14 +126,48 @@ export class HostedDecisionClient implements BrowserDecisionClient {
     if (signal.aborted) {
       return { status: "provider_error", reason_code: "request_aborted" };
     }
+    // D-FR-02: a mid-task provider configuration change aborts the task.
+    if (this.configChanged()) {
+      return { status: "provider_error", reason_code: "provider_config_changed" };
+    }
     try {
-      const raw = await this.postDecision(
-        input,
-        signal
-      );
+      const raw = await this.postDecision(input, signal);
       // F05: a late response after the deadline is discarded.
       if (signal.aborted) {
         return { status: "provider_error", reason_code: "request_aborted" };
+      }
+      // N01 (design §9.2): the echoed correlation must match the request —
+      // a replayed/misrouted response is never accepted.
+      const record = (raw ?? {}) as Record<string, unknown>;
+      const action = record["action"] as Record<string, unknown> | undefined;
+      const correlations = [
+        ["request_id", input.request_id],
+        ["task_id", input.task_id],
+        ["step_id", input.step_id],
+        ["observation_id", input.observation_id],
+      ] as const;
+      for (const [key, expected] of correlations) {
+        const echoed =
+          (record[key] as unknown) ?? (action ? action[key] : undefined);
+        if (echoed !== undefined && echoed !== null && echoed !== expected) {
+          return {
+            status: "provider_error",
+            reason_code: "correlation_mismatch",
+          };
+        }
+      }
+      const echoedRevision =
+        (record["page_revision"] as unknown) ??
+        (action ? action["page_revision"] : undefined);
+      if (
+        echoedRevision !== undefined &&
+        echoedRevision !== null &&
+        echoedRevision !== input.page_revision
+      ) {
+        return {
+          status: "provider_error",
+          reason_code: "correlation_mismatch",
+        };
       }
       return normalizeWireResult(raw);
     } catch (error) {
@@ -120,6 +226,8 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
   public async getCapabilities(signal: AbortSignal): Promise<BrowserDecisionCapabilities> {
     void signal;
     return {
+      // The chat route is always "advertised" — the user's own endpoint.
+      advertised: true,
       operations: [],
       supportsStructuredJsonSchema: false,
       supportsForcedToolDecision: false,
