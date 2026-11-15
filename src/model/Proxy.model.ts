@@ -90,6 +90,15 @@ export class ProxyModel extends BaseDb {
   }
 
   /**
+   * E07/P-FR-01: ALL stored proxy entities (raw, encrypted-at-rest) for
+   * the main-process auto selector. Bounded to 1000 rows.
+   */
+  async listAllRaw(): Promise<ProxyEntity[]> {
+    const repository = await this.getRepository();
+    return await repository.find({ take: 1000 });
+  }
+
+  /**
    * Batch-load full proxy entities for many ids in one query. Replaces N
    * per-id `getProxyById`/`getProxyDetail` round-trips when building
    * redacted summaries for a set of proxies.

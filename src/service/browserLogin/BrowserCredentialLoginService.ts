@@ -895,25 +895,13 @@ export class BrowserCredentialLoginService {
         if (credential.accountId !== null) {
           await accountModule.recordLoginFailureClear(credential.accountId);
         }
-        // N05/P-FR-03: link the proxy the session actually used so later
-        // sessions for this account reuse it. Best-effort.
-        try {
-          const postStatus = getDefaultManagedBrowserModule().getStatus(
-            input.sessionId
-          );
-          const usedProxyId = postStatus?.effectiveProxyId ?? null;
-          if (
-            credential.accountId !== null &&
-            usedProxyId !== null &&
-            postStatus?.accountId === credential.accountId
-          ) {
-            await accountModule
-              .linkProxyToAccount(credential.accountId, usedProxyId)
-              .catch(() => undefined);
-          }
-        } catch {
-          // Proxy linking never fails the sign-in.
-        }
+        // E10/P-FR-03: capture the proxy the session actually used NOW
+        // (before the lease transfer changes the record) — a public
+        // session that signs in also remembers its proxy.
+        const preBindStatus = getDefaultManagedBrowserModule().getStatus(
+          input.sessionId
+        );
+        const usedProxyId = preBindStatus?.effectiveProxyId ?? null;
         if (credential.accountId !== null) {
           try {
             await getDefaultManagedBrowserModule().bindAccountToSession(
@@ -932,6 +920,13 @@ export class BrowserCredentialLoginService {
                 error instanceof Error ? error.message : "unknown"
               }`,
             };
+          }
+          // E10/P-FR-03: link the used proxy to the account AFTER the
+          // bind — works for public sessions that signed in, too.
+          if (usedProxyId !== null) {
+            await accountModule
+              .linkProxyToAccount(credential.accountId, usedProxyId)
+              .catch(() => undefined);
           }
         }
         // B03/S-FR-04: after a successful sign-in, propose the extra

@@ -15,7 +15,12 @@ import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCode
 import type { ResolvedSessionProxy } from "@/modules/ManagedBrowserModule";
 
 export type BrowserProxySelection =
-  | { readonly kind: "proxy_id"; readonly proxyId: number }
+  | {
+      readonly kind: "proxy_id";
+      readonly proxyId: number;
+      /** E10/P-FR-03: the requested country for a geo-change check. */
+      readonly countryCode?: string;
+    }
   | { readonly kind: "auto"; readonly countryCode?: string }
   | { readonly kind: "direct" };
 
@@ -124,10 +129,28 @@ export async function selectProxyForSession(
     if (!isBrowserUsableProtocol(row.protocol)) {
       return { status: "unresolvable", reasonCode: "proxy_protocol_unsupported" };
     }
+    const linked = linkedProxies.find((l) => l.id === row.id);
     if (
       isAccountSession &&
       linkedProxies.length > 0 &&
-      !linkedProxies.some((linked) => linked.id === row.id)
+      !linkedProxies.some((l) => l.id === row.id)
+    ) {
+      return {
+        status: "confirmation_required",
+        reasonCode: "proxy_change_requires_confirmation",
+      };
+    }
+    // E10/P-FR-03: a LINKED proxy in a DIFFERENT country than the
+    // requested one requires user confirmation — a geo change moves the
+    // account's exit identity.
+    if (
+      isAccountSession &&
+      linked &&
+      selection.kind === "proxy_id" &&
+      selection.countryCode != null &&
+      linked.country_code != null &&
+      linked.country_code.toLowerCase() !==
+        selection.countryCode.toLowerCase()
     ) {
       return {
         status: "confirmation_required",
@@ -145,20 +168,38 @@ export async function selectProxyForSession(
 
   // auto: browser-usable proxy, preferring the requested country and a
   // recent passing check; fall back to any usable one, never to direct.
+  // E07/P-FR-01: when a COUNTRY is requested, the selection is
+  // country-strict — no usable row from that country fails the request
+  // (proxy_no_usable_proxy) instead of silently launching a proxy in
+  // another country. A never-checked row (lastCheckPassed undefined) is
+  // treated as UNPROVEN and only used when no checked-passing row exists.
   const usable = linkedProxies.filter((row) => isBrowserUsableProtocol(row.protocol));
   if (usable.length === 0) {
     return { status: "unresolvable", reasonCode: "proxy_no_usable_proxy" };
   }
   const country = selection.countryCode?.toLowerCase();
-  const preferred = country
+  const countryScoped = country
     ? usable.filter(
         (row) => (row.country_code ?? "").toLowerCase() === country,
       )
-    : [];
-  const passing = (preferred.length > 0 ? preferred : usable).filter(
-    (row) => row.lastCheckPassed !== false,
+    : usable;
+  if (country && countryScoped.length === 0) {
+    // E07: a country miss NEVER falls through to another country.
+    return { status: "unresolvable", reasonCode: "proxy_no_usable_proxy" };
+  }
+  const checkedPassing = countryScoped.filter(
+    (row) => row.lastCheckPassed === true,
   );
-  const chosen = (passing.length > 0 ? passing : preferred.length > 0 ? preferred : usable)[0];
+  const notFailed = countryScoped.filter(
+    (row) => row.lastCheckPassed === null || row.lastCheckPassed === undefined,
+  );
+  const passing =
+    checkedPassing.length > 0
+      ? checkedPassing
+      : notFailed.length > 0
+        ? notFailed
+        : countryScoped;
+  const chosen = passing[0];
   if (!chosen) {
     return { status: "unresolvable", reasonCode: "proxy_no_usable_proxy" };
   }

@@ -1781,7 +1781,46 @@ record.currentUrl = message.observation.url || record.currentUrl;
   /** Raw (encrypted-at-rest) proxy rows linked to an account. */
   private async loadProxyRowsForAccount(accountId: number): Promise<ProxyRow[]> {
     if (accountId <= 0) {
-      return [];
+      // E07/P-FR-01: a PUBLIC session's `auto` selects from ALL
+      // browser-usable stored proxies (checked HTTP(S)), not from an
+      // empty account-linked list. Decryption stays in the main process
+      // and only the resolved endpoint is used.
+      try {
+        const { ProxyModel } = await import("@/model/Proxy.model");
+        const { ProxyCheckModel, proxyCheckStatus } = await import(
+          "@/model/ProxyCheck.model"
+        );
+        const { Token } = await import("@/modules/token");
+        const { USERSDBPATH } = await import("@/config/usersetting");
+        const model = new ProxyModel(new Token().getValue(USERSDBPATH));
+        const checkModel = new ProxyCheckModel(
+          new Token().getValue(USERSDBPATH)
+        );
+        const rows = await model.listAllRaw();
+        const out: ProxyRow[] = [];
+        for (const row of rows) {
+          const check = await checkModel.getProxyCheck(row.id);
+          out.push({
+            id: row.id,
+            host: row.host,
+            port: row.port,
+            user: row.user ?? null,
+            pass: row.pass ?? null,
+            protocol: row.protocol ?? null,
+            country_code: row.country_code ?? null,
+            lastCheckPassed:
+              check == null ? null : check.status === proxyCheckStatus.Success,
+          });
+        }
+        return out;
+      } catch (error) {
+        log.warn(
+          `[ManagedBrowserModule] public proxy lookup failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        return [];
+      }
     }
     try {
       const { SocialAccountModule: Sam } = await import(
@@ -2320,6 +2359,12 @@ record.currentUrl = message.observation.url || record.currentUrl;
         ...(accountId > 0 ? { accountId } : {}),
         purpose: "proxy_switch",
         proxy: target,
+        // E08/P-FR-05: the NEW session keeps the task owner — the cap key
+        // stays `task:<id>` across switches instead of falling back to the
+        // conversation/account/platform key.
+        ...(restoreSnapshot.agentTaskId
+          ? { agentTaskId: restoreSnapshot.agentTaskId }
+          : {}),
         ...(conversation ? { conversationId: conversation } : {}),
         ...(lastUrl && lastUrl !== "about:blank"
           ? { requestedStartUrl: lastUrl }
@@ -2335,17 +2380,23 @@ record.currentUrl = message.observation.url || record.currentUrl;
       // known (deterministic; auto selectors can resolve another proxy),
       // falling back to the original selector when the row is gone. The
       // task ownership (agentTaskId) rides along.
-      const restoreSelection: BrowserProxySelection | undefined =
-        restoreSnapshot.effectiveProxyId != null
-          ? { kind: "proxy_id", proxyId: restoreSnapshot.effectiveProxyId }
-          : restoreSnapshot.proxySelection ?? undefined;
+      // E08/P-AC-01: restore by the EFFECTIVE proxy id ONLY — re-running
+      // an auto selector can resolve a DIFFERENT proxy. When the id is
+      // unknown, leave the session STOPPED with a structured error
+      // instead of guessing.
+      if (restoreSnapshot.effectiveProxyId == null) {
+        throw new ManagedBrowserError(
+          "proxy_switch_restore_failed",
+          "restore_proxy_unknown"
+        );
+      }
       try {
         await this.start({
           ...(restoreSnapshot.accountId
             ? { accountId: restoreSnapshot.accountId }
             : {}),
           purpose: "proxy_switch_restore",
-          ...(restoreSelection ? { proxy: restoreSelection } : {}),
+          proxy: { kind: "proxy_id", proxyId: restoreSnapshot.effectiveProxyId },
           ...(restoreSnapshot.conversation
             ? { conversationId: restoreSnapshot.conversation }
             : {}),
