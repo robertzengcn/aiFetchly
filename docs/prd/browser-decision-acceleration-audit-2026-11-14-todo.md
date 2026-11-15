@@ -45,13 +45,30 @@ Second pass (same day), commits `15f4a34fc` → `90979e32e`:
 | `7d354cdb7` | B13: resume instructions reach the running loop; Take control button |
 | `90979e32e` | build: proxy classifier moved inside the worker bundle (rolldown chunk panic) |
 
-Still open: the large phases N01 (hosted/native decision clients —
-needs the hosted decision contract, external), N02 (planner + field
-helper — a full phase), the deep N06 sub-agent items (batch
-confirmation card, queueing for a busy account, per-provider
-concurrency), the N04 registry switch-over callers and PSL replacement,
-and N09's settings section, real E2E drivers, and the paired held-out
-evaluation (external).
+Still open: N01's full hosted rollout needs the hosted decision
+contract deployed (external — the desktop client is DONE); the deep N06
+items (batch confirmation card, busy-account queueing, per-provider
+concurrency), N09's settings UI section, real E2E drivers, and the
+paired held-out evaluation (external).
+
+## Fourth pass (2026-11-15): the PRD implementation plan, phases A–D
+
+Plan: A = provider parity (hosted + native clients); B = planner +
+field helper (N02); C = registry switch-over (N04); D = sub-agent
+control; E = settings UI. Implemented in the worktree:
+
+| Commit | Phase | Items |
+| --- | --- | --- |
+| `f1dac85a0` | A1/A2 | HostedDecisionClient v1: capability probe (GET decision-models; 404 = honest unavailability, D-AC-11), POST /decisions with correlation-echo validation (replay/misroute = provider error), frozen config re-check (D-FR-02); executeTask hosted route probes then runs the hosted client; `advertised` flag on capabilities |
+| `fe30c6377` | A3 | Versioned decision-route settings (§5.3: follow_chat default / native_profile with an explicit profile); SystemOneDecisionClient — inert profile refuses, native distribution preserved, config re-check; route bundle rejects cross-mode credential reuse |
+| `330025741` | B | TaskPlanner: ONE bounded planning call, planner_failed is its own terminal, criteria merge, firstSubgoal rides the first decision; BrowserFieldValueService: trusted bindings → bounded helper, D-FR-20 secret rejection (plan + helper), D-FR-21 full-input cache with unknown-effect invalidation; FILL resolution wired |
+| `5274cc2a3` | C | Registry-backed platform names (S-FR-06); eligibility = verified recipe or generic adapter (S-FR-05) — a bare unverified YouTube row no longer suffices |
+| `74e8a5156` | D | The agent loop registers with the control service and honors the gate before EVERY tool call (C-FR-05): cancelled throws, paused/interrupted returns a structured paused result |
+
+Verification: 559 main managed/decision/agent/login tests, 1606
+component tests, `tsc --noEmit --incremental false` clean, `yarn
+build:e2e` green; CI run 43660987520 SUCCESS on all three jobs at
+`74e8a5156`.
 
 Third pass (same day), commits `bc94a961d` → `9d2…`:
 
