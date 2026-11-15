@@ -194,7 +194,9 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       obsId: String(obsIndex),
       ...(entry.priority === true ? { priority: true } : {}),
       tag: htmlEl.tagName.toLowerCase(),
-      role,
+      // E11: role is page-authored and can exceed the wire bound (48) —
+      // an unsliced role drops the WHOLE observation at parse time.
+      role: String(role).slice(0, 48),
       name,
       inputType,
       value: inputType && !/^hidden$/.test(inputType) ? String(htmlEl.value ?? '') : null,
@@ -285,7 +287,10 @@ export function shapeElementRecord(
   readonly inputType: string | null;
 } {
   return {
-    role: record.role || "generic",
+    // E11: page-authored role can exceed the wire bound (48) — slice
+    // here too so the in-page collector's raw records never drop the
+    // whole observation at parse time.
+    role: (record.role || "generic").slice(0, 48),
     // Accessible names are page-authored: scrub secret-shaped content
     // BEFORE budgeting (GAP-04).
     // F09/A-AC-01: credential fields also redact their accessible name —

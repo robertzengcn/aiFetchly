@@ -313,6 +313,8 @@ export class ManagedBrowserModule {
    * domain proposals must come from THIS ledger, never from model text.
    */
   private readonly sessionRedirectLedger = new Map<string, Set<string>>();
+  /** E15/D-FR-26: input-dispatch state of the in-flight program, per session. */
+  private readonly sessionInputDispatched = new Map<string, boolean>();
   private readonly approvalDecisions = new Map<
     string,
     {
@@ -1240,6 +1242,14 @@ record.currentUrl = message.observation.url || record.currentUrl;
    * Latest sanitized observation for a live session (null when none was
    * taken). Used by the AI tool layer to resolve ref → target descriptor.
    */
+  /**
+   * E15/D-FR-26: was input dispatched by the session's IN-FLIGHT program?
+   * Read by the step-timeout path to classify known no-effect vs unknown.
+   */
+  public isInputDispatched(sessionId: string): boolean {
+    return this.sessionInputDispatched.get(sessionId) === true;
+  }
+
   public getLastObservation(
     sessionId: string
   ): BrowserObservation | null {
@@ -1651,6 +1661,15 @@ record.currentUrl = message.observation.url || record.currentUrl;
             totalSteps: event.totalSteps,
             messageCode: event.messageCode,
           });
+        }
+        // E15/D-FR-26: track the dispatch state of the IN-FLIGHT program —
+        // the step-timeout path reads it to classify known no-effect vs
+        // unknown.
+        if (event.inputDispatched !== undefined) {
+          this.sessionInputDispatched.set(
+            record.sessionId,
+            event.inputDispatched
+          );
         }
         break;
       case "SESSION_STOPPED":

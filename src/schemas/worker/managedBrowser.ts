@@ -189,6 +189,7 @@ const errorCodeSchema = z.enum([
   "worker_exited",
   "cancelled",
   "stop_timeout",
+  "stop_timeout_no_dispatch",
   "cookie_refresh_failed",
   "cookie_persistence_failed",
   "cache_disabled",
@@ -208,6 +209,7 @@ const errorCodeSchema = z.enum([
   "internal_error",
   "session_already_account_bound",
   "proxy_switch_in_progress",
+  "proxy_switch_restore_failed",
   // B07: a SELECT resolution that fails against the live options BEFORE
   // any input is dispatched — proven no-effect (runner reobserves).
   "stale_select_option",
@@ -776,6 +778,8 @@ const actionProgressMessageSchema = z.strictObject({
   ]),
   completedSteps: z.number().int().nonnegative(),
   totalSteps: z.number().int().positive().nullable(),
+  // E15/D-FR-26: input dispatched by the in-flight program?
+  inputDispatched: z.boolean().optional(),
   messageCode: z.string().min(1).max(64),
 });
 

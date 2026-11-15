@@ -111,6 +111,23 @@ export interface ExecuteProgramOptions {
   readonly shouldCancel: () => boolean;
   readonly now?: () => number;
   readonly navigateTimeoutMs?: number;
+  /**
+   * E13/D-FR-16: URL keys (origin+path+query+fragment) observed as link
+   * hrefs — a NAVIGATE in the accelerated path must target one of these
+   * or the current page; an unobserved path on an allowed host is
+   * rejected.
+   */
+  readonly observedUrlKeys?: ReadonlySet<string>;
+  readonly currentPageKey?: string | null;
+  /**
+   * E15/D-FR-26: the executor sets this flag the moment a mutating input
+   * call is INVOKED (click/type/select/press/goto). The module's
+   * step-timeout path reads it to classify the timeout as known no-effect
+   * vs unknown.
+   */
+  readonly dispatchFlag?: { inputDispatched: boolean };
+  /** E15: per-leaf progress hook (module-side dispatch tracking). */
+  readonly onLeaf?: (info: { inputDispatched: boolean }) => void;
 }
 
 type StopCode = NonNullable<BrowserProgramOutcome["stopCode"]>;
@@ -360,6 +377,13 @@ export class BrowserActionExecutor {
     // state can no longer be proven unchanged, so the action is never
     // reported as a known no-effect failure.
     const dispatch = { inputSent: false };
+    const bumpDispatch = (): void => {
+      dispatch.inputSent = true;
+      if (options.dispatchFlag) {
+        options.dispatchFlag.inputDispatched = true;
+      }
+      options.onLeaf?.({ inputDispatched: true });
+    };
     try {
       switch (action.type) {
         case "navigate":
@@ -367,7 +391,7 @@ export class BrowserActionExecutor {
         case "click":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
-            dispatch.inputSent = true;
+            bumpDispatch();
             await entry.element.click({ timeout: 5_000 });
             return { success: true };
           });
@@ -389,7 +413,7 @@ export class BrowserActionExecutor {
             // value. Clearing already mutates the field, so dispatch
             // begins here: a later failure (partial typing, detach) is
             // an unknown effect.
-            dispatch.inputSent = true;
+            bumpDispatch();
             await entry.element.evaluate(clearElementValueFn);
             await entry.element.type(action.value, { delay: 10 });
             return { success: true };
@@ -425,12 +449,12 @@ export class BrowserActionExecutor {
             }
             // The select() call is the first mutation — inputSent only
             // covers everything AFTER the resolution succeeded.
-            dispatch.inputSent = true;
+            bumpDispatch();
             await entry.element.select(...resolved);
             return { success: true };
           });
         case "press_key":
-          dispatch.inputSent = true;
+          bumpDispatch();
           await options.page.keyboard.press(action.key);
           return { success: true };
         case "scroll":
@@ -449,7 +473,7 @@ export class BrowserActionExecutor {
         case "hover":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
-            dispatch.inputSent = true;
+            bumpDispatch();
             await entry.element.hover();
             return { success: true };
           });
@@ -467,22 +491,22 @@ export class BrowserActionExecutor {
               };
             }
             await entry.element.scrollIntoView();
-            dispatch.inputSent = true;
+            bumpDispatch();
             await entry.element.evaluate(clearElementWithEventFn);
             return { success: true };
           });
         case "go_back":
-          dispatch.inputSent = true;
+          bumpDispatch();
           await options.page.evaluate("(() => history.back())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
         case "go_forward":
-          dispatch.inputSent = true;
+          bumpDispatch();
           await options.page.evaluate("(() => history.forward())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
         case "reload":
-          dispatch.inputSent = true;
+          bumpDispatch();
           await options.page.evaluate("(() => location.reload())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
@@ -537,8 +561,40 @@ export class BrowserActionExecutor {
         stopCode: "navigation_blocked",
       };
     }
+    // E13/D-FR-16 (defense in depth): the worker gate authorizes a
+    // navigation only against the CURRENT page or an OBSERVED link URL —
+    // an unobserved path on an allowed host is rejected even when the
+    // origin matches. Accelerated (non-public) sessions only.
+    if (
+      !options.navigation.publicBrowsing &&
+      options.observedUrlKeys !== undefined
+    ) {
+      try {
+        const u = new URL(url);
+        const key = `${u.origin}${u.pathname}${u.search}${u.hash}`;
+        const currentPage = options.currentPageKey ?? null;
+        const observed = options.observedUrlKeys.has(key);
+        const samePage = currentPage !== null && key === currentPage;
+        if (!observed && !samePage) {
+          return {
+            success: false,
+            errorCode: "navigation_blocked",
+            stopCode: "navigation_blocked",
+          };
+        }
+      } catch {
+        return {
+          success: false,
+          errorCode: "navigation_blocked",
+          stopCode: "navigation_blocked",
+        };
+      }
+    }
     // A navigation that started but failed is an unknown effect (7.3).
     dispatch.inputSent = true;
+    if (options.dispatchFlag) {
+      options.dispatchFlag.inputDispatched = true;
+    }
     try {
       await options.page.goto(url, {
         timeout:

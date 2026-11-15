@@ -164,6 +164,8 @@ type RunnerExecutionResultShape = {
 
 /** Structural slice of ManagedBrowserModule consumed by these tools. */
 export interface BrowserModuleLike {
+  /** E15/D-FR-26: input dispatched by the in-flight program? */
+  isInputDispatched?(sessionId: string): boolean;
   start(
     input: {
       accountId?: number;
@@ -1629,13 +1631,23 @@ export class ManagedBrowserAiToolService {
             ]);
             if (outcome === "step_timeout") {
               void this.browserModule.cancelActiveRequest?.(sessionId);
-              // R02/D-FR-26: a timed-out dispatched step has UNKNOWN effect
-              // — the original program may still finish and input may have
-              // occurred. The runner must stop and reconcile, not retry.
+              // E15/D-FR-26: a timeout is UNKNOWN only when input may have
+              // been dispatched — the ACTION_PROGRESS stream reports the
+              // dispatch state. A timeout before any input is a known
+              // no-effect so the runner may re-observe.
+              const dispatched =
+                this.browserModule.isInputDispatched?.(sessionId) === true;
               return {
-                effect: "unknown" as const,
+                effect: dispatched ? ("unknown" as const) : ("known" as const),
                 pageRevision: 0,
-                results: [{ success: false, errorCode: "stop_timeout" }],
+                results: [
+                  {
+                    success: false,
+                    errorCode: dispatched
+                      ? ("stop_timeout" as const)
+                      : ("stop_timeout_no_dispatch" as const),
+                  },
+                ],
               };
             }
             if (outcome.kind === "stop") {

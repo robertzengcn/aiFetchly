@@ -257,6 +257,13 @@ export class BrowserTaskRunner {
   } | null = null;
   /** N02/D-FR-05: whether the planner already ran (one call per task). */
   private plannerRan = false;
+  /** N02/E14/D-FR-25: REAL recent-action ring buffer for decision input. */
+  private recentActions: Array<{
+    operation: BrowserDecisionOperation;
+    target_descriptor: string | null;
+    outcome: "executed" | "failed" | "effect_unknown";
+    error_code: string | null;
+  }> = [];
   /** B16/D-AC-09: the verification miss carried into the next decision. */
   private pendingSubgoal: string | null = null;
   /** T18: chat-route progress check (D-FR-19) — digest every 5 steps. */
@@ -722,6 +729,22 @@ export class BrowserTaskRunner {
             actions: [programAction],
           });
           await this.deps.persistActionOutcome?.(this.stepOutcomeOf(execution));
+          // E14/D-FR-25: record the executed (untargeted) step.
+          {
+            const step = execution.results[execution.results.length - 1];
+            this.recentActions.push({
+              operation: action.operation,
+              target_descriptor: null,
+              outcome:
+                execution.effect === "unknown"
+                  ? "effect_unknown"
+                  : step && !step.success
+                    ? "failed"
+                    : "executed",
+              error_code: step?.errorCode ?? null,
+            });
+            this.recentActions = this.recentActions.slice(-6);
+          }
           const processed = await this.processExecution(
             action.operation,
             null,
@@ -887,6 +910,17 @@ export class BrowserTaskRunner {
           );
         }
         await this.deps.persistActionOutcome?.(this.stepOutcomeOf(execution));
+        // E14/D-FR-25: record the executed step for the decision history.
+        {
+          const step = execution.results[execution.results.length - 1];
+          this.recentActions.push({
+            operation: action.operation,
+            target_descriptor: `${target.role} "${target.name}"`,
+            outcome: execution.effect === "unknown" ? "effect_unknown" : step && !step.success ? "failed" : "executed",
+            error_code: step?.errorCode ?? null,
+          });
+          this.recentActions = this.recentActions.slice(-6);
+        }
                 const processed = await this.processExecution(
           action.operation,
           { role: target.role, name: target.name },
@@ -1057,7 +1091,9 @@ export class BrowserTaskRunner {
       url: observation.url,
       title: observation.title.slice(0, 512),
       candidates: candidates as BrowserDecisionInput["candidates"],
-      recent_actions: [],
+      // E14/D-FR-25: the REAL executed-step history (bounded) — never an
+      // empty list or a fabricated entry.
+      recent_actions: this.recentActions.slice(-6),
       // D-FR-16: every offered operation is executable (T18).
       allowed_operations: RUNNER_OPERATIONS,
       deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
@@ -1175,10 +1211,30 @@ export class BrowserTaskRunner {
       digest === this.lastProgressDigest &&
       !criterionProgress
     ) {
+      // E14/D-FR-22: recovery decides against the observation it will
+      // execute on — re-observe, rebuild candidates/input FIRST.
+      const freshNoProgressObservation = await this.deps.observe(
+        this.input.sessionId
+      );
+      const recoveryContext = freshNoProgressObservation
+        ? this.buildDecisionInput(
+            freshNoProgressObservation,
+            buildDecisionCandidates({
+              elements: freshNoProgressObservation.elements,
+            })
+          )
+        : decisionInput;
       const recovered = await this.recoverOnce(
-        decisionInput,
+        recoveryContext,
         "no progress for 5 steps; the page did not change - try a DIFFERENT approach or ESCALATE",
-        signal
+        signal,
+        {
+          operation:
+            this.recentActions.at(-1)?.operation ?? "WAIT",
+          error_code: "no_progress",
+          target_descriptor:
+            this.recentActions.at(-1)?.target_descriptor ?? null,
+        }
       );
       if (recovered) {
         return "ok";

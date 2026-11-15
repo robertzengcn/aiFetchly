@@ -96,6 +96,7 @@ export type ManagedBrowserErrorCode =
   | "worker_exited"
   | "cancelled"
   | "stop_timeout"
+  | "stop_timeout_no_dispatch"
   | "cookie_refresh_failed"
   | "cookie_persistence_failed"
   | "cache_disabled"
@@ -108,7 +109,8 @@ export type ManagedBrowserErrorCode =
   | "internal_error"
   | "stale_select_option"
   | "session_already_account_bound"
-  | "proxy_switch_in_progress";
+  | "proxy_switch_in_progress"
+  | "proxy_switch_restore_failed";
 
 /** Bounded reason codes for user handoff (technical design §18). */
 export type ManagedBrowserHandoffReason =

@@ -197,6 +197,15 @@ export class WorkerSession {
   /** GAP-05: redirect storms emit ONE challenge — dedupe by kind+origin. */
   private lastChallengeKey: string | null = null;
   private lastChallengeAtEpochMs = 0;
+  /**
+   * E13/D-FR-16: URL keys (origin+path+query+fragment) observed as link
+   * hrefs since the last navigation — the worker-side navigation gate
+   * authorizes a goto only against these, the current page, or the same
+   * key.
+   */
+  private observedUrlKeys = new Set<string>();
+  /** E15/D-FR-26: input-dispatch state of the IN-FLIGHT program. */
+  private currentDispatchFlag: { inputDispatched: boolean } | null = null;
 
   constructor(deps: WorkerSessionDeps) {
     this.sessionId = deps.sessionId;
@@ -476,6 +485,9 @@ export class WorkerSession {
     const abort = new AbortController();
     this.currentRunActionsAbort = abort;
     try {
+      const dispatchFlag = { inputDispatched: false };
+      this.currentDispatchFlag = dispatchFlag;
+      let dispatchedSteps = 0;
       const outcome = await this.executor.executeProgram(program, {
         page,
         registry: this.registry,
@@ -486,6 +498,32 @@ export class WorkerSession {
             ...this.adapter.loginOrigins,
           ],
         },
+        dispatchFlag,
+        onLeaf: (info) => {
+          // E15/D-FR-26: stream dispatch state so the module's step-timeout
+          // path can classify known no-effect vs unknown.
+          dispatchedSteps++;
+          this.send({
+            ...this.base(`evt-progress-${this.now()}`),
+            type: "ACTION_PROGRESS",
+            phase: "acting",
+            completedSteps: dispatchedSteps,
+            totalSteps: null,
+            messageCode: 'e15-dispatch',
+            inputDispatched: info.inputDispatched,
+          });
+        },
+        // E13/D-FR-16: the worker-side gate authorizes a goto only against
+        // observed link URLs and the current page.
+        observedUrlKeys: this.observedUrlKeys,
+        currentPageKey: (() => {
+          try {
+            const u = new URL(page.url());
+            return `${u.origin}${u.pathname}${u.search}${u.hash}`;
+          } catch {
+            return null;
+          }
+        })(),
         shouldCancel: () => this.cancelled || abort.signal.aborted,
         now: this.now,
       });
@@ -508,6 +546,25 @@ export class WorkerSession {
           );
         } catch {
           observation = null;
+        }
+      }
+      // E13/D-FR-16: harvest observed link URLs for the worker-side gate.
+      if (observation) {
+        if (this.observedUrlKeys.size > 500) {
+          this.observedUrlKeys.clear();
+        }
+        for (const el of observation.elements) {
+          const href = (el as { href_full?: string | null }).href_full;
+          if (href) {
+            try {
+              const u = new URL(href);
+              this.observedUrlKeys.add(
+                `${u.origin}${u.pathname}${u.search}${u.hash}`
+              );
+            } catch {
+              /* unparsable hrefs are skipped */
+            }
+          }
         }
       }
       // F07: the dispatched action's evidence is NEVER lost — the
@@ -560,6 +617,7 @@ export class WorkerSession {
       this.emitError(requestId, "internal_error", toSafeErrorMessage(error));
     } finally {
       this.currentRunActionsAbort = null;
+        this.currentDispatchFlag = null;
     }
   }
 
@@ -889,6 +947,11 @@ export class WorkerSession {
    */
   public pauseCurrent(): void {
     this.currentRunActionsAbort?.abort();
+  }
+
+  /** E15/D-FR-26: was input dispatched by the IN-FLIGHT program? */
+  public isInputDispatched(): boolean {
+    return this.currentDispatchFlag?.inputDispatched === true;
   }
 
   public async stop(requestId: string, reason: string): Promise<void> {
