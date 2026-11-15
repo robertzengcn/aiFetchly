@@ -1974,3 +1974,74 @@ describe("BrowserTaskRunner E05 secret-field fill refusal", () => {
     expect(result.status).toBe("completed");
   });
 });
+
+describe("BrowserTaskRunner V02 SIGN_IN blocking handoff", () => {
+  const signInEntry = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "SIGN_IN", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("waits in-job and resumes with a fresh observation when the user resolves", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    (deps as unknown as {
+      awaitHandoff: () => Promise<"resolved" | "expired" | "cancelled">;
+    }).awaitHandoff = async () => "resolved";
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_v02a",
+        conversationId: "conv-1",
+        goal: "check feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).toContain("sign_in:handoff_awaited");
+    expect(result.status).toBe("completed");
+  });
+
+  it("expiry interrupts the task (handoff_expired)", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: () => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    (deps as unknown as {
+      awaitHandoff: () => Promise<"resolved" | "expired" | "cancelled">;
+    }).awaitHandoff = async () => "expired";
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_v02b",
+        conversationId: "conv-1",
+        goal: "check feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("handoff_expired");
+  });
+
+  it("a bare fake without awaitHandoff still terminates sign_in_handoff", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: () => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_v02c",
+        conversationId: "conv-1",
+        goal: "check feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("sign_in_handoff");
+  });
+});

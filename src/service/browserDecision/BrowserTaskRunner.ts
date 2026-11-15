@@ -574,9 +574,31 @@ export class BrowserTaskRunner {
           if (signal.aborted) {
             return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
           }
+          if (signInResult.status === "handoff_required" && this.deps.awaitHandoff) {
+            // V02/D-FR-10a/C-FR-02: the credential card's cancel/handoff
+            // opens the dialog — the runner BLOCKS in-job like an action
+            // handoff, preserving task identity and budgets, and resumes
+            // with a fresh observation when the user resolves.
+            evidence.push("sign_in:handoff_awaited");
+            const resolution = await this.deps.awaitHandoff(
+              "login_required",
+              this.taskId
+            );
+            if (resolution === "resolved") {
+              observation = await this.deps.observe(this.input.sessionId);
+              continue;
+            }
+            return this.terminal(
+              "partial",
+              resolution === "expired" ? "handoff_expired" : "handoff_cancelled",
+              evidence,
+              extracted,
+              observation
+            );
+          }
           if (signInResult.status === "handoff_required") {
-            // The card cancel/user-handoff opened the handoff dialog —
-            // the runner must not keep deciding against that page.
+            // No awaitHandoff wired (bare fakes): the dialog is open and
+            // the runner must not decide against that page.
             return this.terminal("partial", "sign_in_handoff", evidence, extracted, observation);
           }
           observation = await this.deps.observe(this.input.sessionId);
