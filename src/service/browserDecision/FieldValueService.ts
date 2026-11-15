@@ -26,6 +26,12 @@ export interface FieldResolutionInput {
   readonly bindings: readonly FieldBinding[];
   /** Bounded recent-action context for the helper call. */
   readonly recentContext?: readonly string[];
+  /**
+   * W03/D-FR-21: the provider configuration revision the helper runs
+   * under. A cached value produced by one provider is never replayed
+   * after the user switches provider.
+   */
+  readonly providerRevision?: string | null;
   /** The helper call (selected-provider; bounded; may be absent in tests). */
   readonly helper?: (input: {
     readonly goal: string;
@@ -62,13 +68,15 @@ export function fieldIsForbiddenToFill(fieldName: string): boolean {
 
 export class BrowserFieldValueService {
   /**
-   * D-FR-21: cache keyed by the FULL helper input (goal+field+context) —
-   * a hit requires every input identical. Cleared whenever a mutation of
-   * the field ran with unknown effect (the runner calls invalidate()).
+   * D-FR-21: cache keyed by the FULL helper input (goal+field+context+
+   * provider revision) — a hit requires every input identical. Each entry
+   * records its PARSED field name so invalidation matches the field
+   * exactly (W03: never a substring match). Cleared whenever a mutation
+   * of the field ran with unknown effect (the runner calls invalidate()).
    */
   private cache = new Map<
     string,
-    { value: string; invalidated: boolean }
+    { field: string; value: string; invalidated: boolean }
   >();
 
   private static cacheKey(input: FieldResolutionInput): string {
@@ -76,18 +84,21 @@ export class BrowserFieldValueService {
       goal: input.goal,
       field: input.fieldName,
       context: input.recentContext ?? [],
+      providerRevision: input.providerRevision ?? null,
     });
   }
 
   /** D-FR-21: unknown execution effect on this field invalidates replay. */
   public invalidate(fieldName: string): void {
+    // W03: match the PARSED field name exactly (trimmed, case-insensitive)
+    // — a substring match would drop unrelated entries (`invalidate("pass")`
+    // must NOT clear a cached `password` field).
+    const target = fieldName.trim().toLowerCase();
+    if (target.length === 0) {
+      return;
+    }
     for (const [key, entry] of [...this.cache.entries()]) {
-      // Invalidate every cached entry for this field (any goal/context —
-      // a mutated field's page state can no longer prove the old value).
-      if (
-        key.includes(JSON.stringify(fieldName).slice(1, -1)) ||
-        entry.invalidated
-      ) {
+      if (entry.invalidated || entry.field.toLowerCase() === target) {
         this.cache.delete(key);
       }
     }
@@ -144,7 +155,11 @@ export class BrowserFieldValueService {
     if (problems.length > 0) {
       return null;
     }
-    this.cache.set(key, { value: raw, invalidated: false });
+    this.cache.set(key, {
+      field: fieldName,
+      value: raw,
+      invalidated: false,
+    });
     return raw;
   }
 }

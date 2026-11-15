@@ -1712,10 +1712,17 @@ export class ManagedBrowserAiToolService {
           if (fieldIsForbiddenToFill(fieldInput.fieldName)) {
             return null;
           }
+          // W03/D-FR-21: the cache key carries the provider revision — a
+          // value typed under one provider is never replayed after the
+          // user switches provider.
+          const { providerConfigKey } = await import(
+            "@/service/aiProvider/AIProviderConfigVersion"
+          );
           return await getDefaultBrowserFieldValueService().resolveText({
             fieldName: fieldInput.fieldName,
             goal: fieldInput.goal,
             bindings: runnerPlan?.bindings ?? [],
+            providerRevision: providerConfigKey(),
             helper: async (helperInput) => {
               const helperDecision = await decisionClient.decide(
                 {
