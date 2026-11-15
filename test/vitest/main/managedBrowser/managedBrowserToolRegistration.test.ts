@@ -52,7 +52,7 @@ describe("managed-browser tool registration", () => {
   });
 
   it("E04/C-FR-03: resume is NOT a model tool", () => {
-    expect(getTool("browser_resume_after_handoff")).toBeUndefined();
+    expect(getTool("browser_resume_after_handoff") ?? null).toBeNull();
   });
 
   it("requires confirmation for session start, action programs, and cache clears", () => {
