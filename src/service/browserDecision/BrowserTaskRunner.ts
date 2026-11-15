@@ -113,6 +113,39 @@ export interface RunnerDeps {
     readonly reasonCode?: string;
   }>;
   /**
+   * N02/D-FR-05: ONE bounded planning call before the loop. A planner
+   * failure is its own terminal reason (planner_failed); absent in bare
+   * test fakes (no planner, no failure).
+   */
+  readonly plan?: (input: {
+    readonly goal: string;
+    readonly constraints: readonly string[];
+    readonly completionCriteria: readonly CompletionCriterion[];
+    readonly url: string;
+    readonly title: string;
+    readonly signal: AbortSignal;
+  }) => Promise<
+    | null
+    | {
+        readonly completionCriteria: readonly CompletionCriterion[];
+        readonly bindings: ReadonlyArray<{
+          readonly field: string;
+          readonly value: string;
+        }>;
+        readonly firstSubgoal: string | null;
+      }
+  >;
+  /**
+   * N02/D-FR-20/21: resolve FILL text from trusted plan bindings /
+   * bounded helper; null when nothing trustworthy applies.
+   */
+  readonly resolveFieldText?: (input: {
+    readonly fieldName: string;
+    readonly goal: string;
+  }) => Promise<string | null>;
+  /** D-FR-21: unknown effect on a field invalidates cached helper values. */
+  readonly invalidateFieldCache?: (fieldName: string) => void;
+  /**
    * T19: durable cursor hooks (best-effort persistence; failures never
    * block execution but ARE logged by the module).
    */
@@ -212,6 +245,17 @@ export class BrowserTaskRunner {
   private startUrl: string | null = null;
   /** A-FR-14: bounded credential-service attempts per task. */
   private signInAttempts = 0;
+  /** N02/D-FR-05: the plan established once at admission. */
+  private plan: {
+    readonly completionCriteria: readonly CompletionCriterion[];
+    readonly bindings: ReadonlyArray<{
+      readonly field: string;
+      readonly value: string;
+    }>;
+    readonly firstSubgoal: string | null;
+  } | null = null;
+  /** N02/D-FR-05: whether the planner already ran (one call per task). */
+  private plannerRan = false;
   /** B16/D-AC-09: the verification miss carried into the next decision. */
   private pendingSubgoal: string | null = null;
   /** T18: chat-route progress check (D-FR-19) — digest every 5 steps. */
@@ -219,7 +263,7 @@ export class BrowserTaskRunner {
   private stepsSinceProgressCheck = 0;
 
   constructor(
-    private readonly input: BrowserTaskInput,
+    private input: BrowserTaskInput,
     deps: RunnerDeps
   ) {
     this.deps = deps;
@@ -252,6 +296,45 @@ export class BrowserTaskRunner {
     }
 
     try {
+      // N02/D-FR-05: ONE bounded planning call before the loop. A planner
+      // failure is its OWN terminal reason — never silently retried, and
+      // never a reason to run the loop without criteria.
+      if (!this.plannerRan && this.deps.plan) {
+        this.plannerRan = true;
+        const firstObservation =
+          observation ?? (await this.deps.observe(this.input.sessionId));
+        const plan = firstObservation
+          ? await this.deps.plan({
+              goal: this.input.goal,
+              constraints: this.input.constraints ?? [],
+              completionCriteria: this.input.completionCriteria ?? [],
+              url: firstObservation.url,
+              title: firstObservation.title,
+              signal,
+            })
+          : null;
+        if (signal.aborted) {
+          return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+        }
+        if (plan === null) {
+          return this.terminal("failed", "planner_failed", evidence, extracted, firstObservation);
+        }
+        this.plan = plan;
+        if (plan.firstSubgoal) {
+          this.pendingSubgoal = plan.firstSubgoal;
+        }
+        if (plan.completionCriteria.length > 0) {
+          // D-FR-05: refined criteria are MERGED with the caller's.
+          this.input = {
+            ...this.input,
+            completionCriteria: [
+              ...(this.input.completionCriteria ?? []),
+              ...plan.completionCriteria,
+            ],
+          };
+        }
+        evidence.push("planner:ok");
+      }
       while (this.leafSteps < this.budget.leafSteps && this.decisionRequests < this.budget.decisionRequests) {
         if (signal.aborted) {
           return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
@@ -273,7 +356,8 @@ export class BrowserTaskRunner {
         // B13/C-FR-07: instructions the user typed when resuming the task
         // are folded into THIS decision (consume-once) — consumed BEFORE
         // the decision input is built so the subgoal actually rides it.
-        this.pendingSubgoal = null;
+        // N02/D-FR-05: the planner's firstSubgoal set before the loop
+        // rides the FIRST decision (resume instructions override it).
         const resumeInstructions =
           control.consumeResumeInstructions?.(this.taskId) ?? null;
         if (resumeInstructions) {
@@ -281,6 +365,7 @@ export class BrowserTaskRunner {
           evidence.push("resume_with_instructions");
         }
         const decisionInput = this.buildDecisionInput(observation, candidates);
+        this.pendingSubgoal = null;
         if (this.startUrl === null) {
           this.startUrl = observation.url;
         }
@@ -722,10 +807,22 @@ export class BrowserTaskRunner {
           continue;
         }
 
-        const programAction = this.toRunnerAction(action, target, observation);
+        let programAction = this.toRunnerAction(action, target, observation);
         if (!programAction) {
           evidence.push(`unsupported_operation:${action.operation}`);
           continue;
+        }
+        // N02/D-FR-20/21: FILL text resolution — trusted plan bindings
+        // first (unambiguous), then the bounded helper. The model's own
+        // text applies only when neither produced a trustworthy value.
+        if (programAction.type === "fill" && this.deps.resolveFieldText) {
+          const resolved = await this.deps.resolveFieldText({
+            fieldName: target.name,
+            goal: this.input.goal,
+          });
+          if (resolved !== null && resolved !== programAction.value) {
+            programAction = { ...programAction, value: resolved };
+          }
         }
 
         this.leafSteps++;
@@ -787,6 +884,11 @@ export class BrowserTaskRunner {
               actions: [programAction],
             })
         );
+        if (execution.effect === "unknown" && action.operation === "FILL") {
+          // D-FR-21: an unknown effect on the field invalidates cached
+          // helper values — automatic replay is no longer safe.
+          this.deps.invalidateFieldCache?.(target.name);
+        }
         if (processed.stop) {
           // T18: a failures-exhausted stop gets ONE bounded recovery
           // before the terminal lands; policy stops never recover.

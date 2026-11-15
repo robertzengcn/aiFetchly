@@ -1835,3 +1835,74 @@ describe("BrowserTaskRunner A-FR-14 SIGN_IN operation", () => {
     expect(calls).toBe(2);
   });
 });
+
+const clickGoEntry = (): BrowserDecisionResultWireLike => ({
+  status: "decided",
+  action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+  uncertainty: { source: "unavailable" as const, confidence: null },
+});
+
+describe("BrowserTaskRunner N02 planner", () => {
+  it("runs the planner ONCE before the loop and feeds the first subgoal", async () => {
+    let planCalls = 0;
+    const deps = makeRunnerDeps([clickGoEntry(), doneEntry()]);
+    (deps as unknown as {
+      plan: (input: Record<string, unknown>) => Promise<{
+        completionCriteria: Array<{ kind: string; value: string }>;
+        bindings: Array<{ field: string; value: string }>;
+        firstSubgoal: string | null;
+      } | null>;
+    }).plan = async (input) => {
+      planCalls++;
+      void input;
+      return {
+        completionCriteria: [],
+        bindings: [],
+        firstSubgoal: "type the query first",
+      };
+    };
+    const calls: Array<Record<string, unknown>> = [];
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (input: unknown) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input);
+    }) as typeof deps.decisionClient.decide;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_plan-a",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(planCalls).toBe(1);
+    expect(String(calls[0]?.subgoal)).toContain("type the query first");
+    expect(result.evidence).toContain("planner:ok");
+    expect(result.status).toBe("completed");
+  });
+
+  it("a planner failure is its OWN terminal (planner_failed)", async () => {
+    const deps = makeRunnerDeps([doneEntry()]);
+    (deps as unknown as {
+      plan: () => Promise<null>;
+    }).plan = async () => null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_plan-b",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("planner_failed");
+    // The loop never ran — no decision was requested.
+    expect(result.counts.decisionRequests).toBe(0);
+  });
+});

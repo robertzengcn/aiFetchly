@@ -1526,6 +1526,12 @@ export class ManagedBrowserAiToolService {
       );
     }
     const awaitedResultRef: { taskId?: string } = {};
+    /** N02/D-FR-05: the plan established by the pre-loop planner call. */
+    let runnerPlan: {
+      readonly completionCriteria: readonly CompletionCriterion[];
+      readonly bindings: ReadonlyArray<{ field: string; value: string }>;
+      readonly firstSubgoal: string | null;
+    } | null = null;
     // T17/D-FR-02: freeze the provider route at admission.
     void currentProviderConfigKey;
     const runner = new BrowserTaskRunner(
@@ -1621,6 +1627,43 @@ export class ManagedBrowserAiToolService {
         decisionClient,
         route,
         signal: context.signal,
+        // N02/D-FR-05: ONE bounded planning call before the loop; a
+        // planner failure is its own terminal reason (planner_failed).
+        // The plan lands in a per-run closure the FILL resolver reads.
+        plan: async (planInput) => {
+          const { runPlanner } = await import(
+            "@/service/browserDecision/TaskPlanner"
+          );
+          const plan = await runPlanner(
+            decisionClient,
+            planInput,
+            planInput.signal
+          );
+          if (plan !== null) {
+            runnerPlan = plan;
+          }
+          return plan;
+        },
+        // N02/D-FR-20/21: FILL text from trusted plan bindings / bounded
+        // helper; secret-shaped text is rejected inside the service.
+        resolveFieldText: async (fieldInput) => {
+          const { getDefaultBrowserFieldValueService } = await import(
+            "@/service/browserDecision/FieldValueService"
+          );
+          return await getDefaultBrowserFieldValueService().resolveText({
+            fieldName: fieldInput.fieldName,
+            goal: fieldInput.goal,
+            bindings: runnerPlan?.bindings ?? [],
+          });
+        },
+        invalidateFieldCache: (fieldName) => {
+          void (async () => {
+            const { getDefaultBrowserFieldValueService } = await import(
+              "@/service/browserDecision/FieldValueService"
+            );
+            getDefaultBrowserFieldValueService().invalidate(fieldName);
+          })().catch(() => undefined);
+        },
         // A-FR-14/N02: the runner's SIGN_IN operation routes through the
         // privileged credential service (blocking card waits included).
         signIn: async (signInInput) => {
