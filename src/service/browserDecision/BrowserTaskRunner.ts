@@ -360,7 +360,10 @@ export class BrowserTaskRunner {
           }
         }
 
-        const candidates = buildDecisionCandidates({ elements: observation.elements });
+        const candidates = buildDecisionCandidates({
+          elements: observation.elements,
+          taskTerms: taskTermsOf(this.input),
+        });
         // B13/C-FR-07: instructions the user typed when resuming the task
         // are folded into THIS decision (consume-once) — consumed BEFORE
         // the decision input is built so the subgoal actually rides it.
@@ -1137,6 +1140,10 @@ export class BrowserTaskRunner {
     observation: RunnerObservation,
     candidates: ReturnType<typeof buildDecisionCandidates>
   ): BrowserDecisionInput {
+    // D-FR-14: the shortlist arrives priority-ordered (focused/dialog);
+    // buildDecisionCandidates applies the task-lexical ranking against
+    // the goal/constraints when called from the loop head — this method
+    // receives the already-ranked list, so no further ranking here.
     return {
       schema_version: 1,
       request_id: `req_${randomUUID().slice(0, 8)}`,
@@ -1607,6 +1614,18 @@ export class BrowserTaskRunner {
  * path, query, and fragment. Default ports and empty fragments are
  * normalized by the URL constructor itself.
  */
+/**
+ * D-FR-14: task-lexical terms for candidate ranking — significant words
+ * from the goal, subgoal, and constraints (length >= 3, bounded 12).
+ */
+function taskTermsOf(input: BrowserTaskInput): readonly string[] {
+  const words = `${input.goal} ${(input.constraints ?? []).join(" ")}`
+    .toLowerCase()
+    .split(/[^a-z0-9À-￿]+/)
+    .filter((w) => w.length >= 3);
+  return [...new Set(words)].slice(0, 12);
+}
+
 function urlKeyOf(url: URL): string {
   return `${url.origin}${url.pathname}${url.search}${url.hash}`;
 }

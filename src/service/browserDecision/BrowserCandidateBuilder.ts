@@ -64,6 +64,12 @@ export interface CandidateBuildInput {
   /** Shortlist ceiling for small-budget routes (proposed 8–16). */
   readonly maxCandidates?: number;
   readonly allowedOperations?: readonly BrowserDecisionOperation[];
+  /**
+   * D-FR-14: the task's lexical terms (goal + subgoal words) — candidates
+   * whose accessible name shares terms with the task rank higher within
+   * their priority group (bounded local lexical signal, design §8.2.3).
+   */
+  readonly taskTerms?: readonly string[];
 }
 
 export function buildDecisionCandidates(
@@ -93,14 +99,14 @@ export function buildDecisionCandidates(
     if (element.valueSummary && SECRET_VALUE_SUMMARIES.has(element.valueSummary)) {
       continue;
     }
-    if (element.disabled) {
-      continue;
-    }
     const base = ROLE_OPERATIONS[element.role] ?? ROLE_OPERATIONS.generic!;
     const operations = base.filter((op) => allowed.includes(op));
     if (operations.length === 0) {
       continue;
     }
+    // D-FR-12: DISABLED candidates are EXPOSED as disabled (not omitted) —
+    // the model can see a control exists but is not usable; the executor's
+    // live revalidation refuses a disabled dispatch anyway.
     candidates.push({
       candidate_id: element.ref,
       role: element.role,
@@ -115,6 +121,34 @@ export function buildDecisionCandidates(
         ? { option_labels: element.option_labels }
         : {}),
     });
+  }
+  // D-FR-14: task-lexical ranking within the collected list (stable) —
+  // candidates whose name shares a term with the task rank first. The
+  // priority pass (focused/dialog) already ordered `elements`; this is a
+  // secondary local signal, not a reranker request.
+  const taskTerms = input.taskTerms;
+  if (taskTerms && taskTerms.length > 0) {
+    const terms = taskTerms
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length >= 3);
+    const lexicalScore = (name: string): number => {
+      const lower = name.toLowerCase();
+      let score = 0;
+      for (const term of terms) {
+        if (lower.includes(term)) score++;
+      }
+      return score;
+    };
+    const scored = candidates.map((c, i) => ({
+      c,
+      i,
+      score: lexicalScore(c.name),
+    }));
+    scored.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.i - b.i; // stable within equal scores
+    });
+    return scored.map((entry) => entry.c);
   }
   return candidates;
 }

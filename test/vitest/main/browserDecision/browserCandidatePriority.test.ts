@@ -57,3 +57,36 @@ describe("buildDecisionCandidates priority ordering (D-FR-13/14)", () => {
     ]);
   });
 });
+
+describe("D-FR-12/14 candidate exposure and lexical ranking", () => {
+  it("DISABLED candidates are exposed with disabled: true, not omitted", () => {
+    const candidates = buildDecisionCandidates({
+      elements: [
+        { ref: "e_on", role: "button", name: "Enabled button", disabled: false },
+        { ref: "e_off", role: "button", name: "Disabled button", disabled: true },
+      ],
+    });
+    const on = candidates.find((c) => c.candidate_id === "e_on");
+    const off = candidates.find((c) => c.candidate_id === "e_off");
+    expect(on).toBeDefined();
+    expect(off).toBeDefined();
+    expect(off?.disabled).toBe(true);
+    // Disabled buttons still offer CLICK — the executor refuses live.
+    expect(off?.allowed_operations).toContain("CLICK");
+  });
+
+  it("task-lexical ranking promotes name-matching candidates within the list", () => {
+    const candidates = buildDecisionCandidates({
+      elements: [
+        { ref: "e_plain", role: "button", name: "Settings" },
+        { ref: "e_match", role: "button", name: "Search suppliers" },
+        { ref: "e_other", role: "button", name: "Profile" },
+      ],
+      taskTerms: ["suppliers", "search"],
+    });
+    const ids = candidates.map((c) => c.candidate_id);
+    // The name-matching candidate ranks first.
+    expect(ids.indexOf("e_match")).toBeLessThan(ids.indexOf("e_plain"));
+    expect(ids.indexOf("e_match")).toBeLessThan(ids.indexOf("e_other"));
+  });
+});
