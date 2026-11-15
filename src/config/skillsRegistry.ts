@@ -5125,29 +5125,9 @@ function managedBrowserToolEntries(): SkillDefinition[] {
           context
         ),
     },
-    {
-      name: "browser_resume_after_handoff",
-      description:
-        "Resume AI control after the user finished the handoff step (login/verification).",
-      parameters: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session id." },
-        },
-        required: ["session_id"],
-      },
-      tier: "main",
-      requiresConfirmation: false,
-      permissionCategory: "automation",
-      source: "built-in",
-      timeoutClass: "network",
-      execute: async (args, context) =>
-        wrap(
-          (a, c) => getDefaultManagedBrowserAiToolService().resumeAfterHandoff(a, c),
-          args,
-          context
-        ),
-    },
+    // E04/C-FR-03: RESUME IS NOT A MODEL TOOL — only the user's dialog
+    // action (BROWSER_TASK_RESUME / the session card) may end a takeover.
+    // The service method stays for the IPC path.
     {
       // TODO-MSB-015: the PRD contract names this tool browser_screenshot;
       // registered under that name (browser_capture_screenshot retired).

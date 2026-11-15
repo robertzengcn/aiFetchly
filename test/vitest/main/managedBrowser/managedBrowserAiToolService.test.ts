@@ -1289,7 +1289,7 @@ describe("ManagedBrowserAiToolService blocking handoff (B12)", () => {
       "@/service/browserAgents/AgentTaskControlService"
     );
     const control = getDefaultAgentTaskControlService();
-    const record = control.get("handoff-call-handoff-1");
+    const record = control.get("call-handoff-1");
     expect(record?.state).toBe("interrupted");
   });
 });
@@ -1388,5 +1388,63 @@ describe("ManagedBrowserAiToolService ownership on all tools (E03)", () => {
       conversationId: "conv-parent",
     });
     expect(ok.sessionId).toBe(SESSION_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E04/C-FR-02/09/12: the handoff wait lands on the OWNING agent task id
+// (not handoff-*), freezes the PARENT JOB's user-wait flag, and honors
+// the model's reason.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService blocking handoff (E04)", () => {
+  const AGENT_CTX = {
+    conversationId: "agent-v2-child",
+    toolCallId: "call-handoff-agent",
+    ownerAgentId: "agt-owner-1",
+    jobId: "job-parent-1",
+  };
+
+  it("registers the wait under the OWNING agent task id, not handoff-*", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID ? status({ state: "ready" }) : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    const result = (await service.requestHandoff(
+      { session_id: SESSION_ID, reason: "login_required" },
+      AGENT_CTX
+    )) as Record<string, unknown>;
+    expect(result.handoff_resolution).toBe("resolved");
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const control = getDefaultAgentTaskControlService();
+    // The intervention/wait record is under the agent task id.
+    expect(control.get("agt-owner-1")).toBeDefined();
+    // The model's reason was mapped to a schema-valid handoff reason.
+    expect(module.requestHandoff).toHaveBeenCalledWith(
+      SESSION_ID,
+      "login_required"
+    );
+  });
+
+  it("an unmappable model reason stays user_requested", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID ? status({ state: "ready" }) : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    await service.requestHandoff(
+      { session_id: SESSION_ID, reason: "something odd" },
+      AGENT_CTX
+    );
+    const moduleMock = module;
+    expect(moduleMock.requestHandoff).toHaveBeenCalledWith(
+      SESSION_ID,
+      "user_requested"
+    );
   });
 });

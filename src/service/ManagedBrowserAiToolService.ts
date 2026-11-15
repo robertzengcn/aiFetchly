@@ -1119,13 +1119,16 @@ export class ManagedBrowserAiToolService {
       throw new ManagedBrowserAiToolError("invalid_tool_arguments");
     }
     this.ensureSession(parsed.data.session_id, context?.conversationId);
-    // B12/C-FR-02 (design 18.2): inside an agent turn, the handoff BLOCKS
-    // in the tool call until the user resolves, the window expires, or
-    // the task is stopped — the tool no longer returns while the dialog
-    // is merely OPEN. The coordinator opens the handoff with the (schema-
-    // valid) reason, marks the job waiting_for_user (freezing the parent
-    // poll deadline), and returns the resolution.
-    const handoffTaskId = `handoff-${context?.toolCallId ?? crypto.randomUUID().slice(0, 12)}`;
+    // B12/E04/C-FR-02/09 (design 18.2): inside an agent turn, the handoff
+    // BLOCKS in the tool call until the user resolves, the window expires,
+    // or the task is stopped. The wait task id is the OWNING agent task
+    // (context.ownerAgentId) so interventions land on the real task —
+    // never a throwaway `handoff-*` id — and the parent job's user-wait
+    // flag freezes the poll deadline for the whole interval.
+    const handoffTaskId =
+      context?.ownerAgentId ??
+      context?.toolCallId ??
+      `handoff-${crypto.randomUUID().slice(0, 12)}`;
     const { awaitUserResolution } = await import(
       "@/service/browserAgents/HandoffCoordinator"
     );
@@ -1134,9 +1137,22 @@ export class ManagedBrowserAiToolService {
     );
     const controlService = getDefaultAgentTaskControlService();
     controlService.register(handoffTaskId, context?.conversationId ?? "");
+    // E04: the model's `reason` is honored when it maps to a schema-valid
+    // handoff reason; everything else stays user_requested.
+    const REASON_MAP: Record<string, "login_required" | "captcha_sensitive_flow"> = {
+      login_required: "login_required",
+      login: "login_required",
+      login_wall: "login_required",
+      captcha: "captcha_sensitive_flow",
+      captcha_sensitive_flow: "captcha_sensitive_flow",
+      challenge: "captcha_sensitive_flow",
+    };
+    const requestedReason = parsed.data.reason?.toLowerCase();
+    const handoffReason =
+      requestedReason != null ? (REASON_MAP[requestedReason] ?? "user_requested") : "user_requested";
     const resolution = await awaitUserResolution({
       sessionId: parsed.data.session_id,
-      reason: "user_requested" as const,
+      reason: handoffReason,
       taskId: handoffTaskId,
       signal: context?.signal,
       jobId: context?.jobId ?? null,
