@@ -67,7 +67,7 @@ jobs:
             ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -329,7 +329,7 @@ jobs:
             ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -572,7 +572,7 @@ jobs:
             ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
