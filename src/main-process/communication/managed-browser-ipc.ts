@@ -251,22 +251,43 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   const pauseOrTakeControl = async (input: {
     taskId?: string;
     sessionId?: string;
-  }): Promise<{ ok: boolean }> => {
+  }): Promise<{ ok: boolean; reason?: string }> => {
     // C-FR-16: the session card sends sessionId only — resolve the
     // runner task that owns the session so the CONTROL layer pauses too
-    // (not just the browser session).
+    // (not just the browser session). B02: the resolution ALSO consults
+    // the session's authoritative agent-task ownership (a batch child's
+    // control record id), never a global sweep.
     const resolvedTaskId =
       input.taskId ??
       (input.sessionId
         ? (getDefaultManagedBrowserAiToolService().runnerTaskIdForSession(
             input.sessionId
-          ) ?? undefined)
+          ) ??
+          getDefaultManagedBrowserModule().getSessionOwnerAgentTaskId(
+            input.sessionId
+          ) ??
+          undefined)
         : undefined);
     if (resolvedTaskId === undefined) {
-      // Session-only pause without a runner task: the browser session
-      // pause below still applies (user control layer).
-      controlService.sweepNonTerminalToInterrupted("orphan_session_pause");
-      return { ok: true };
+      // B02: session-only pause with NO resolvable task — the browser
+      // session pause below still applies (user-control layer), but NO
+      // control records are touched. The old orphan sweep interrupted
+      // EVERY nonterminal task in the process, including unrelated jobs.
+      // The pause result is honest about what was actually paused.
+      let sessionPaused = true;
+      if (input.sessionId) {
+        try {
+          await getDefaultManagedBrowserModule().pauseSession(input.sessionId);
+        } catch {
+          sessionPaused = false;
+        }
+      }
+      return {
+        ok: sessionPaused,
+        ...(sessionPaused
+          ? {}
+          : { reason: "session_pause_failed" }),
+      };
     }
     controlService.setState(resolvedTaskId, "paused", "user_paused");
     // F06: the 60-minute pause cap only covers pauses with an open
@@ -274,15 +295,22 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     if (resolvedTaskId !== undefined) {
       controlService.beginIntervention(resolvedTaskId, "user_paused");
     }
+    let sessionPaused = true;
     if (input.sessionId) {
       // T24/C-FR-05: PAUSE_REQUEST stops the in-flight program between
       // actions (executed results preserved), then the session moves to
-      // user control.
-      await getDefaultManagedBrowserModule()
-        .pauseSession(input.sessionId)
-        .catch(() => undefined);
+      // user control. B02: a rejected worker pause is SURFACED (ok:
+      // false), never swallowed into ok:true.
+      try {
+        await getDefaultManagedBrowserModule().pauseSession(input.sessionId);
+      } catch {
+        sessionPaused = false;
+      }
     }
-    return { ok: true };
+    return {
+      ok: sessionPaused,
+      ...(sessionPaused ? {} : { reason: "session_pause_failed" }),
+    };
   };
   registerValidatedHandler(
     BROWSER_TASK_PAUSE,
@@ -298,25 +326,64 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     BROWSER_TASK_RESUME,
     browserTaskResumeSchema,
     async (input) => {
+      // B02: Resume VERIFIES the task/session pair — a task id that does
+      // not own the session is refused (never resumed cross-task).
+      if (input.taskId && input.sessionId) {
+        const owner =
+          getDefaultManagedBrowserAiToolService().runnerTaskIdForSession(
+            input.sessionId
+          ) ??
+          getDefaultManagedBrowserModule().getSessionOwnerAgentTaskId(
+            input.sessionId
+          );
+        if (owner !== null && owner !== input.taskId) {
+          return { ok: false, reason: "task_session_mismatch" };
+        }
+      }
       // C-FR-07: resume advances the page revision (old refs invalid) and
       // leaves user control; the agent must observe before acting.
+      let resumed = true;
       if (input.sessionId) {
-        await getDefaultManagedBrowserModule()
-          .resumeAfterHandoff(input.sessionId)
-          .catch(() => undefined);
+        try {
+          await getDefaultManagedBrowserModule().resumeAfterHandoff(
+            input.sessionId
+          );
+        } catch {
+          resumed = false;
+        }
       }
       // F06: closing the intervention keeps the cap record truthful.
-      controlService.endIntervention(input.taskId);
+      // B02: resume resolves the task the SAME way pause does — a
+      // session-only resume targets the session's authoritative owner;
+      // without any resolvable task the resume fails honestly.
+      const resolvedResumeTaskId =
+        input.taskId ??
+        (input.sessionId
+          ? (getDefaultManagedBrowserAiToolService().runnerTaskIdForSession(
+              input.sessionId
+            ) ??
+            getDefaultManagedBrowserModule().getSessionOwnerAgentTaskId(
+              input.sessionId
+            ) ??
+            undefined)
+          : undefined);
+      if (resolvedResumeTaskId === undefined) {
+        return {
+          ok: resumed,
+          ...(resumed ? {} : { reason: "session_resume_failed" }),
+        };
+      }
+      controlService.endIntervention(resolvedResumeTaskId);
       // B13/C-FR-07: the user's instructions are stored on the control
       // record and consumed ONCE by the running loop (folded into its
       // next decision input) — they never vanish into the renderer.
       if (input.instructions) {
         controlService.recordResumeInstructions(
-          input.taskId,
+          resolvedResumeTaskId,
           input.instructions
         );
       }
-      controlService.resume(input.taskId);
+      controlService.resume(resolvedResumeTaskId);
       return { ok: true, instructions: input.instructions ?? null };
     }
   );

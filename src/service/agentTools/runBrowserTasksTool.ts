@@ -476,6 +476,10 @@ export async function runBrowserTasks(
               // this child's session (challenge/login/handoff) NAME the
               // task in the parent conversation.
               taskLabel: `Browser task ${index + 1}/${tasks.length}`,
+              // B02/M-FR-08: ONE task identity — the batch card's row id
+              // owns the control record, so Pause/Take-control/Stop and
+              // the loop's gate address the SAME record.
+              controlTaskId: taskId,
             } as unknown as Parameters<typeof runtime.runSync>[0],
             {
               ...getDefaultAgentRuntimeDeps(),

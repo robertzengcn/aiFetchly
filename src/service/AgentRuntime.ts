@@ -236,12 +236,17 @@ export class AgentRuntime {
 
     const agentTaskId = `agt-${randomUUID()}`;
     const agentConversationId = `agent-v2-${randomUUID()}`;
+    // B02/M-FR-08: ONE task identity — the caller's user-visible control
+    // record id (the batch card's row) owns the CONTROL SERVICE record,
+    // so user pause/take-over/stop and this loop's gate address the same
+    // record. Persistence keeps the internal agt id.
+    const controlTaskId = request.controlTaskId ?? agentTaskId;
     // C-FR-05: the agent task joins the control service so user pause/
     // stop reaches the loop between tool calls (not only the runner).
-    getDefaultAgentTaskControlService().register(agentTaskId, agentConversationId);
+    getDefaultAgentTaskControlService().register(controlTaskId, agentConversationId);
     // W06/M-FR-08: register the user-visible label so notices published
     // for sessions this agent owns NAME the task in the parent chat.
-    registerAgentTaskLabel(agentTaskId, request.taskLabel ?? definition.name);
+    registerAgentTaskLabel(controlTaskId, request.taskLabel ?? definition.name);
     const transcript = new AgentTranscriptService(this.taskModule);
 
     // Normalize constraints — AI-generated taskPackets may omit this object.
@@ -389,7 +394,7 @@ export class AgentRuntime {
       // C-FR-05: the per-task control gate is honored before EVERY tool
       // call — pause (user_paused) blocks at this safe point; cancel
       // fails the call immediately so the loop wraps up.
-      const controlRecord = getDefaultAgentTaskControlService().get(agentTaskId);
+      const controlRecord = getDefaultAgentTaskControlService().get(controlTaskId);
       if (controlRecord) {
         if (controlRecord.state === "cancelled") {
           throw new Error("task_cancelled");
@@ -616,7 +621,7 @@ export class AgentRuntime {
         // already in flight finishes, but its tool calls hit the paused
         // branch in policyCheckedExecute below (held as a set).
         onBeforeModelRound: () => {
-          const record = getDefaultAgentTaskControlService().get(agentTaskId);
+          const record = getDefaultAgentTaskControlService().get(controlTaskId);
           if (!record) {
             return "ok";
           }

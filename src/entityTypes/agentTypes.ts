@@ -179,6 +179,14 @@ export interface RunAgentRequest {
    */
   taskLabel?: string;
   /**
+   * B02/M-FR-08: ONE task identity — when the caller owns a user-visible
+   * control record (the batch card's `batchId:index` row), the runtime
+   * registers and gates the CONTROL SERVICE under THAT id, so user
+   * pause/take-over/stop and the loop's gate address the same record.
+   * Persisted task rows keep the internal agt id.
+   */
+  controlTaskId?: string;
+  /**
    * The parent agent's id. Used (with {@link parentConversationId}) to issue
    * inter-agent handoff grants so the parent can read the child's preserved
    * tool outputs (T15b). Absent for top-level / user-driven runs.

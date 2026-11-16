@@ -854,3 +854,97 @@ describe("runBrowserTasks extracted-row dedupe (M-FR-11)", () => {
     expect(results[0]?.extracted[0]).toMatchObject({ name: "Alpha" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// B02/M-FR-08: ONE task identity — the batch row id owns the control
+// record, so a Pause addressed to `batchId:index` reaches the CHILD's
+// loop gate (previously the gate ran under a separate hidden agt-* id
+// and stayed open while the card showed paused).
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks unified task identity (B02)", () => {
+  it("a Pause addressed to the batch row id reaches the record the CHILD uses", async () => {
+    // Production: the collector and the child runtime BOTH use the
+    // default control service — mirror that here (no injected instance).
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const service = getDefaultAgentTaskControlService();
+    const runtime = {
+      runSync: async (request: { controlTaskId?: string }) => {
+        // The runtime registers the control record under the CALLER's id.
+        const record = service.get(request.controlTaskId ?? "");
+        if (!record) {
+          return {
+            status: "failed",
+            errorMessage: "control record not under the batch row id",
+            output: null,
+          };
+        }
+        // Pause via the batch row id — the record now says paused, which
+        // is exactly what the card's Pause addresses.
+        service.setState(request.controlTaskId!, "paused", "user_paused");
+        return {
+          status: "completed",
+          agentTaskId: "agt-child-b02",
+          agentId: "agent-browser-operator",
+          agentVersion: 1,
+          toolCallsCount: 1,
+          sourceUrls: [],
+          output: {
+            status: "completed",
+            summary: "done",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+            needs_user: null,
+            user_interventions: [],
+          },
+        };
+      },
+    };
+    const { results } = await runBrowserTasks(
+      [{ goal: "identity check" }],
+      1,
+      "conv-b02",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    // The task completed through the record that the batch row id owns.
+    expect(results[0]?.status).toBe("completed");
+  });
+
+  it("the collector's control record is addressed by the batch row id during the run", async () => {
+    let seenControlId: string | null = null;
+    const runtime = {
+      runSync: vi.fn(async (request: { controlTaskId?: string }) => {
+        seenControlId = request.controlTaskId ?? null;
+        return {
+          status: "completed",
+          agentTaskId: "agt-x",
+          agentId: "agent-browser-operator",
+          agentVersion: 1,
+          toolCallsCount: 0,
+          sourceUrls: [],
+          output: {
+            status: "completed",
+            summary: "ok",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+            needs_user: null,
+            user_interventions: [],
+          },
+        };
+      }),
+    };
+    await runBrowserTasks(
+      [{ goal: "row id check" }],
+      1,
+      "conv-b02b",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    // The registered row is exactly the id the child was told to use.
+    expect(seenControlId).toMatch(/^batch_[0-9a-f-]+:0$/);
+  });
+});
