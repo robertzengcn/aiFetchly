@@ -97,7 +97,11 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
     // R01/D-FR-18: the probed chat OUTPUT capabilities — booleans only
     // when BOTH flags are valid booleans; anything else is unprobed.
     let chatCapabilities:
-      | { structuredJsonSchema: boolean; forcedToolDecision: boolean }
+      | {
+          structuredJsonSchema: boolean;
+          forcedToolDecision: boolean;
+          providerRevision: string | null;
+        }
       | null = null;
     const rawCaps = record.chatCapabilities;
     if (typeof rawCaps === "object" && rawCaps !== null) {
@@ -109,6 +113,10 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
         chatCapabilities = {
           structuredJsonSchema: caps.structuredJsonSchema,
           forcedToolDecision: caps.forcedToolDecision,
+          providerRevision:
+            typeof caps.providerRevision === "string"
+              ? caps.providerRevision.slice(0, 128)
+              : null,
         };
       }
     }
@@ -185,6 +193,7 @@ export interface ManagedBrowserPreferencePatch {
     readonly chatCapabilities?: {
       readonly structuredJsonSchema: boolean;
       readonly forcedToolDecision: boolean;
+      readonly providerRevision?: string | null;
     } | null;
   };
 }
@@ -400,9 +409,18 @@ export class ManagedBrowserSettingsModule {
             : current.requestTimeoutMs,
         // R01/D-FR-18: probed chat output capabilities ride the patch.
         chatCapabilities:
-          patchRoute.chatCapabilities !== undefined
-            ? patchRoute.chatCapabilities
-            : current.chatCapabilities,
+          patchRoute.chatCapabilities === undefined
+            ? current.chatCapabilities
+            : patchRoute.chatCapabilities === null
+              ? null
+              : {
+                  structuredJsonSchema:
+                    patchRoute.chatCapabilities.structuredJsonSchema,
+                  forcedToolDecision:
+                    patchRoute.chatCapabilities.forcedToolDecision,
+                  providerRevision:
+                    patchRoute.chatCapabilities.providerRevision ?? null,
+                },
       };
       writes.push(
         this.writeStoredValue(

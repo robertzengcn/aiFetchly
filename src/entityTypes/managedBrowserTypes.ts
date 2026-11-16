@@ -357,6 +357,12 @@ export interface EffectiveManagedBrowserSettings {
     readonly chatCapabilities: {
       readonly structuredJsonSchema: boolean;
       readonly forcedToolDecision: boolean;
+      /**
+       * B04/D-AC-08: the provider epoch the flags were probed under —
+       * flags from a different revision are never applied (conservative
+       * legacy behavior until the endpoint is re-probed).
+       */
+      readonly providerRevision: string | null;
     } | null;
   };
 }

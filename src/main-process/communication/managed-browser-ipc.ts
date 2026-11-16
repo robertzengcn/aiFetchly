@@ -630,35 +630,69 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
     managedBrowserGetEffectiveSettingsInputSchema,
     async () => {
+      // B04/PRD §7: the probe is gated like every AI entry point — a
+      // disabled route is a structured all-false result, never a doomed
+      // provider call, and nothing is persisted.
+      const { BrowserAiAvailabilityService } = await import(
+        "@/service/browserDecision/BrowserAiAvailabilityService"
+      );
+      const availability = new BrowserAiAvailabilityService().evaluate();
+      if (!availability.available) {
+        return {
+          chat: false,
+          structuredJsonSchema: false,
+          forcedToolDecision: false,
+          structuredError: availability.reasonCode ?? "ai_disabled",
+          forcedToolError: availability.reasonCode ?? "ai_disabled",
+        };
+      }
       const { probeChatDecisionCapabilities } = await import(
         "@/service/browserDecision/ChatCapabilityProbe"
       );
       const { AiChatApi } = await import("@/api/aiChatApi");
       const api = new AiChatApi();
-      const result = await probeChatDecisionCapabilities(
-        async (request, signal) => {
-          return (await api.openAIChatCompletion(
-            {
-              messages: request.messages as never,
-              ...(request.model ? { model: request.model } : {}),
-              response_format: request.response_format as never,
-              ...(request.tools ? { tools: request.tools as never } : {}),
-              ...(request.tool_choice
-                ? { tool_choice: request.tool_choice as never }
-                : {}),
-              stream: false,
-              temperature: request.temperature,
-            },
-            { signal }
-          )) as never;
-        }
+      let result;
+      try {
+        result = await probeChatDecisionCapabilities(
+          async (request, signal) => {
+            return (await api.openAIChatCompletion(
+              {
+                messages: request.messages as never,
+                ...(request.model ? { model: request.model } : {}),
+                response_format: request.response_format as never,
+                ...(request.tools ? { tools: request.tools as never } : {}),
+                ...(request.tool_choice
+                  ? { tool_choice: request.tool_choice as never }
+                  : {}),
+                stream: false,
+                temperature: request.temperature,
+              },
+              { signal }
+            )) as never;
+          }
+        );
+      } catch {
+        // B04: a throwing transport is an all-false honest verdict —
+        // nothing is persisted.
+        result = {
+          chat: false,
+          structuredJsonSchema: false,
+          forcedToolDecision: false,
+          structuredError: "probe_transport_failed",
+          forcedToolError: "probe_transport_failed",
+        };
+      }
+      // Persist the probed flags scoped to the CURRENT provider revision
+      // (B04/D-AC-08): flags from another revision never apply.
+      const { providerConfigKey } = await import(
+        "@/service/aiProvider/AIProviderConfigVersion"
       );
-      // Persist the probed flags so the runner's chat client uses them.
       await new ManagedBrowserSettingsModule().updatePreferences({
         decisionRoute: {
           chatCapabilities: {
             structuredJsonSchema: result.structuredJsonSchema,
             forcedToolDecision: result.forcedToolDecision,
+            providerRevision: providerConfigKey(),
           },
         },
       });

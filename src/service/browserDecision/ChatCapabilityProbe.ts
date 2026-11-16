@@ -65,19 +65,76 @@ const PROBE_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-/** Run one bounded probe request; return whether it round-tripped. */
+const PROBE_TOOL_NAME = "probe_ok";
+
+/**
+ * B04/D-AC-08: a probe VERIFIES the payload — a mere presence check
+ * accepted ordinary prose for every mode. Requirements per probe:
+ *   chat        → any nonempty plain completion (basic round-trip);
+ *   structured  → json_schema response whose content PARSES to
+ *                 {ok:true} (the schema actually held);
+ *   forced tool → tool_calls[0] with the EXACT probe tool name and
+ *                 arguments parsing to {ok:true}.
+ */
+function probePayloadOk(
+  response: ChatCompletionLike,
+  mode: "chat" | "structured" | "forced"
+): { ok: boolean; error: string | null } {
+  const message = response.choices?.[0]?.message;
+  if (!message) {
+    return { ok: false, error: "empty_probe_response" };
+  }
+  if (mode === "forced") {
+    const call = message.tool_calls?.[0];
+    if (!call?.function?.name) {
+      return { ok: false, error: "forced_tool_missing_call" };
+    }
+    // The EXACT tool name — any other call is a wrong answer, not support.
+    if (call.function.name !== PROBE_TOOL_NAME) {
+      return { ok: false, error: "forced_tool_wrong_name" };
+    }
+    try {
+      const args = JSON.parse(call.function.arguments ?? "") as {
+        ok?: unknown;
+      };
+      if (args.ok !== true) {
+        return { ok: false, error: "forced_tool_bad_arguments" };
+      }
+      return { ok: true, error: null };
+    } catch {
+      return { ok: false, error: "forced_tool_bad_arguments" };
+    }
+  }
+  const content = message.content ?? "";
+  if (content.length === 0) {
+    return { ok: false, error: "empty_probe_response" };
+  }
+  if (mode === "chat") {
+    // Plain chat: any content round-trips — this is the BASIC probe.
+    return { ok: true, error: null };
+  }
+  // Structured: the schema payload must actually parse and satisfy ok:true.
+  try {
+    const parsed = JSON.parse(content) as { ok?: unknown };
+    if (parsed.ok !== true) {
+      return { ok: false, error: "structured_bad_payload" };
+    }
+    return { ok: true, error: null };
+  } catch {
+    return { ok: false, error: "structured_unparseable" };
+  }
+}
+
 async function runProbe(
   complete: CompleteFn,
-  build: () => Parameters<CompleteFn>[0]
+  build: () => Parameters<CompleteFn>[0],
+  mode: "chat" | "structured" | "forced"
 ): Promise<{ ok: boolean; error: string | null }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
     const response = await complete(build(), controller.signal);
-    const hasAnswer =
-      (response.choices?.[0]?.message?.content ?? "").length > 0 ||
-      (response.choices?.[0]?.message?.tool_calls?.length ?? 0) > 0;
-    return { ok: hasAnswer, error: hasAnswer ? null : "empty_probe_response" };
+    return probePayloadOk(response, mode);
   } catch (error) {
     return {
       ok: false,
@@ -105,49 +162,65 @@ export async function probeChatDecisionCapabilities(
     { role: "user", content: "Probe: reply {\"ok\": true}." },
   ] as const;
 
-  // 1. The chat route itself (plain completion).
-  const chatProbe = await runProbe(complete, () => ({
-    messages,
-    ...(model ? { model } : {}),
-    response_format: { type: "json_object" } as const,
-    temperature: 0,
-  }));
+  // 1. The chat route itself (B04: PLAIN text — a provider that supports
+  //    plain text but rejects json_object must still be probeable).
+  const chatProbe = await runProbe(
+    complete,
+    () => ({
+      messages,
+      ...(model ? { model } : {}),
+      response_format: { type: "text" } as const,
+      temperature: 0,
+    }),
+    "chat"
+  );
 
-  // 2. Verified JSON Schema output.
+  // 2. Verified JSON Schema output (payload verified against ok:true).
   const structuredProbe = chatProbe.ok
-    ? await runProbe(complete, () => ({
-        messages,
-        ...(model ? { model } : {}),
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "probe",
-            strict: false,
-            schema: PROBE_SCHEMA,
-          },
-        },
-        temperature: 0,
-      }))
-    : { ok: false, error: "chat_probe_failed" };
-
-  // 3. Forced tool call.
-  const forcedProbe = chatProbe.ok
-    ? await runProbe(complete, () => ({
-        messages,
-        ...(model ? { model } : {}),
-        tools: [
-          {
-            type: "function" as const,
-            function: {
-              name: "probe_ok",
-              description: "Report the probe result.",
-              parameters: PROBE_SCHEMA,
+    ? await runProbe(
+        complete,
+        () => ({
+          messages,
+          ...(model ? { model } : {}),
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "probe",
+              strict: false,
+              schema: PROBE_SCHEMA,
             },
           },
-        ],
-        tool_choice: { type: "function" as const, function: { name: "probe_ok" } },
-        temperature: 0,
-      }))
+          temperature: 0,
+        }),
+        "structured"
+      )
+    : { ok: false, error: "chat_probe_failed" };
+
+  // 3. Forced tool call (EXACT tool name + arguments verified).
+  const forcedProbe = chatProbe.ok
+    ? await runProbe(
+        complete,
+        () => ({
+          messages,
+          ...(model ? { model } : {}),
+          tools: [
+            {
+              type: "function" as const,
+              function: {
+                name: PROBE_TOOL_NAME,
+                description: "Report the probe result.",
+                parameters: PROBE_SCHEMA,
+              },
+            },
+          ],
+          tool_choice: {
+            type: "function" as const,
+            function: { name: PROBE_TOOL_NAME },
+          },
+          temperature: 0,
+        }),
+        "forced"
+      )
     : { ok: false, error: "chat_probe_failed" };
 
   return {

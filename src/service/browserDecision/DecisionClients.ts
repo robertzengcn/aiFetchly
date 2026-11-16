@@ -400,11 +400,26 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
               }
             }, 500)
           : null;
-        // D-FR-18: the negotiated output mode for THIS attempt.
-        const useSchema =
-          attempt === 0 && this.chatCapabilities?.structuredJsonSchema === true;
-        const useForcedTool =
-          attempt === 1 && this.chatCapabilities?.forcedToolDecision === true;
+        // B04/D-FR-18: the negotiated mode ladder — the BEST supported
+        // mode starts. A provider supporting tools but not JSON Schema
+        // starts with the forced tool (never a json_object it may not
+        // honor), then the ladder continues across the 2-attempt ceiling.
+        const structured = this.chatCapabilities?.structuredJsonSchema === true;
+        const forcedTool = this.chatCapabilities?.forcedToolDecision === true;
+        const modes: Array<"schema" | "tool" | "json_object" | "text"> = [];
+        if (structured) {
+          modes.push("schema");
+        }
+        if (forcedTool) {
+          modes.push("tool");
+        }
+        if (!structured) {
+          modes.push("json_object");
+        }
+        modes.push("text");
+        const mode = modes[attempt] ?? "text";
+        const useSchema = mode === "schema";
+        const useForcedTool = mode === "tool";
         const responseFormat = useSchema
           ? ({
               type: "json_schema",
@@ -414,7 +429,7 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
                 schema: chatDecisionResponseSchema(),
               },
             } as const)
-          : attempt === 0
+          : mode === "json_object"
             ? ({ type: "json_object" } as const)
             : ({ type: "text" } as const);
         const promptBase = buildChatDecisionPrompt(input);
@@ -422,13 +437,12 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
           { role: "system", content: CHAT_DECISION_SYSTEM_PROMPT },
           {
             role: "user",
-            content:
-              attempt === 0 && !useSchema
-                ? promptBase
-                : useForcedTool
-                  ? `${promptBase}
+            content: useForcedTool
+              ? `${promptBase}
 Call the ${CHAT_DECISION_TOOL_NAME} tool with the decision JSON as arguments.`
-                  : `${promptBase}
+              : useSchema || mode === "json_object"
+                ? promptBase
+                : `${promptBase}
 
 IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
           },
@@ -478,10 +492,17 @@ IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
         if (this.configChanged()) {
           return { status: "provider_error", reason_code: "provider_config_changed" };
         }
-        // D-FR-18: a forced tool call answers through tool_calls arguments.
-        const toolArguments =
-          response.choices?.[0]?.message?.tool_calls?.[0]?.function
-            ?.arguments ?? null;
+        // D-FR-18/B04: a forced-tool mode REQUIRES the exact decision
+        // tool call — plain prose in tool mode is an unsupported mode, an
+        // attempt failure (not a decision). Other modes parse content.
+        let toolArguments: string | null = null;
+        if (useForcedTool) {
+          const call = response.choices?.[0]?.message?.tool_calls?.[0];
+          if (call?.function?.name !== CHAT_DECISION_TOOL_NAME) {
+            throw new Error("forced_tool_response_wrong_name");
+          }
+          toolArguments = call.function.arguments ?? null;
+        }
         const content =
           toolArguments ??
           response.choices?.[0]?.message?.content ??

@@ -1600,10 +1600,26 @@ export class ManagedBrowserAiToolService {
         // R01/D-FR-02: each decision call re-checks the frozen provider
         // config identity; a mid-task change returns provider_error.
         () => currentProviderConfigKey(),
-        // R01/D-FR-18: the probed chat output capabilities — the
-        // negotiation ladder uses only modes the endpoint actually
-        // supports (conservative legacy behavior until probed).
-        settings.decisionRoute.chatCapabilities ?? undefined
+        // R01/D-FR-18 + B04/D-AC-08: the probed chat output
+        // capabilities apply ONLY when they were probed under the
+        // CURRENT provider revision — flags from another revision are
+        // conservative legacy behavior until re-probed.
+        (() => {
+          const stored = settings.decisionRoute.chatCapabilities;
+          if (!stored) {
+            return undefined;
+          }
+          if (
+            stored.providerRevision === null ||
+            stored.providerRevision !== currentProviderConfigKey()
+          ) {
+            return undefined;
+          }
+          return {
+            structuredJsonSchema: stored.structuredJsonSchema,
+            forcedToolDecision: stored.forcedToolDecision,
+          };
+        })()
       );
       chatClient.freezeRoute(currentProviderConfigKey());
       decisionClient = chatClient;

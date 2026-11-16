@@ -110,6 +110,70 @@ describe("ChatCompletionDecisionClient output negotiation (R01/D-FR-18)", () => 
     expect(formats[1]).toMatchObject({ type: "text" });
   });
 
+  it("a TOOL-ONLY provider starts with the forced tool (B04 best-mode ladder)", async () => {
+    const formats: Array<unknown> = [];
+    const toolsSeen: Array<unknown> = [];
+    let calls = 0;
+    const client = new ChatCompletionDecisionClient(
+      async (request) => {
+        calls++;
+        formats.push(request.response_format);
+        toolsSeen.push(request.tools ?? null);
+        if (calls === 1) {
+          // Attempt 1 = forced tool (json_object may be unsupported).
+          return {
+            choices: [
+              {
+                message: {
+                  tool_calls: [
+                    {
+                      function: {
+                        name: "propose_browser_decision",
+                        arguments: decidedJson,
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+        return { choices: [{ message: { content: decidedJson } }] };
+      },
+      undefined,
+      undefined,
+      { structuredJsonSchema: false, forcedToolDecision: true }
+    );
+    const decision = await client.decide(baseInput, new AbortController().signal);
+    expect(decision.status).toBe("decided");
+    // The ladder STARTED with the forced tool — no json_object attempt
+    // happened before it (the old code always led with json_object).
+    expect(toolsSeen[0]).not.toBeNull();
+    expect(formats[0]).toMatchObject({ type: "text" });
+    expect(calls).toBe(1);
+  });
+
+  it("plain content in FORCED-tool mode is an attempt failure, not a decision (B04)", async () => {
+    let calls = 0;
+    const client = new ChatCompletionDecisionClient(
+      async (request) => {
+        calls++;
+        if (request.tool_choice) {
+          // The provider answered with prose instead of the tool call.
+          return { choices: [{ message: { content: "I cannot use tools" } }] };
+        }
+        return { choices: [{ message: { content: decidedJson } }] };
+      },
+      undefined,
+      undefined,
+      { structuredJsonSchema: false, forcedToolDecision: true }
+    );
+    const decision = await client.decide(baseInput, new AbortController().signal);
+    // Attempt 2 (json_object) succeeds — the tool-mode prose never acted.
+    expect(decision.status).toBe("decided");
+    expect(calls).toBe(2);
+  });
+
   it("a mode never probed true is never attempted (legacy ladder preserved)", async () => {
     const formats: Array<unknown> = [];
     const toolsSeen: Array<unknown> = [];
@@ -170,6 +234,25 @@ describe("probeChatDecisionCapabilities (R01/PRD §7)", () => {
     const requests: Array<unknown> = [];
     const result = await probeChatDecisionCapabilities(async (request) => {
       requests.push(request.response_format ?? request.tool_choice);
+      if (request.tool_choice) {
+        // The forced probe answers through the EXACT tool.
+        return {
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  {
+                    function: {
+                      name: "probe_ok",
+                      arguments: '{"ok": true}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        };
+      }
       return { choices: [{ message: { content: '{"ok": true}' } }] };
     });
     expect(result).toMatchObject({
@@ -177,14 +260,63 @@ describe("probeChatDecisionCapabilities (R01/PRD §7)", () => {
       structuredJsonSchema: true,
       forcedToolDecision: true,
     });
-    // Three probes ran in order: json_object, json_schema, forced tool.
+    // Three probes ran in order: plain text, json_schema, forced tool
+    // (B04: the chat probe is PLAIN — a text-only provider is probeable).
     expect(requests).toHaveLength(3);
-    expect(requests[0]).toMatchObject({ type: "json_object" });
+    expect(requests[0]).toMatchObject({ type: "text" });
     expect(requests[1]).toMatchObject({ type: "json_schema" });
     expect(requests[2]).toMatchObject({
       type: "function",
       function: { name: "probe_ok" },
     });
+  });
+
+  // B04/D-AC-08: ordinary PROSE must not certify a mode — the payload
+  // must actually parse and satisfy the probe contract.
+  it("prose replies do NOT certify structured or forced modes", async () => {
+    const result = await probeChatDecisionCapabilities(async () => ({
+      choices: [{ message: { content: "Sure, I support everything!" } }],
+    }));
+    expect(result.chat).toBe(true);
+    expect(result.structuredJsonSchema).toBe(false);
+    expect(result.structuredError).toBe("structured_unparseable");
+    expect(result.forcedToolDecision).toBe(false);
+  });
+
+  it("a forced call with the WRONG tool name does not certify forced mode", async () => {
+    const result = await probeChatDecisionCapabilities(async (request) => {
+      if (request.tool_choice) {
+        return {
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  { function: { name: "other_tool", arguments: '{"ok":true}' } },
+                ],
+              },
+            },
+          ],
+        };
+      }
+      return { choices: [{ message: { content: '{"ok": true}' } }] };
+    });
+    expect(result.chat).toBe(true);
+    expect(result.forcedToolDecision).toBe(false);
+    expect(result.forcedToolError).toBe("forced_tool_wrong_name");
+  });
+
+  it("a structured payload with ok:false does not certify structured mode", async () => {
+    const result = await probeChatDecisionCapabilities(async (request) => {
+      if (
+        request.response_format &&
+        "json_schema" in (request.response_format as object)
+      ) {
+        return { choices: [{ message: { content: '{"ok": false}' } }] };
+      }
+      return { choices: [{ message: { content: '{"ok": true}' } }] };
+    });
+    expect(result.structuredJsonSchema).toBe(false);
+    expect(result.structuredError).toBe("structured_bad_payload");
   });
 
   it("a failed chat probe skips the other probes and reports their failures", async () => {
@@ -209,6 +341,19 @@ describe("probeChatDecisionCapabilities (R01/PRD §7)", () => {
         "json_schema" in (request.response_format as object)
       ) {
         throw new Error("json_schema rejected");
+      }
+      if (request.tool_choice) {
+        return {
+          choices: [
+            {
+              message: {
+                tool_calls: [
+                  { function: { name: "probe_ok", arguments: '{"ok": true}' } },
+                ],
+              },
+            },
+          ],
+        };
       }
       return { choices: [{ message: { content: '{"ok": true}' } }] };
     });
