@@ -72,6 +72,7 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 | **Eigene AI Provider** | Nutzen Sie OpenAI-kompatible Anbieter wie Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI oder eigene Endpunkte. |
 | **Ausführung von Business-Aufgaben** | Recherche, Extraktion, Dateiverarbeitung, Nachrichtenerstellung, Planung und Automatisierung ohne Wechsel zwischen mehreren SaaS-Tools. |
 | **KI-Assistent für Kunden-E-Mails** | Entwerfen, senden und beantworten Sie Kunden-E-Mails mit Kontext aus Dokumenten und Workflow-Daten. |
+| **KI-Bilderzeugung und -bearbeitung** | Erzeugen Sie Bilder im Chat und verfeinern Sie sie mit einer einfachen Folgeanfrage wie „Füge einen Hund ins Bild ein" — ganz ohne Workspace. Wählen Sie bis zu drei erzeugte Bilder aus, um sie einzeln zu bearbeiten oder zu kombinieren, und wenden Sie dieselbe Bearbeitung auf bis zu 50 Bilder über isolierte Batch-Subagenten an — mit Fortschritt, Wiederholung fehlgeschlagener Elemente und Abbruch. |
 | **Spezialisierte Subagenten** | Starten Sie autonome Subagenten mit eigenem Systemprompt, Tool-Allowlist, Ressourcenlimits und strukturierter Ausgabe. |
 | **Berechtigungsgesteuerte Automatisierung** | Kontrollieren Sie, welche Tools, Plugins, Hooks und Subagenten ausgeführt werden dürfen. |
 
@@ -307,6 +308,8 @@ Vollständige Anforderungen und technische Designverträge finden Sie in:
 Die vollständige Dokumentation finden Sie unter [docs.aifetchly.com](https://docs.aifetchly.com).
 
 KI-gesteuerter verwalteter Browser / Browser Use (sichtbare Chrome-Sitzungen, Browser-Tools, Aktionsprogramme, Freigaben, manuelle Übernahme, Fingerprint, Cache): [Produktanforderungen](docs/prd/puppeteer-managed-social-browser-prd.md) und [Technisches Design](docs/prd/puppeteer-managed-social-browser-technical-design.md).
+
+KI-Chat-Bilderzeugung und -bearbeitung sowie Batch-Bildbearbeitung (Bilder durch Chat erzeugen und bearbeiten, ohne Workspace, Bearbeitung und Kombination mehrerer Bilder, Batch-Subagenten mit Fortschritt und Wiederholung): [Produktanforderungen](docs/prd/ai-chat-generated-image-editing-prd.md) und [Technisches Design](docs/prd/ai-chat-generated-image-editing-technical-design.md).
 
 Die offizielle Website der Anwendung ist [aifetchly.com](https://www.aifetchly.com).
 

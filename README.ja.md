@@ -72,6 +72,7 @@ aiFetchly はビジネス上の意図を実行可能なワークフローに変�
 | **カスタム AI Provider** | Ollama、LM Studio、OpenAI、OpenRouter、vLLM、LocalAI、カスタムエンドポイントなど OpenAI 互換 Provider を利用できます。 |
 | **業務タスク実行** | 調査、抽出、ファイル処理、メッセージ下書き、スケジューリング、自動化を複数 SaaS に移動せず実行します。 |
 | **AI 顧客メールアシスタント** | 文書とワークフローデータをコンテキストとして、顧客メールの作成、送信、返信を支援します。 |
+| **AI 画像生成と編集** | チャットで画像を生成し、「画像に犬を追加して」のように続けて依頼するだけで編集できます（ワークスペース不要）。生成済み画像は最大 3 枚まで選択・並べ替えて編集や合成が可能で、最大 50 枚の画像に同じ編集を隔離されたバッチサブエージェントで一括適用できます。進捗表示、失敗項目の再試行、キャンセルに対応します。 |
 | **専門サブエージェント** | 独自システムプロンプト、ツール許可リスト、リソース制限、構造化出力を持つサブエージェントを実行します。 |
 | **権限制御された自動化** | 実行できるツール、プラグイン、Hook、サブエージェントを制御します。 |
 
@@ -307,6 +308,8 @@ src/childprocess/managed-browser/
 完全なドキュメントは [docs.aifetchly.com](https://docs.aifetchly.com) で確認できます。
 
 AI が操作する管理ブラウザ / Browser Use（可視 Chrome セッション、ブラウザツール、アクションプログラム、承認、手動引き継ぎ、fingerprint、キャッシュ）：[製品要件](docs/prd/puppeteer-managed-social-browser-prd.md) および [技術設計](docs/prd/puppeteer-managed-social-browser-technical-design.md)。
+
+AI チャット生成画像の編集とバッチ画像編集（チャットで画像を生成・編集、ワークスペース不要、複数画像の編集と合成、進捗と再試行対応のバッチサブエージェント）：[製品要件](docs/prd/ai-chat-generated-image-editing-prd.md) および [技術設計](docs/prd/ai-chat-generated-image-editing-technical-design.md)。
 
 アプリケーションの公式 Web サイトは [aifetchly.com](https://www.aifetchly.com) です。
 

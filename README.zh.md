@@ -72,6 +72,7 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 | **自定义 AI Provider** | AI Chat 支持 OpenAI 兼容 Provider，包括 Ollama、LM Studio、OpenAI、OpenRouter、vLLM、LocalAI 或自定义端点。 |
 | **业务任务执行** | 执行调研、提取、文件处理、消息草拟、定时和自动化流程，无需在多个 SaaS 工具之间切换。 |
 | **AI 客户邮件助手** | 使用业务文档和流程数据作为上下文，草拟、发送和回复客户邮件。 |
+| **AI 图像生成与编辑** | 在聊天中生成图片，并可用一句"在图里加一只狗"继续编辑，无需选择工作区。可按顺序选择最多 3 张生成图片进行编辑或合成，也可通过隔离的批量子 Agent 对最多 50 张图片应用相同编辑，支持进度展示、失败重试和取消。 |
 | **应用支持子 Agent** | 部署专业 AI 子 Agent，使用独立系统提示词、工具白名单、资源限制和结构化输出运行。 |
 | **权限控制自动化** | 管理哪些工具、插件、Hook 和子 Agent 可以运行。工具调用会经过全局拒绝规则、Agent 白名单和任务级限制。 |
 
@@ -309,6 +310,8 @@ src/childprocess/managed-browser/
 完整文档请访问 [docs.aifetchly.com](https://docs.aifetchly.com)。
 
 AI 操控受管浏览器 / Browser Use（可见 Chrome 会话、浏览器工具、动作程序、审批、人工接管、指纹策略、缓存）：[产品需求](docs/prd/puppeteer-managed-social-browser-prd.md) 与 [技术设计](docs/prd/puppeteer-managed-social-browser-technical-design.md)。
+
+AI 聊天生成图片编辑与批量图片编辑（在聊天中生成并编辑图片、无需工作区、多图编辑与合成、带进度和重试的批量子 Agent）：[产品需求](docs/prd/ai-chat-generated-image-editing-prd.md) 与 [技术设计](docs/prd/ai-chat-generated-image-editing-technical-design.md)。
 
 应用官方网站是 [aifetchly.com](https://www.aifetchly.com)。
 
