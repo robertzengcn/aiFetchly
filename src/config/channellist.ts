@@ -122,6 +122,11 @@ export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE =
   "socialaccount:show:platformpage";
 // Secure session metadata (renderer-safe: no cookie values).
 export const SOCIAL_ACCOUNT_SESSION_METADATA = "socialaccount:session:metadata";
+// Q-01/R02: per-account AI opt-in editing (read + toggle).
+export const SOCIAL_ACCOUNT_GET_AI_USE_ENABLED =
+  "socialaccount:get-ai-use-enabled";
+export const SOCIAL_ACCOUNT_SET_AI_USE_ENABLED =
+  "socialaccount:set-ai-use-enabled";
 // Browser-profile import (feature-flagged; see src/config/featureFlags.ts).
 export const SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY =
   "socialaccount:browser-import:availability";

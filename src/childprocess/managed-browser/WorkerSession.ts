@@ -877,13 +877,17 @@ export class WorkerSession {
       });
     } finally {
       // A-FR-08: wipe local references to the credential.
-      // E19/A-FR-08: overwrite the secret in memory before dropping the
-      // reference — a dangling copy in a crash dump must not retain the
-      // password. (V8 cannot guarantee the old string is collected; this
-      // is the documented best-effort wipe, paired with the local copy
-      // dying at the end of the call.)
+      // E19/A-FR-08 (honest version): JavaScript strings are immutable —
+      // `input.password = ""` does NOT write over the previous bytes, it
+      // only drops the reference; the old string survives until GC (and
+      // in a crash dump until then). The documented best-effort wipe is:
+      // (1) drop EVERY reference promptly (below, plus the local copies
+      // inside the fill call dying at its end), (2) never log, persist,
+      // or transmit the value, and (3) prefer zero-copy credential paths
+      // (CDP/autofill) where the worker never materializes the secret at
+      // all. No comment here may claim byte-level overwrite — the
+      // runtime cannot provide it.
       input.password = "";
-      input.username = "";
       input.username = "";
     }
   }

@@ -12,6 +12,8 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+  SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
 } from "@/config/channellist";
 import { SocialAccount } from "@/modules/socialaccount";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
@@ -26,6 +28,7 @@ import { registerValidatedHandler } from "@/main-process/communication/_shared/r
 import {
   socialAccountListInputSchema,
   socialAccountByIdInputSchema,
+  socialAccountAiOptInInputSchema,
   socialPlatformListInputSchema,
   socialAccountSaveInputSchema,
 } from "@/schemas/ipc/socialAccount";
@@ -106,6 +109,33 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     async (input) => {
       const socialaccount = new SocialAccountController();
       return socialaccount.getAccountdetail(input.id);
+    }
+  );
+
+  // Q-01/R02: per-account AI opt-in — read (enabled omitted) or set.
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+    socialAccountByIdInputSchema,
+    async (input) => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      return { enabled: await new SocialAccountModule().getAiUseEnabled(input.id) };
+    }
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+    socialAccountAiOptInInputSchema,
+    async (input) => {
+      if (input.enabled === undefined) {
+        throw new Error("enabled_required");
+      }
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      await new SocialAccountModule().setAiUseEnabled(input.id, input.enabled);
+      return { ok: true };
     }
   );
 

@@ -180,4 +180,29 @@ export class SocialAccountModel extends BaseDb {
   async updatePassword(accountId: number, encryptedPass: string): Promise<void> {
     await this.repository.update(accountId, { pass: encryptedPass });
   }
+
+  /**
+   * Q-01/R02: find an EXISTING account by username + site so the
+   * credential card updates that row instead of creating a duplicate.
+   */
+  async findRowByUserAndSite(
+    username: string,
+    siteId: number | null,
+    platformId: number
+  ): Promise<SocialAccountEntity | null> {
+    const qb = this.repository
+      .createQueryBuilder("account")
+      .where("account.user = :username", { username });
+    if (siteId !== null) {
+      qb.andWhere("account.site_id = :siteId", { siteId });
+    } else {
+      qb.andWhere("account.social_type_id = :platformId", { platformId });
+    }
+    return await qb.getOne();
+  }
+
+  /** Q-01/R02: the per-account AI opt-in toggle for an existing account. */
+  async updateAiUseEnabled(accountId: number, enabled: boolean): Promise<void> {
+    await this.repository.update(accountId, { ai_use_enabled: enabled });
+  }
 }

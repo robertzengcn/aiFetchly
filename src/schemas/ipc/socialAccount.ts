@@ -23,6 +23,14 @@ export const socialAccountByIdInputSchema = lazySchema(() =>
   }),
 )
 
+/** Q-01/R02: the per-account AI opt-in toggle (read + set). */
+export const socialAccountAiOptInInputSchema = lazySchema(() =>
+  z.strictObject({
+    id: z.number().int().positive('id is required'),
+    enabled: z.boolean().optional(),
+  }),
+)
+
 /** PLATFORM_LIST: pagination */
 export const socialPlatformListInputSchema = lazySchema(() =>
   z.strictObject({

@@ -583,10 +583,30 @@ export class SocialAccountModule extends BaseModule {
       throw new Error("save_not_requested");
     }
     await this.ensureConnection();
+    const platformId = input.platformId ?? (input.siteId ?? 0);
+    // Q-01/R02: an existing account for the SAME user+site is UPDATED —
+    // the credential card never creates a duplicate of a disabled account;
+    // saving a credential IS the opt-in for that account.
+    const existing = await this.socialAccountModel.findRowByUserAndSite(
+      input.username,
+      input.siteId,
+      platformId
+    );
+    if (existing) {
+      const encrypted = await this.encryptPass(input.password);
+      if (encrypted === null) {
+        throw new Error("credential_unavailable");
+      }
+      await this.socialAccountModel.updatePassword(existing.id, encrypted);
+      if (!existing.ai_use_enabled) {
+        await this.socialAccountModel.updateAiUseEnabled(existing.id, true);
+      }
+      return existing.id;
+    }
     const entity = new SocialAccountEntity();
     entity.user = input.username;
     entity.name = input.username;
-    entity.social_type_id = input.platformId ?? (input.siteId ?? 0);
+    entity.social_type_id = platformId;
     entity.site_id = input.siteId;
     entity.status = 1;
     // R21/A-FR-06: the user checked "Save for future use" — enable the
@@ -594,5 +614,28 @@ export class SocialAccountModule extends BaseModule {
     entity.ai_use_enabled = true;
     entity.pass = await this.encryptPass(input.password);
     return await this.socialAccountModel.saveNewAccount(entity);
+  }
+
+  /**
+   * Q-01/R02: per-account AI opt-in editing for EXISTING accounts — the
+   * only writer besides the credential card (which sets true on save).
+   */
+  public async setAiUseEnabled(accountId: number, enabled: boolean): Promise<void> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      throw new Error("account_not_found");
+    }
+    await this.socialAccountModel.updateAiUseEnabled(accountId, enabled);
+  }
+
+  /** Q-01/R02: read the per-account AI opt-in (detail page display). */
+  public async getAiUseEnabled(accountId: number): Promise<boolean> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      return false;
+    }
+    return Boolean(account.ai_use_enabled);
   }
 }

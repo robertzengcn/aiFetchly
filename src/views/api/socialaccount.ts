@@ -20,6 +20,8 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+  SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
@@ -87,6 +89,21 @@ export async function getSocialaccountinfo(
   }
 
   return resp;
+}
+
+// Q-01/R02: the per-account AI opt-in (read + toggle).
+export async function getSocialAccountAiUseEnabled(id: number): Promise<boolean> {
+  const resp = (await windowInvoke(SOCIAL_ACCOUNT_GET_AI_USE_ENABLED, {
+    id,
+  })) as { enabled: boolean } | null;
+  return resp?.enabled === true;
+}
+
+export async function setSocialAccountAiUseEnabled(
+  id: number,
+  enabled: boolean
+): Promise<void> {
+  await windowInvoke(SOCIAL_ACCOUNT_SET_AI_USE_ENABLED, { id, enabled });
 }
 //save social account
 export async function saveSocialAccount(
