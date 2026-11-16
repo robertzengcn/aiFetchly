@@ -684,3 +684,63 @@ describe("runBrowserTasks busy-account queue (W09)", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// M-FR-11: the PARENT dedupes extracted rows before handing them to the
+// consumer (the parent owns any save). Key order is normalized so
+// {a:1,b:2} and {b:2,a:1} dedupe to one row; first occurrence wins.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks extracted-row dedupe (M-FR-11)", () => {
+  it("dedupes identical rows (and reordered-key objects) across the batch", async () => {
+    const outputs = [
+      {
+        status: "completed",
+        summary: "task 1 rows",
+        extracted: [
+          { name: "Alpha", price: 1 },
+          { price: 1, name: "Alpha" }, // reordered keys — same row
+          { name: "Beta", price: 2 },
+        ],
+        final_url: null,
+        evidence: [],
+        needs_user: null,
+        user_interventions: [],
+      },
+      {
+        status: "completed",
+        summary: "task 2 rows",
+        extracted: [{ name: "Alpha", price: 1 }], // duplicate across siblings
+        final_url: null,
+        evidence: [],
+        needs_user: null,
+        user_interventions: [],
+      },
+    ];
+    const runtime = {
+      runSync: vi
+        .fn()
+        .mockImplementationOnce(async () => ({
+          status: "completed",
+          output: outputs[0],
+        }))
+        .mockImplementationOnce(async () => ({
+          status: "completed",
+          output: outputs[1],
+        })),
+    };
+    const { results } = await runBrowserTasks(
+      [{ goal: "task a" }, { goal: "task b" }],
+      2,
+      "conv-dedupe",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    // Task 1 keeps Alpha/Beta/Beta-reordered → deduped to 2 unique rows;
+    // task 2's Alpha is a duplicate WITHIN its own (tiny) result but the
+    // batch boundary dedupes per result — cross-result dedupe would
+    // silently drop sibling output, which the caller owns.
+    expect(results[0]?.extracted).toHaveLength(2);
+    expect(results[1]?.extracted).toHaveLength(1);
+    expect(results[0]?.extracted[0]).toMatchObject({ name: "Alpha" });
+  });
+});

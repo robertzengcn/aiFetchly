@@ -423,6 +423,36 @@ export class BrowserTaskRunner {
             "the user controlled the browser; observe before acting.";
           evidence.push("resume_note_user_controlled");
         }
+        // C-FR-07: recheck the session's SITE identity after user control —
+        // the fresh observation's registrable domain must still match the
+        // task's start site. A drift is RECORDED in evidence and rides the
+        // decision note (the model must re-orient before acting); the task
+        // is never cancelled for it — the user may have navigated
+        // deliberately, and the worker's navigation gate still holds.
+        if (
+          (resumedDuringGate || resumeInstructions) &&
+          this.startUrl !== null
+        ) {
+          const { parseUrlIdentityWithOptions } = await import(
+            "@/service/browserDecision/RegistrableDomain"
+          );
+          const startIdentity = parseUrlIdentityWithOptions(this.startUrl, {});
+          const nowIdentity = parseUrlIdentityWithOptions(observation.url, {});
+          if (
+            startIdentity &&
+            nowIdentity &&
+            startIdentity.registrableDomain !== nowIdentity.registrableDomain
+          ) {
+            evidence.push(
+              `resume_identity_site_drifted:${nowIdentity.registrableDomain}`
+            );
+            const driftNote =
+              "site identity drifted after the user's takeover — re-orient on the current page before acting";
+            this.pendingSubgoal = this.pendingSubgoal
+              ? `${this.pendingSubgoal} ${driftNote}`
+              : driftNote;
+          }
+        }
         const decisionInput = this.buildDecisionInput(observation, candidates);
         this.pendingSubgoal = null;
         if (this.startUrl === null) {

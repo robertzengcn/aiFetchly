@@ -733,7 +733,61 @@ export async function runBrowserTasks(
     });
   }
   emitBatchEvent({ batchId, conversationId, phase: "finished" });
-  return { batchId, results };
+  // M-FR-11: the PARENT dedupes extracted rows before returning them to
+  // the caller (the parent owns any save) — siblings scraping overlapping
+  // pages produce identical rows, and the consumer's dedupe-before-save
+  // expectation is honored HERE, at the batch boundary.
+  const deduped: BrowserBatchTaskResult[] = results.map((result) =>
+    result.extracted.length > 1
+      ? { ...result, extracted: dedupeExtractedRows(result.extracted) }
+      : result
+  );
+  return { batchId, results: deduped };
+}
+
+/**
+ * M-FR-11: order-preserving dedupe of extracted rows by canonical JSON
+ * identity — object key order is normalized so `{a:1,b:2}` and
+ * `{b:2,a:1}` dedupe to one row.
+ */
+function dedupeExtractedRows(
+  rows: readonly unknown[]
+): BrowserBatchTaskResult["extracted"] {
+  const seen = new Set<string>();
+  const out: unknown[] = [];
+  for (const row of rows) {
+    let identity: string;
+    try {
+      if (row !== null && typeof row === "object") {
+        const sorted = sortObjectKeys(row as Record<string, unknown>);
+        identity = JSON.stringify(sorted);
+      } else {
+        identity = JSON.stringify(row);
+      }
+    } catch {
+      identity = String(row);
+    }
+    if (seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
+    out.push(row);
+  }
+  return out;
+}
+
+function sortObjectKeys(value: Record<string, unknown>): unknown {
+  const entries = Object.entries(value)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of entries) {
+    out[key] =
+      v !== null && typeof v === "object" && !Array.isArray(v)
+        ? sortObjectKeys(v as Record<string, unknown>)
+        : v;
+  }
+  return out;
 }
 
 function mapInterventions(
