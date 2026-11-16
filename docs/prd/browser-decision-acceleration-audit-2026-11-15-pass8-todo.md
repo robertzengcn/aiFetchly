@@ -2,6 +2,44 @@
 
 Date: 2026-11-15. Audited worktree: `E:/project/aiFetchly-bda`. Branch: `feature/browser-decision-acceleration`. HEAD: `cf5d9a861` (`docs: record the seventh pass (G01/G03/G05/G06 items) in the recheck audit`).
 
+**2026-11-16 closure pass:** W01–W09 are CLOSED — commits
+`d1ef9afb4`(W01) → `d408583ec`(W02) → `79fafaf04`(W03) →
+`15c413b5c`(W04) → `199806a72`(W05) → `a04514994`(W06) →
+`562737526`(W07) → `ddc2fbfb1`(W08) → `2891c7c7d`(W09) →
+`3ee00c3f8`(R02/R03/R04 quick items). Summary: W01 the hosted client
+aborts held-open requests on a config change; W02 partial/interrupted
+are their own terminal states across the control record, DB phase, and
+batch card (six-language labels); W03 the helper cache key carries the
+provider revision and invalidation matches the parsed field name; W04
+a failed proxy decrypt fails the check with proxy_auth_failed without
+launching the checker, and typed connect/auth/tunnel reasons flow
+through switch errors; W05 an alias chat default fails closed instead
+of picking the first /models id; W06 sub-agent notices, credential
+cards, and approval prompts publish on the ROOT conversation with the
+task label; W07 the agent loop consults the control gate BEFORE the
+model call (pause-before-request sends nothing; pause-during-request
+executes none of the response's tool calls; pause ends blocked, never
+cancelled); W08 a child's consequential action returns the structured
+needs_user proposal instead of throwing, and the batch confirmation
+card gates the start (tasks+sites preview, grant expires with the
+batch); W09 the busy-account queue emits `queued` (never
+waiting_for_user), polls the lease, holds a per-account reservation,
+and a crash before session_id releases the lease. R-items closed: the
+social-account detail page no longer console.logs platform data, the
+worker never calls bringToFront on launch (C-FR-10), proxy_list
+carries browser_usable + country + last check (P-FR-07), and the
+runner's resume appends the C-FR-07 note ("the user controlled the
+browser; observe before acting") with instructions on every resume.
+Focused sweep at the closure HEAD: 609 tests passed across 49 files
+(browserDecision, browserAgents, managedBrowser, proxy suites,
+AgentRuntime.permission, agentTaskCancel) plus 23 component tests.
+Still open: R01 (negotiation modes, verifier, recall measurement),
+remaining R02/R03/R04 feature work (registry switch-over, password
+bytes, sentinel scope, sub-agent model, dedupe save, handoff dialog
+queue, window title), R05 (real E2E drivers, held-out evaluation),
+and the pre-existing Windows-only outbound-email-gate SQLite fixture
+interference (verified failing identically before this pass).
+
 Specifications:
 
 - [PRD](browser-decision-acceleration-prd.md) v1.1 (2026-11-01)
