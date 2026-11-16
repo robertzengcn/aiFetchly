@@ -1,4 +1,7 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { describe, expect, it, beforeAll, beforeEach, vi } from "vitest";
 
 /**
  * Q-01/R02: per-account AI opt-in — the credential card UPDATES an
@@ -6,12 +9,18 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
  * the opt-in is editable for existing accounts.
  */
 
-// No USERSDBPATH: both BaseModule and BaseDb fall back to the SAME
-// resolveTestDbPath() temp dir, so model + module share one database.
+// A UNIQUE temp DB per file (G06 fixture-isolation class): the shared
+// resolveTestDbPath() fallback collides with parallel worker suites
+// ("database is locked" during schema sync). Both BaseModule and BaseDb
+// resolve USERSDBPATH to this file's own directory.
+const tmpDir = path.join(
+  os.tmpdir(),
+  `social-account-optin-test-${process.pid}-${Date.now()}`
+);
 vi.mock("@/modules/token", () => ({
   Token: class {
-    getValue(): string {
-      return "";
+    getValue(name: string): string {
+      return name === "user_dbpath" ? tmpDir : "";
     }
     setValue(): void {}
   },
@@ -50,6 +59,10 @@ vi.mock("@/modules/fieldCipher", async (importOriginal) => {
 
 import { SqliteDb } from "@/config/SqliteDb";
 import { SocialAccountModule } from "@/modules/socialAccountModule";
+
+beforeAll(() => {
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+});
 
 describe("SocialAccountModule per-account AI opt-in (Q-01/R02)", () => {
   beforeEach(() => {
