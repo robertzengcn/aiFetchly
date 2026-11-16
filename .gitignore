@@ -170,3 +170,6 @@ node_modules
 
 # Dated local backup of .agents/skills (42MB, transient) — keep out of the repo
 .agents/skills.backup-*/
+false/scraper.db
+false/scraper.db-shm
+false/scraper.db-wal
