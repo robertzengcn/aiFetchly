@@ -1039,6 +1039,42 @@ export class ManagedBrowserModule {
     return stopped;
   }
 
+  /**
+   * B01/M-AC-01: cleanup scoped to ONE agent task's authoritative session
+   * ownership — stops only sessions whose ownerAgentTaskId matches. The
+   * conversation-scoped sweep (above) also matches root conversations, so
+   * it can close SIBLING and PARENT sessions; the batch collector must
+   * use THIS method for child cleanup.
+   */
+  public async stopAllForAgentTask(
+    agentTaskId: string,
+    reason: "cancelled" | "user_stop" = "cancelled"
+  ): Promise<number> {
+    let stopped = 0;
+    for (const record of this.sessions.values()) {
+      if (record.ownerAgentTaskId !== agentTaskId) {
+        continue;
+      }
+      try {
+        await this.stop(record.sessionId, reason);
+        stopped++;
+      } catch {
+        /* best effort */
+      }
+    }
+    return stopped;
+  }
+
+  /**
+   * B01/M-FR-07: the authoritative owner of a session — the owning agent
+   * task id (null for directly-owned sessions). The batch collector
+   * validates a child-reported session_id against its own task BEFORE
+   * stopping or transferring it.
+   */
+  public getSessionOwnerAgentTaskId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.ownerAgentTaskId ?? null;
+  }
+
   public listActiveSessions(): readonly SafeManagedBrowserStatus[] {
     return [...this.sessions.values()].map((record) =>
       this.toSafeStatus(record)

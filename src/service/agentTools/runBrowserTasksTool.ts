@@ -448,6 +448,11 @@ export async function runBrowserTasks(
       batchAbort.signal.addEventListener("abort", onParentAbort, {
         once: true,
       });
+      // B01: the child's AUTHORITATIVE agent task id is captured from
+      // whatever result (or error) the lane settles with — cleanup and
+      // session-id validation scope to THIS task's ownership only. The
+      // declaration lives at LANE level so the catch path can use it.
+      let childAgentTaskId: string | null = null;
       try {
         const prompt = buildTaskPrompt(task, index, tasks.length);
         const runtime = (deps.runAgent ?? AgentRuntimeRegistry.getRuntime)();
@@ -484,6 +489,11 @@ export async function runBrowserTasks(
             }
           );
         let result = await runOnce();
+        // B01: capture the child's authoritative agent task id.
+        childAgentTaskId =
+          typeof (result as { agentTaskId?: unknown }).agentTaskId === "string"
+            ? (result as { agentTaskId: string }).agentTaskId
+            : childAgentTaskId;
         const resultFailedCode = (
           result.output as { reason?: string } | null
         )?.reason;
@@ -568,6 +578,8 @@ export async function runBrowserTasks(
           !parentCancelled && !returnNow && childAbort.signal.aborted;
         const hasUsableOutput =
           result.status === "completed" && result.output != null;
+        // B01/M-AC-01: cleanup and session-id validation scope to THIS
+        // task's authoritative ownership (childAgentTaskId, lane-level).
         // T13: a parent-signal abort ALWAYS outranks the result. For a
         // return-now or a single-child stop, output that already landed
         // is honored (the work finished before the abort landed).
@@ -583,6 +595,23 @@ export async function runBrowserTasks(
             returnNow ? "interrupted" : "cancelled",
             returnNow ? "return_now_partial" : "user_stop"
           );
+          // B01: the early branch cleans up ITS OWN task's sessions too —
+          // a child aborted mid-start would otherwise leak its lease.
+          // Awaited so the cancellation result does not claim release
+          // before the module acted.
+          if (childAgentTaskId) {
+            try {
+              const { getDefaultManagedBrowserModule } = await import(
+                "@/modules/ManagedBrowserModule"
+              );
+              await getDefaultManagedBrowserModule().stopAllForAgentTask(
+                childAgentTaskId,
+                "cancelled"
+              );
+            } catch {
+              /* best effort */
+            }
+          }
           return {
             task_index: index,
             status: returnNow ? "partial" : "cancelled",
@@ -618,22 +647,59 @@ export async function runBrowserTasks(
         const outputSessionId = (
           result.output as { session_id?: string } | null
         )?.session_id;
+        // B01/M-AC-01/M-FR-07: cleanup and transfer validate the
+        // session's AUTHORITATIVE owner — a child-reported session_id
+        // that belongs to another task is never stopped or transferred,
+        // and the fallback (no id reported) stops only THIS task's
+        // sessions, never the conversation-wide set (which would close
+        // sibling and parent sessions). Cleanup is AWAITED so the result
+        // does not claim released leases before the module acted.
+        const cleanupEvidence: string[] = [];
         if (!task.keep_open) {
-          // F17/E20: the collector owns cleanup. A child that reported a
-          // session_id is stopped directly; a child that CRASHED or was
-          // cancelled before reporting one releases every session the
-          // conversation owns (M-AC-01: no leaked lease or global slot).
-          void (async () => {
+          try {
             const { getDefaultManagedBrowserModule } = await import(
               "@/modules/ManagedBrowserModule"
             );
             const module = getDefaultManagedBrowserModule();
             if (typeof outputSessionId === "string" && outputSessionId) {
-              await module.stop(outputSessionId, "cancelled");
-            } else {
-              await module.stopAllForConversation(conversationId, "cancelled");
+              const owner =
+                module.getSessionOwnerAgentTaskId(outputSessionId);
+              if (owner !== null && owner === childAgentTaskId) {
+                await module.stop(outputSessionId, "cancelled");
+              } else if (owner === null && childAgentTaskId === null) {
+                // Both unknown (bare fakes): keep the direct stop.
+                await module.stop(outputSessionId, "cancelled");
+              } else {
+                cleanupEvidence.push(
+                  "cleanup_skipped:session_owner_mismatch"
+                );
+              }
+            } else if (childAgentTaskId) {
+              await module.stopAllForAgentTask(childAgentTaskId, "cancelled");
             }
-          })().catch(() => undefined);
+          } catch {
+            cleanupEvidence.push("cleanup_failed");
+          }
+        }
+        // B01/M-FR-07: a keep_open result transfers the session to the
+        // parent ONLY when the reported session actually belongs to this
+        // task; a foreign id is dropped (never surfaced as session_id).
+        let transferredSessionId: string | undefined = undefined;
+        if (task.keep_open && typeof outputSessionId === "string" && outputSessionId) {
+          try {
+            const { getDefaultManagedBrowserModule } = await import(
+              "@/modules/ManagedBrowserModule"
+            );
+            const owner = getDefaultManagedBrowserModule()
+              .getSessionOwnerAgentTaskId(outputSessionId);
+            if (childAgentTaskId === null || owner === childAgentTaskId) {
+              transferredSessionId = outputSessionId;
+            } else {
+              cleanupEvidence.push("keep_open_transfer_refused:owner_mismatch");
+            }
+          } catch {
+            cleanupEvidence.push("keep_open_transfer_refused:owner_unknown");
+          }
         }
         return {
           task_index: index,
@@ -641,11 +707,16 @@ export async function runBrowserTasks(
           summary: (result.output as { summary?: string } | null)?.summary ?? String(result.errorMessage ?? result.status),
           extracted: (result.output as { extracted?: unknown[] } | null)?.extracted ?? [],
           final_url: (result.output as { final_url?: string } | null)?.final_url ?? null,
-          evidence: (result.output as { evidence?: string[] } | null)?.evidence ?? [],
+          evidence: [
+            ...((result.output as { evidence?: string[] } | null)?.evidence ?? []),
+            // B01: cleanup facts ride the returned evidence — a skipped or
+            // failed cleanup is never silently swallowed.
+            ...cleanupEvidence,
+          ],
           needs_user: (result.output as { needs_user?: { type: string } } | null)?.needs_user ?? null,
           user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
           ...(task.keep_open
-            ? { session_id: (result.output as { session_id?: string } | null)?.session_id }
+            ? { session_id: transferredSessionId ?? (result.output as { session_id?: string } | null)?.session_id }
             : {}),
         };
       } catch (error) {
@@ -665,19 +736,25 @@ export async function runBrowserTasks(
               : "failed",
           error instanceof Error ? error.message : "task_error"
         );
-        // W09/M-AC-01: a child that CRASHED before reporting a session_id
-        // releases every session the conversation owns — the account lease
-        // must not stay held by a dead child (queued siblings would wait
-        // on a ghost).
-        void (async () => {
-          const { getDefaultManagedBrowserModule } = await import(
-            "@/modules/ManagedBrowserModule"
-          );
-          await getDefaultManagedBrowserModule().stopAllForConversation(
-            conversationId,
-            "cancelled"
-          );
-        })().catch(() => undefined);
+        // B01/M-AC-01: a child that CRASHED releases only ITS OWN task's
+        // sessions (agt-scoped, awaited) — the conversation-wide sweep
+        // also matches the ROOT conversation and could close sibling and
+        // parent sessions. The account lease must not stay held by a dead
+        // child (queued siblings would wait on a ghost), but the cleanup
+        // must not reach beyond this task.
+        if (childAgentTaskId) {
+          try {
+            const { getDefaultManagedBrowserModule } = await import(
+              "@/modules/ManagedBrowserModule"
+            );
+            await getDefaultManagedBrowserModule().stopAllForAgentTask(
+              childAgentTaskId,
+              "cancelled"
+            );
+          } catch {
+            /* best effort */
+          }
+        }
         return {
           task_index: index,
           status:
@@ -689,7 +766,10 @@ export async function runBrowserTasks(
           summary: error instanceof Error ? error.message : "task error",
           extracted: [],
           final_url: null,
-          evidence: returnNow ? ["return_now:error"] : [],
+          evidence: [
+            ...(returnNow ? ["return_now:error"] : []),
+            ...(!childAgentTaskId ? ["cleanup_skipped:agent_task_id_unknown"] : []),
+          ],
           needs_user: null,
           user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
         };

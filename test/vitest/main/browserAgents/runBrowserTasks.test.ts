@@ -16,12 +16,18 @@ import {
 } from "@/service/ManagedBrowserLeaseService";
 import { setBrowserBatchEventSink } from "@/service/agentTools/runBrowserTasksTool";
 
-/** W09: the collector's crash-path cleanup must be observable. */
+/** W09/B01: cleanup observability — task-scoped stop + owner lookups. */
 const stopAllForConversationMock = vi.fn(async (): Promise<void> => undefined);
+const stopAllForAgentTaskMock = vi.fn(async (): Promise<number> => 1);
+const stopMock = vi.fn(async (): Promise<void> => undefined);
+const ownerBySession = new Map<string, string | null>();
 vi.mock("@/modules/ManagedBrowserModule", () => ({
   getDefaultManagedBrowserModule: () => ({
     stopAllForConversation: stopAllForConversationMock,
-    stop: vi.fn(async (): Promise<void> => undefined),
+    stopAllForAgentTask: stopAllForAgentTaskMock,
+    stop: stopMock,
+    getSessionOwnerAgentTaskId: (sessionId: string) =>
+      ownerBySession.get(sessionId) ?? null,
   }),
 }));
 
@@ -661,7 +667,41 @@ describe("runBrowserTasks busy-account queue (W09)", () => {
     setDefaultManagedBrowserLeaseServiceForTest(null);
   });
 
-  it("a child crash before session_id releases the lease (stopAllForConversation)", async () => {
+  it("a child crash with a known agent-task id releases its OWN sessions", async () => {
+    stopAllForAgentTaskMock.mockClear();
+    stopAllForConversationMock.mockClear();
+    const crash = {
+      runSync: async () => ({
+        // Real AgentRuntime failures are RESULTS (not throws) carrying
+        // the authoritative agent task id.
+        status: "failed",
+        agentTaskId: "agt-crash-w09",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 0,
+        sourceUrls: [],
+        errorMessage: "worker exit before session_id",
+        output: null,
+      }),
+    };
+    const outcome = await runBrowserTasks(
+      [{ goal: "crash before session" } as BrowserBatchTaskInput],
+      1,
+      "conv-crash-w09",
+      new AbortController().signal,
+      { runAgent: () => crash as never }
+    );
+    expect(outcome.results[0]?.status).toBe("failed");
+    expect(stopAllForAgentTaskMock).toHaveBeenCalledWith(
+      "agt-crash-w09",
+      "cancelled"
+    );
+    // B01: the conversation-wide sweep is NEVER used for child cleanup.
+    expect(stopAllForConversationMock).not.toHaveBeenCalled();
+  });
+
+  it("a throw with no agent-task id reports the skipped cleanup honestly", async () => {
+    stopAllForAgentTaskMock.mockClear();
     stopAllForConversationMock.mockClear();
     const crash = {
       runSync: async () => {
@@ -676,12 +716,82 @@ describe("runBrowserTasks busy-account queue (W09)", () => {
       { runAgent: () => crash as never }
     );
     expect(outcome.results[0]?.status).toBe("failed");
-    // The cleanup is a detached best-effort async — flush it.
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(stopAllForConversationMock).toHaveBeenCalledWith(
-      "conv-crash-w09",
-      "cancelled"
+    // B01: nothing is swept — the result HONESTLY reports that the
+    // cleanup could not be scoped instead of closing sibling sessions.
+    expect(outcome.results[0]?.evidence).toContain(
+      "cleanup_skipped:agent_task_id_unknown"
     );
+    expect(stopAllForAgentTaskMock).not.toHaveBeenCalled();
+    expect(stopAllForConversationMock).not.toHaveBeenCalled();
+  });
+
+  it("a reported session_id owned by ANOTHER task is neither stopped nor transferred (B01)", async () => {
+    stopMock.mockClear();
+    ownerBySession.clear();
+    // The parent's ordinary session and a sibling's session are alive.
+    ownerBySession.set("mb_foreign_0000001", "agt-sibling-9");
+    ownerBySession.set("mb_owned_00000001", "agt-owner-1");
+    const runtime = {
+      runSync: vi.fn().mockImplementation(async () => ({
+        status: "completed",
+        agentTaskId: "agt-owner-1",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 1,
+        sourceUrls: [],
+        output: {
+          status: "completed",
+          summary: "claimed a foreign session",
+          extracted: [],
+          final_url: null,
+          evidence: [],
+          session_id: "mb_foreign_0000001",
+        },
+      })),
+    };
+    const outcome = await runBrowserTasks(
+      [{ goal: "no keep_open" }],
+      1,
+      "conv-b01",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    expect(outcome.results[0]?.status).toBe("completed");
+    // The foreign session was NEVER stopped, and the result reports the skip.
+    expect(stopMock).not.toHaveBeenCalledWith("mb_foreign_0000001", "cancelled");
+    expect(outcome.results[0]?.evidence).toContain(
+      "cleanup_skipped:session_owner_mismatch"
+    );
+    // B01: the conversation-wide sweep is NEVER used for child cleanup.
+    expect(stopAllForConversationMock).not.toHaveBeenCalled();
+    // A session the task actually owns IS stopped by id.
+    const ownedRuntime = {
+      runSync: vi.fn().mockImplementation(async () => ({
+        status: "completed",
+        agentTaskId: "agt-owner-1",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 1,
+        sourceUrls: [],
+        output: {
+          status: "completed",
+          summary: "done",
+          extracted: [],
+          final_url: null,
+          evidence: [],
+          session_id: "mb_owned_00000001",
+        },
+      })),
+    };
+    stopMock.mockClear();
+    await runBrowserTasks(
+      [{ goal: "own session" }],
+      1,
+      "conv-b01",
+      new AbortController().signal,
+      { runAgent: () => ownedRuntime as never }
+    );
+    expect(stopMock).toHaveBeenCalledWith("mb_owned_00000001", "cancelled");
   });
 });
 
