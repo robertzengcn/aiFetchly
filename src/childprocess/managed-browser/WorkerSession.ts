@@ -56,6 +56,7 @@ import type {
 } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
   redactSecrets,
+  registerTrustedSecret,
   sanitizeScriptResult,
   toSafeErrorMessage,
   truncateText,
@@ -849,6 +850,13 @@ export class WorkerSession {
       return;
     }
     try {
+      // B09/A-FR-15: the ACTUAL filled credential is registered with the
+      // worker's sanitizer BEFORE any fill — every observation, action
+      // result, extraction, and log line this worker produces from now on
+      // redacts the exact value (pattern checks cannot catch an ordinary
+      // synthetic credential embedded in page text). Bounded FIFO: old
+      // values age out after later fills.
+      registerTrustedSecret(input.password);
       const firstStep = input.recipe?.steps[0] ?? null;
       const result = await this.loginFiller.fill(page, {
         mode: input.mode,

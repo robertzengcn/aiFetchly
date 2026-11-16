@@ -43,7 +43,59 @@ export function isLikelySecretKey(key: string): boolean {
   return SECRET_KEY_PATTERN.test(key);
 }
 
+// ---------------------------------------------------------------------------
+// B09/A-FR-15: TRUSTED-SECRET containment. Pattern checks cannot catch an
+// ordinary synthetic credential ("summer2024!") embedded in page text —
+// the value does not look like a secret. The WORKER KNOWS the values it
+// actually filled: LoginFormFiller's credential registers them here, and
+// every redaction path redacts the EXACT value from every outbound
+// channel (observation text/titles, structured records, action results,
+// extraction). Bounded registry (FIFO, max 8) — old values age out.
+// ---------------------------------------------------------------------------
+const trustedSecrets: string[] = [];
+const TRUSTED_SECRET_MAX = 8;
+
+export function registerTrustedSecret(value: string): void {
+  if (!value || value.length < 3) {
+    return;
+  }
+  const existing = trustedSecrets.indexOf(value);
+  if (existing >= 0) {
+    trustedSecrets.splice(existing, 1);
+  }
+  trustedSecrets.push(value);
+  while (trustedSecrets.length > TRUSTED_SECRET_MAX) {
+    trustedSecrets.shift();
+  }
+}
+
+/** Test seam — clears every registered trusted secret. */
+export function clearTrustedSecretsForTest(): void {
+  trustedSecrets.length = 0;
+}
+
+/** The filled credential itself, anywhere in text, is containment-critical. */
+function containsTrustedSecret(text: string): boolean {
+  return trustedSecrets.some((secret) => text.includes(secret));
+}
+
+/** Replace every registered trusted secret occurrence in text. */
+function redactTrustedSecrets(text: string): string {
+  let out = text;
+  for (const secret of trustedSecrets) {
+    if (out.includes(secret)) {
+      out = out.split(secret).join(REDACTED_MARKER);
+    }
+  }
+  return out;
+}
+
 export function isLikelySecretValue(value: string): boolean {
+  // B09: internal sentinels are markers at ANY length — the min-length
+  // gate must not let a shorter marker through.
+  if (/^__[a-z0-9_]+__$/i.test(value)) {
+    return true;
+  }
   if (value.length < 16) {
     // Too short to be a meaningful secret; avoid false positives on normal
     // short text (names, single words).
@@ -64,6 +116,11 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
     return "[depth_limit]";
   }
   if (typeof value === "string") {
+    // B09: the ACTUAL filled credential is redacted by exact value first,
+    // at any length, before any shape heuristic.
+    if (containsTrustedSecret(value)) {
+      return redactTrustedSecrets(value);
+    }
     return isLikelySecretValue(value) ? REDACTED_MARKER : value;
   }
   if (Array.isArray(value)) {
@@ -96,6 +153,11 @@ export function redactSecretsInText(text: string): string {
   if (!text) {
     return text;
   }
+  // B09 pass 0: the ACTUAL filled credential (exact value, any length,
+  // any position) is containment-critical — redact before shape passes.
+  if (containsTrustedSecret(text)) {
+    text = redactTrustedSecrets(text);
+  }
   // Pass 1: secret-shaped key=value / key: value pairs → key=[redacted].
   const out = text.replace(
     INLINE_KEY_VALUE_SECRET,
@@ -111,7 +173,7 @@ export function redactSecretsInText(text: string): string {
     }
     // Strip sentence punctuation for the shape check, keep the marker swap.
     const bare = token.replace(/^[("']+|[)"'\],.;:!?]+$/g, "");
-    if (bare.length >= 16 && isLikelySecretValue(bare)) {
+    if (isLikelySecretValue(bare)) {
       tokens[i] = token.replace(bare, REDACTED_MARKER);
     }
   }

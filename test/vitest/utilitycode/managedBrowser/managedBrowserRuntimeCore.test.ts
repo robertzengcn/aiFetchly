@@ -515,4 +515,55 @@ describe("A-FR-15 credential sentinel scan", () => {
     expect(cleaned.user).toBe("[redacted]");
     expect(cleaned.note).toBe("normal value");
   });
+
+  // B09: a SHORT internal marker bypassed the min-length gate.
+  it("redacts short sentinels at any length", async () => {
+    const { isLikelySecretValue, redactSecretsInText } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    expect(isLikelySecretValue("__x__")).toBe(true);
+    expect(redactSecretsInText("marker __pw__ found")).toBe(
+      "marker [redacted] found"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B09/A-FR-15: TRUSTED-SECRET containment — the ACTUAL filled credential
+// is redacted by exact value from every output channel, even when it
+// looks like ordinary text. Unregistered page text passes through.
+// ---------------------------------------------------------------------------
+describe("B09 trusted-secret containment", () => {
+  it("a registered filled credential is redacted from text and records", async () => {
+    const {
+      registerTrustedSecret,
+      clearTrustedSecretsForTest,
+      redactSecretsInText,
+      redactSecrets,
+    } = await import("@/childprocess/managed-browser/ResultSanitizer");
+    clearTrustedSecretsForTest();
+    const synthetic = "summer2024!field";
+    registerTrustedSecret(synthetic);
+    // Embedded in page prose (pattern checks cannot catch it).
+    expect(
+      redactSecretsInText(`Welcome back! Your hint is ${synthetic} enjoy`)
+    ).toBe("Welcome back! Your hint is [redacted] enjoy");
+    // Structured record (extraction/observation shapes).
+    const record = redactSecrets({
+      note: `hint: ${synthetic}`,
+      title: "plain page",
+    }) as Record<string, unknown>;
+    expect(record.note).toBe("hint: [redacted]");
+    expect(record.title).toBe("plain page");
+    clearTrustedSecretsForTest();
+  });
+
+  it("UNREGISTERED ordinary text passes through (normal page output kept)", async () => {
+    const { clearTrustedSecretsForTest, redactSecretsInText } = await import(
+      "@//childprocess/managed-browser/ResultSanitizer".replace("@//", "@/")
+    );
+    clearTrustedSecretsForTest();
+    const text = "Welcome back! Your hint is summer2024!field enjoy";
+    expect(redactSecretsInText(text)).toBe(text);
+  });
 });
