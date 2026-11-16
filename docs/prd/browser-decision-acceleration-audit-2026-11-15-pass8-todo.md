@@ -38,7 +38,13 @@ remaining R02/R03/R04 feature work (registry switch-over, password
 bytes, sentinel scope, sub-agent model, dedupe save, handoff dialog
 queue, window title), R05 (real E2E drivers, held-out evaluation),
 and the pre-existing Windows-only outbound-email-gate SQLite fixture
-interference (verified failing identically before this pass).
+interference (verified failing identically before this pass). Two CI
+follow-ups during the watch: the session-card notice filter was made
+lenient for legacy sessionId-less notices (commit `66087a657`, plus a
+foreign-conversation routing regression) and the batch-confirm channels
+were added to the preload allowlist (`853c74bf7`). CI run 43909450423
+SUCCESS on all three jobs (Lint+unit 17m39s, Package smoke 5m53s,
+Electron E2E 40m17s) at `853c74bf7`.
 
 Specifications:
 
