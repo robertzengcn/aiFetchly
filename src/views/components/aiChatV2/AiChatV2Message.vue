@@ -513,9 +513,14 @@
         </div>
       </template>
       <AiChatV2StreamStatus
-        v-if="message.role === 'assistant' && status !== 'idle'"
+        v-if="
+          message.role === 'assistant' &&
+          message.messageType !== MessageType.TOOL_CALL &&
+          message.messageType !== MessageType.TOOL_RESULT &&
+          status !== 'idle'
+        "
         :status="status"
-        :error-message="errorMessage"
+        :error-message="effectiveErrorMessage"
       />
       <div
         v-if="message.role === 'user' && mentionChips.length > 0"
@@ -652,6 +657,7 @@ import {
   expandPastedTextForDisplay,
 } from "@/service/pastedText/PastedTextDisplay";
 import { windowInvoke } from "@/views/utils/apirequest";
+import { localizeWorkspaceError } from "@/views/utils/workspaceErrorLocalization";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -823,7 +829,43 @@ const roleLabel = computed(() => {
   return props.message.role;
 });
 
-const status = computed<Status>(() => props.status ?? "idle");
+const persistedErrorText = computed<string | undefined>(() => {
+  if (props.message.role !== "assistant") return undefined;
+  if (
+    props.message.messageType === MessageType.TOOL_CALL ||
+    props.message.messageType === MessageType.TOOL_RESULT
+  ) {
+    return undefined;
+  }
+  const raw = props.message.metadata?.error;
+  if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
+  return localizeWorkspaceError(raw, (key) => t(key)).text;
+});
+
+const status = computed<Status>(() => {
+  if (props.status && props.status !== "idle") {
+    return props.status;
+  }
+  if (
+    persistedErrorText.value &&
+    props.message.content !== props.message.metadata?.error &&
+    props.message.content !== persistedErrorText.value
+  ) {
+    return "error";
+  }
+  if (
+    props.message.role === "assistant" &&
+    props.message.messageType !== MessageType.TOOL_CALL &&
+    props.message.messageType !== MessageType.TOOL_RESULT &&
+    props.message.metadata?.cancelled === true
+  ) {
+    return "cancelled";
+  }
+  return "idle";
+});
+const effectiveErrorMessage = computed<string | undefined>(
+  () => props.errorMessage || persistedErrorText.value
+);
 const disabled = computed(() => props.disabled ?? false);
 
 const messageTime = computed(() => {

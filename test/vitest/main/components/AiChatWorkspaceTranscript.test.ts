@@ -1536,4 +1536,130 @@ describe("AiChatWorkspaceTranscript remote working indicator & empty bubble supp
 
     expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(false);
   });
+
+  it("renders tool execution group below each AI response when loaded from persisted chat history order", async () => {
+    const messages: ChatV2MessageView[] = [
+      {
+        id: "u1",
+        conversationId: "v2-test",
+        role: "user",
+        content: "Search for leads",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u1" },
+      },
+      {
+        id: "tc1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "web_search",
+        timestamp: "2026-08-20T10:00:02.000Z",
+        messageType: MessageType.TOOL_CALL,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u1",
+          toolCallId: "call-1",
+          toolName: "web_search",
+        },
+      },
+      {
+        id: "tr1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: '{"success":true}',
+        timestamp: "2026-08-20T10:00:03.000Z",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u1",
+          toolCallId: "call-1",
+          toolName: "web_search",
+          toolResult: { success: true, summary: "Found 5 leads" },
+          toolResultSummary: "Found 5 leads",
+        },
+      },
+      {
+        id: "a1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "Here are the 5 leads I found.",
+        timestamp: "2026-08-20T10:00:04.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u1" },
+      },
+    ];
+
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const listEl = wrapper.find('[data-testid="workspace-transcript-list"]').element;
+    const childOrder = Array.from(listEl.children).map((el) => {
+      if (el.getAttribute("data-testid") === "execution-group") {
+        return "execution-group";
+      }
+      if (el.classList.contains("v2-message--user")) {
+        return "user-message";
+      }
+      if (el.classList.contains("v2-message--assistant")) {
+        return "assistant-message";
+      }
+      return "other";
+    });
+    expect(childOrder).toEqual([
+      "user-message",
+      "assistant-message",
+      "execution-group",
+    ]);
+  });
+
+  it("displays persisted AI response error when loading a failed turn with empty content from chat history", async () => {
+    const messages: ChatV2MessageView[] = [
+      {
+        id: "u-err",
+        conversationId: "v2-test",
+        role: "user",
+        content: "Hello AI",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u-err" },
+      },
+      {
+        id: "a-err",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-08-20T10:00:02.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u-err",
+          finishReason: "error",
+          error: "AI server returned 502 Bad Gateway",
+        },
+      },
+    ];
+
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const messageComponents = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(messageComponents).toHaveLength(2);
+    const errorStatus = wrapper.find('[data-testid="stream-status-error"]');
+    expect(errorStatus.exists()).toBe(true);
+    expect(errorStatus.text()).toContain("AI server returned 502 Bad Gateway");
+  });
 });

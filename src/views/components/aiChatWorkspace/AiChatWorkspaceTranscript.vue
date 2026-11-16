@@ -325,6 +325,38 @@ type ProjectedItem =
  * - No generic Tool Call/Tool Result cards (FR-043)
  * - No nested plan-document scroller (FR-055)
  */
+function isRenderableAssistantMessage(msg: ChatV2MessageView): boolean {
+  if (
+    msg.messageType !== ("message" as MessageType) ||
+    msg.role !== "assistant" ||
+    msg.metadata?.planEventType ||
+    msg.metadata?.planStateView
+  ) {
+    return false;
+  }
+  const hasContent = Boolean(msg.content && msg.content.length > 0);
+  const hasReasoning = Boolean(
+    props.showReasoning &&
+      msg.metadata?.reasoning?.content &&
+      msg.metadata.reasoning.content.length > 0
+  );
+  const hasActionableMetadata = Boolean(
+    msg.metadata?.error ||
+      msg.metadata?.cancelled ||
+      msg.metadata?.artifact ||
+      msg.metadata?.toolResult ||
+      msg.metadata?.toolCallId ||
+      (Array.isArray(msg.metadata?.generatedImages) &&
+        msg.metadata.generatedImages.length > 0) ||
+      (Array.isArray(msg.metadata?.generatedImageReferences) &&
+        msg.metadata.generatedImageReferences.length > 0) ||
+      (Array.isArray(msg.metadata?.attachments) &&
+        msg.metadata.attachments.length > 0) ||
+      msg.metadata?.planStateView
+  );
+  return hasContent || hasReasoning || hasActionableMetadata;
+}
+
 const projectedItems = computed<ProjectedItem[]>(() => {
   const messages = props.messages;
   const result: ProjectedItem[] = [];
@@ -343,6 +375,15 @@ const projectedItems = computed<ProjectedItem[]>(() => {
       receiptKeys.add(exec.key);
     }
   }
+
+  const messageIndexById = new Map<string, number>();
+  messages.forEach((m, idx) => {
+    if (m.id && !messageIndexById.has(m.id)) {
+      messageIndexById.set(m.id, idx);
+    }
+  });
+  const emittedGroupKeys = new Set<string>();
+  const deferredByAssistantId = new Map<string, ProjectedItem[]>();
 
   // Walk messages in order; replace tool sequences with groups.
   let i = 0;
@@ -371,19 +412,23 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         // One group per assistant response. Skip ahead past all tool messages
         // in this group, surfacing gated-tool permission prompts hidden among
         // them as interactive cards after the group (design §15.5).
-        result.push({
-          kind: "execution-group",
-          key: group.key,
-          group,
-        });
+        const batchItems: ProjectedItem[] = [];
+        if (!emittedGroupKeys.has(group.key)) {
+          emittedGroupKeys.add(group.key);
+          batchItems.push({
+            kind: "execution-group",
+            key: group.key,
+            group,
+          });
+        }
         // The anchor tool message itself can carry an interactive surface
         // (a solo batch result owns a legacy group) — check it too.
         const replyId = emailReplyDraftId(msg);
         if (replyId !== null) {
-          result.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: replyId });
+          batchItems.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: replyId });
         }
         if (isOutboundBatchResultMessage(msg)) {
-          result.push({
+          batchItems.push({
             kind: "outbound-batch",
             key: `outbound-batch-${msg.id}`,
             message: msg,
@@ -392,7 +437,7 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         // FR-SKL-001: installation results render the shared install card
         // (approvals, dependencies, credentials) outside the collapsed group.
         if (isSkillInstallResult(messages[i])) {
-          result.push({
+          batchItems.push({
             kind: "skill-install",
             key: `skill-install-${messages[i].id}`,
             message: messages[i],
@@ -403,7 +448,7 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         // call sits outside the mounted window) — surface it too, mirroring
         // the in-loop branch, or the decision card silently disappears.
         if (isPermissionPrompt(messages[i])) {
-          result.push({
+          batchItems.push({
             kind: "permission-prompt",
             key: `permission-${messages[i].id}`,
             message: messages[i],
@@ -412,7 +457,7 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         // T3/D2 (audit): generated-image batch cards carry live progress,
         // Stop, and Retry — they must not collapse into a generic receipt.
         if (isBatchToolCard(messages[i])) {
-          result.push({
+          batchItems.push({
             kind: "batch-card",
             key: `batch-card-${messages[i].id}`,
             message: messages[i],
@@ -426,7 +471,7 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             messages[i].messageType === ("tool_result" as MessageType))
         ) {
           if (isPermissionPrompt(messages[i])) {
-            result.push({
+            batchItems.push({
               kind: "permission-prompt",
               key: `permission-${messages[i].id}`,
               message: messages[i],
@@ -437,30 +482,49 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           // the collapsed receipt.
           const replyId = emailReplyDraftId(messages[i]);
           if (replyId !== null) {
-            result.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
+            batchItems.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
           }
           if (isOutboundBatchResultMessage(messages[i])) {
-            result.push({
+            batchItems.push({
               kind: "outbound-batch",
               key: `outbound-batch-${messages[i].id}`,
               message: messages[i],
             });
           }
           if (isSkillInstallResult(messages[i])) {
-            result.push({
+            batchItems.push({
               kind: "skill-install",
               key: `skill-install-${messages[i].id}`,
               message: messages[i],
             });
           }
           if (isBatchToolCard(messages[i])) {
-            result.push({
+            batchItems.push({
               kind: "batch-card",
               key: `batch-card-${messages[i].id}`,
               message: messages[i],
             });
           }
           i += 1;
+        }
+        const ownerIdx = group.assistantMessageId
+          ? messageIndexById.get(group.assistantMessageId)
+          : undefined;
+        // When loaded from history, tool_call/tool_result rows are persisted
+        // chronologically before the final assistant MESSAGE row. Defer the
+        // group until after its owning assistant message so tool executions
+        // consistently render below the AI response (matching live chat).
+        if (
+          ownerIdx !== undefined &&
+          ownerIdx >= i &&
+          isRenderableAssistantMessage(messages[ownerIdx])
+        ) {
+          const existing =
+            deferredByAssistantId.get(group.assistantMessageId!) ?? [];
+          existing.push(...batchItems);
+          deferredByAssistantId.set(group.assistantMessageId!, existing);
+        } else {
+          result.push(...batchItems);
         }
       } else if (isPermissionPrompt(msg)) {
         // Unpaired gated tool result: the interactive card IS the surface —
@@ -553,32 +617,19 @@ const projectedItems = computed<ProjectedItem[]>(() => {
     // Regular message.
     if (msg.role === "user") {
       result.push({ kind: "user-message", key: msg.id, message: msg });
-    } else {
-      const hasContent = Boolean(msg.content && msg.content.length > 0);
-      const hasReasoning = Boolean(
-        props.showReasoning &&
-          msg.metadata?.reasoning?.content &&
-          msg.metadata.reasoning.content.length > 0
-      );
-      const hasActionableMetadata = Boolean(
-        msg.metadata?.error ||
-          msg.metadata?.cancelled ||
-          msg.metadata?.artifact ||
-          msg.metadata?.toolResult ||
-          msg.metadata?.toolCallId ||
-          (Array.isArray(msg.metadata?.generatedImages) &&
-            msg.metadata.generatedImages.length > 0) ||
-          (Array.isArray(msg.metadata?.generatedImageReferences) &&
-            msg.metadata.generatedImageReferences.length > 0) ||
-          (Array.isArray(msg.metadata?.attachments) &&
-            msg.metadata.attachments.length > 0) ||
-          msg.metadata?.planStateView
-      );
-      if (hasContent || hasReasoning || hasActionableMetadata) {
-        result.push({ kind: "assistant-message", key: msg.id, message: msg });
+    } else if (isRenderableAssistantMessage(msg)) {
+      result.push({ kind: "assistant-message", key: msg.id, message: msg });
+      const deferred = deferredByAssistantId.get(msg.id);
+      if (deferred && deferred.length > 0) {
+        result.push(...deferred);
+        deferredByAssistantId.delete(msg.id);
       }
     }
     i += 1;
+  }
+
+  for (const leftover of deferredByAssistantId.values()) {
+    result.push(...leftover);
   }
 
   // ONE lifecycle surface for the latest plan (FR-052), placed AFTER the

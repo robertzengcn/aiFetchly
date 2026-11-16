@@ -2000,5 +2000,20 @@ describe("AIChatQueryEngine reactive compaction sentinel", () => {
     // It must still clear the threshold gate (>= the resolved context window,
     // which is >= 0.8 * window). The recovery default (128k) is the floor.
     expect(input.promptTokens).toBeGreaterThanOrEqual(128_000);
+
+    // Even when partialContent is empty (""), the failed assistant response
+    // must be persisted with finishReason="error" and error metadata so loading
+    // the conversation from chat history surfaces the failure.
+    expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "v2-reactive",
+        messageId: "assistant-reactive",
+        content: "",
+        metadata: expect.objectContaining({
+          finishReason: "error",
+          error: expect.stringContaining("context too large"),
+        }),
+      })
+    );
   });
 });

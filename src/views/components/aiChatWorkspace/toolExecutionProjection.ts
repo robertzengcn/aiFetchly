@@ -133,19 +133,70 @@ export interface ToolExecutionGroupView {
   readonly defaultExpanded: boolean;
 }
 
-/** Owning assistant message for a tool row: the nearest preceding assistant
- * MESSAGE row, or null for legacy histories (design §15.10 rule 1). */
+function isRegularAssistantMessage(message: ChatV2MessageView): boolean {
+  return (
+    message.messageType === MessageType.MESSAGE &&
+    message.role === "assistant" &&
+    Boolean(message.id) &&
+    !message.metadata?.planEventType &&
+    !message.metadata?.planStateView
+  );
+}
+
+/** Owning assistant message for a tool row: the assistant MESSAGE row for
+ * the same turn (preceding in live stream order, or following in persisted
+ * history order), or a turn-scoped fallback for legacy/plan histories. */
 function assistantOwnerFor(
   messages: readonly ChatV2MessageView[],
   index: number
 ): string | null {
+  const current = messages[index];
+  const turnId =
+    typeof current?.metadata?.turnId === "string"
+      ? current.metadata.turnId.trim()
+      : "";
+  if (turnId) {
+    for (const msg of messages) {
+      if (isRegularAssistantMessage(msg) && msg.metadata?.turnId === turnId) {
+        return msg.id;
+      }
+    }
+  }
+  // Live stream order: assistant placeholder precedes tool rows in the turn.
   for (let i = index - 1; i >= 0; i -= 1) {
     if (
       messages[i].messageType === MessageType.MESSAGE &&
-      messages[i].role === "assistant" &&
-      messages[i].id
+      messages[i].role === "user"
     ) {
+      break;
+    }
+    if (isRegularAssistantMessage(messages[i])) {
       return messages[i].id;
+    }
+  }
+  // Persisted history order: tool rows are written before the final assistant
+  // message at the end of the turn.
+  for (let i = index + 1; i < messages.length; i += 1) {
+    if (
+      messages[i].messageType === MessageType.MESSAGE &&
+      messages[i].role === "user"
+    ) {
+      break;
+    }
+    if (isRegularAssistantMessage(messages[i])) {
+      return messages[i].id;
+    }
+  }
+  // Fallback for plan-only or tool-only turns: anchor to any preceding
+  // assistant row or the turn's user message so separate turns do not merge.
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (messages[i].messageType === MessageType.MESSAGE) {
+      if (messages[i].role === "assistant" && messages[i].id) {
+        return messages[i].id;
+      }
+      if (messages[i].role === "user") {
+        return messages[i].id || null;
+      }
     }
   }
   return null;
