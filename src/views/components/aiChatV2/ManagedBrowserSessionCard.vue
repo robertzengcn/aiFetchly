@@ -613,10 +613,29 @@ onMounted(() => {
   // GAP-08: structured chat notices — latest three, localized.
   unsubscribeNotices = onManagedBrowserChatNotice((notice) => {
     // W06/M-FR-08: a notice is only shown on the card of the session it
-    // belongs to — root-conversation publishing means a sibling chat's
-    // displayed session never shows another conversation's challenge.
-    if (status.value && notice.sessionId !== status.value.sessionId) {
-      return;
+    // belongs to. Legacy notices without a sessionId still render; a
+    // notice published on a conversation that is neither the displayed
+    // session's owner nor its root conversation is another chat's
+    // business and never shows here.
+    const displayed = status.value;
+    if (displayed) {
+      if (
+        typeof notice.sessionId === "string" &&
+        notice.sessionId.length > 0 &&
+        notice.sessionId !== displayed.sessionId
+      ) {
+        return;
+      }
+      const noticeConversation = notice.conversationId ?? null;
+      if (
+        noticeConversation !== null &&
+        displayed.ownerConversationId !== null &&
+        displayed.rootConversationId !== null &&
+        noticeConversation !== displayed.ownerConversationId &&
+        noticeConversation !== displayed.rootConversationId
+      ) {
+        return;
+      }
     }
     recentNotices.value = [
       ...recentNotices.value.filter((n) => n.eventId !== notice.eventId),

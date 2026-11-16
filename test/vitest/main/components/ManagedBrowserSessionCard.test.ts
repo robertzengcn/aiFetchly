@@ -745,3 +745,52 @@ it("renders and stops an account-free public browser session", async () => {
   expect(apiMocks.stopManagedBrowser).toHaveBeenCalled();
   wrapper.unmount();
 });
+
+// ---------------------------------------------------------------------------
+// W06/M-FR-08: notice routing — a notice for ANOTHER conversation (neither
+// the displayed session's owner nor its root) never renders here, and a
+// notice carrying a task label renders it.
+// ---------------------------------------------------------------------------
+it("drops a notice published on a foreign conversation and renders task labels", async () => {
+  apiMocks.listActiveSessions.mockImplementation(async () => [
+    status({
+      ownerConversationId: "conv-owner",
+      rootConversationId: "conv-root",
+    }),
+  ]);
+  const wrapper = mountCard();
+  await vi.waitFor(() =>
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true)
+  );
+  const noticeMock = apiMocks.onManagedBrowserChatNotice;
+  const push = noticeMock.mock.calls[noticeMock.mock.calls.length - 1][0] as (
+    payload: unknown
+  ) => void;
+  // A challenge notice from a SECOND parent conversation: dropped.
+  push({
+    eventId: "evt-foreign",
+    sessionId: "mb_other000000001",
+    conversationId: "conv-second-parent",
+    type: "challenge_detected",
+    severity: "warning",
+    taskLabel: "Browser task 2/3",
+  });
+  await nextTick();
+  expect(
+    wrapper.findAll("[data-testid='mb-session-notices'] li")
+  ).toHaveLength(0);
+  // The displayed session's own notice (root conversation, task label).
+  push({
+    eventId: "evt-own",
+    sessionId: "mb_test000000001",
+    conversationId: "conv-root",
+    type: "challenge_detected",
+    severity: "warning",
+    taskLabel: "Browser task 2/3",
+  });
+  await nextTick();
+  const items = wrapper.findAll("[data-testid='mb-session-notices'] li");
+  expect(items).toHaveLength(1);
+  expect(items[0].text()).toContain("Browser task 2/3");
+  wrapper.unmount();
+});
