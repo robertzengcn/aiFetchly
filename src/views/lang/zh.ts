@@ -2431,6 +2431,8 @@ export default {
       permissionDescription:
         "将这些由 AiFetchly 生成的工件复制到 {destination}。",
       savedToWorkspace: "已将 {fileName} 保存到你的工作区。",
+      savedAllToWorkspace: "已将 {count} 张图片保存到你的工作区。",
+      savedSomeToWorkspace: "已将 {saved}/{total} 张图片保存到你的工作区。",
       saveFailed: "无法保存到工作区。",
     },
     imageTool: {
@@ -2864,6 +2866,8 @@ export default {
       useAsReference: "用作参考",
       edit: "编辑",
       saveToWorkspace: "保存到工作区",
+      saveAll: "全部保存",
+      saveAllToWorkspace: "将全部图片保存到工作区",
       remove: "移除",
       clearAll: "全部清除",
       moveUp: "上移",

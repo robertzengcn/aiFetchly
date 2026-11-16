@@ -29,6 +29,9 @@
           @use-generated-image="(ref) => emit('use-generated-image', ref)"
           @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
           @save-generated-image="(ref) => emit('save-generated-image', ref)"
+          @save-all-generated-images="
+            (refs) => emit('save-all-generated-images', refs)
+          "
           @stop-batch="emit('stop-batch')"
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
         />
@@ -44,6 +47,9 @@
           @use-generated-image="(ref) => emit('use-generated-image', ref)"
           @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
           @save-generated-image="(ref) => emit('save-generated-image', ref)"
+          @save-all-generated-images="
+            (refs) => emit('save-all-generated-images', refs)
+          "
           @stop-batch="emit('stop-batch')"
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
           @report="(d) => emit('report', d)"
@@ -274,6 +280,11 @@ const emit = defineEmits<{
   (
     e: "save-generated-image",
     reference: ChatV2GeneratedImageReference
+  ): void;
+  /** Save every rendered image from one message in a single action. */
+  (
+    e: "save-all-generated-images",
+    references: ChatV2GeneratedImageReference[]
   ): void;
   /** FR-IMG-012: stop a running generated-image batch. */
   (e: "stop-batch"): void;

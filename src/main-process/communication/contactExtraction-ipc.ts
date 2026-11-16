@@ -6,7 +6,10 @@
  */
 
 import { app, ipcMain, BrowserWindow } from "electron";
-import { buildPackagedWorkerEnv } from "@/utils/packagedWorkerPath";
+import {
+  buildPackagedWorkerEnv,
+  buildWorkerLoginUrlEnv,
+} from "@/utils/packagedWorkerPath";
 import { spawn, ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { ContactInfoModule } from "@/modules/ContactInfoModule";
@@ -19,6 +22,7 @@ import {
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { TOKENNAME, USER_AI_ENABLED } from "@/config/usersetting";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import type { ModuleExecutionContext } from "@/entityTypes/skillTypes";
 import { ToolExecutor } from "@/service/ToolExecutor";
 import { getContactExtractionWorkerPath } from "./contactExtractionWorkerPath";
@@ -137,6 +141,20 @@ function spawnWorker(): ChildProcess {
     log.warn("Failed to read token for worker:", error);
   }
 
+  // The worker bundle reads VITE_LOGIN_URL at RUNTIME (its vite config has no
+  // build-time define — see vite.contactExtractionWorker.config.mjs). The
+  // packaged main process only carries the value as an inlined literal (the
+  // vite `define` replaces it at build time), so the actual env var is
+  // normally unset and the spawned worker would inherit nothing and fall back
+  // to http://localhost:3000 — every AI extraction then fails instantly with
+  // ECONNREFUSED (observed 2026-11-12..14 as "AI extraction error: {}").
+  // Forward the resolved base URL explicitly. In the main bundle the
+  // resolveViteLoginBase() read is itself define-replaced to the inlined
+  // build value, so packaged apps forward the configured URL unchanged.
+  const workerLoginUrlEnv = buildWorkerLoginUrlEnv(() =>
+    resolveViteLoginBase()?.value
+  );
+
   // Spawn the worker with Electron's own binary in RUN_AS_NODE mode (the same
   // approach GoogleMapsModule uses) instead of the system `node`. Plain `node`
   // cannot read app.asar, so the worker's external requires (uuid, zod, ...)
@@ -160,6 +178,7 @@ function spawnWorker(): ChildProcess {
             WORKER_TYPE: "contact-extraction",
             WORKER_AUTH_TOKEN: workerAuthToken,
             WORKER_AI_ENABLED: workerAiEnabled,
+            ...workerLoginUrlEnv,
           },
         }),
       }) as ChildProcess

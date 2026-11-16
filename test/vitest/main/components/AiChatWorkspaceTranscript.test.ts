@@ -24,6 +24,9 @@ const i18n = createI18n({
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          saveToWorkspace: "Save to workspace",
+          saveAll: "Save all",
+          saveAllToWorkspace: "Save all images to workspace",
           progressSummary: "{completed} of {requested} completed",
           retryFailed: "Retry failed items",
           stopBatch: "Stop batch",
@@ -1077,6 +1080,41 @@ describe("AiChatWorkspaceTranscript generated-image reference forwarding", () =>
     expect(Object.keys(events?.[0]?.[0] ?? {}).sort()).toEqual([
       "imageIndex",
       "messageId",
+    ]);
+    expect(
+      wrapper.find('[data-testid="generated-image-save-all"]').exists()
+    ).toBe(false);
+  });
+
+  it("forwards save-all-generated-images for every rendered tile", async () => {
+    const message = msg(
+      MessageType.MESSAGE,
+      {
+        generatedImages: [
+          { url: "https://example.com/gen-1.png" },
+          { url: "https://example.com/gen-2.png" },
+        ],
+      },
+      "assistant",
+      "Here are the images."
+    );
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [message],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const saveAll = wrapper.get('[data-testid="generated-image-save-all"]');
+    await saveAll.trigger("click");
+
+    const events = wrapper.emitted("save-all-generated-images");
+    expect(events?.[0]?.[0]).toEqual([
+      { messageId: message.id, imageIndex: 0 },
+      { messageId: message.id, imageIndex: 1 },
     ]);
   });
 

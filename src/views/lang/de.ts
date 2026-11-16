@@ -2546,6 +2546,10 @@ export default {
       permissionDescription:
         "Kopiere diese von AiFetchly generierten Artefakte nach {destination}.",
       savedToWorkspace: "{fileName} wurde in deinem Workspace gespeichert.",
+      savedAllToWorkspace:
+        "{count} Bilder wurden in deinem Workspace gespeichert.",
+      savedSomeToWorkspace:
+        "{saved} von {total} Bildern wurden in deinem Workspace gespeichert.",
       saveFailed: "Speichern im Workspace fehlgeschlagen.",
     },
     imageTool: {
@@ -3020,6 +3024,8 @@ export default {
       useAsReference: "Als Referenz verwenden",
       edit: "Bearbeiten",
       saveToWorkspace: "Im Workspace speichern",
+      saveAll: "Alle speichern",
+      saveAllToWorkspace: "Alle Bilder im Workspace speichern",
       remove: "Entfernen",
       clearAll: "Alle entfernen",
       moveUp: "Nach oben",

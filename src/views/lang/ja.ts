@@ -2510,6 +2510,10 @@ export default {
       permissionDescription:
         "AiFetchly が生成したアーティファクトを {destination} にコピーします。",
       savedToWorkspace: "{fileName} をワークスペースに保存しました。",
+      savedAllToWorkspace:
+        "{count} 枚の画像をワークスペースに保存しました。",
+      savedSomeToWorkspace:
+        "{total} 枚中 {saved} 枚をワークスペースに保存しました。",
       saveFailed: "ワークスペースに保存できませんでした。",
     },
     imageTool: {
@@ -2957,6 +2961,8 @@ export default {
       useAsReference: "参照として使用",
       edit: "編集",
       saveToWorkspace: "ワークスペースに保存",
+      saveAll: "すべて保存",
+      saveAllToWorkspace: "すべての画像をワークスペースに保存",
       remove: "削除",
       clearAll: "すべてクリア",
       moveUp: "上へ移動",

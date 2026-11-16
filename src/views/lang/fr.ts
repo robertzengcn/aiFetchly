@@ -2539,6 +2539,10 @@ export default {
         "Copiez ces artefacts générés par AiFetchly vers {destination}.",
       savedToWorkspace:
         "{fileName} a été enregistré dans votre espace de travail.",
+      savedAllToWorkspace:
+        "{count} images ont été enregistrées dans votre espace de travail.",
+      savedSomeToWorkspace:
+        "{saved} images sur {total} ont été enregistrées dans votre espace de travail.",
       saveFailed: "Impossible d'enregistrer dans l'espace de travail.",
     },
     imageTool: {
@@ -3009,6 +3013,9 @@ export default {
       useAsReference: "Utiliser comme référence",
       edit: "Modifier",
       saveToWorkspace: "Enregistrer dans l'espace de travail",
+      saveAll: "Tout enregistrer",
+      saveAllToWorkspace:
+        "Enregistrer toutes les images dans l'espace de travail",
       remove: "Supprimer",
       clearAll: "Tout effacer",
       moveUp: "Monter",
