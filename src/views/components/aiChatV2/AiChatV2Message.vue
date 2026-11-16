@@ -367,9 +367,13 @@
                 aria-hidden="true"
               />
               <span>{{ saveAllShortLabel }}</span>
-              <v-tooltip activator="parent" location="top" :open-delay="250">
-                {{ saveAllImagesLabel }}
-              </v-tooltip>
+              <v-tooltip
+                activator="parent"
+                location="top"
+                :open-delay="250"
+                :text="saveAllImagesLabel"
+                content-class="v2-message__image-tip"
+              />
             </button>
           </div>
           <div
@@ -423,9 +427,13 @@
                   size="16"
                   aria-hidden="true"
                 />
-                <v-tooltip activator="parent" location="top" :open-delay="250">
-                  {{ useAsReferenceLabel }}
-                </v-tooltip>
+                <v-tooltip
+                  activator="parent"
+                  location="top"
+                  :open-delay="250"
+                  :text="useAsReferenceLabel"
+                  content-class="v2-message__image-tip"
+                />
               </button>
               <button
                 type="button"
@@ -438,9 +446,13 @@
                   size="16"
                   aria-hidden="true"
                 />
-                <v-tooltip activator="parent" location="top" :open-delay="250">
-                  {{ editImageLabel }}
-                </v-tooltip>
+                <v-tooltip
+                  activator="parent"
+                  location="top"
+                  :open-delay="250"
+                  :text="editImageLabel"
+                  content-class="v2-message__image-tip"
+                />
               </button>
               <button
                 type="button"
@@ -453,9 +465,13 @@
                   size="16"
                   aria-hidden="true"
                 />
-                <v-tooltip activator="parent" location="top" :open-delay="250">
-                  {{ saveImageLabel }}
-                </v-tooltip>
+                <v-tooltip
+                  activator="parent"
+                  location="top"
+                  :open-delay="250"
+                  :text="saveImageLabel"
+                  content-class="v2-message__image-tip"
+                />
               </button>
             </div>
           </div>
@@ -2313,5 +2329,18 @@ const pastedChips = computed<PastedChip[]>(() => {
 .v2-mention-chip__reason {
   opacity: 0.75;
   font-size: 10px;
+}
+</style>
+
+<style>
+/* Teleported overlay. Theme pairs a light surface-variant background with a
+   near-white on-surface-variant, so the default tip is a grey box with no
+   readable label. Pin contrast here. */
+.v2-message__image-tip.v-overlay__content {
+  background: rgb(var(--v-theme-on-surface)) !important;
+  color: rgb(var(--v-theme-surface)) !important;
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+  opacity: 1 !important;
 }
 </style>

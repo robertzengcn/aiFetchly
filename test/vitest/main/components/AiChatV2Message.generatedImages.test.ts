@@ -88,7 +88,14 @@ function mountWith(message: ChatV2MessageView) {
         AiChatV2StreamStatus: true,
         AiChatV2PlanApprovalCard: true,
         VIcon: true,
-        VTooltip: { template: '<span class="v-tooltip-stub"><slot /></span>' },
+        VTooltip: {
+          props: {
+            text: { type: String, default: "" },
+            contentClass: { type: String, default: "" },
+          },
+          template:
+            '<span class="v-tooltip-stub" :data-content-class="contentClass">{{ text }}</span>',
+        },
         VProgressLinear: true,
       },
     },
@@ -126,6 +133,9 @@ describe("AiChatV2Message generated image actions", () => {
 
     expect(useButtons[0].attributes("aria-label")).toBe("Use as reference");
     expect(useButtons[0].find(".v-tooltip-stub").text()).toBe("Use as reference");
+    expect(useButtons[0].find(".v-tooltip-stub").attributes("data-content-class")).toBe(
+      "v2-message__image-tip"
+    );
     expect(visibleLabel(useButtons[0])).toBe("");
     expect(useButtons[0].find("v-icon-stub").attributes("icon")).toBe(
       "mdi-image-plus-outline"
