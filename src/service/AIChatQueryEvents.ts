@@ -422,6 +422,12 @@ export type AIChatQueryLoopResult =
       toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata for the cancelled turn, if any. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
+      /**
+       * W07/C-FR-05: true when the turn ended because the per-task control
+       * gate reported PAUSED (not a user cancel) — the caller maps this to
+       * a blocked/paused outcome instead of a cancelled one.
+       */
+      agentTaskPaused?: boolean;
     }
   | {
       type: "paused_for_permission";
@@ -669,6 +675,15 @@ export interface AIChatQueryLoopInput {
    * but before the abort signal propagates through the underlying fetch.
    */
   isActiveTurn: () => boolean;
+  /**
+   * W07/C-FR-05/06: consulted at the TOP of every tool round, BEFORE the
+   * model request is sent. Returning a non-"ok" verdict ends the turn
+   * WITHOUT sending the request: "cancel" maps to the cancelled result
+   * (stop), "pause" ends the turn paused (user pause — no further tokens
+   * are spent until resume re-enters). Tool calls of a response already
+   * in flight are gated per call by the caller's executeTool wrapper.
+   */
+  onBeforeModelRound?: () => "ok" | "pause" | "cancel";
   /**
    * Optional override for the transient-failure auto-retry policy. When
    * omitted the loop uses its module-level defaults (3 attempts, exponential

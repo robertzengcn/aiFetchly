@@ -609,6 +609,25 @@ export class AgentRuntime {
         eventSink: sink,
         startRound: 0,
         isActiveTurn: () => true,
+        // W07/C-FR-05/06: the per-task control gate is consulted BEFORE
+        // every model request — a pause issued before the request is sent
+        // never sends it (no tokens spent while paused), and a stop ends
+        // the turn cancelled. The gate check is non-blocking: a response
+        // already in flight finishes, but its tool calls hit the paused
+        // branch in policyCheckedExecute below (held as a set).
+        onBeforeModelRound: () => {
+          const record = getDefaultAgentTaskControlService().get(agentTaskId);
+          if (!record) {
+            return "ok";
+          }
+          if (record.state === "cancelled") {
+            return "cancel";
+          }
+          if (record.state === "paused" || record.state === "interrupted") {
+            return "pause";
+          }
+          return "ok";
+        },
         // Retry transient content failures instantly. Agents run under a tight
         // maxRuntimeMs deadline (the abort timer above); spending that budget
         // on exponential backoff sleeps can starve actual work. The agent's
@@ -625,6 +644,21 @@ export class AgentRuntime {
         capturedImages = result.images;
       } else if (result.type === "cancelled") {
         finalText = result.partialContent;
+        // W07/C-FR-05: a gate-reported PAUSE is not a user cancel — the
+        // task is blocked until resume, so persist waiting_user (never
+        // cancelled) and return the blocked status.
+        if (result.agentTaskPaused) {
+          await this.taskModule.setStatus(agentTaskId, "waiting_user", {
+            finishedAt: new Date(),
+          });
+          return this.buildResult(
+            agentTaskId,
+            definition,
+            "blocked",
+            finalText,
+            "the task is paused by the user — no progress until resumed"
+          );
+        }
         await this.taskModule.setStatus(agentTaskId, "cancelled", {
           finishedAt: new Date(),
         });

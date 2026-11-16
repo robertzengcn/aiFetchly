@@ -159,6 +159,7 @@ vi.mock("@/config/skillsRegistry", () => ({
 }));
 
 import { AgentRuntime } from "@/service/AgentRuntime";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import {
   ToolJobRegistry,
   setDefaultToolJobRegistry,
@@ -466,5 +467,114 @@ describe("AgentRuntime permission handling (real AIChatQueryLoop)", () => {
       (m) => m.role === "tool"
     );
     expect(finalRoundToolMessages).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W07/C-FR-05/06: the agent loop checks the per-task control gate BEFORE the
+// model request. A pause issued before the request is sent never sends it;
+// a pause issued during the request lets the body finish but NONE of its
+// tool calls act; a stop aborts the request (cancelTask, covered elsewhere).
+// ---------------------------------------------------------------------------
+describe("AgentRuntime control gate before the model call (W07)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    timeoutState.inferClassOverride = undefined;
+  });
+
+  afterEach(() => {
+    setDefaultToolJobRegistry(new ToolJobRegistry());
+  });
+
+  it("a pause issued before the request is sent does not send it", async () => {
+    const { streamFn, requests } = makeStreamRoundTrips();
+    const { deps } = makeDeps(streamFn);
+
+    // The user pauses the task the moment it is registered — before any
+    // model round. The runtime registers the task itself, so the test
+    // wraps the control service's register to pause right after.
+    const control = getDefaultAgentTaskControlService();
+    const originalRegister = control.register.bind(control);
+    control.register = (taskId: string, conversationId: string) => {
+      const record = originalRegister(taskId, conversationId);
+      control.setState(taskId, "paused", "user_paused");
+      return record;
+    };
+    try {
+      const runtime = new AgentRuntime();
+      const result = await runtime.runSync(
+        {
+          agentId: "agent-test",
+          prompt: "read a.csv and summarize",
+          executionMode: "foreground",
+          taskPacket: { files: ["a.csv"], instruction: "summarize" },
+        },
+        {
+          streamChatCompletion: streamFn as never,
+          executeTool: deps.executeTool as never,
+          eventSink: deps.eventSink,
+        }
+      );
+      // Blocked, not cancelled — and NO model request was ever sent.
+      expect(result.status).toBe("blocked");
+      expect(requests).toHaveLength(0);
+      expect(deps.executeTool).not.toHaveBeenCalled();
+    } finally {
+      control.register = originalRegister;
+    }
+  });
+
+  it("a pause issued during the request lets the body finish and executes none of its tool calls", async () => {
+    const requests: CapturedStreamRequest[] = [];
+    // Capture the runtime's task id at registration, then pause it WHILE
+    // the model body streams — before the tool-call chunk arrives.
+    let registeredTaskId: string | null = null;
+    const control = getDefaultAgentTaskControlService();
+    const originalRegister = control.register.bind(control);
+    control.register = (taskId: string, conversationId: string) => {
+      const record = originalRegister(taskId, conversationId);
+      registeredTaskId = taskId;
+      control.register = originalRegister;
+      return record;
+    };
+    const streamFn = async (
+      req: unknown,
+      onChunk: (c: OpenAIChatCompletionChunk) => void
+    ): Promise<void> => {
+      requests.push(req as CapturedStreamRequest);
+      // The user pauses while the body is streaming. The body still
+      // finishes — the tool-call chunk is emitted and the round completes.
+      if (registeredTaskId) {
+        control.setState(registeredTaskId, "paused", "user_paused");
+      }
+      onChunk(makeToolCallChunk("call-1", "file_read", '{"path":"a.csv"}'));
+    };
+    const { events, deps } = makeDeps(streamFn);
+
+    const runtime = new AgentRuntime();
+    const result = await runtime.runSync(
+      {
+        agentId: "agent-test",
+        prompt: "read a.csv and summarize",
+        executionMode: "foreground",
+        taskPacket: { files: ["a.csv"], instruction: "summarize" },
+      },
+      {
+        streamChatCompletion: streamFn as never,
+        executeTool: deps.executeTool as never,
+        eventSink: deps.eventSink,
+      }
+    );
+
+    // The response body finished (one request) but the NEXT round is never
+    // sent — the task ends blocked, not cancelled.
+    expect(requests).toHaveLength(1);
+    expect(result.status).toBe("blocked");
+    // NONE of the response's tool calls acted: the wrapper returned the
+    // held paused result instead of dispatching the tool.
+    expect(deps.executeTool).not.toHaveBeenCalled();
+    const toolResults = toolResultEvents(events);
+    expect(toolResults).toHaveLength(1);
+    expect(toolResults[0].agentTaskPaused).toBe(true);
   });
 });

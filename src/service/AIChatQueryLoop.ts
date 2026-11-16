@@ -2542,6 +2542,33 @@ export class AIChatQueryLoop {
       let steeringApplied = false;
 
       for (let round = input.startRound; ; round += 1) {
+        // W07/C-FR-05/06: the per-task control gate is consulted BEFORE the
+        // model request is sent. A pause issued before the request does not
+        // send it; a stop aborts the turn (cancelled result). A response
+        // already in flight finishes — none of its tool calls then act (the
+        // executeTool wrapper returns paused results per call).
+        if (input.onBeforeModelRound) {
+          const gateVerdict = input.onBeforeModelRound();
+          if (gateVerdict === "cancel" || gateVerdict === "pause") {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              // No model content has been produced for this round — the
+              // request was never sent (or the gate stopped it before it).
+              partialContent: "",
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
+              // W07: distinguishes a PAUSED turn from a user cancel —
+              // the agent runtime maps this to blocked, not cancelled.
+              ...(gateVerdict === "pause" ? { agentTaskPaused: true } : {}),
+            };
+          }
+        }
         if (round >= maxToolRounds) {
           // Slice 2 Unit 4 (FR-05/07, §7.1): when the completion policy is
           // on and this turn is enrolled, consult the controller before the
