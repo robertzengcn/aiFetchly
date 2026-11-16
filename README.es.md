@@ -61,6 +61,10 @@ aiFetchly convierte una intención de negocio en flujos ejecutables:
 
 ![Gestión de memoria de IA de aiFetchly](docs/images/readme/memory_edit.png)
 
+### Generación y edición de imágenes con IA
+
+![Edición de imágenes con IA en el chat de aiFetchly](docs/images/readme/edit_image.png)
+
 ## Capacidades del agente
 
 ### Espacio de trabajo de IA
@@ -72,6 +76,7 @@ aiFetchly convierte una intención de negocio en flujos ejecutables:
 | **AI Providers personalizados** | Usa cualquier proveedor compatible con OpenAI, incluidos Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI o un endpoint personalizado. |
 | **Ejecución de tareas empresariales** | Ejecuta investigación, extracción, procesamiento de archivos, borradores, programación y automatizaciones sin cambiar entre varias herramientas SaaS. |
 | **Asistente de email para clientes** | Redacta, envía y responde emails con contexto de tus documentos y datos de trabajo. |
+| **Generación y edición de imágenes con IA** | Genera imágenes en el chat y refínalas con una petición simple como «añade un perro a la imagen», sin necesidad de espacio de trabajo. Selecciona y ordena hasta tres imágenes generadas para editarlas o combinarlas, y aplica la misma edición a hasta 50 imágenes mediante subagentes de lote aislados, con progreso, reintento de fallos y cancelación. |
 | **Subagentes especializados** | Ejecuta subagentes autónomos con prompt propio, lista de herramientas permitidas, límites de recursos y salida estructurada. |
 | **Automatización con permisos** | Controla qué herramientas, plugins, hooks y subagentes pueden ejecutarse. |
 
@@ -307,6 +312,8 @@ Para consultar los requisitos completos y los contratos técnicos:
 La documentación completa está en [docs.aifetchly.com](https://docs.aifetchly.com).
 
 Navegador gestionado controlado por IA / Browser Use (sesiones visibles de Chrome, herramientas de navegador, programas de acción, aprobaciones, intervención humana, fingerprint, caché): [requisitos de producto](docs/prd/puppeteer-managed-social-browser-prd.md) y [diseño técnico](docs/prd/puppeteer-managed-social-browser-technical-design.md).
+
+Edición de imágenes generadas en el chat de IA y edición por lotes (genera y edita imágenes conversando, sin espacio de trabajo, edición y combinación de varias imágenes, subagentes por lotes con progreso y reintento): [requisitos de producto](docs/prd/ai-chat-generated-image-editing-prd.md) y [diseño técnico](docs/prd/ai-chat-generated-image-editing-technical-design.md).
 
 El sitio web oficial de la aplicación es [aifetchly.com](https://www.aifetchly.com).
 

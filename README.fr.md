@@ -61,6 +61,10 @@ aiFetchly transforme une intention métier en workflows exécutables :
 
 ![Gestion de la mémoire IA aiFetchly](docs/images/readme/memory_edit.png)
 
+### Génération et édition d'images IA
+
+![Édition d'images IA dans le chat aiFetchly](docs/images/readme/edit_image.png)
+
 ## Capacités de l'agent
 
 ### Espace de travail IA
@@ -72,6 +76,7 @@ aiFetchly transforme une intention métier en workflows exécutables :
 | **AI Providers personnalisés** | Alimentez AI Chat avec un fournisseur compatible OpenAI : Ollama, LM Studio, OpenAI, OpenRouter, vLLM, LocalAI ou endpoint personnalisé. |
 | **Exécution de tâches métier** | Lancez recherche, extraction, traitement de fichiers, rédaction, planification et automatisation sans jongler entre plusieurs SaaS. |
 | **Assistant email client IA** | Rédigez, envoyez et répondez aux emails clients avec le contexte de vos documents et données de workflow. |
+| **Génération et édition d'images IA** | Générez des images dans le chat et affinez-les avec une simple demande du type « ajoute un chien à l'image », sans espace de travail requis. Sélectionnez et ordonnez jusqu'à trois images générées pour les modifier ou les combiner, et appliquez la même modification à 50 images au maximum via des sous-agents de lot isolés, avec progression, reprise des échecs et annulation. |
 | **Sous-agents spécialisés** | Déployez des sous-agents autonomes avec prompt, liste d'outils autorisés, limites de ressources et sortie structurée. |
 | **Automatisation contrôlée par permissions** | Contrôlez les outils, plugins, hooks et sous-agents autorisés à s'exécuter. |
 
@@ -307,6 +312,8 @@ Pour consulter l'intégralité des spécifications et contrats d'architecture :
 La documentation complète est disponible sur [docs.aifetchly.com](https://docs.aifetchly.com).
 
 Navigateur géré piloté par l'IA / Browser Use (sessions Chrome visibles, outils de navigateur, programmes d'action, approbations, reprise en main, fingerprint, cache) : [exigences produit](docs/prd/puppeteer-managed-social-browser-prd.md) et [conception technique](docs/prd/puppeteer-managed-social-browser-technical-design.md).
+
+Édition des images générées dans le chat IA et édition d'images par lots (générez et modifiez des images en discutant, sans espace de travail, édition et combinaison multi-images, sous-agents de lot avec progression et reprise) : [exigences produit](docs/prd/ai-chat-generated-image-editing-prd.md) et [conception technique](docs/prd/ai-chat-generated-image-editing-technical-design.md).
 
 Le site officiel de l'application est [aifetchly.com](https://www.aifetchly.com).
 
