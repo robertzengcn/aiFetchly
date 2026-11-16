@@ -102,14 +102,21 @@ export function fillLoginPageFunction(input: {
     if (!(el instanceof Element)) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
-    const style = window.getComputedStyle(el);
+    // A-FR-16: visibility is judged by the element's OWN frame window —
+    // a same-origin iframe's form is laid out in that frame's viewport.
+    const win =
+      (el.ownerDocument?.defaultView as Window | null | undefined) ?? window;
+    const style = win.getComputedStyle(el);
     return style.visibility !== "hidden" && style.display !== "none";
   };
   const hitTestable = (el: Element): boolean => {
+    // A-FR-16: hit-testing runs against the element's OWN document —
+    // frame-local coordinates resolve within the frame, not the top page.
+    const doc = el.ownerDocument ?? document;
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const top = document.elementFromPoint(cx, cy);
+    const top = doc.elementFromPoint(cx, cy);
     return top === el || (top instanceof Node && el.contains(top));
   };
   const hostAllowed = (): boolean =>
@@ -118,6 +125,21 @@ export function fillLoginPageFunction(input: {
         location.hostname === suffix ||
         location.hostname.endsWith("." + suffix)
     );
+  // A-FR-16: a same-site frame check — the frame must ALSO be on an
+  // allowed domain (never a cross-origin or off-domain frame).
+  const frameAllowed = (frame: HTMLIFrameElement): boolean => {
+    try {
+      const frameDoc = frame.contentDocument;
+      if (!frameDoc) return false; // cross-origin: inaccessible, skip
+      const frameHost = frameDoc.location?.hostname ?? "";
+      return input.allowedDomainSuffixes.some(
+        (suffix) =>
+          frameHost === suffix || frameHost.endsWith("." + suffix)
+      );
+    } catch {
+      return false;
+    }
+  };
   const passwordSafe = (pw: HTMLInputElement): boolean =>
     pw instanceof HTMLInputElement &&
     pw.type === "password" &&
@@ -149,9 +171,78 @@ export function fillLoginPageFunction(input: {
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
+  // A-FR-19: the KEYSTROKE fallback — some frameworks ignore programmatic
+  // value sets (no per-char input events, or a masked state binding).
+  // Focus is VERIFIED first (the secret must never be typed into a
+  // different field), then the value is entered via per-character
+  // insertText events and read back. Returns false when the focus check
+  // fails or the readback does not match — the caller clears and aborts.
+  const setViaKeystrokes = (
+    el: HTMLInputElement,
+    value: string
+  ): boolean => {
+    // A-FR-16: focus/execCommand run against the element's OWN document
+    // so same-site frame fields work identically.
+    const doc = el.ownerDocument ?? document;
+    el.focus();
+    if (doc.activeElement !== el) {
+      return false;
+    }
+    // Focus checks after each char would be per-char; the bounded version
+    // verifies focus, clears, enters via execCommand (real input events
+    // fire), and re-verifies the final value + that focus never moved.
+    const selection = (el as unknown as { setSelectionRange?: (s: number, e: number) => void })
+      .setSelectionRange;
+    selection?.call(el, el.value.length, el.value.length);
+    // Guard: environments without execCommand (or engines that refuse
+    // insertText) fail the fallback honestly — the caller clears/aborts.
+    if (typeof doc.execCommand !== "function") {
+      return false;
+    }
+    const okInsert = doc.execCommand("insertText", false, value);
+    if (!okInsert) {
+      return false;
+    }
+    if (doc.activeElement !== el) {
+      return false;
+    }
+    return el.value === value;
+  };
+  // A-FR-19: set-with-fallback — native setter first; when the readback
+  // disagrees, ONE bounded keystroke attempt; a mismatch either way is
+  // the caller's abort condition.
+  const setValueWithFallback = (
+    el: HTMLInputElement,
+    value: string
+  ): boolean => {
+    setNativeValue(el, value);
+    if (el.value === value) {
+      return true;
+    }
+    setNativeValue(el, "");
+    return setViaKeystrokes(el, value);
+  };
   const stamps: string[] = [];
 
-  const forms = Array.from(document.querySelectorAll("form"));
+  // A-FR-16: forms come from the TOP document AND from SAME-SITE
+  // same-origin iframes on allowed domains (the login form may live in a
+  // frame). Cross-origin/off-domain frames are inaccessible and skipped.
+  const docs: Document[] = [document];
+  for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+    if (frameAllowed(frame)) {
+      const frameDoc = frame.contentDocument;
+      if (frameDoc) {
+        docs.push(frameDoc);
+      }
+    }
+  }
+  const forms: HTMLFormElement[] = docs.flatMap((doc) =>
+    Array.from(doc.querySelectorAll("form"))
+  );
+  // A-FR-16: the tamper snapshot covers EVERY scanned document — a frame
+  // input is as much a potential recipient as a top-page one.
+  const snapshotInputs = (): HTMLInputElement[] =>
+    docs.flatMap((doc) => Array.from(doc.querySelectorAll("input")));
   const candidates: Array<{
     form: HTMLFormElement;
     passwordInput: HTMLInputElement;
@@ -177,6 +268,7 @@ export function fillLoginPageFunction(input: {
     const a = (el.getAttribute("autocomplete") ?? "").toLowerCase();
     return values.includes(a);
   };
+  let registrationFormSeen = false;
   for (const form of forms) {
     const passwordInputs = Array.from(
       form.querySelectorAll<HTMLInputElement>('input[type="password"]')
@@ -184,6 +276,17 @@ export function fillLoginPageFunction(input: {
     if (passwordInputs.length === 0) continue;
     if (input.mode === "login" && passwordInputs.length !== 1) {
       return { ok: false, reasonCode: "ambiguous_password_field" };
+    }
+    // A-FR-20: autocomplete="new-password" marks a REGISTRATION form. In
+    // login mode the automated credential must never land in it — filling
+    // could CREATE an account. The form is skipped; when every candidate
+    // is a registration form the fill refuses outright.
+    if (
+      input.mode === "login" &&
+      autocompleteIs(passwordInputs[0]!, "new-password")
+    ) {
+      registrationFormSeen = true;
+      continue;
     }
     // T21: saved recipe first, deterministic detection second.
     const eligibleUsernames = Array.from(
@@ -226,6 +329,11 @@ export function fillLoginPageFunction(input: {
     });
   }
   if (candidates.length === 0) {
+    // A-FR-20: every password-bearing form was a registration form —
+    // login mode refuses (never create an account implicitly).
+    if (registrationFormSeen) {
+      return { ok: false, reasonCode: "registration_form_detected" };
+    }
     // T21: two-step login step 1 — a visible username input with NO
     // password input: fill + submit, report so the orchestrator can run
     // the password round on the next page (bounded, max 3 pages).
@@ -320,7 +428,7 @@ export function fillLoginPageFunction(input: {
 
   // T04: per-input length snapshot (NOT a sum) — prefilled usernames and
   // equal-and-opposite foreign changes are both detected.
-  const allInputs = Array.from(document.querySelectorAll("input"));
+  const allInputs = snapshotInputs();
   // F09: use element identity (not array indices) so newly inserted
   // inputs after the snapshot are caught by the tamper check.
   const inputSet = new Set(allInputs);
@@ -340,7 +448,16 @@ export function fillLoginPageFunction(input: {
 
   // --- Username (skipped on a two-step password-only page) -------------------
   if (!chosen.passwordOnly) {
-    setNativeValue(chosen.usernameInput, input.username);
+    // A-FR-19: the native setter first, the VERIFIED keystroke fallback
+    // when the framework ignores the programmatic set.
+    if (!setValueWithFallback(chosen.usernameInput, input.username)) {
+      clearTouched();
+      return {
+        ok: false,
+        reasonCode: "fill_readback_mismatch",
+        stamps: [stampOf(chosen.usernameInput)],
+      };
+    }
     stamps.push(stampOf(chosen.usernameInput));
     if (chosen.usernameInput.value.length !== input.username.length) {
       clearTouched();
@@ -387,7 +504,12 @@ export function fillLoginPageFunction(input: {
   }
 
   // --- Password ---------------------------------------------------------------
-  setNativeValue(pw, input.password);
+  // A-FR-19: the native setter first, the VERIFIED keystroke fallback
+  // when the framework ignores the programmatic set.
+  if (!setValueWithFallback(pw, input.password)) {
+    clearTouched();
+    return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+  }
   stamps.push(stampOf(pw));
 
   // A-FR-16/A-AC-04: a show-password toggle may have flipped the field to
@@ -411,7 +533,7 @@ export function fillLoginPageFunction(input: {
     clearTouched();
     return { ok: false, reasonCode: "recipient_set_changed", stamps };
   }
-  const lengthsAfter = Array.from(document.querySelectorAll("input"));
+  const lengthsAfter = snapshotInputs();
   const tampered: HTMLInputElement[] = [];
   for (const el of lengthsAfter) {
     const before = lengthsBefore.get(el);
@@ -434,7 +556,10 @@ export function fillLoginPageFunction(input: {
   // F09: sentinel-aware scan — LENGTH checks cannot catch a copied
   // secret that replaced an equal-length placeholder. Any OTHER field
   // holding the exact password value is a leaked recipient.
-  for (const el of document.querySelectorAll("input, textarea")) {
+  // A-FR-16: the sentinel scan covers every scanned document (frames too).
+  for (const el of docs.flatMap((doc) =>
+    Array.from(doc.querySelectorAll("input, textarea"))
+  )) {
     if (el === pw) continue;
     if (el === chosen.usernameInput && input.password === input.username) {
       continue;

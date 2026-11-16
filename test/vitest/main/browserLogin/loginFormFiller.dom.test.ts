@@ -561,3 +561,130 @@ describe("F09: form selection and recipient-set safety", () => {
     expect(second.reasonCode).toBe("two_step_no_transition");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A-FR-19/A-FR-20: keystroke fallback with focus checks, and
+// autocomplete="new-password" treated as a registration form.
+// ---------------------------------------------------------------------------
+describe("A-FR-19/A-FR-20 keystroke fallback and registration gate", () => {
+  it("an autocomplete=new-password form is refused as registration in login mode", () => {
+    const page = buildPage({
+      inputs: [
+        { type: "text", name: "username" },
+        { type: "password", name: "passwd" },
+      ],
+    });
+    // Mark the password field as a REGISTRATION field.
+    const pw = document.querySelector<HTMLInputElement>("input[name='passwd']")!;
+    pw.setAttribute("autocomplete", "new-password");
+    const result = page.run(
+      baseTarget({
+        mode: "login",
+        username: "user@example.test",
+        password: "secret-password",
+      })
+    );
+    expect(result.ok).toBe(false);
+    expect(result.reasonCode).toBe("registration_form_detected");
+    // Nothing was typed.
+    expect(
+      document.querySelector<HTMLInputElement>("input[name='username']")!.value
+    ).toBe("");
+    expect(pw.value).toBe("");
+  });
+
+  it("a registration form alongside a login form still fills the login form", () => {
+    document.body.innerHTML = "";
+    // A registration form FIRST (new-password) ...
+    const reg = document.createElement("form");
+    reg.action = "/register";
+    const regUser = document.createElement("input");
+    regUser.type = "text";
+    regUser.name = "username";
+    const regPw = document.createElement("input");
+    regPw.type = "password";
+    regPw.name = "newpass";
+    regPw.setAttribute("autocomplete", "new-password");
+    reg.append(regUser, regPw);
+    document.body.appendChild(reg);
+    // ...then a real login form.
+    const login = document.createElement("form");
+    login.action = "/login";
+    const loginUser = document.createElement("input");
+    loginUser.type = "text";
+    loginUser.name = "username";
+    const loginPw = document.createElement("input");
+    loginPw.type = "password";
+    loginPw.name = "password";
+    loginPw.setAttribute("autocomplete", "current-password");
+    login.append(loginUser, loginPw);
+    document.body.appendChild(login);
+    for (const el of Array.from(document.querySelectorAll("input"))) {
+      el.getBoundingClientRect = () =>
+        ({
+          left: 0,
+          top: 0,
+          right: 100,
+          bottom: 20,
+          width: 100,
+          height: 20,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    }
+    document.elementFromPoint = () => loginPw;
+    const happyDom = (window as unknown as {
+      happyDOM?: { setURL: (url: string) => Promise<void> };
+    }).happyDOM;
+    if (happyDom) {
+      void happyDom.setURL("https://www.example.test/login");
+    }
+    const result = fillLoginPageFunction({
+      mode: "login",
+      allowedDomainSuffixes: ["example.test"],
+      username: "user@example.test",
+      password: "secret-password",
+      submitVia: "form",
+    });
+    expect(result.ok).toBe(true);
+    // The credential landed in the LOGIN form — never the registration one.
+    expect(loginPw.value).toBe("secret-password");
+    expect(regPw.value).toBe("");
+    expect(regUser.value).toBe("");
+  });
+
+  it("an untypeable field falls back to keystrokes and aborts cleanly when they are refused", () => {
+    const page = buildPage({
+      inputs: [
+        { type: "text", name: "username" },
+        { type: "password", name: "password" },
+      ],
+    });
+    // Simulate a framework that REJECTS programmatic value sets: the
+    // prototype-set value is immediately reverted by an input handler.
+    const pw = document.querySelector<HTMLInputElement>("input[name='password']")!;
+    const username = document.querySelector<HTMLInputElement>("input[name='username']")!;
+    for (const el of [username, pw]) {
+      el.addEventListener("input", () => {
+        // happy-dom has no execCommand insertText support — the fallback's
+        // keystroke path fails honestly and the fill aborts CLEANLY.
+        if (!document.execCommand) {
+          el.value = "";
+        }
+      });
+    }
+    const result = page.run(
+      baseTarget({
+        mode: "login",
+        username: "user@example.test",
+        password: "secret-password",
+      })
+    );
+    // The fallback was attempted and refused → clean abort, fields clear.
+    expect(result.ok).toBe(false);
+    expect(result.reasonCode).toBe("fill_readback_mismatch");
+    expect(pw.value).toBe("");
+    expect(username.value).toBe("");
+  });
+});
