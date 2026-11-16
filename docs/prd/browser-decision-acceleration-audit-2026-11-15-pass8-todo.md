@@ -83,6 +83,11 @@ R04/M-FR-11 the batch boundary dedupes extracted rows (order-preserving,
 key order normalized); C-FR-07 the resume rechecks the session's site
 identity (resume_identity_site_drifted evidence + re-orient note).
 R04/M-FR-10 the chat backoff reads the failure (429 → 5s, else 1s).
+One CI follow-up: the decisionRoute fixture patch for the
+executeTask/managedBrowserModule tests was not committed with R01
+(commit `ba0873d16`). CI run 43947382204 SUCCESS on all three jobs
+(Lint+unit 21m41s, Package smoke 6m23s, Electron E2E 36m49s) at
+`ba0873d16`.
 Sweep at the closure HEAD: 669 tests across 55 main-process files, 1622
 component tests, and the utility suite green except two PRE-EXISTING
 Windows-environmental failures (isolated-vm native build for the Node
