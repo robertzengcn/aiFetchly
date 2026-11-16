@@ -1423,33 +1423,61 @@ export class ManagedBrowserAiToolService {
     );
     // N01/design 5.3: the EXPLICIT native route — only when the user
     // configured mode native_profile with a complete profile. Never
-    // inferred; an unusable profile is a structured refusal.
+    // inferred; an unusable profile is a structured refusal (B03: a
+    // native_profile mode with a NULL normalized profile refuses — it
+    // never falls through to chat).
     let nativeProfileError: string | null = null;
     const settings = await this.settings.getEffectiveSettings();
     const nativeProfile =
       settings.decisionRoute.mode === "native_profile"
         ? settings.decisionRoute.nativeProfile
         : null;
+    if (settings.decisionRoute.mode === "native_profile" && !nativeProfile) {
+      // B03/D-FR-03: the mode says native but the profile did not
+      // normalize — a structured refusal, never a silent chat fall-through.
+      nativeProfileError = "native_profile_incomplete";
+    }
     let decisionClient: BrowserDecisionClient | undefined;
     if (route === "chat" && nativeProfile) {
       if (nativeProfile.apiKeyRef === "none") {
         nativeProfileError = "native_profile_incomplete";
       } else {
-        const { SystemOneDecisionClient } = await import(
-          "@/service/browserDecision/SystemOneDecisionClient"
-        );
-        const { HttpClient } = await import("@/modules/lib/httpclient");
-        const httpClient = new HttpClient();
-        const nativeClient = new SystemOneDecisionClient(
-          nativeProfile,
-          {
-            postQuestion: async (endpoint, body, signal) =>
-              httpClient.postJson(endpoint, body, { signal }),
-          },
-          () => currentProviderConfigKey()
-        );
-        nativeClient.freezeRoute(currentProviderConfigKey());
-        decisionClient = nativeClient;
+        // B03: the native profile's model may be an alias — same rule as
+        // the chat route (aliases never ride a decision request).
+        if (/^(haiku|small)$/i.test(nativeProfile.model.trim())) {
+          nativeProfileError = "decision_model_alias_unresolved";
+        } else {
+          const { SystemOneDecisionClient } = await import(
+            "@/service/browserDecision/SystemOneDecisionClient"
+          );
+          const { postNativeDecision } = await import(
+            "@/service/browserDecision/NativeDecisionTransport"
+          );
+          const { AIProviderResolver } = await import(
+            "@/service/aiProvider/AIProviderResolver"
+          );
+          // B03: the ONLY credential on a native request is the
+          // explicitly selected one (apiKeyRef "chat" → the chat
+          // provider's key). No hosted state ever rides along; a hosted
+          // chat resolution carries no key (the hosted gate governs it).
+          const resolvedChat = new AIProviderResolver().resolveForChat();
+          const nativeCredential = {
+            apiKey:
+              resolvedChat.canUse && resolvedChat.kind === "local"
+                ? resolvedChat.apiKey
+                : null,
+          };
+          const nativeClient = new SystemOneDecisionClient(
+            nativeProfile,
+            {
+              postQuestion: async (endpoint, body, signal) =>
+                postNativeDecision(endpoint, body, nativeCredential, signal),
+            },
+            () => currentProviderConfigKey()
+          );
+          nativeClient.freezeRoute(currentProviderConfigKey());
+          decisionClient = nativeClient;
+        }
       }
     }
     if (nativeProfileError !== null) {

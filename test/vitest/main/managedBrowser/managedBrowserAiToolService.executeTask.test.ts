@@ -445,9 +445,10 @@ describe("executeTask native route + model override (E01/E02)", () => {
         apiKeyRef: "chat",
       },
       requestTimeoutMs: null,
-    chatCapabilities: null,
+      chatCapabilities: null,
     };
     const nativePosts: Array<{ endpoint: string }> = [];
+    const nativeCredentials: Array<string | null> = [];
     let chatCalls = 0;
     vi.doMock("@/api/aiChatApi", () => ({
       AiChatApi: class {
@@ -467,14 +468,49 @@ describe("executeTask native route + model override (E01/E02)", () => {
       },
     }));
     let nativeCalls = 0;
-    vi.doMock("@/modules/lib/httpclient", () => ({
-      HttpClient: class {
-        public async postJson(endpoint: string): Promise<unknown> {
-          nativePosts.push({ endpoint });
-          nativeCalls++;
-          // First native call = the PLANNER (plan JSON); the rest = loop
-          // decisions (DONE — the criteria are then verified).
-          if (nativeCalls === 1) {
+    // B03: the native route uses the DEDICATED transport (exact endpoint,
+    // selected credential) — the hosted HttpClient is no longer touched.
+    vi.doMock(
+      "@/service/browserDecision/NativeDecisionTransport",
+      async (importOriginal) => {
+        const original = await importOriginal<
+          typeof import("@/service/browserDecision/NativeDecisionTransport")
+        >();
+        return {
+          ...original,
+          postNativeDecision: async (
+            endpoint: string,
+            _body: unknown,
+            credential: { apiKey: string | null }
+          ): Promise<unknown> => {
+            nativePosts.push({ endpoint });
+            nativeCredentials.push(credential.apiKey);
+            nativeCalls++;
+            if (nativeCalls === 1) {
+              // First native call = the PLANNER (plan JSON); the rest =
+              // loop decisions (DONE — the criteria are then verified).
+              return {
+                status: "decided",
+                action: {
+                  operation: "DONE",
+                  target_id: null,
+                  option_id: null,
+                  key: null,
+                  url: null,
+                  text: JSON.stringify({
+                    completion_criteria: [
+                      { kind: "url_contains", value: "/results" },
+                    ],
+                    bindings: [],
+                    first_subgoal: "click search",
+                  }),
+                },
+                uncertainty: {
+                  source: "native_distribution",
+                  confidence: 0.7,
+                },
+              };
+            }
             return {
               status: "decided",
               action: {
@@ -483,29 +519,21 @@ describe("executeTask native route + model override (E01/E02)", () => {
                 option_id: null,
                 key: null,
                 url: null,
-                text: JSON.stringify({
-                  completion_criteria: [
-                    { kind: "url_contains", value: "/results" },
-                  ],
-                  bindings: [],
-                  first_subgoal: "click search",
-                }),
+                text: null,
               },
-              uncertainty: { source: "native_distribution", confidence: 0.7 },
+              uncertainty: {
+                source: "native_distribution",
+                confidence: 0.7,
+              },
             };
-          }
-          return {
-            status: "decided",
-            action: {
-              operation: "DONE",
-              target_id: null,
-              option_id: null,
-              key: null,
-              url: null,
-              text: null,
-            },
-            uncertainty: { source: "native_distribution", confidence: 0.7 },
-          };
+          },
+        };
+      }
+    );
+    vi.doMock("@/modules/lib/httpclient", () => ({
+      HttpClient: class {
+        public async postJson(): Promise<unknown> {
+          throw new Error("native route must not use the hosted HttpClient");
         }
         public async get(): Promise<unknown> {
           return {};
@@ -514,11 +542,17 @@ describe("executeTask native route + model override (E01/E02)", () => {
     }));
     vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
       AIProviderResolver: class {
-        public resolveForChat(): { canUse: boolean; kind: string; config: { defaultModel: string } } {
+        public resolveForChat(): {
+          canUse: boolean;
+          kind: string;
+          config: { defaultModel: string };
+          apiKey: string;
+        } {
           return {
             canUse: true,
             kind: "local",
             config: { defaultModel: "real-model-1" },
+            apiKey: "native-selected-key",
           };
         }
       },
@@ -534,6 +568,14 @@ describe("executeTask native route + model override (E01/E02)", () => {
     )) as Record<string, unknown>;
     expect(result.status).toBe("completed");
     expect(nativePosts.length).toBeGreaterThan(0);
+    // B03: every native request hit the EXACT profile endpoint.
+    for (const post of nativePosts) {
+      expect(post.endpoint).toBe("https://native.example.test/v1");
+    }
+    // B03: the SELECTED credential rode every native request.
+    for (const key of nativeCredentials) {
+      expect(key).toBe("native-selected-key");
+    }
     // ZERO chat completions — the native route reached the runner intact.
     expect(chatCalls).toBe(0);
   });
