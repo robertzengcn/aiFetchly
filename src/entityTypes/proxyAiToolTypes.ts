@@ -45,6 +45,12 @@ export interface SafeProxySummary {
   readonly checktime?: string;
   readonly status?: ProxyBasicStatus;
   readonly googlePass?: ProxyGooglePassStatus;
+  /**
+   * R03/P-FR-07: whether the proxy is BROWSER-USABLE — a browser-usable
+   * protocol (HTTP/HTTPS, not SOCKS) whose latest basic check passed.
+   * Never includes credentials.
+   */
+  readonly browserUsable?: boolean;
 }
 
 /**
@@ -359,7 +365,15 @@ export function toSafeProxySummary(
     status: mapBasicStatus(input.status, hasChecktime),
     googlePass: mapGooglePassStatus(input.googlePass),
   };
-  return summary;
+  // R03/P-FR-07: browser_usable = browser-usable protocol AND the latest
+  // basic check passed. A never-checked or failed proxy is not usable.
+  const browserUsableProtocol =
+    summary.protocol !== undefined &&
+    (summary.protocol === "http" || summary.protocol === "https");
+  return {
+    ...summary,
+    browserUsable: browserUsableProtocol && summary.status === "pass" && hasChecktime,
+  };
 }
 
 // ---------------------------------------------------------------------------

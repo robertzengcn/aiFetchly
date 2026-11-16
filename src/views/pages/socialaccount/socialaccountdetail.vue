@@ -301,7 +301,6 @@ const rules = {
 
 
 const showProxytable = () => {
-  console.log("show proxy table");
   proxytableshow.value = !proxytableshow.value;
 };
 
@@ -401,14 +400,8 @@ const initialize = async () => {
     // }
   }
   //get social task type
-  console.log('SocialPlatformList raw data:', SocialPlatformList);
-  console.log('SocialPlatformList type:', typeof SocialPlatformList);
-  console.log('SocialPlatformList is array:', Array.isArray(SocialPlatformList));
-  console.log('SocialPlatformList length:', SocialPlatformList?.length);
-  
   if (SocialPlatformList && Array.isArray(SocialPlatformList) && SocialPlatformList.length > 0) {
     platformitems.value = SocialPlatformList.map((item) => {
-      console.log('Mapping item:', item);
       return {
         id: item.id,
         name: item.name,
@@ -417,7 +410,6 @@ const initialize = async () => {
         url: item.url,
       };
     });
-    console.log('Platform items mapped successfully:', platformitems.value);
   } else {
     console.error('SocialPlatformList is not available or empty');
     platformitems.value = [];

@@ -354,7 +354,13 @@ export class BrowserTaskRunner {
           return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
         }
         // C-FR-05: safe-point control gate.
+        const generationBeforeGate = control.getResumeGeneration(this.taskId);
         await gate.waitUntilOpen(signal);
+        // C-FR-07: a resume means the user controlled the browser — the
+        // next decision must OBSERVE BEFORE ACTING (note rides the
+        // decision input; page revision advanced so old refs are stale).
+        const resumedDuringGate =
+          control.getResumeGeneration(this.taskId) > generationBeforeGate;
         // PRD §8 route budget: active runtime excludes user waits (D-21).
         if (control.activeTimeMs(this.taskId) > this.budget.activeRuntimeMs) {
           return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
@@ -378,8 +384,13 @@ export class BrowserTaskRunner {
         const resumeInstructions =
           control.consumeResumeInstructions?.(this.taskId) ?? null;
         if (resumeInstructions) {
-          this.pendingSubgoal = `the user resumed the task with these instructions: ${resumeInstructions}`;
-          evidence.push("resume_with_instructions");
+          this.pendingSubgoal = `the user controlled the browser; observe before acting. the user resumed the task with these instructions: ${resumeInstructions}`;
+          evidence.push("resume_with_instructions", "resume_note_user_controlled");
+        } else if (resumedDuringGate) {
+          // C-FR-07: resume without instructions still carries the note.
+          this.pendingSubgoal =
+            "the user controlled the browser; observe before acting.";
+          evidence.push("resume_note_user_controlled");
         }
         const decisionInput = this.buildDecisionInput(observation, candidates);
         this.pendingSubgoal = null;

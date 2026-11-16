@@ -301,7 +301,9 @@ export class WorkerSession {
           password: proxy.password ?? "",
         });
       }
-      await this.page.bringToFront().catch(() => undefined);
+      // C-FR-10/R04: the worker NEVER steals focus — a launch must not
+      // yank the user's foreground window. The user focuses the task
+      // window deliberately (BROWSER_TASK_FOCUS_WINDOW request path).
 
       if (storagePolicy.persistentCache.enabled) {
         this.send({
