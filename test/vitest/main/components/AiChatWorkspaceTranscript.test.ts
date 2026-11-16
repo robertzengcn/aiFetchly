@@ -6,6 +6,12 @@ import { createI18n } from "vue-i18n";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
+import en from "@/views/lang/en";
+import zh from "@/views/lang/zh";
+import es from "@/views/lang/es";
+import fr from "@/views/lang/fr";
+import de from "@/views/lang/de";
+import ja from "@/views/lang/ja";
 
 const i18n = createI18n({
   legacy: false,
@@ -14,9 +20,13 @@ const i18n = createI18n({
     en: {
       ui: { actions: { retry: "Retry" } },
       aiChatV2: {
+        ai_working: "Working…",
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          saveToWorkspace: "Save to workspace",
+          saveAll: "Save all",
+          saveAllToWorkspace: "Save all images to workspace",
           progressSummary: "{completed} of {requested} completed",
           retryFailed: "Retry failed items",
           stopBatch: "Stop batch",
@@ -1071,6 +1081,41 @@ describe("AiChatWorkspaceTranscript generated-image reference forwarding", () =>
       "imageIndex",
       "messageId",
     ]);
+    expect(
+      wrapper.find('[data-testid="generated-image-save-all"]').exists()
+    ).toBe(false);
+  });
+
+  it("forwards save-all-generated-images for every rendered tile", async () => {
+    const message = msg(
+      MessageType.MESSAGE,
+      {
+        generatedImages: [
+          { url: "https://example.com/gen-1.png" },
+          { url: "https://example.com/gen-2.png" },
+        ],
+      },
+      "assistant",
+      "Here are the images."
+    );
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [message],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const saveAll = wrapper.get('[data-testid="generated-image-save-all"]');
+    await saveAll.trigger("click");
+
+    const events = wrapper.emitted("save-all-generated-images");
+    expect(events?.[0]?.[0]).toEqual([
+      { messageId: message.id, imageIndex: 0 },
+      { messageId: message.id, imageIndex: 1 },
+    ]);
   });
 
   it("forwards edit-generated-image from the tile button as an opaque reference", async () => {
@@ -1312,4 +1357,183 @@ it('recognizes sent reply results and rejects failed or invalid draft results', 
   for (const toolResult of [{ success: false, draftId: 42 }, { draftId: -1 }, { draftId: '42' }, {}]) {
     expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'create_email_reply_draft', toolResult }))).toBeNull();
   }
+});
+
+interface LangWithAiChatV2 {
+  aiChatV2?: {
+    ai_working?: string;
+  };
+}
+
+describe("AiChatWorkspaceTranscript i18n", () => {
+  it("defines aiChatV2.ai_working across all supported languages", () => {
+    expect((en as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Working…");
+    expect((zh as LangWithAiChatV2).aiChatV2?.ai_working).toBe("处理中…");
+    expect((es as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Trabajando…");
+    expect((fr as LangWithAiChatV2).aiChatV2?.ai_working).toBe("En cours…");
+    expect((de as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Wird bearbeitet…");
+    expect((ja as LangWithAiChatV2).aiChatV2?.ai_working).toBe("処理中…");
+  });
+});
+
+describe("AiChatWorkspaceTranscript remote working indicator & empty bubble suppression", () => {
+  it("suppresses empty assistant message bubble when content is empty and has no reasoning/tool", async () => {
+    const emptyAssistant: ChatV2MessageView = {
+      id: "a-empty",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [emptyAssistant],
+        activeAssistantMessageId: "a-empty",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const assistantMessages = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(assistantMessages).toHaveLength(0);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').text()).toContain("Working…");
+  });
+
+  it("renders assistant message normally once content or reasoning arrives", async () => {
+    const textAssistant: ChatV2MessageView = {
+      id: "a-text",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "Hello from LLM",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [textAssistant],
+        activeAssistantMessageId: "a-text",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+    expect(wrapper.text()).toContain("Hello from LLM");
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+  });
+
+  it("renders assistant message with empty text if generatedImages or attachments are present", async () => {
+    const imageAssistant: ChatV2MessageView = {
+      id: "a-image",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        generatedImages: [{ url: "https://example.com/img.png", prompt: "cat" }] as never,
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [imageAssistant],
+        activeAssistantMessageId: "a-image",
+        streamStatus: "idle",
+        isRemoteWorking: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+  });
+
+  it("suppresses assistant message when content is empty and reasoning is present if showReasoning is false", async () => {
+    const reasoningAssistant: ChatV2MessageView = {
+      id: "a-reasoning",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Thinking deeply...",
+          format: "plain_text",
+          source: "server",
+        },
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [reasoningAssistant],
+        activeAssistantMessageId: "a-reasoning",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+        showReasoning: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(0);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+  });
+
+  it("renders assistant message when content is empty and reasoning is present if showReasoning is true", async () => {
+    const reasoningAssistant: ChatV2MessageView = {
+      id: "a-reasoning-visible",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Thinking deeply...",
+          format: "plain_text",
+          source: "server",
+        },
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [reasoningAssistant],
+        activeAssistantMessageId: "a-reasoning-visible",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+        showReasoning: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+  });
+
+  it("hides working indicator when remote is idle and not streaming", async () => {
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+        isRemoteWorking: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(false);
+  });
 });

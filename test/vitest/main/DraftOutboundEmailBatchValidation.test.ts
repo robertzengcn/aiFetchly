@@ -198,4 +198,32 @@ describe("draft_outbound_email_batch input validation", () => {
     const payload = result.result as Record<string, unknown>;
     expect(payload.validation_errors).toBeUndefined();
   });
+
+  it("names the missing required arguments for the flash-model incomplete shape", async () => {
+    // Production failure shape (z-ai/glm-5.3-flash, 2026-11-14): valid JSON
+    // carrying only email_content + service_ids (+skip_review) — missing the
+    // recipient source and the subject. The failure must NAME the missing
+    // parameters so schema-literal models can self-correct on the next round
+    // instead of regenerating the same incomplete call for many agentic
+    // rounds.
+    const skill = SkillRegistry.getSkill("draft_outbound_email_batch");
+    const result = await skill!.execute!(
+      {
+        email_content: "Hello",
+        service_ids: [15],
+        skip_review: true,
+      },
+      baseContext
+    );
+
+    expect(result.success).toBe(false);
+    const payload = result.result as Record<string, unknown>;
+    expect(payload.success).toBe(false);
+    expect(payload.error).toContain("emails");
+    expect(payload.error).toContain("email_subject");
+    expect(payload.validation_errors).toBeInstanceOf(Array);
+    const missing = payload.missing_params as string[];
+    expect(missing.some((m) => m.startsWith("emails"))).toBe(true);
+    expect(missing.some((m) => m.startsWith("email_subject"))).toBe(true);
+  });
 });

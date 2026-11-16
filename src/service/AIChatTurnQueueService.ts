@@ -1039,6 +1039,15 @@ export class AIChatTurnQueueService {
     const lease = this.deps.tryAcquireLease({ conversationId });
     if (!lease) {
       await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
+      const queuedView = await this.deps.pendingModule.getView(
+        row.pendingMessageId
+      );
+      if (queuedView) {
+        this.emitEvent(queuedView, "queued");
+      }
+      setTimeout(() => {
+        this.scheduleDrain(conversationId);
+      }, 200);
       log.info(
         `[ai-chat-queue] lease busy — released claim conv=${conversationId}`
       );
@@ -1340,7 +1349,16 @@ export class AIChatTurnQueueService {
         // can reuse it idempotently (scheduler requeue preserves age).
         await bridge?.releaseToQueued?.(bridgeRunId?.runId ?? null);
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
+        const queuedView = await this.deps.pendingModule.getView(
+          row.pendingMessageId
+        );
+        if (queuedView) {
+          this.emitEvent(queuedView, "queued");
+        }
         this.drainSchedulerWaiters(conversationId);
+        setTimeout(() => {
+          this.scheduleDrain(conversationId);
+        }, 200);
         return;
       }
       if (

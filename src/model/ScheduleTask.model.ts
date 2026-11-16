@@ -722,11 +722,14 @@ export class ScheduleTaskModel extends BaseDb {
         return { kind: "expired", reason: "MAX_RUNS_REACHED" } as const;
       }
 
-      // Coalesce if a run for this schedule is already pending/running/waiting.
+      // Coalesce only when a run is genuinely pending or running. A stale
+      // `waiting_for_conversation` run never held a conversation turn and must
+      // not block newer cadence slots forever; retire it to `coalesced` before
+      // claiming the fresh slot.
       const activeRun = await runRepo.findOne({
         where: {
           schedule_id: scheduleId,
-          status: In(["pending", "running", "waiting_for_conversation"]),
+          status: In(["pending", "running"]),
         },
       });
       if (activeRun) {
@@ -747,6 +750,23 @@ export class ScheduleTaskModel extends BaseDb {
           }
         );
         return { kind: "coalesced", coalescedCount: skipped + 1 } as const;
+      }
+
+      const waitingRun = await runRepo.findOne({
+        where: {
+          schedule_id: scheduleId,
+          status: "waiting_for_conversation",
+        },
+      });
+      if (waitingRun) {
+        await runRepo.update(
+          { id: waitingRun.id, status: "waiting_for_conversation" },
+          {
+            status: "coalesced",
+            error_code: "WAITING_RUN_EXPIRED",
+            finished_at: now,
+          }
+        );
       }
 
       // Determine the occurrence number of the due slot from the cadence grid.

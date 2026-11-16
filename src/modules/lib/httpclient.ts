@@ -72,6 +72,8 @@ export class HttpClient {
   private _headers: Record<string, string> = {};
   private baseUrl: string;
   private _isWorker = false;
+  private _tokenInitPromise: Promise<void>;
+  private _hasExplicitAuthHeader = false;
   constructor() {
     const resolved = resolveViteLoginBase();
     let loginUrl: string | undefined = resolved?.value;
@@ -100,8 +102,9 @@ export class HttpClient {
       if (workerToken && workerToken.trim().length > 0) {
         this.setHeader("Authorization", "Bearer " + workerToken);
       }
+      this._tokenInitPromise = Promise.resolve();
     } else {
-      void this.setheaderToken();
+      this._tokenInitPromise = this.setheaderToken();
     }
     // const tokenModel=new Token()
     // const tokenval=tokenModel.getValue("social-market-token")
@@ -133,9 +136,9 @@ export class HttpClient {
     const tokenModel = new Token();
     const tokenval = tokenModel.getValue(TOKENNAME);
     //log.info("prepare to set token:"+tokenval)
-    if (tokenval) {
+    if (tokenval && !this._hasExplicitAuthHeader) {
       //config.headers.Authorization = 'Bearer ' + tokenval
-      this.setHeader("Authorization", "Bearer " + tokenval);
+      this._headers["Authorization"] = "Bearer " + tokenval;
     }
   }
 
@@ -202,11 +205,10 @@ export class HttpClient {
       const refreshResult = await TokenRefreshService.refreshOnce();
 
       if (refreshResult.status && refreshResult.data) {
-        // Update access token in headers
-        this.setHeader(
-          "Authorization",
-          "Bearer " + refreshResult.data.accessToken
-        );
+        // Update access token in headers without marking it as caller-explicit
+        // so subsequent getFirstParty() calls can still sync newer stored tokens.
+        this._headers["Authorization"] =
+          "Bearer " + refreshResult.data.accessToken;
 
         // The new session may have a different secret key; drop the cached one.
         userSecretKeyService.invalidate();
@@ -242,7 +244,9 @@ export class HttpClient {
     isRetry = false,
     absolute = false
   ): Promise<unknown> {
-    // await this.setheaderToken()
+    if (!this._isWorker) {
+      await this._tokenInitPromise;
+    }
     // `absolute` = first-party full URL (Plugin Hub): used as-is instead of
     // baseUrl + endpoint. Only reachable via getFirstParty(), which enforces
     // the hub-origin allowlist, so the Bearer token never leaves first-party.
@@ -395,6 +399,9 @@ export class HttpClient {
   }
 
   setHeader(key: string, value: string) {
+    if (key.toLowerCase() === "authorization") {
+      this._hasExplicitAuthHeader = true;
+    }
     this._headers[key] = value;
     return this;
   }
@@ -404,11 +411,13 @@ export class HttpClient {
   }
 
   setBasicAuth(username: string, password: string) {
+    this._hasExplicitAuthHeader = true;
     this._headers["Authorization"] = `Basic ${btoa(`${username}:${password}`)}`;
     return this;
   }
 
   setBearerAuth(token: string) {
+    this._hasExplicitAuthHeader = true;
     this._headers["Authorization"] = `Bearer ${token}`;
     return this;
   }
@@ -548,6 +557,9 @@ export class HttpClient {
     options: RequestInit = {},
     isRetry = false
   ): Promise<Response> {
+    if (!this._isWorker) {
+      await this._tokenInitPromise;
+    }
     const res = await fetch(this.baseUrl + endpoint, {
       ...options,
       body: JSON.stringify(data),
@@ -607,11 +619,9 @@ export class HttpClient {
           const refreshResult = await TokenRefreshService.refreshOnce();
 
           if (refreshResult.status && refreshResult.data) {
-            // Update access token in headers
-            this.setHeader(
-              "Authorization",
-              "Bearer " + refreshResult.data.accessToken
-            );
+            // Update access token in headers without marking it as caller-explicit
+            this._headers["Authorization"] =
+              "Bearer " + refreshResult.data.accessToken;
 
             // The new session may have a different secret key; drop the cached one.
             userSecretKeyService.invalidate();

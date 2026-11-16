@@ -2667,6 +2667,10 @@ export default {
       permissionDescription:
         "AiFetchly が生成したアーティファクトを {destination} にコピーします。",
       savedToWorkspace: "{fileName} をワークスペースに保存しました。",
+      savedAllToWorkspace:
+        "{count} 枚の画像をワークスペースに保存しました。",
+      savedSomeToWorkspace:
+        "{total} 枚中 {saved} 枚をワークスペースに保存しました。",
       saveFailed: "ワークスペースに保存できませんでした。",
     },
     imageTool: {
@@ -2963,6 +2967,7 @@ export default {
     loading_history: "履歴を読み込み中…",
     streaming: "生成中…",
     thinking: "AIが思考中…",
+    ai_working: "処理中…",
     reconnecting: "再接続中…",
     reconnect_attempt: "({max}回中{n}回目)",
     recovery: {
@@ -3113,6 +3118,8 @@ export default {
       useAsReference: "参照として使用",
       edit: "編集",
       saveToWorkspace: "ワークスペースに保存",
+      saveAll: "すべて保存",
+      saveAllToWorkspace: "すべての画像をワークスペースに保存",
       remove: "削除",
       clearAll: "すべてクリア",
       moveUp: "上へ移動",

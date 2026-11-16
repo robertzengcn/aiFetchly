@@ -2714,6 +2714,10 @@ export default {
       permissionDescription:
         "Copia estos artefactos generados por AiFetchly en {destination}.",
       savedToWorkspace: "Se guardó {fileName} en tu espacio de trabajo.",
+      savedAllToWorkspace:
+        "Se guardaron {count} imágenes en tu espacio de trabajo.",
+      savedSomeToWorkspace:
+        "Se guardaron {saved} de {total} imágenes en tu espacio de trabajo.",
       saveFailed: "No se pudo guardar en el espacio de trabajo.",
     },
     imageTool: {
@@ -3033,6 +3037,7 @@ export default {
     loading_history: "Cargando historial…",
     streaming: "Generando…",
     thinking: "La IA está pensando…",
+    ai_working: "Trabajando…",
     reconnecting: "Reconectando…",
     reconnect_attempt: "(intento {n}/{max})",
     recovery: {
@@ -3187,6 +3192,8 @@ export default {
       useAsReference: "Usar como referencia",
       edit: "Editar",
       saveToWorkspace: "Guardar en el espacio de trabajo",
+      saveAll: "Guardar todo",
+      saveAllToWorkspace: "Guardar todas las imágenes en el espacio de trabajo",
       remove: "Eliminar",
       clearAll: "Borrar todo",
       moveUp: "Subir",

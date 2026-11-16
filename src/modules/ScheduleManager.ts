@@ -17,6 +17,10 @@ import {
 } from "@/model/SchedulerStatus.model";
 import { Token } from "@/modules/token";
 import { USERSDBPATH } from '@/config/usersetting';
+import {
+    ExecutionLease,
+    ScheduleExecutionGuard
+} from "@/modules/ScheduleExecutionGuard";
 export interface SchedulerStatus {
     isRunning: boolean;
     activeSchedules: number;
@@ -37,7 +41,8 @@ export class ScheduleManager {
     private taskExecutorModule: TaskExecutorService;
     private schedulerStatusModel: SchedulerStatusModel;
     private dbpath: string;
-    private runningScheduleIds = new Set<number>();
+    private readonly executionGuard = ScheduleExecutionGuard.getInstance();
+    private ownedLeases: Set<ExecutionLease> = new Set();
 
     private constructor() {
         const tokenService = new Token();
@@ -105,6 +110,10 @@ export class ScheduleManager {
             } catch (error) {
                 log.error('Failed to stop existing ScheduleManager during destroy:', error);
             }
+            for (const lease of Array.from(ScheduleManager.instance.ownedLeases)) {
+                lease.release();
+            }
+            ScheduleManager.instance.ownedLeases.clear();
         }
 
         ScheduleManager.instance = null;
@@ -209,15 +218,26 @@ export class ScheduleManager {
         scheduleId: number,
         options?: { detach?: boolean }
     ): Promise<void> {
-        if (this.runningScheduleIds.has(scheduleId)) {
+        const scheduleLease = this.executionGuard.tryAcquireSchedule(scheduleId);
+        if (!scheduleLease) {
             log.info(
                 `Schedule ${scheduleId} is already running, skipping overlapping execution`
             );
             return;
         }
 
-        this.runningScheduleIds.add(scheduleId);
+        this.ownedLeases.add(scheduleLease);
+        let taskLease: ExecutionLease | null = null;
         let handedOff = false;
+        const releaseLeases = (): void => {
+            if (taskLease) {
+                taskLease.release();
+                this.ownedLeases.delete(taskLease);
+                taskLease = null;
+            }
+            scheduleLease.release();
+            this.ownedLeases.delete(scheduleLease);
+        };
         try {
             const schedule = await this.scheduleTaskModule.getScheduleById(scheduleId);
             if (!schedule) {
@@ -229,6 +249,20 @@ export class ScheduleManager {
                     `Schedule ${scheduleId} is not active (is_active=${String(schedule.is_active)}, status=${String(schedule.status)}), skipping execution`
                 );
                 return;
+            }
+
+            if (schedule.task_type != null && Number.isFinite(schedule.task_id)) {
+                taskLease = this.executionGuard.tryAcquireTask(
+                    schedule.task_type,
+                    schedule.task_id
+                );
+                if (!taskLease) {
+                    log.info(
+                        `Schedule ${scheduleId} skipped because task ${String(schedule.task_type)}:${schedule.task_id} is already running`
+                    );
+                    return;
+                }
+                this.ownedLeases.add(taskLease);
             }
 
             log.info(`Executing schedule ${scheduleId} (${schedule.name})`);
@@ -256,7 +290,7 @@ export class ScheduleManager {
                             );
                         })
                         .finally(() => {
-                            this.runningScheduleIds.delete(scheduleId);
+                            releaseLeases();
                         });
                 });
                 return;
@@ -268,7 +302,7 @@ export class ScheduleManager {
             throw error;
         } finally {
             if (!handedOff) {
-                this.runningScheduleIds.delete(scheduleId);
+                releaseLeases();
             }
         }
     }
@@ -309,6 +343,25 @@ export class ScheduleManager {
             );
             await this.scheduleTaskModule.incrementExecutionCount(scheduleId, false);
             await this.scheduleTaskModule.updateLastErrorMessage(scheduleId, errorMessage);
+            if (
+                schedule.trigger_type === TriggerType.CRON &&
+                schedule.cron_expression
+            ) {
+                try {
+                    const nextRunTime = this.calculateNextRunTime(
+                        schedule.cron_expression
+                    );
+                    await this.scheduleTaskModule.updateNextRunTime(
+                        scheduleId,
+                        nextRunTime
+                    );
+                } catch (nextRunError: unknown) {
+                    log.error(
+                        `Failed to advance next run time after failure for schedule ${scheduleId}:`,
+                        nextRunError
+                    );
+                }
+            }
             log.error(`Schedule ${scheduleId} execution failed:`, error);
             await this.executeDependentJobs(executionId, ExecutionStatus.FAILED);
         }

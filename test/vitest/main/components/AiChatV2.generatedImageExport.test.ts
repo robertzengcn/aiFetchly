@@ -183,6 +183,9 @@ const i18n = createI18n({
           permissionDescription:
             "Copy these AiFetchly-generated artifacts into {destination}.",
           savedToWorkspace: "Saved {fileName} to your workspace.",
+          savedAllToWorkspace: "Saved {count} images to your workspace.",
+          savedSomeToWorkspace:
+            "Saved {saved} of {total} images to your workspace.",
           saveFailed: "Could not save to workspace.",
         },
         imageTool: {
@@ -300,6 +303,7 @@ const MessagesStub = defineComponent({
     "use-generated-image",
     "edit-generated-image",
     "save-generated-image",
+    "save-all-generated-images",
     "grant-permission",
     "deny-permission",
     "approve-plan",
@@ -311,10 +315,16 @@ const MessagesStub = defineComponent({
   setup(_, { emit }) {
     const saveImage = (): void =>
       emit("save-generated-image", { messageId: "m1", imageIndex: 0 });
-    return { saveImage };
+    const saveAllImages = (): void =>
+      emit("save-all-generated-images", [
+        { messageId: "m1", imageIndex: 0 },
+        { messageId: "m1", imageIndex: 1 },
+      ]);
+    return { saveImage, saveAllImages };
   },
   template: `<div data-testid="messages">
     <button data-testid="msg-save-img" @click="saveImage">save</button>
+    <button data-testid="msg-save-all-img" @click="saveAllImages">save all</button>
   </div>`,
 });
 
@@ -466,5 +476,89 @@ describe("AiChatV2 save-to-workspace wiring", () => {
 
     expect(noticeToastText(wrapper)).toContain(SAVE_FAILED_TEXT);
     expect(noticeToastText(wrapper)).toContain("generated_image_not_owned");
+  });
+
+  it("saves every image from save-all and shows one summary toast", async () => {
+    vi.mocked(exportGeneratedImage)
+      .mockResolvedValueOnce({
+        status: "exported",
+        destinationPath: "/tmp/ws/generated-artifacts/image-1.png",
+        relativeDestinationPath: "generated-artifacts/image-1.png",
+        fileName: "image-1.png",
+      } satisfies ChatV2GeneratedImageExportResult)
+      .mockResolvedValueOnce({
+        status: "exported",
+        destinationPath: "/tmp/ws/generated-artifacts/image-2.png",
+        relativeDestinationPath: "generated-artifacts/image-2.png",
+        fileName: "image-2.png",
+      } satisfies ChatV2GeneratedImageExportResult);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="msg-save-all-img"]').trigger("click");
+    await flushPromises();
+
+    const calls = vi.mocked(exportGeneratedImage).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0][1]).toEqual({ messageId: "m1", imageIndex: 0 });
+    expect(calls[1][1]).toEqual({ messageId: "m1", imageIndex: 1 });
+    expect(calls[0][0]).toBe(calls[1][0]);
+    expect(noticeToastText(wrapper)).toContain(
+      "Saved 2 images to your workspace."
+    );
+  });
+
+  it("reports a partial save-all when one image fails", async () => {
+    vi.mocked(exportGeneratedImage)
+      .mockResolvedValueOnce({
+        status: "exported",
+        destinationPath: "/tmp/ws/generated-artifacts/image-1.png",
+        relativeDestinationPath: "generated-artifacts/image-1.png",
+        fileName: "image-1.png",
+      } satisfies ChatV2GeneratedImageExportResult)
+      .mockRejectedValueOnce(new Error("generated_image_missing"));
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="msg-save-all-img"]').trigger("click");
+    await flushPromises();
+
+    expect(exportGeneratedImage).toHaveBeenCalledTimes(2);
+    expect(noticeToastText(wrapper)).toContain(
+      "Saved 1 of 2 images to your workspace."
+    );
+  });
+
+  it("queues the whole save-all set when a workspace is required", async () => {
+    vi.mocked(exportGeneratedImage)
+      .mockResolvedValueOnce({ status: "workspace_required" })
+      .mockResolvedValue({
+        status: "exported",
+        destinationPath: "/tmp/ws/generated-artifacts/image-1.png",
+        relativeDestinationPath: "generated-artifacts/image-1.png",
+        fileName: "image-1.png",
+      } satisfies ChatV2GeneratedImageExportResult);
+
+    const wrapper = mountChat();
+    await flushPromises();
+    await wrapper.find('[data-testid="msg-save-all-img"]').trigger("click");
+    await flushPromises();
+
+    expect(exportGeneratedImage).toHaveBeenCalledTimes(1);
+    expect(noticeToastText(wrapper)).toContain(WORKSPACE_REQUIRED_TEXT);
+    expect(
+      wrapper.findComponent({ name: "WorkspaceRequiredCard" }).exists()
+    ).toBe(true);
+
+    const chatVm = wrapper.vm as unknown as {
+      onWorkspaceApproved?: (workspaceId: number, rootPath: string) => void;
+    };
+    chatVm.onWorkspaceApproved?.(7, "/tmp/approved-ws");
+    await flushPromises();
+
+    const calls = vi.mocked(exportGeneratedImage).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[1][1]).toEqual({ messageId: "m1", imageIndex: 0 });
+    expect(calls[2][1]).toEqual({ messageId: "m1", imageIndex: 1 });
   });
 });

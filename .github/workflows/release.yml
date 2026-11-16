@@ -192,11 +192,11 @@ jobs:
           echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package start"
           # Reuses the package created above in a fresh Node process to avoid V8 Zone OOM.
           if [ "$BUILD_MODE" = "store" ]; then
-            cross-env NODE_ENV=production WINDOWS_DISTRIBUTION=store yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-msix
+            NODE_ENV=production WINDOWS_DISTRIBUTION=store yarn electron-forge make --skip-package --platform=win32 --targets @electron-forge/maker-msix
           elif [ "$BUILD_MODE" = "production" ]; then
-            cross-env NODE_ENV=production yarn electron-forge make --skip-package --platform=win32
+            NODE_ENV=production yarn electron-forge make --skip-package --platform=win32
           else
-            cross-env NODE_ENV=test yarn electron-forge make --skip-package --platform=win32
+            NODE_ENV=test yarn electron-forge make --skip-package --platform=win32
           fi
           echo "[$(date -u +%FT%TZ)] phase: electron-forge make --skip-package end"
 

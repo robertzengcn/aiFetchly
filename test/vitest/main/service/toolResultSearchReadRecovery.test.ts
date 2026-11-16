@@ -51,6 +51,10 @@ vi.mock("@/service/ToolResultTextUtil", () => ({
 
 import { handleToolResultSearch } from "@/service/agentTools/toolResultSearchTool";
 import { handleToolResultRead } from "@/service/agentTools/toolResultReadTool";
+import {
+  TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+  toolResultBudgetExhaustedResult,
+} from "@/service/agentTools/toolResultDenialRecovery";
 import type { ToolResultToolContext } from "@/service/agentTools/toolResultContext";
 
 let currentContext: ToolResultToolContext | null = null;
@@ -164,5 +168,130 @@ describe("tool_result_read denial recovery", () => {
     expect(recovery).toBeTruthy();
     expect(recovery.toLowerCase()).toMatch(/output_id/);
     expect(recovery.toLowerCase()).toMatch(/verbatim/);
+  });
+
+  it("includes output_id, cursor, and stop-retrieving guidance on RETRIEVAL_BUDGET_EXHAUSTED", async () => {
+    const outId = "out_5cb021289856b41b869773e8030f28f4";
+    const cursor = "opaque.cursor.sig";
+    const base = buildContext({});
+    if (!base) throw new Error("expected non-null test context");
+    currentContext = {
+      ...base,
+      resolveTarget: async () => ({
+        ok: true as const,
+        target: {
+          outputId: outId,
+          revision: 1,
+          backend: "file",
+          storageKey: "test-key",
+          format: "json",
+          capturedBytes: 1024,
+          sourceCompleteness: "complete",
+        },
+      }),
+      reserveWork: async () => ({
+        ok: false as const,
+        code: "RETRIEVAL_BUDGET_EXHAUSTED" as const,
+      }),
+    };
+
+    const readRes = await handleToolResultRead(
+      { output_id: outId, cursor },
+      buildSkillContext()
+    );
+    expect(readRes.success).toBe(false);
+    expect(readRes.result.error).toBe("RETRIEVAL_BUDGET_EXHAUSTED");
+    expect(readRes.result.output_id).toBe(outId);
+    expect(readRes.result.cursor).toBe(cursor);
+    expect(readRes.result.analysis_complete).toBe(false);
+    expect(readRes.result.terminal_for_turn).toBe(true);
+    expect(String(readRes.result.recovery).toLowerCase()).toMatch(
+      /do not call tool_result_read or tool_result_search/
+    );
+
+    const searchRes = await handleToolResultSearch(
+      { output_id: outId, query: "wholesale", cursor },
+      buildSkillContext()
+    );
+    expect(searchRes.success).toBe(false);
+    expect(searchRes.result.error).toBe("RETRIEVAL_BUDGET_EXHAUSTED");
+    expect(searchRes.result.output_id).toBe(outId);
+    expect(searchRes.result.cursor).toBe(cursor);
+    expect(searchRes.result.analysis_complete).toBe(false);
+    expect(searchRes.result.terminal_for_turn).toBe(true);
+    expect(String(searchRes.result.recovery).toLowerCase()).toMatch(
+      /do not call tool_result_read or tool_result_search/
+    );
+  });
+
+  it("settles reserved work with 0 tokens if read or search throws unexpectedly", async () => {
+    const outId = "out_5cb021289856b41b869773e8030f28f4";
+    const settleCalls: number[] = [];
+    const base = buildContext({});
+    if (!base) throw new Error("expected non-null test context");
+    currentContext = {
+      ...base,
+      resolveTarget: async () => ({
+        ok: true as const,
+        target: {
+          outputId: outId,
+          revision: 1,
+          backend: "file",
+          storageKey: "test-key",
+          format: "json",
+          capturedBytes: 1024,
+          sourceCompleteness: "complete",
+        },
+      }),
+      reserveWork: async () => ({ ok: true as const }),
+      settleWork: async (tokens: number) => {
+        settleCalls.push(tokens);
+      },
+      retrieval: {
+        read: async () => {
+          throw new Error("boom read");
+        },
+        search: async () => {
+          throw new Error("boom search");
+        },
+      } as unknown as typeof base.retrieval,
+    };
+
+    await expect(
+      handleToolResultRead({ output_id: outId }, buildSkillContext())
+    ).rejects.toThrow("boom read");
+    await expect(
+      handleToolResultSearch({ output_id: outId, query: "car" }, buildSkillContext())
+    ).rejects.toThrow("boom search");
+    expect(settleCalls).toEqual([0, 0]);
+  });
+
+  it("builds correct payload in toolResultBudgetExhaustedResult with and without cursor", () => {
+    const withoutCursor = toolResultBudgetExhaustedResult({
+      outputId: "out_test123",
+    });
+    expect(withoutCursor).toEqual({
+      error: "RETRIEVAL_BUDGET_EXHAUSTED",
+      output_id: "out_test123",
+      analysis_complete: false,
+      terminal_for_turn: true,
+      recovery: TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+    });
+    expect(Object.prototype.hasOwnProperty.call(withoutCursor, "cursor")).toBe(
+      false
+    );
+
+    const withCursor = toolResultBudgetExhaustedResult({
+      outputId: "out_test456",
+      cursor: "cursor_abc_123",
+    });
+    expect(withCursor).toEqual({
+      error: "RETRIEVAL_BUDGET_EXHAUSTED",
+      output_id: "out_test456",
+      cursor: "cursor_abc_123",
+      analysis_complete: false,
+      terminal_for_turn: true,
+      recovery: TOOL_RESULT_BUDGET_EXHAUSTED_RECOVERY,
+    });
   });
 });

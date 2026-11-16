@@ -73,3 +73,67 @@ describe("TaskExecutorService DI (R5.1)", () => {
     expect(status).toBe(TaskStatus.Processing);
   });
 });
+
+describe("TaskExecutorService.executeAiMessageTask status propagation (Bug #4)", () => {
+  it("returns runId when ScheduledAiMessageRunner completes", async () => {
+    const fakeRun = vi.fn().mockResolvedValue({
+      runId: 88,
+      status: "completed",
+      assistantFinalMessage: "done",
+      toolCallsCount: 1,
+      blockedToolCalls: [],
+    });
+    const svc = new TaskExecutorService(
+      makeFakeDeps({
+        createScheduledAiMessageRunner: () => ({ run: fakeRun }),
+      })
+    );
+
+    const runId = await svc.executeAiMessageTask(42, 7);
+
+    expect(fakeRun).toHaveBeenCalledWith(42, 7);
+    expect(runId).toBe(88);
+  });
+
+  it("throws when ScheduledAiMessageRunner returns blocked_by_policy (CONVERSATION_BUSY)", async () => {
+    const fakeRun = vi.fn().mockResolvedValue({
+      runId: 89,
+      status: "blocked_by_policy",
+      assistantFinalMessage: "",
+      toolCallsCount: 0,
+      blockedToolCalls: [],
+      errorMessage: "CONVERSATION_BUSY",
+    });
+    const svc = new TaskExecutorService(
+      makeFakeDeps({
+        createScheduledAiMessageRunner: () => ({ run: fakeRun }),
+      })
+    );
+
+    await expect(svc.executeAiMessageTask(42, 7)).rejects.toThrow(
+      /blocked_by_policy.*CONVERSATION_BUSY/
+    );
+  });
+
+  it("throws when ScheduledAiMessageRunner returns failed or timeout", async () => {
+    for (const status of ["failed", "timeout"] as const) {
+      const fakeRun = vi.fn().mockResolvedValue({
+        runId: 90,
+        status,
+        assistantFinalMessage: "",
+        toolCallsCount: 0,
+        blockedToolCalls: [],
+        errorMessage: status === "failed" ? "PROVIDER_ERROR" : "Timed out",
+      });
+      const svc = new TaskExecutorService(
+        makeFakeDeps({
+          createScheduledAiMessageRunner: () => ({ run: fakeRun }),
+        })
+      );
+
+      await expect(svc.executeAiMessageTask(42, 7)).rejects.toThrow(
+        new RegExp(status)
+      );
+    }
+  });
+});
