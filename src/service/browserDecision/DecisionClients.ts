@@ -217,9 +217,56 @@ export class HostedDecisionClient implements BrowserDecisionClient {
 
 export interface ChatCompletionLike {
   readonly choices?: ReadonlyArray<{
-    readonly message?: { readonly content?: string | null };
+    readonly message?: {
+      readonly content?: string | null;
+      readonly tool_calls?: ReadonlyArray<{
+        readonly function?: { readonly name?: string; readonly arguments?: string };
+      }>;
+    };
   }>;
 }
+
+/**
+ * R01/D-FR-18: per-provider chat OUTPUT capabilities — probed once by the
+ * settings connection test and persisted on the decision route. A flag
+ * left false keeps the conservative legacy behavior (json_object / plain
+ * text); no probe result means no unsupported mode is ever attempted.
+ */
+export interface ChatDecisionCapabilities {
+  /** The provider accepts response_format json_schema (verified output). */
+  readonly structuredJsonSchema: boolean;
+  /** The provider accepts a forced tool call (tool_choice). */
+  readonly forcedToolDecision: boolean;
+}
+
+/** The verified JSON Schema the decision request must satisfy. */
+export const CHAT_DECISION_RESPONSE_SCHEMA_NAME = "browser_decision";
+
+export function chatDecisionResponseSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      status: { type: "string", enum: ["decided", "uncertain", "blocked"] },
+      action: {
+        type: "object",
+        properties: {
+          operation: { type: "string" },
+          target_id: { type: ["string", "null"] },
+          option_id: { type: ["string", "null"] },
+          key: { type: ["string", "null"] },
+          url: { type: ["string", "null"] },
+          text: { type: ["string", "null"] },
+        },
+        required: ["operation"],
+      },
+      uncertainty: { type: "object" },
+    },
+    required: ["status", "action"],
+    additionalProperties: true,
+  };
+}
+
+const CHAT_DECISION_TOOL_NAME = "propose_browser_decision";
 
 export class ChatCompletionDecisionClient implements BrowserDecisionClient {
   /**
@@ -234,13 +281,35 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
       request: {
         messages: ReadonlyArray<{ role: string; content: string }>;
         model?: string;
-        response_format?: { type: "json_object" | "text" };
+        response_format?:
+          | { type: "json_object" | "text" }
+          | {
+              type: "json_schema";
+              json_schema: {
+                name: string;
+                strict?: boolean;
+                schema: Record<string, unknown>;
+              };
+            };
+        tools?: ReadonlyArray<{
+          type: "function";
+          function: {
+            name: string;
+            description: string;
+            parameters: Record<string, unknown>;
+          };
+        }>;
+        tool_choice?: {
+          type: "function";
+          function: { name: string };
+        };
         temperature?: number;
       },
       signal: AbortSignal
     ) => Promise<ChatCompletionLike>,
     private readonly model?: string,
-    private readonly getConfigKey?: () => string | null
+    private readonly getConfigKey?: () => string | null,
+    private readonly chatCapabilities?: ChatDecisionCapabilities
   ) {}
 
   /** Freeze the route at admission (call once before the loop). */
@@ -263,8 +332,12 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
       // The chat route is always "advertised" — the user's own endpoint.
       advertised: true,
       operations: [],
-      supportsStructuredJsonSchema: false,
-      supportsForcedToolDecision: false,
+      // R01/D-FR-18: the negotiated output modes are REPORTED, not
+      // hardcoded — the flags come from the settings connection probe.
+      supportsStructuredJsonSchema:
+        this.chatCapabilities?.structuredJsonSchema === true,
+      supportsForcedToolDecision:
+        this.chatCapabilities?.forcedToolDecision === true,
       supportsJsonObject: true,
       nativeDecision: false,
       maxCandidates: 120,
@@ -279,7 +352,11 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
     signal: AbortSignal
   ): Promise<BrowserDecisionResult> {
     // D-FR-18: at most 2 actual provider attempts per logical decision —
-    // one retry for a parse failure, never an open repair loop.
+    // one retry for a parse failure, never an open repair loop. The
+    // output mode is NEGOTIATED across the ladder:
+    //   attempt 0: verified JSON Schema (when probed) → json_object;
+    //   attempt 1: forced tool call (when probed) → plain text + JSON-only
+    //   instruction.
     for (let attempt = 0; attempt < 2; attempt++) {
       // F05: an already-aborted signal never reaches the provider.
       if (signal.aborted) {
@@ -291,10 +368,17 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
         return { status: "provider_error", reason_code: "provider_config_changed" };
       }
       try {
-        // T25: bounded backoff on rate-limit rejections (429), inside the
-        // same 2-attempt ceiling — never an open retry loop.
+        // T25/R04/M-FR-10: bounded backoff on rate-limit rejections (429)
+        // inside the same 2-attempt ceiling — the delay reads the failure
+        // (a 429 waits longer than a parse failure), never an open loop.
         if (attempt === 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          const retryError = this.lastAttemptError;
+          const rateLimited = /\b429\b|rate[_ ]limit|too many requests/i.test(
+            retryError
+          );
+          await new Promise((resolve) =>
+            setTimeout(resolve, rateLimited ? 5_000 : 1_000)
+          );
           // F05: validity is re-checked after the backoff await too.
           if (signal.aborted) {
             return { status: "provider_error", reason_code: "request_aborted" };
@@ -316,33 +400,65 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
               }
             }, 500)
           : null;
-        // D-FR-18: the output mode is NEGOTIATED across the hard cap of
-        // two upstream attempts — attempt 1 uses json_object (widely
-        // supported); attempt 2 falls back to plain text with the
-        // JSON-only instruction (providers whose json_object mode mangles
-        // or rejects the payload get a second, different strategy).
-        const responseFormat =
-          attempt === 0
+        // D-FR-18: the negotiated output mode for THIS attempt.
+        const useSchema =
+          attempt === 0 && this.chatCapabilities?.structuredJsonSchema === true;
+        const useForcedTool =
+          attempt === 1 && this.chatCapabilities?.forcedToolDecision === true;
+        const responseFormat = useSchema
+          ? ({
+              type: "json_schema",
+              json_schema: {
+                name: CHAT_DECISION_RESPONSE_SCHEMA_NAME,
+                strict: false,
+                schema: chatDecisionResponseSchema(),
+              },
+            } as const)
+          : attempt === 0
             ? ({ type: "json_object" } as const)
             : ({ type: "text" } as const);
+        const promptBase = buildChatDecisionPrompt(input);
+        const messages: ReadonlyArray<{ role: string; content: string }> = [
+          { role: "system", content: CHAT_DECISION_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content:
+              attempt === 0 && !useSchema
+                ? promptBase
+                : useForcedTool
+                  ? `${promptBase}
+Call the ${CHAT_DECISION_TOOL_NAME} tool with the decision JSON as arguments.`
+                  : `${promptBase}
+
+IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
+          },
+        ];
         let response: ChatCompletionLike;
         try {
           response = await this.complete(
             {
-              messages: [
-                { role: "system", content: CHAT_DECISION_SYSTEM_PROMPT },
-                {
-                  role: "user",
-                  content:
-                    attempt === 0
-                      ? buildChatDecisionPrompt(input)
-                      : `${buildChatDecisionPrompt(input)}
-
-IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
-                },
-              ],
+              messages,
               ...(this.model ? { model: this.model } : {}),
               response_format: responseFormat,
+              ...(useForcedTool
+                ? {
+                    tools: [
+                      {
+                        type: "function" as const,
+                        function: {
+                          name: CHAT_DECISION_TOOL_NAME,
+                          description:
+                            "Propose the next browser decision as strict JSON.",
+                          parameters: chatDecisionResponseSchema(),
+                        },
+                      },
+                    ],
+                    tool_choice: {
+                      type: "function" as const,
+                      function: { name: CHAT_DECISION_TOOL_NAME },
+                    },
+                  }
+                : {}),
               temperature: 0,
             },
             attemptController.signal
@@ -362,7 +478,17 @@ IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
         if (this.configChanged()) {
           return { status: "provider_error", reason_code: "provider_config_changed" };
         }
-        const content = response.choices?.[0]?.message?.content ?? "";
+        // D-FR-18: a forced tool call answers through tool_calls arguments.
+        const toolArguments =
+          response.choices?.[0]?.message?.tool_calls?.[0]?.function
+            ?.arguments ?? null;
+        const content =
+          toolArguments ??
+          response.choices?.[0]?.message?.content ??
+          "";
+        if (typeof content !== "string" || content.length === 0) {
+          throw new Error("empty decision JSON");
+        }
         const parsed: unknown = JSON.parse(content);
         // F14/D-FR-19: a chat response can never claim native
         // distribution — self-reported calibration is stripped.
@@ -387,11 +513,13 @@ IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
         }
         return normalized;
       } catch (error) {
+        this.lastAttemptError =
+          error instanceof Error ? error.message : String(error);
         if (signal.aborted) {
           return { status: "provider_error", reason_code: "request_aborted" };
         }
         if (attempt === 1) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = this.lastAttemptError;
           return {
             status: "provider_error",
             reason_code: message.includes("JSON")
@@ -403,6 +531,9 @@ IMPORTANT: reply with ONLY the JSON object — no prose, no code fences.`,
     }
     return { status: "provider_error", reason_code: "chat_request_failed" };
   }
+
+  /** R04/M-FR-10: the last failure's message — the 429 backoff reads it. */
+  private lastAttemptError = "";
 }
 
 const BOUNDED_PRESS_KEYS: ReadonlySet<string> = new Set(BROWSER_DECISION_PRESS_KEY_VALUES);

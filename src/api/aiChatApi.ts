@@ -580,9 +580,20 @@ export interface OpenAIChatCompletionRequest {
    * the provider is asked to emit valid JSON only — used by the strict-reply
    * generation path so the model is less likely to wrap JSON in prose. Servers
    * that ignore `response_format` simply disregard it; local strict parsing
-   * remains authoritative regardless of this hint.
+   * remains authoritative regardless of this hint. R01/D-FR-18: the decision
+   * route may request a VERIFIED JSON SCHEMA (`json_schema`) when the probe
+   * reported the provider supports it.
    */
-  response_format?: { readonly type: "json_object" | "text" };
+  response_format?:
+    | { readonly type: "json_object" | "text" }
+    | {
+        readonly type: "json_schema";
+        readonly json_schema: {
+          readonly name: string;
+          readonly strict?: boolean;
+          readonly schema: Record<string, unknown>;
+        };
+      };
 }
 
 /** OpenAI-compatible model object */

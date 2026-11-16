@@ -349,6 +349,15 @@ export interface EffectiveManagedBrowserSettings {
       readonly apiKeyRef: "chat" | "none";
     } | null;
     readonly requestTimeoutMs: number | null;
+    /**
+     * R01/D-FR-18: the chat endpoint's OUTPUT capabilities as probed by
+     * the settings connection test — null until probed (conservative
+     * legacy behavior). Reported separately from native decisions.
+     */
+    readonly chatCapabilities: {
+      readonly structuredJsonSchema: boolean;
+      readonly forcedToolDecision: boolean;
+    } | null;
   };
 }
 

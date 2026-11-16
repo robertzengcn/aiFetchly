@@ -1560,6 +1560,10 @@ export class ManagedBrowserAiToolService {
               stream: false,
               temperature: request.temperature,
               response_format: request.response_format,
+              ...(request.tools ? { tools: request.tools as never } : {}),
+              ...(request.tool_choice
+                ? { tool_choice: request.tool_choice as never }
+                : {}),
             },
             { signal }
           )) as ChatCompletionLike;
@@ -1567,7 +1571,11 @@ export class ManagedBrowserAiToolService {
         decisionModel,
         // R01/D-FR-02: each decision call re-checks the frozen provider
         // config identity; a mid-task change returns provider_error.
-        () => currentProviderConfigKey()
+        () => currentProviderConfigKey(),
+        // R01/D-FR-18: the probed chat output capabilities — the
+        // negotiation ladder uses only modes the endpoint actually
+        // supports (conservative legacy behavior until probed).
+        settings.decisionRoute.chatCapabilities ?? undefined
       );
       chatClient.freezeRoute(currentProviderConfigKey());
       decisionClient = chatClient;
@@ -1807,6 +1815,50 @@ export class ManagedBrowserAiToolService {
           await getDefaultBrowserTaskModule()
             .recordCursor({ taskId: awaitedResultRef.taskId ?? "", ...cursor })
             .catch(() => undefined);
+        },
+        // R01/D-FR-24: the OPTIONAL provider verifier — ONE bounded call
+        // per task (verifierCallsHard), consulted only when deterministic
+        // verification missed AND recovery is exhausted. It asks the SAME
+        // selected provider whether the GOAL is met given the fresh
+        // observation; the verdict is a strict JSON {verified, reason}.
+        verifyWithProvider: async (verifierInput) => {
+          try {
+            const verifierDecision = await decisionClient.decide(
+              {
+                schema_version: 1,
+                request_id: `verifier_${Math.random().toString(36).slice(2, 10)}`,
+                task_id: `verifier_${awaitedResultRef.taskId ?? "unknown"}`,
+                step_id: "verifier_1",
+                observation_id: "verifier_virtual",
+                page_revision: 1,
+                goal: `VERIFIER: was this goal COMPLETED? Answer decided with operation DONE if the goal is met, ESCALATE if it is not. Goal: ${verifierInput.goal.slice(0, 2_000)}`,
+                subgoal: `Fresh page: url=${verifierInput.url.slice(0, 500)}; title=${verifierInput.title.slice(0, 200)}; visibleText=${verifierInput.visibleText.slice(0, 1_000)}; extractedRows=${verifierInput.extracted.length}`,
+                constraints: [],
+                completion_criteria: [],
+                url: verifierInput.url,
+                title: verifierInput.title,
+                candidates: [],
+                recent_actions: [],
+                allowed_operations: ["DONE", "ESCALATE"],
+                deadline_ms: 8_000,
+              },
+              verifierInput.signal
+            );
+            if (verifierDecision.status === "decided") {
+              const verified = verifierDecision.action.operation === "DONE";
+              return {
+                verified,
+                reason: verified
+                  ? "provider_confirms_goal_met"
+                  : "provider_says_incomplete",
+              };
+            }
+            return null;
+          } catch {
+            // A verifier transport failure is honest "no verdict" — the
+            // partial stands, never a fabricated completion.
+            return null;
+          }
         },
         persistActionIntent: async (actionType) => {
           const { getDefaultBrowserTaskModule } = await import(

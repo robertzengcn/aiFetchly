@@ -33,6 +33,7 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
     chatDecisionModel: null,
     nativeProfile: null,
     requestTimeoutMs: null,
+    chatCapabilities: null,
   };
   if (raw == null || raw.trim() === "") {
     return fallback;
@@ -93,12 +94,31 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
       record.requestTimeoutMs > 0
         ? Math.min(Math.floor(record.requestTimeoutMs), 10_000)
         : null;
+    // R01/D-FR-18: the probed chat OUTPUT capabilities — booleans only
+    // when BOTH flags are valid booleans; anything else is unprobed.
+    let chatCapabilities:
+      | { structuredJsonSchema: boolean; forcedToolDecision: boolean }
+      | null = null;
+    const rawCaps = record.chatCapabilities;
+    if (typeof rawCaps === "object" && rawCaps !== null) {
+      const caps = rawCaps as Record<string, unknown>;
+      if (
+        typeof caps.structuredJsonSchema === "boolean" &&
+        typeof caps.forcedToolDecision === "boolean"
+      ) {
+        chatCapabilities = {
+          structuredJsonSchema: caps.structuredJsonSchema,
+          forcedToolDecision: caps.forcedToolDecision,
+        };
+      }
+    }
     return {
       version: 1,
       mode,
       chatDecisionModel,
       nativeProfile: mode === "native_profile" ? nativeProfile : null,
       requestTimeoutMs,
+      chatCapabilities,
     };
   } catch {
     return fallback;
@@ -161,6 +181,11 @@ export interface ManagedBrowserPreferencePatch {
       readonly apiKeyRef: "chat" | "none";
     } | null;
     readonly requestTimeoutMs?: number | null;
+    /** R01/D-FR-18: probed chat output capabilities (settings probe). */
+    readonly chatCapabilities?: {
+      readonly structuredJsonSchema: boolean;
+      readonly forcedToolDecision: boolean;
+    } | null;
   };
 }
 
@@ -373,6 +398,11 @@ export class ManagedBrowserSettingsModule {
               ? null
               : Math.min(Math.floor(patchRoute.requestTimeoutMs), 10_000)
             : current.requestTimeoutMs,
+        // R01/D-FR-18: probed chat output capabilities ride the patch.
+        chatCapabilities:
+          patchRoute.chatCapabilities !== undefined
+            ? patchRoute.chatCapabilities
+            : current.chatCapabilities,
       };
       writes.push(
         this.writeStoredValue(

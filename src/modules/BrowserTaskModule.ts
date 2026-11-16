@@ -65,6 +65,8 @@ export class BrowserTaskModule extends BaseModule {
     readonly userInterventionCount?: number;
     /** N01/D-AC-08: provider-reported token usage for the decisions. */
     readonly decisionTokens?: number;
+    /** R01/D-FR-24: the optional provider verifier's call count. */
+    readonly verifierCalls?: number;
   }): Promise<void> {
     const model = await this.getModel();
     // F07: MERGE with the existing cursor — counters a caller omits keep

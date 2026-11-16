@@ -210,6 +210,41 @@
           {{ t("managedBrowser.settings.native_profile_incomplete") }}
         </p>
       </template>
+      <!-- R01/PRD §7: the connection test reports the three decision
+           capabilities SEPARATELY — a passing chat test does not certify
+           verified JSON Schema, and neither certifies native decisions. -->
+      <div class="d-flex align-center ga-3 flex-wrap mt-3">
+        <v-btn
+          size="small"
+          variant="outlined"
+          data-testid="mb-decision-probe-btn"
+          :loading="probeInFlight"
+          @click="onProbeCapabilities"
+        >
+          {{ t("managedBrowser.settings.decision_probe_btn") || "Test decision capabilities" }}
+        </v-btn>
+        <span class="text-caption text-grey-darken-1">
+          {{ t("managedBrowser.settings.decision_probe_hint") || "Probes chat, verified JSON Schema, and forced tool output separately." }}
+        </span>
+      </div>
+      <ul
+        v-if="probeResult !== null"
+        class="text-caption mt-1"
+        data-testid="mb-decision-probe-result"
+      >
+        <li>
+          {{ t("managedBrowser.settings.decision_probe_chat") || "Chat" }}:
+          {{ probeResult.chat ? t("managedBrowser.settings.decision_probe_ok") : t("managedBrowser.settings.decision_probe_fail") }}
+        </li>
+        <li>
+          {{ t("managedBrowser.settings.decision_probe_structured") || "Verified JSON Schema" }}:
+          {{ probeResult.structuredJsonSchema ? t("managedBrowser.settings.decision_probe_ok") : t("managedBrowser.settings.decision_probe_fail") }}
+        </li>
+        <li>
+          {{ t("managedBrowser.settings.decision_probe_tool") || "Forced tool call" }}:
+          {{ probeResult.forcedToolDecision ? t("managedBrowser.settings.decision_probe_ok") : t("managedBrowser.settings.decision_probe_fail") }}
+        </li>
+      </ul>
     </div>
 
     <div class="d-flex align-center ga-3 flex-wrap mt-2">
@@ -443,6 +478,7 @@ import {
   getEffectiveBrowserSettings,
   issueClearConfirmation,
   onManagedBrowserCacheProgress,
+  probeBrowserDecisionCapabilities,
   updateBrowserPreferences,
 } from "@/views/api/managedBrowser";
 import type {
@@ -470,6 +506,23 @@ const parallelAgentsEnabled = ref(true);
 const browserDecisionEnabled = ref(true);
 // N09/design 5.3: the decision route (follow_chat default; inert native).
 const decisionRouteMode = ref<"follow_chat" | "native_profile">("follow_chat");
+// R01/PRD §7: the decision-capability probe (three separate verdicts).
+const probeInFlight = ref(false);
+const probeResult = ref<Awaited<
+  ReturnType<typeof probeBrowserDecisionCapabilities>
+> | null>(null);
+
+async function onProbeCapabilities(): Promise<void> {
+  probeInFlight.value = true;
+  try {
+    probeResult.value = await probeBrowserDecisionCapabilities();
+  } catch (error) {
+    console.error("[ManagedBrowserSettingsPanel] capability probe failed:", error);
+    probeResult.value = null;
+  } finally {
+    probeInFlight.value = false;
+  }
+}
 const chatDecisionModel = ref("");
 const nativeBaseUrl = ref("");
 const nativeModel = ref("");

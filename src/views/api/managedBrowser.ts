@@ -30,6 +30,7 @@ import {
   MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
   MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
   MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
+  MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_RESUME,
   BROWSER_TASK_STOP,
@@ -188,9 +189,34 @@ export async function updateBrowserPreferences(patch: {
       apiKeyRef: "chat" | "none";
     } | null;
     requestTimeoutMs?: number | null;
+    /** R01/D-FR-18: probed chat output capabilities. */
+    chatCapabilities?: {
+      structuredJsonSchema: boolean;
+      forcedToolDecision: boolean;
+    } | null;
   };
 }): Promise<EffectiveManagedBrowserSettings> {
   return await windowInvoke(MANAGED_BROWSER_UPDATE_SETTINGS, patch);
+}
+
+/** R01/PRD §7: the per-capability probe verdicts (reported separately). */
+export interface BrowserDecisionProbeResult {
+  readonly chat: boolean;
+  readonly structuredJsonSchema: boolean;
+  readonly forcedToolDecision: boolean;
+  readonly structuredError: string | null;
+  readonly forcedToolError: string | null;
+}
+
+/**
+ * R01/D-FR-18: run the three decision-capability probes against the
+ * user's chat endpoint and persist the flags on the decision route.
+ */
+export async function probeBrowserDecisionCapabilities(): Promise<BrowserDecisionProbeResult> {
+  return await windowInvoke(
+    MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
+    {}
+  ) as BrowserDecisionProbeResult;
 }
 
 export async function getCacheStatus(input: {

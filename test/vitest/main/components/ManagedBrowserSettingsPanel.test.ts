@@ -7,6 +7,7 @@ const DEFAULT_DECISION_ROUTE = {
   chatDecisionModel: null,
   nativeProfile: null,
   requestTimeoutMs: null,
+    chatCapabilities: null,
 };
 import { flushPromises, mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
@@ -53,6 +54,13 @@ const apiMocks = vi.hoisted(() => ({
   ),
   clearCache: vi.fn(async (): Promise<unknown> => null),
   onManagedBrowserCacheProgress: vi.fn((): (() => void) => () => undefined),
+  probeBrowserDecisionCapabilities: vi.fn(async (): Promise<unknown> => ({
+    chat: true,
+    structuredJsonSchema: true,
+    forcedToolDecision: false,
+    structuredError: null,
+    forcedToolError: "tool_choice rejected",
+  })),
 }));
 vi.mock("@/views/api/managedBrowser", () => apiMocks);
 
@@ -72,6 +80,13 @@ const i18n = createI18n({
           decision_route_native: "Native profile (advanced)",
           decision_route_model_override: "Decision model override",
           decision_route_model_hint: "optional real model id",
+          decision_probe_btn: "Test decision capabilities",
+          decision_probe_hint: "Probes chat, verified JSON Schema, and forced tool output separately.",
+          decision_probe_chat: "Chat",
+          decision_probe_structured: "Verified JSON Schema",
+          decision_probe_tool: "Forced tool call",
+          decision_probe_ok: "supported",
+          decision_probe_fail: "not supported",
           native_profile_url: "Native endpoint (https://)",
           native_profile_model: "Native model",
           native_profile_credential: "Credential",
@@ -635,5 +650,24 @@ describe("ManagedBrowserSettingsPanel session settings (G06)", () => {
     const calls = apiMocks.updateBrowserPreferences.mock
       .calls as Array<[{ maxConcurrentSessions?: number }]>;
     expect(calls.at(-1)![0].maxConcurrentSessions).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R01/PRD §7: the decision-capability probe reports the three verdicts
+// SEPARATELY in the panel.
+// ---------------------------------------------------------------------------
+describe("ManagedBrowserSettingsPanel decision capability probe (R01)", () => {
+  it("renders the three probe verdicts after the probe runs", async () => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper.find("[data-testid='mb-decision-probe-btn']").trigger("click");
+    await flushPromises();
+    expect(apiMocks.probeBrowserDecisionCapabilities).toHaveBeenCalled();
+    const items = wrapper.findAll("[data-testid='mb-decision-probe-result'] li");
+    expect(items).toHaveLength(3);
+    expect(items[0].text()).toContain("Chat: supported");
+    expect(items[1].text()).toContain("Verified JSON Schema: supported");
+    expect(items[2].text()).toContain("Forced tool call: not supported");
   });
 });

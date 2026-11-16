@@ -762,6 +762,10 @@ export const MANAGED_BROWSER_BATCH_CONFIRM_REQUEST =
   "managed-browser:batch-confirm-request";
 export const MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM =
   "managed-browser:submit-batch-confirm";
+// R01/D-FR-18: the settings connection probe — three separate probes
+// (chat / verified JSON Schema / forced tool) reported independently.
+export const MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES =
+  "managed-browser:probe-decision-capabilities";
 // PRD C-FR-04: renderer-only task control (user actions; no model tool).
 export const BROWSER_TASK_PAUSE = "browser-task:pause";
 export const BROWSER_TASK_TAKE_CONTROL = "browser-task:take-control";

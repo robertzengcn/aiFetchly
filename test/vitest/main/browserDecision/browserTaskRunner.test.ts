@@ -2122,3 +2122,75 @@ describe("BrowserTaskRunner V02 SIGN_IN blocking handoff", () => {
     expect(result.reason).toBe("sign_in_handoff");
   });
 });
+
+// ---------------------------------------------------------------------------
+// R01/D-FR-24: the OPTIONAL provider verifier — one bounded call, consulted
+// only when deterministic verification missed AND recovery is exhausted.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner provider verifier (R01/D-FR-24)", () => {
+  it("an exhausted recovery with a confirming verifier completes as verified_by_provider_verifier", async () => {
+    let verifierCalls = 0;
+    // Two unverified DONEs exhaust the recovery budget (clamped min 1) →
+    // the verifier is the last gate before the honest partial.
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      verifyWithProvider: async () => {
+        verifierCalls++;
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_ver1",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(verifierCalls).toBe(1);
+    expect(result.status).toBe("completed");
+    expect(result.reason).toBe("verified_by_provider_verifier");
+    expect(result.evidence).toContain("verifier_used:1");
+  });
+
+  it("a rejecting verifier keeps the honest partial with the verifier evidence", async () => {
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      verifyWithProvider: async () => ({
+        verified: false,
+        reason: "provider_says_incomplete",
+      }),
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_ver2",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+    expect(result.evidence).toContain("verifier:provider_says_incomplete");
+  });
+
+  it("no verifier dep preserves the plain partial (bare fakes unchanged)", async () => {
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_ver3",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      makeRunnerDeps([doneEntry(), doneEntry()])
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+    expect(result.evidence.some((e) => e.startsWith("verifier"))).toBe(false);
+  });
+});

@@ -25,6 +25,7 @@ import {
   MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
   MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
   MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
+  MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_TAKE_CONTROL,
   BROWSER_TASK_RESUME,
@@ -552,6 +553,50 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS,
     managedBrowserGetEffectiveSettingsInputSchema,
     async () => browserModule.getEffectiveSettingsForRenderer()
+  );
+
+  // R01/D-FR-18: the decision-capability probe — THREE separate probes
+  // (chat round-trip / verified JSON Schema / forced tool) reported
+  // independently; the probed flags persist on decisionRoute so the chat
+  // decision client negotiates only supported output modes.
+  registerValidatedHandler(
+    MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
+    managedBrowserGetEffectiveSettingsInputSchema,
+    async () => {
+      const { probeChatDecisionCapabilities } = await import(
+        "@/service/browserDecision/ChatCapabilityProbe"
+      );
+      const { AiChatApi } = await import("@/api/aiChatApi");
+      const api = new AiChatApi();
+      const result = await probeChatDecisionCapabilities(
+        async (request, signal) => {
+          return (await api.openAIChatCompletion(
+            {
+              messages: request.messages as never,
+              ...(request.model ? { model: request.model } : {}),
+              response_format: request.response_format as never,
+              ...(request.tools ? { tools: request.tools as never } : {}),
+              ...(request.tool_choice
+                ? { tool_choice: request.tool_choice as never }
+                : {}),
+              stream: false,
+              temperature: request.temperature,
+            },
+            { signal }
+          )) as never;
+        }
+      );
+      // Persist the probed flags so the runner's chat client uses them.
+      await new ManagedBrowserSettingsModule().updatePreferences({
+        decisionRoute: {
+          chatCapabilities: {
+            structuredJsonSchema: result.structuredJsonSchema,
+            forcedToolDecision: result.forcedToolDecision,
+          },
+        },
+      });
+      return result;
+    }
   );
 
   registerValidatedHandler(

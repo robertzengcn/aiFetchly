@@ -143,6 +143,22 @@ export interface RunnerDeps {
       }
   >;
   /**
+   * R01/D-FR-24: the OPTIONAL provider verifier — one bounded call per
+   * task (verifierCallsHard), consulted only when the deterministic
+   * criteria MISS and the recovery budget is exhausted. The verifier
+   * answers whether the GOAL is met given the fresh observation; a null
+   * verdict (transport failure, unclear answer) keeps the partial. The
+   * call is separately counted in the persisted cursor.
+   */
+  readonly verifyWithProvider?: (input: {
+    readonly goal: string;
+    readonly url: string;
+    readonly title: string;
+    readonly visibleText: string;
+    readonly extracted: readonly unknown[];
+    readonly signal: AbortSignal;
+  }) => Promise<{ verified: boolean; reason: string } | null>;
+  /**
    * N02/D-FR-20/21: resolve FILL text from trusted plan bindings /
    * bounded helper; null when nothing trustworthy applies.
    */
@@ -161,6 +177,8 @@ export interface RunnerDeps {
     leafSteps: number;
     decisionRequests: number;
     recoveryCalls: number;
+    /** R01/D-FR-24: the optional provider verifier's bounded call count. */
+    verifierCalls?: number;
     activeTimeMs?: number;
   }) => Promise<void>;
   readonly persistActionIntent?: (actionType: string) => Promise<void>;
@@ -243,6 +261,8 @@ export class BrowserTaskRunner {
   /** N01/D-AC-08: summed provider-reported token usage (chat route). */
   private tokenUsage = 0;
   private recoveryCalls = 0;
+  /** R01/D-FR-24: the optional provider verifier's own bounded counter. */
+  private verifierCalls = 0;
   private lastFailureKey: string | null = null;
   private consecutiveEquivalentFailures = 0;
   private readonly maxEquivalentFailures: number;
@@ -287,6 +307,17 @@ export class BrowserTaskRunner {
   }
 
   public async run(): Promise<BrowserTaskResult> {
+    // R01/design §6.3 (ACCEPTED SUBSTITUTE, documented): the design's
+    // state machine (`reconciling` / `verifying` / `awaiting_approval`
+    // micro-states) is implemented as ONE bounded while-loop with
+    // explicit safe points instead of separate states. Every transition
+    // the design assigns to those states happens at a checkpoint here:
+    // reconciling → the recovery table + pendingSubgoal re-decision;
+    // verifying → the fresh-observation verifyCompletion block (and the
+    // optional bounded provider verifier, D-FR-24); awaiting_approval →
+    // the F06 in-job approval wait and awaitHandoff. Unknown effect still
+    // terminates (never an unbounded reconcile). This is the accepted
+    // substitute — do not "fix" it into a state machine without a reason.
     const control = this.deps.control ?? getDefaultAgentTaskControlService();
     control.register(this.taskId, this.input.conversationId);
     const gate = control.getGate(this.taskId);
@@ -584,6 +615,48 @@ export class BrowserTaskRunner {
           // success. The verification MISS goes into the next decision
           // input (pendingSubgoal) so the model can close the gap.
           if (this.recoveryCalls >= this.budget.recoveryCalls) {
+            // R01/D-FR-24: the OPTIONAL provider verifier — one bounded
+            // call, consulted only when deterministic verification missed
+            // AND the recovery budget is exhausted. Its verdict can
+            // complete the task (verified_by_provider_verifier) or leave
+            // the honest partial; the call is separately counted.
+            if (
+              this.deps.verifyWithProvider &&
+              this.verifierCalls < limitsForRoute(this.deps.route).verifierCallsHard
+            ) {
+              this.verifierCalls++;
+              const verdict = await this.deps.verifyWithProvider({
+                goal: this.input.goal,
+                url: observation.url,
+                title: observation.title,
+                visibleText: observation.visibleText.slice(0, 2_000),
+                extracted,
+                signal,
+              });
+              if (signal.aborted) {
+                return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+              }
+              if (verdict !== null && verdict.verified) {
+                return this.terminal(
+                  "completed",
+                  "verified_by_provider_verifier",
+                  [...evidence, `verifier:${verdict.reason}`, "verifier_used:1"],
+                  extracted,
+                  observation
+                );
+              }
+              return this.terminal(
+                "partial",
+                "verification_failed_budget_exhausted",
+                [
+                  ...evidence,
+                  ...(verdict !== null ? [`verifier:${verdict.reason}`] : []),
+                  "verifier_used:1",
+                ],
+                extracted,
+                observation
+              );
+            }
             return this.terminal("partial", "verification_failed_budget_exhausted", evidence, extracted, observation);
           }
           this.recoveryCalls++;
@@ -1602,6 +1675,9 @@ export class BrowserTaskRunner {
           leafSteps: this.leafSteps,
           decisionRequests: this.decisionRequests,
           recoveryCalls: this.recoveryCalls,
+          // R01/D-FR-24: the verifier's own bounded counter rides the
+          // cursor for full per-task accounting.
+          verifierCalls: this.verifierCalls,
           activeTimeMs: control.activeTimeMs(this.taskId),
         })
         .catch(() => undefined);
