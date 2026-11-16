@@ -98,8 +98,45 @@ export function fillLoginPageFunction(input: {
   filledFields?: { username: string; password: string };
   usernameOnlySubmitted?: boolean;
 } {
-  const isVisible = (el: Element): boolean => {
+  // B08: realm-safe type checks — a same-origin iframe's elements come
+  // from a DIFFERENT DOM realm; `el instanceof topWindow.Element` fails
+  // for them. Every check consults the element's own realm.
+  const isElementOfOwnRealm = (el: unknown): el is Element => {
     if (!(el instanceof Element)) return false;
+    const frameElement = el as Element & {
+      ownerDocument?: { defaultView?: unknown };
+    };
+    const realmElement = (frameElement.ownerDocument?.defaultView as
+      | { Element?: unknown }
+      | undefined)?.Element;
+    return (
+      realmElement === undefined ||
+      el instanceof (realmElement as typeof Element)
+    );
+  };
+  const isNodeOfOwnRealm = (el: unknown): el is Node => {
+    if (!(el instanceof Node)) return false;
+    const frameNode = el as Node & { ownerDocument?: { defaultView?: unknown } };
+    const realmNode = (frameNode.ownerDocument?.defaultView as
+      | { Node?: unknown }
+      | undefined)?.Node;
+    return realmNode === undefined || el instanceof (realmNode as typeof Node);
+  };
+  const isHtmlInputOfOwnRealm = (el: unknown): el is HTMLInputElement => {
+    if (!(el instanceof HTMLInputElement)) return false;
+    const frameEl = el as HTMLInputElement & {
+      ownerDocument?: { defaultView?: unknown };
+    };
+    const realmInput = (frameEl.ownerDocument?.defaultView as
+      | { HTMLInputElement?: unknown }
+      | undefined)?.HTMLInputElement;
+    return (
+      realmInput === undefined ||
+      el instanceof (realmInput as typeof HTMLInputElement)
+    );
+  };
+  const isVisible = (el: Element): boolean => {
+    if (!isElementOfOwnRealm(el)) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return false;
     // A-FR-16: visibility is judged by the element's OWN frame window —
@@ -117,7 +154,7 @@ export function fillLoginPageFunction(input: {
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     const top = doc.elementFromPoint(cx, cy);
-    return top === el || (top instanceof Node && el.contains(top));
+    return top === el || (isNodeOfOwnRealm(top) && el.contains(top));
   };
   const hostAllowed = (): boolean =>
     input.allowedDomainSuffixes.some(
@@ -141,7 +178,7 @@ export function fillLoginPageFunction(input: {
     }
   };
   const passwordSafe = (pw: HTMLInputElement): boolean =>
-    pw instanceof HTMLInputElement &&
+    isHtmlInputOfOwnRealm(pw) &&
     pw.type === "password" &&
     !pw.disabled &&
     !pw.readOnly &&
@@ -191,9 +228,18 @@ export function fillLoginPageFunction(input: {
     // Focus checks after each char would be per-char; the bounded version
     // verifies focus, clears, enters via execCommand (real input events
     // fire), and re-verifies the final value + that focus never moved.
-    const selection = (el as unknown as { setSelectionRange?: (s: number, e: number) => void })
-      .setSelectionRange;
-    selection?.call(el, el.value.length, el.value.length);
+    // B08: setSelectionRange exists on text-like inputs only — email/tel
+    // inputs may throw in Chromium; typeof guard before the call.
+    const selection = (
+      el as unknown as { setSelectionRange?: (s: number, e: number) => void }
+    ).setSelectionRange;
+    if (typeof selection === "function") {
+      try {
+        selection.call(el, el.value.length, el.value.length);
+      } catch {
+        // Cursor placement is best-effort — typing proceeds without it.
+      }
+    }
     // Guard: environments without execCommand (or engines that refuse
     // insertText) fail the fallback honestly — the caller clears/aborts.
     if (typeof doc.execCommand !== "function") {
@@ -387,7 +433,18 @@ export function fillLoginPageFunction(input: {
       return { ok: false, reasonCode: "two_step_no_transition" };
     }
     only.form.setAttribute("data-mb-submitted", "1");
-    setNativeValue(only.usernameInput, input.username);
+    // B08: the username-only branch uses the SAME verified fill — native
+    // setter, then the focus-verified keystroke fallback; a mismatch
+    // CLEARS the field and refuses (never submits a partially filled
+    // username forward).
+    if (!setValueWithFallback(only.usernameInput, input.username)) {
+      setNativeValue(only.usernameInput, "");
+      return {
+        ok: false,
+        reasonCode: "fill_readback_mismatch",
+        stamps: [stampOf(only.usernameInput)],
+      };
+    }
     only.form.requestSubmit();
     return {
       ok: true,
@@ -540,7 +597,7 @@ export function fillLoginPageFunction(input: {
     if (before === undefined) {
       // F09: newly inserted input since the snapshot — a potential
       // recipient injected by a page event handler.
-      if (el instanceof HTMLInputElement && el.value.length > 0) {
+      if (isHtmlInputOfOwnRealm(el) && el.value.length > 0) {
         tampered.push(el);
       }
       continue;
@@ -549,7 +606,7 @@ export function fillLoginPageFunction(input: {
     const isChosenUsername = el === chosen.usernameInput;
     const isChosenPassword = el === pw;
     if (isChosenUsername || isChosenPassword) continue;
-    if (el instanceof HTMLInputElement) {
+    if (isHtmlInputOfOwnRealm(el)) {
       tampered.push(el);
     }
   }
@@ -565,7 +622,7 @@ export function fillLoginPageFunction(input: {
       continue;
     }
     if (
-      (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) &&
+      (isHtmlInputOfOwnRealm(el) || el instanceof HTMLTextAreaElement) &&
       el.value === input.password
     ) {
       tampered.push(el as HTMLInputElement);
@@ -588,25 +645,36 @@ export function fillLoginPageFunction(input: {
   pw.setAttribute("data-mb-cred", "1");
 
   // --- Submit through the password field's own form (A-FR-18) ----------------
-  const submit = (): void => {
+  // B08: focus checks consult the element's OWN document (frame fields),
+  // and a FAILED focus check clears the credential and refuses — the
+  // enclosing result must never report ok:true with populated fields.
+  const submit = (): boolean => {
+    const pwDoc = pw.ownerDocument ?? document;
     if (input.submitVia === "enter" || !pw.form) {
       // Focus checks around submission (A-FR-19); requestSubmit is the
       // trusted-path equivalent of pressing Enter inside the field.
       pw.focus();
-      if (document.activeElement !== pw) {
-        return; // focus stolen — refuse rather than submit blind
+      if (pwDoc.activeElement !== pw) {
+        return false; // focus stolen — refuse rather than submit blind
       }
     }
     if (pw.form) {
       pw.form.requestSubmit();
     } else {
+      const frameWin = pw.ownerDocument?.defaultView ?? window;
       pw.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+        new (frameWin as unknown as { KeyboardEvent: typeof KeyboardEvent })
+          .KeyboardEvent("keydown", { key: "Enter", bubbles: true })
       );
     }
+    return true;
   };
-  submit();
-  if (document.activeElement === pw) {
+  const submitted = submit();
+  if (!submitted) {
+    clearTouched();
+    return { ok: false, reasonCode: "submit_focus_lost", stamps };
+  }
+  if (pw.ownerDocument?.activeElement === pw) {
     pw.blur();
   }
 
