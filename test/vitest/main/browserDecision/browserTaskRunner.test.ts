@@ -2124,6 +2124,71 @@ describe("BrowserTaskRunner V02 SIGN_IN blocking handoff", () => {
 });
 
 // ---------------------------------------------------------------------------
+// B05/D-FR-24: the verifier NEVER overrides a FAILED EXPLICIT criterion —
+// semantic verification exists only for tasks with NO explicit criteria.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner verifier scope (B05)", () => {
+  it("a failed explicit URL criterion stays unverified even with an affirmative verifier", async () => {
+    let verifierCalls = 0;
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      verifyWithProvider: async () => {
+        verifierCalls++;
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b05a",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        // An EXPLICIT criterion the page does NOT satisfy.
+        completionCriteria: [{ kind: "url_contains", value: "/no-such-page" }],
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+    // The verifier was never consulted — deterministic failure is final.
+    expect(verifierCalls).toBe(0);
+    expect(result.evidence.some((e) => e.startsWith("verifier"))).toBe(false);
+  });
+
+  it("the verifier verdict is discarded when a resume happened during verification", async () => {
+    const control = new AgentTaskControlService();
+    let verifierCalls = 0;
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      control,
+      verifyWithProvider: async () => {
+        verifierCalls++;
+        // The user pauses+resumes DURING the verifier await.
+        control.beginIntervention(runner.taskId, "user_paused");
+        control.resume(runner.taskId);
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b05b",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(verifierCalls).toBe(1);
+    // The verdict was discarded — the loop continues (budget exhausted →
+    // the next DONE settles the honest partial).
+    expect(result.status).toBe("partial");
+    expect(result.evidence).toContain("verifier_discarded_after_resume");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R01/D-FR-24: the OPTIONAL provider verifier — one bounded call, consulted
 // only when deterministic verification missed AND recovery is exhausted.
 // ---------------------------------------------------------------------------

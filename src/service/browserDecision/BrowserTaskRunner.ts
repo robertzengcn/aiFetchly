@@ -645,26 +645,57 @@ export class BrowserTaskRunner {
           // success. The verification MISS goes into the next decision
           // input (pendingSubgoal) so the model can close the gap.
           if (this.recoveryCalls >= this.budget.recoveryCalls) {
-            // R01/D-FR-24: the OPTIONAL provider verifier — one bounded
-            // call, consulted only when deterministic verification missed
-            // AND the recovery budget is exhausted. Its verdict can
-            // complete the task (verified_by_provider_verifier) or leave
-            // the honest partial; the call is separately counted.
+            // B05/D-FR-24: the OPTIONAL provider verifier answers SEMANTIC
+            // completion ONLY — a FAILED EXPLICIT deterministic criterion
+            // (URL/element/text/extract) is unverified, full stop; the
+            // verifier is consulted only when the task declared NO
+            // explicit criteria (nothing deterministic to fail).
+            const hasExplicitCriteria =
+              (this.input.completionCriteria ?? []).length > 0;
             if (
+              !hasExplicitCriteria &&
               this.deps.verifyWithProvider &&
               this.verifierCalls < limitsForRoute(this.deps.route).verifierCallsHard
             ) {
               this.verifierCalls++;
-              const verdict = await this.deps.verifyWithProvider({
-                goal: this.input.goal,
-                url: observation.url,
-                title: observation.title,
-                visibleText: observation.visibleText.slice(0, 2_000),
-                extracted,
-                signal,
-              });
+              // B05: the verifier call carries an ENFORCED desktop
+              // deadline capped by the REMAINING active runtime — the
+              // 8s body field alone never bounded the desktop call.
+              const remainingActiveMs = Math.max(
+                1,
+                this.budget.activeRuntimeMs - control.activeTimeMs(this.taskId)
+              );
+              const verifierController = new AbortController();
+              const onVerifierAbort = (): void => verifierController.abort();
+              signal.addEventListener("abort", onVerifierAbort, { once: true });
+              const verifierTimer = setTimeout(
+                () => verifierController.abort(),
+                Math.min(8_000, remainingActiveMs)
+              );
+              let verdict: { verified: boolean; reason: string } | null = null;
+              try {
+                verdict = await this.deps.verifyWithProvider({
+                  goal: this.input.goal,
+                  url: observation.url,
+                  title: observation.title,
+                  visibleText: observation.visibleText.slice(0, 2_000),
+                  extracted,
+                  signal: verifierController.signal,
+                });
+              } finally {
+                clearTimeout(verifierTimer);
+                signal.removeEventListener("abort", onVerifierAbort);
+              }
               if (signal.aborted) {
                 return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+              }
+              // B05/C-FR-06: a Pause+Resume DURING verification invalidates
+              // the evidence — held work is discarded on resume, so a
+              // verdict gathered across the resume never completes.
+              const generationAfterVerifier = control.getResumeGeneration(this.taskId);
+              if (generationAfterVerifier > generationBeforeDecide) {
+                evidence.push("verifier_discarded_after_resume");
+                continue;
               }
               if (verdict !== null && verdict.verified) {
                 return this.terminal(
