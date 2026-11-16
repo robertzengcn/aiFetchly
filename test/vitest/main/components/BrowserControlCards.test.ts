@@ -13,6 +13,7 @@ const invokeMock = vi.fn();
 const credentialListeners = new Set<(request: unknown) => void>();
 const pickerListeners = new Set<(request: unknown) => void>();
 const siteConfirmListeners = new Set<(request: unknown) => void>();
+const batchConfirmListeners = new Set<(request: unknown) => void>();
 
 vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/views/api/managedBrowser")>();
@@ -33,6 +34,14 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
     onManagedBrowserSiteConfirmRequest: (cb: (request: unknown) => void) => {
       siteConfirmListeners.add(cb);
       return () => siteConfirmListeners.delete(cb);
+    },
+    onManagedBrowserBatchConfirmRequest: (cb: (request: unknown) => void) => {
+      batchConfirmListeners.add(cb);
+      return () => batchConfirmListeners.delete(cb);
+    },
+    submitBrowserBatchConfirm: (input: unknown) => {
+      invokeMock("MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM", input);
+      return Promise.resolve({ accepted: true });
     },
     submitBrowserSiteConfirm: (input: unknown) => {
       invokeMock("MANAGED_BROWSER_SUBMIT_SITE_CONFIRM", input);
@@ -142,11 +151,18 @@ function emitSiteConfirm(request: unknown): void {
   }
 }
 
+function emitBatchConfirm(request: unknown): void {
+  for (const listener of batchConfirmListeners) {
+    listener(request);
+  }
+}
+
 beforeEach(() => {
   batchListeners.clear();
   credentialListeners.clear();
   pickerListeners.clear();
   siteConfirmListeners.clear();
+  batchConfirmListeners.clear();
   invokeMock.mockClear();
 });
 
@@ -708,5 +724,79 @@ describe("BrowserTaskBatchCard resume-with-instructions dialog (V01/C-FR-04)", (
       "BROWSER_TASK_RESUME",
       expect.objectContaining({ taskId: "batch_v01:0", instructions: "" })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W08/M-FR-04: batch confirmation card — the batch preview renders for the
+// owning conversation only; confirming starts, denying refuses.
+// ---------------------------------------------------------------------------
+
+describe("BrowserControlCards batch confirm (W08/M-FR-04)", () => {
+  function mountWith(conversationId: string | null) {
+    return mount(BrowserControlCards, {
+      props: { conversationId },
+      global: { plugins: [i18n] },
+    });
+  }
+
+  const confirmRequest = {
+    requestId: "bconfirm-1",
+    conversationId: "conv-a",
+    tasks: [
+      { index: 0, goal: "Find supplier prices", site: "supplier-a.test" },
+      { index: 1, goal: "Check competitor page", site: null },
+    ],
+    createdAt: Date.now(),
+  };
+
+  it("mounts the confirm card for the owning conversation with the task preview", async () => {
+    const wrapper = mountWith("conv-a");
+    emitBatchConfirm(confirmRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserBatchConfirmCard" });
+    expect(card.exists()).toBe(true);
+    expect(card.props("tasks")).toHaveLength(2);
+    // Another conversation does not render it.
+    const wrapperOther = mountWith("conv-other");
+    expect(
+      wrapperOther.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
+    ).toBe(false);
+  });
+
+  it("confirm submits confirmed true and clears the card", async () => {
+    const wrapper = mountWith("conv-a");
+    emitBatchConfirm(confirmRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserBatchConfirmCard" });
+    card.vm.$emit("confirmed");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM", {
+      requestId: "bconfirm-1",
+      conversationId: "conv-a",
+      confirmed: true,
+      cancelled: false,
+    });
+    expect(
+      wrapper.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
+    ).toBe(false);
+  });
+
+  it("deny submits cancelled and clears the card", async () => {
+    const wrapper = mountWith("conv-a");
+    emitBatchConfirm(confirmRequest);
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserBatchConfirmCard" });
+    card.vm.$emit("denied");
+    await flushPromises();
+    expect(invokeMock).toHaveBeenCalledWith("MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM", {
+      requestId: "bconfirm-1",
+      conversationId: "conv-a",
+      confirmed: false,
+      cancelled: true,
+    });
+    expect(
+      wrapper.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
+    ).toBe(false);
   });
 });

@@ -4293,6 +4293,10 @@ export default {
   },
   browserTasks: {
     batchTitle: "并行浏览器任务",
+    batchConfirmTitle: "确认并行浏览器任务",
+    batchConfirmHint: "以下任务将各自在独立的浏览器会话中运行。",
+    batchConfirmStart: "开始任务",
+    batchConfirmDeny: "取消",
     resume_with_instructions: "附带指示恢复",
     resume_instructions_label: "指示（可选）",
     taskRunning: "运行中",

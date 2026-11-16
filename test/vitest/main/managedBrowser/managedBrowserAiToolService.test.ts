@@ -445,6 +445,36 @@ describe("GAP-01 resolved-target approval", () => {
     );
   });
 
+  // W08/M-FR-05: a CHILD agent runs headless — a consequential call does
+  // NOT throw approval_required (an unactionable error there); it returns
+  // the structured needs_user proposal for that task only. No approval
+  // card is published (there is no interactive card for a child).
+  it("a child agent gets a structured needs_user proposal instead of a throw", async () => {
+    const module = moduleWithObservation();
+    const service = makeService({ module });
+    const result = await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 4,
+        program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 4 }] },
+      },
+      { ...CTX, ownerAgentId: "agt-child-1" }
+    );
+    expect(result).toMatchObject({
+      status: "needs_user",
+      needs_user: {
+        type: "approval",
+        risk_class: "consequential_write",
+      },
+    });
+    expect(
+      String((result.needs_user as { proposed_action: string }).proposed_action)
+    ).toContain("Publish");
+    // The action never reached the module and no approval card fired.
+    expect(module.runActions).not.toHaveBeenCalled();
+    expect(module.notifyApprovalRequired).not.toHaveBeenCalled();
+  });
+
   it("attests expected fingerprints and executes on a DIGEST-MATCHING approval", async () => {
     const module = moduleWithObservation();
     const program = {

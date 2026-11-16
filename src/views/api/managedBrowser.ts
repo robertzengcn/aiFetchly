@@ -28,6 +28,8 @@ import {
   MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
   MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
   MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
+  MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+  MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_RESUME,
   BROWSER_TASK_STOP,
@@ -396,6 +398,43 @@ export function onManagedBrowserSiteConfirmRequest(
   return () => {
     window.api.removeListener(MANAGED_BROWSER_SITE_CONFIRM_REQUEST, handler);
   };
+}
+
+// ---------------------------------------------------------------------------
+// M-FR-04/W08: batch confirmation card — the batch preview (tasks + sites)
+// is confirmed BEFORE any session starts; the grant expires with the batch.
+// ---------------------------------------------------------------------------
+
+export interface BrowserBatchConfirmRequestEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly tasks: ReadonlyArray<{
+    readonly index: number;
+    readonly goal: string;
+    readonly site: string | null;
+  }>;
+  readonly createdAt: number;
+}
+
+export function onManagedBrowserBatchConfirmRequest(
+  callback: (request: BrowserBatchConfirmRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserBatchConfirmRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, handler);
+  };
+}
+
+export async function submitBrowserBatchConfirm(input: {
+  requestId: string;
+  conversationId: string;
+  confirmed: boolean;
+  cancelled: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM, input);
 }
 
 /** N07: live credential-card requests (no-account sign-in path). */

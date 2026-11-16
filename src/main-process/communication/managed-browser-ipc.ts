@@ -23,6 +23,8 @@ import {
   MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
   MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
   MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
+  MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+  MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_TAKE_CONTROL,
   BROWSER_TASK_RESUME,
@@ -43,12 +45,14 @@ import {
   browserCredentialSubmitSchema,
   accountPickerSubmitSchema,
   siteConfirmSubmitSchema,
+  batchConfirmSubmitSchema,
 } from "@/schemas/ipc/browserCredential";
 import {
   getCredentialCardWaitRegistry,
   getAccountPickerWaitRegistry,
   getSiteConfirmWaitRegistry,
 } from "@/service/browserLogin/BrowserCredentialLoginService";
+import { getBatchConfirmWaitRegistry } from "@/service/agentTools/runBrowserTasksTool";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import {
   listEligibleAccountsInputSchema,
@@ -174,6 +178,17 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       siteId: request.siteId,
       registrableDomain: request.registrableDomain,
       proposedDomains: request.proposedDomains,
+      createdAt: request.createdAt,
+    })
+  );
+
+  // M-FR-04/W08: the batch confirmation card — the batch preview streams
+  // to the owning conversation BEFORE any session starts.
+  getBatchConfirmWaitRegistry().setSink((request) =>
+    sendToRenderer(win, MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, {
+      requestId: request.requestId,
+      conversationId: request.conversationId,
+      tasks: request.tasks,
       createdAt: request.createdAt,
     })
   );
@@ -405,6 +420,25 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       entry.resolve({
         applied: !input.cancelled,
         domains: input.cancelled ? [] : input.domains,
+        cancelled: input.cancelled,
+      });
+      return { accepted: true };
+    }
+  );
+
+  registerValidatedHandler(
+    MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
+    batchConfirmSubmitSchema,
+    async (input) => {
+      const entry = getBatchConfirmWaitRegistry().consume({
+        requestId: input.requestId,
+        conversationId: input.conversationId,
+      });
+      if (!entry) {
+        return { accepted: false };
+      }
+      entry.resolve({
+        confirmed: input.confirmed && !input.cancelled,
         cancelled: input.cancelled,
       });
       return { accepted: true };

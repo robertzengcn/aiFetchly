@@ -448,3 +448,123 @@ describe("runBrowserTasks busy-account queueing (M-FR-06)", () => {
       expect(results[0]?.status).toBe("completed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// W08/M-FR-04: the batch confirmation card. The batch does NOT start until
+// the user confirms the listed tasks and sites; the grant is consumed by
+// the start and expires with the batch. Without a wired renderer sink the
+// gate auto-confirms (headless runs cannot block forever).
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks batch confirmation gate (W08/M-FR-04)", () => {
+  it("a refused confirmation starts no lanes and reports confirmed false", async () => {
+    const { getBatchConfirmWaitRegistry } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    const registry = getBatchConfirmWaitRegistry();
+    let runCalls = 0;
+    const fakeRunAgent = () => ({
+      runSync: async () => {
+        runCalls++;
+        return { status: "completed", output: {} } as never;
+      },
+    }) as never;
+    const wired: Array<unknown> = [];
+    registry.setSink((request) => {
+      wired.push(request);
+      // The user DENIES the batch.
+      request.resolve({ confirmed: false, cancelled: true });
+    });
+    try {
+      const { batchId, results, confirmed } = await runBrowserTasks(
+        [{ goal: "scrape site A", start_url: "https://site-a.test/x" }],
+        1,
+        "conv-deny",
+        new AbortController().signal,
+        { runAgent: fakeRunAgent }
+      );
+      expect(confirmed).toBe(false);
+      expect(results).toEqual([]);
+      expect(runCalls).toBe(0);
+      // The preview listed the task with its site.
+      expect(wired).toHaveLength(1);
+      const preview = wired[0] as { tasks: Array<{ goal: string; site: string | null }> };
+      expect(preview.tasks[0].goal).toBe("scrape site A");
+      expect(preview.tasks[0].site).toBe("site-a.test");
+      expect(batchId).toMatch(/^batch_/);
+    } finally {
+      registry.setSink(null);
+    }
+  });
+
+  it("a confirmed confirmation starts the batch", async () => {
+    const { getBatchConfirmWaitRegistry } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    const registry = getBatchConfirmWaitRegistry();
+    const fakeRunAgent = () => ({
+      runSync: async () => ({
+        status: "completed",
+        agentTaskId: "agt-1",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 1,
+        sourceUrls: [],
+        output: {
+          status: "completed",
+          summary: "done",
+          extracted: [],
+          final_url: null,
+          evidence: [],
+          needs_user: null,
+          user_interventions: [],
+        },
+      }),
+    }) as never;
+    registry.setSink((request) => {
+      request.resolve({ confirmed: true, cancelled: false });
+    });
+    try {
+      const { results, confirmed } = await runBrowserTasks(
+        [{ goal: "check site B", start_url: "https://site-b.test/" }],
+        1,
+        "conv-confirm",
+        new AbortController().signal,
+        { runAgent: fakeRunAgent }
+      );
+      expect(confirmed).toBeUndefined(); // undefined = ran normally
+      expect(results[0]?.status).toBe("completed");
+    } finally {
+      registry.setSink(null);
+    }
+  });
+
+  it("auto-confirms when no renderer sink is wired (headless run)", async () => {
+    const fakeRunAgent = () => ({
+      runSync: async () => ({
+        status: "completed",
+        agentTaskId: "agt-1",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 1,
+        sourceUrls: [],
+        output: {
+          status: "completed",
+          summary: "done",
+          extracted: [],
+          final_url: null,
+          evidence: [],
+          needs_user: null,
+          user_interventions: [],
+        },
+      }),
+    }) as never;
+    const { results } = await runBrowserTasks(
+      [{ goal: "no-renderer run" }],
+      1,
+      "conv-headless",
+      new AbortController().signal,
+      { runAgent: fakeRunAgent }
+    );
+    expect(results[0]?.status).toBe("completed");
+  });
+});

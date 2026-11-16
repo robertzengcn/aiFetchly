@@ -104,7 +104,12 @@ export async function runBrowserTasksForTool(
   conversationId: string,
   signal: AbortSignal,
   deps: RunBrowserTasksDeps = {}
-): Promise<{ batchId: string; results: BrowserBatchTaskResult[] }> {
+): Promise<{
+  batchId: string;
+  results: BrowserBatchTaskResult[];
+  /** M-FR-04: false when the user refused the batch confirmation card. */
+  confirmed?: boolean;
+}> {
   const { BrowserAiAvailabilityService } = await import(
     "@/service/browserDecision/BrowserAiAvailabilityService"
   );
@@ -222,19 +227,169 @@ export function abortTask(taskId: string): number {
   return 1;
 }
 
+// ---------------------------------------------------------------------------
+// M-FR-04/W08: the batch confirmation card. The batch does NOT start until
+// the user confirms the listed tasks and sites. The confirm grant is
+// consumed by the start and expires with the batch — nothing persists past
+// the run (M-FR-04: no standing routine-action consent).
+// ---------------------------------------------------------------------------
+
+export interface BatchConfirmTaskPreview {
+  readonly index: number;
+  readonly goal: string;
+  /** Registrable site the task will drive (null when goal-only). */
+  readonly site: string | null;
+}
+
+export interface PendingBatchConfirmRequest {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly tasks: readonly BatchConfirmTaskPreview[];
+  readonly resolve: (input: { confirmed: boolean; cancelled: boolean }) => void;
+  readonly createdAt: number;
+}
+
+const BATCH_CONFIRM_TTL_MS = 10 * 60_000;
+
+class BatchConfirmWaitRegistry {
+  private readonly pending = new Map<string, PendingBatchConfirmRequest>();
+  private sink: ((request: PendingBatchConfirmRequest) => void) | null = null;
+
+  /** Whether a renderer is wired — without one the card cannot be shown. */
+  public hasSink(): boolean {
+    return this.sink !== null;
+  }
+
+  public setSink(sink: ((request: PendingBatchConfirmRequest) => void) | null): void {
+    this.sink = sink;
+  }
+
+  public create(input: {
+    readonly conversationId: string;
+    readonly tasks: readonly BatchConfirmTaskPreview[];
+  }): {
+    readonly request: PendingBatchConfirmRequest;
+    readonly promise: Promise<{ confirmed: boolean; cancelled: boolean }>;
+  } {
+    let resolve!: PendingBatchConfirmRequest["resolve"];
+    const promise = new Promise<{ confirmed: boolean; cancelled: boolean }>(
+      (res) => {
+        resolve = res;
+      }
+    );
+    const requestId = `bconfirm_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    const request: PendingBatchConfirmRequest = {
+      requestId,
+      conversationId: input.conversationId,
+      tasks: input.tasks,
+      resolve,
+      createdAt: Date.now(),
+    };
+    this.pending.set(requestId, request);
+    this.sink?.(request);
+    setTimeout(() => {
+      const entry = this.pending.get(requestId);
+      if (entry) {
+        this.pending.delete(requestId);
+        entry.resolve({ confirmed: false, cancelled: true });
+      }
+    }, BATCH_CONFIRM_TTL_MS).unref?.();
+    return { request, promise };
+  }
+
+  /** Single-use, owner-conversation-bound consume (mirrors the site confirm). */
+  public consume(input: {
+    readonly requestId: string;
+    readonly conversationId: string;
+  }): PendingBatchConfirmRequest | null {
+    const entry = this.pending.get(input.requestId);
+    if (!entry || entry.conversationId !== input.conversationId) {
+      return null;
+    }
+    this.pending.delete(input.requestId);
+    return entry;
+  }
+}
+
+const batchConfirmRegistry = new BatchConfirmWaitRegistry();
+
+/** Renderer-facing accessor for the batch-confirm IPC handler. */
+export function getBatchConfirmWaitRegistry(): BatchConfirmWaitRegistry {
+  return batchConfirmRegistry;
+}
+
+/** Registrable host of the task's start URL (null when absent/unparseable). */
+function batchTaskSiteOf(startUrl: string | undefined): string | null {
+  if (!startUrl) {
+    return null;
+  }
+  try {
+    return new URL(startUrl).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * M-FR-04: the start gate. With a wired renderer the batch waits for the
+ * user's confirmation of the listed tasks and sites; without one (headless
+ * tool runs) it cannot block forever and proceeds — the per-child tool
+ * gates (needs_user, never consequential) still hold.
+ */
+async function requestBatchConfirmation(
+  conversationId: string,
+  tasks: readonly BrowserBatchTaskInput[]
+): Promise<boolean> {
+  if (!batchConfirmRegistry.hasSink()) {
+    return true;
+  }
+  const { request, promise } = batchConfirmRegistry.create({
+    conversationId,
+    tasks: tasks.map((task, index) => ({
+      index,
+      goal: task.goal,
+      site: batchTaskSiteOf(task.start_url),
+    })),
+  });
+  const resolution = await promise;
+  void request;
+  return resolution.confirmed && !resolution.cancelled;
+}
+
 export async function runBrowserTasks(
   tasks: readonly BrowserBatchTaskInput[],
   concurrency: number,
   conversationId: string,
   signal: AbortSignal,
   deps: RunBrowserTasksDeps = {}
-): Promise<{ batchId: string; results: BrowserBatchTaskResult[] }> {
+): Promise<{
+  batchId: string;
+  results: BrowserBatchTaskResult[];
+  /** M-FR-04: false when the user refused the batch confirmation card. */
+  confirmed?: boolean;
+}> {
   const batchId = `batch_${randomUUID().slice(0, 12)}`;
   const batchAbort = new AbortController();
   const onOuterAbort = (): void => batchAbort.abort();
   signal.addEventListener("abort", onOuterAbort, { once: true });
   liveBatches.set(batchId, batchAbort);
   const control = deps.control ?? getDefaultAgentTaskControlService();
+  // M-FR-04/W08: the batch does NOT start until the user confirms the
+  // listed tasks and sites. The confirm grant is consumed by this start
+  // and expires with the batch (nothing persists past the run). A parent
+  // abort during the wait refuses the batch.
+  const confirmed = signal.aborted
+    ? false
+    : await requestBatchConfirmation(conversationId, tasks);
+  if (!confirmed || signal.aborted) {
+    liveBatches.delete(batchId);
+    signal.removeEventListener("abort", onOuterAbort);
+    return {
+      batchId,
+      results: [],
+      confirmed: false,
+    };
+  }
   // F21: the batch card lives from the first lane start.
   emitBatchEvent({ batchId, conversationId, phase: "started" });
 

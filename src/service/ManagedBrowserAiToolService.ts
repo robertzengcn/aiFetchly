@@ -731,6 +731,23 @@ export class ManagedBrowserAiToolService {
     // bound to the exact program digest + page revision and consumed
     // single-use; a different program or a mutated revision never matches.
     if (assessment.requiresApproval) {
+      // W08/M-FR-05: a CHILD agent runs headless — there is no approval
+      // card it could answer, and throwing approval_required fails the
+      // call with an unactionable error. The child instead receives the
+      // structured needs_user proposal and returns it on ITS task only
+      // (siblings keep running); the parent batch card surfaces it.
+      // Chat callers keep the interactive approval flow below.
+      if (context.ownerAgentId) {
+        return {
+          status: "needs_user",
+          needs_user: {
+            type: "approval",
+            proposed_action: buildApprovalSummary(program, descriptorFor),
+            risk_class: assessment.riskClass,
+            reason_code: assessment.reasonCode,
+          },
+        };
+      }
       // PRD D-FR-27: bind the approval to the SEMANTIC action (operation,
       // role/name, value digest, key/option, site domain) — not to random
       // reference tokens that change on every reobservation.

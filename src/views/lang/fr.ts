@@ -4546,6 +4546,10 @@ export default {
   },
   browserTasks: {
     batchTitle: "Tâches parallèles du navigateur",
+    batchConfirmTitle: "Confirmer les tâches parallèles du navigateur",
+    batchConfirmHint: "Chaque tâche ci-dessous s’exécutera dans sa propre session de navigateur.",
+    batchConfirmStart: "Démarrer les tâches",
+    batchConfirmDeny: "Annuler",
     resume_with_instructions: "Reprendre avec instructions",
     resume_instructions_label: "Instructions (facultatif)",
     taskRunning: "En cours",

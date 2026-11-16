@@ -33,6 +33,15 @@
     @cancelled="onSiteConfirmCancelled"
   />
 
+  <!-- M-FR-04/W08: batch confirmation card. The batch preview of THIS
+       conversation only; confirming starts the batch, denying refuses it. -->
+  <BrowserBatchConfirmCard
+    v-if="activeBatchConfirmRequest !== null"
+    :tasks="activeBatchConfirmRequest.tasks"
+    @confirmed="onBatchConfirmed"
+    @denied="onBatchDenied"
+  />
+
   <!-- N07/B01: live credential card (no-account / username-only sign-in).
        Renders the pending request of THIS conversation only — a request
        opened in another chat never renders here (A-FR-05). -->
@@ -56,21 +65,25 @@ import BrowserTaskBatchCard from "./BrowserTaskBatchCard.vue";
 import BrowserCredentialCard from "./BrowserCredentialCard.vue";
 import BrowserAccountPickerCard from "./BrowserAccountPickerCard.vue";
 import BrowserSiteConfirmCard from "./BrowserSiteConfirmCard.vue";
+import BrowserBatchConfirmCard from "./BrowserBatchConfirmCard.vue";
 import {
   browserBatchReturnNow,
   onManagedBrowserBatchEvent,
   onManagedBrowserAccountPickerRequest,
   onManagedBrowserCredentialRequest,
   onManagedBrowserSiteConfirmRequest,
+  onManagedBrowserBatchConfirmRequest,
   pauseBrowserTask,
   resumeBrowserTask,
   stopBrowserTask,
   submitBrowserAccountPicker,
   submitBrowserSiteConfirm,
+  submitBrowserBatchConfirm,
   type BrowserBatchEvent,
   type BrowserCredentialRequestEvent,
   type BrowserAccountPickerRequestEvent,
   type BrowserSiteConfirmRequestEvent,
+  type BrowserBatchConfirmRequestEvent,
 } from "@/views/api/managedBrowser";
 import { useI18n } from "vue-i18n";
 
@@ -264,6 +277,62 @@ async function onSiteConfirmCancelled(): Promise<void> {
   clearSiteConfirmRequest();
 }
 
+// M-FR-04/W08: pending batch confirmations, per conversation like the
+// other cards. The batch does not start until the user confirms.
+const batchConfirmRequests = ref(
+  new Map<string, BrowserBatchConfirmRequestEvent>()
+);
+
+const activeBatchConfirmRequest =
+  computed<BrowserBatchConfirmRequestEvent | null>(() => {
+    let newest: BrowserBatchConfirmRequestEvent | null = null;
+    for (const request of batchConfirmRequests.value.values()) {
+      if (
+        props.conversationId != null &&
+        request.conversationId !== props.conversationId
+      ) {
+        continue;
+      }
+      newest = request;
+    }
+    return newest;
+  });
+
+function clearBatchConfirmRequest(): void {
+  const active = activeBatchConfirmRequest.value;
+  if (active !== null) {
+    batchConfirmRequests.value.delete(active.requestId);
+  }
+}
+
+async function onBatchConfirmed(): Promise<void> {
+  const active = activeBatchConfirmRequest.value;
+  if (active === null) {
+    return;
+  }
+  await submitBrowserBatchConfirm({
+    requestId: active.requestId,
+    conversationId: active.conversationId,
+    confirmed: true,
+    cancelled: false,
+  });
+  clearBatchConfirmRequest();
+}
+
+async function onBatchDenied(): Promise<void> {
+  const active = activeBatchConfirmRequest.value;
+  if (active === null) {
+    return;
+  }
+  await submitBrowserBatchConfirm({
+    requestId: active.requestId,
+    conversationId: active.conversationId,
+    confirmed: false,
+    cancelled: true,
+  });
+  clearBatchConfirmRequest();
+}
+
 const LABEL_FALLBACK = "Browser task";
 
 function applyEvent(event: BrowserBatchEvent): void {
@@ -310,6 +379,7 @@ let unsubscribe: (() => void) | null = null;
 let unsubscribeCredential: (() => void) | null = null;
 let unsubscribePicker: (() => void) | null = null;
 let unsubscribeSiteConfirm: (() => void) | null = null;
+let unsubscribeBatchConfirm: (() => void) | null = null;
 let pruneTimer: number | null = null;
 
 onMounted(() => {
@@ -327,6 +397,9 @@ onMounted(() => {
   });
   unsubscribeSiteConfirm = onManagedBrowserSiteConfirmRequest((request) => {
     siteConfirmRequests.value.set(request.requestId, request);
+  });
+  unsubscribeBatchConfirm = onManagedBrowserBatchConfirmRequest((request) => {
+    batchConfirmRequests.value.set(request.requestId, request);
   });
   pruneTimer = window.setInterval(() => {
     // Finished batches linger 30s for review, then the card disappears.
@@ -355,6 +428,12 @@ onMounted(() => {
         siteConfirmRequests.value.delete(requestId);
       }
     }
+    // W08: same TTL sweep for batch confirmations.
+    for (const [requestId, request] of batchConfirmRequests.value) {
+      if (Date.now() - request.createdAt > 10 * 60_000) {
+        batchConfirmRequests.value.delete(requestId);
+      }
+    }
   }, 5_000);
 });
 
@@ -363,6 +442,7 @@ onBeforeUnmount(() => {
   unsubscribeCredential?.();
   unsubscribePicker?.();
   unsubscribeSiteConfirm?.();
+  unsubscribeBatchConfirm?.();
   if (pruneTimer !== null) {
     window.clearInterval(pruneTimer);
   }

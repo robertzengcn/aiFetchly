@@ -4456,6 +4456,10 @@ export default {
   },
   browserTasks: {
     batchTitle: "並列ブラウザタスク",
+    batchConfirmTitle: "並列ブラウザタスクの確認",
+    batchConfirmHint: "以下のタスクはそれぞれ個別のブラウザセッションで実行されます。",
+    batchConfirmStart: "タスクを開始",
+    batchConfirmDeny: "キャンセル",
     resume_with_instructions: "指示を付けて再開",
     resume_instructions_label: "指示（任意）",
     taskRunning: "実行中",

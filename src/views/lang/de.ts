@@ -4570,6 +4570,10 @@ export default {
   },
   browserTasks: {
     batchTitle: "Parallele Browser-Aufgaben",
+    batchConfirmTitle: "Parallele Browser-Aufgaben bestätigen",
+    batchConfirmHint: "Jede der folgenden Aufgaben läuft in einer eigenen Browser-Sitzung.",
+    batchConfirmStart: "Aufgaben starten",
+    batchConfirmDeny: "Abbrechen",
     resume_with_instructions: "Mit Anweisungen fortsetzen",
     resume_instructions_label: "Anweisungen (optional)",
     taskRunning: "Läuft",

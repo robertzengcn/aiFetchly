@@ -755,6 +755,13 @@ export const MANAGED_BROWSER_SITE_CONFIRM_REQUEST =
   "managed-browser:site-confirm-request";
 export const MANAGED_BROWSER_SUBMIT_SITE_CONFIRM =
   "managed-browser:submit-site-confirm";
+// M-FR-04/W08: batch confirmation card. The batch preview (tasks + sites)
+// is shown BEFORE any session starts; the confirm grant is consumed by
+// the start and expires with the batch.
+export const MANAGED_BROWSER_BATCH_CONFIRM_REQUEST =
+  "managed-browser:batch-confirm-request";
+export const MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM =
+  "managed-browser:submit-batch-confirm";
 // PRD C-FR-04: renderer-only task control (user actions; no model tool).
 export const BROWSER_TASK_PAUSE = "browser-task:pause";
 export const BROWSER_TASK_TAKE_CONTROL = "browser-task:take-control";

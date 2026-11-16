@@ -109,3 +109,39 @@ export const siteConfirmSubmitSchema = lazySchema(() =>
 export type SiteConfirmSubmitInput = z.infer<
   ReturnType<typeof siteConfirmSubmitSchema>
 >;
+
+/**
+ * M-FR-04/W08: batch confirmation card. The request previews the tasks
+ * (goal + site) BEFORE any session starts; the submit is the user's
+ * confirm/deny for the whole batch — single-use, owner-conversation-bound.
+ */
+export const batchConfirmRequestEventSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1).max(128),
+    conversationId: z.string().min(1).max(128),
+    tasks: z
+      .array(
+        z.strictObject({
+          index: z.number().int().min(0).max(4),
+          goal: z.string().min(1).max(2000),
+          site: z.string().min(1).max(253).nullable(),
+        })
+      )
+      .min(1)
+      .max(5),
+    createdAt: z.number().int().positive(),
+  })
+);
+
+export const batchConfirmSubmitSchema = lazySchema(() =>
+  z.strictObject({
+    requestId: z.string().min(1).max(128),
+    conversationId: z.string().min(1).max(128),
+    confirmed: z.boolean(),
+    cancelled: z.boolean(),
+  })
+);
+
+export type BatchConfirmSubmitInput = z.infer<
+  ReturnType<typeof batchConfirmSubmitSchema>
+>;
