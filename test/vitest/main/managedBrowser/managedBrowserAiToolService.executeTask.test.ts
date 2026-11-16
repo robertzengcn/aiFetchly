@@ -7,6 +7,7 @@ const DEFAULT_DECISION_ROUTE = {
   chatDecisionModel: null,
   nativeProfile: null,
   requestTimeoutMs: null,
+    chatCapabilities: null,
 };
 
 /**
@@ -340,6 +341,7 @@ describe("executeTask native route + model override (E01/E02)", () => {
       chatDecisionModel: "my-cheap-browser-model",
       nativeProfile: null,
       requestTimeoutMs: null,
+    chatCapabilities: null,
     };
     const modelsRequested: string[] = [];
     vi.doMock("@/api/aiChatApi", () => ({
@@ -443,6 +445,7 @@ describe("executeTask native route + model override (E01/E02)", () => {
         apiKeyRef: "chat",
       },
       requestTimeoutMs: null,
+    chatCapabilities: null,
     };
     const nativePosts: Array<{ endpoint: string }> = [];
     let chatCalls = 0;
@@ -547,6 +550,7 @@ describe("executeTask native route + model override (E01/E02)", () => {
         apiKeyRef: "none",
       },
       requestTimeoutMs: null,
+    chatCapabilities: null,
     };
     vi.doMock("@/modules/lib/httpclient", () => ({
       HttpClient: class {
@@ -580,6 +584,7 @@ describe("executeTask native route + model override (E01/E02)", () => {
       chatDecisionModel: null,
       nativeProfile: null,
       requestTimeoutMs: null,
+    chatCapabilities: null,
     };
     let chatCalls = 0;
     vi.doMock("@/api/aiChatApi", () => ({
@@ -639,6 +644,7 @@ describe("executeTask native route + model override (E01/E02)", () => {
       chatDecisionModel: null,
       nativeProfile: null,
       requestTimeoutMs: null,
+    chatCapabilities: null,
     };
     const modelsRequested: string[] = [];
     vi.doMock("@/api/aiChatApi", () => ({

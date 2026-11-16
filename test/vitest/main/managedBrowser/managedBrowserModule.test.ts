@@ -7,6 +7,7 @@ const DEFAULT_DECISION_ROUTE = {
   chatDecisionModel: null,
   nativeProfile: null,
   requestTimeoutMs: null,
+    chatCapabilities: null,
 };
 import { evaluateNavigationTarget } from "@/childprocess/managed-browser/NavigationPolicy";
 import { browserStartSessionToolSchema } from "@/schemas/aiTools/managedBrowser";
