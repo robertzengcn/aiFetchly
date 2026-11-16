@@ -186,10 +186,13 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     );
 
     await send(aiApp, "list both file sets");
-    // Wait until the turn is live mid-stream, then queue + steer. (The
-    // request log records on COMPLETION — polling it would wait past the
-    // stream and miss the steering window entirely.)
-    await expect(chatRoot(aiApp)).toContainText("Generating…", {
+    // Wait until the turn is live mid-stream, then queue + steer. The
+    // transcript's working indicator (aiChatV2.ai_working) is the
+    // authoritative live signal since the empty assistant bubble stopped
+    // rendering an in-bubble "Generating…" state. (The request log records
+    // on COMPLETION — polling it would wait past the stream and miss the
+    // steering window entirely.)
+    await expect(chatRoot(aiApp)).toContainText("Working…", {
       timeout: 30_000,
     });
     await send(aiApp, "actually skip the tools");
@@ -235,8 +238,10 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
 
     await send(aiApp, "slow turn A");
     // Steer while A is mid-stream (the request log records on completion —
-    // polling it would miss the steering window).
-    await expect(chatRoot(aiApp)).toContainText("Generating…", {
+    // polling it would miss the steering window). The transcript's working
+    // indicator is the authoritative live signal since the empty assistant
+    // bubble stopped rendering an in-bubble "Generating…" state.
+    await expect(chatRoot(aiApp)).toContainText("Working…", {
       timeout: 30_000,
     });
     await send(aiApp, "redirect A");
@@ -433,8 +438,10 @@ test.describe("AI chat message queue + steering (Electron E2E)", () => {
     await send(aiApp, "slow turn with attachment follow-up");
     // Queue the attachment while A is still mid-stream (the request log
     // records on completion — polling it would let A finish first and B
-    // would dispatch instead of queue).
-    await expect(chatRoot(aiApp)).toContainText("Generating…", {
+    // would dispatch instead of queue). The transcript's working indicator
+    // is the authoritative live signal since the empty assistant bubble
+    // stopped rendering an in-bubble "Generating…" state.
+    await expect(chatRoot(aiApp)).toContainText("Working…", {
       timeout: 30_000,
     });
 
