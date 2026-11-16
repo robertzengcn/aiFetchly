@@ -948,3 +948,46 @@ describe("runBrowserTasks unified task identity (B02)", () => {
     expect(seenControlId).toMatch(/^batch_[0-9a-f-]+:0$/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B07/C-FR-09: the confirmation wait is CANCELLATION-AWARE — a parent
+// Stop during the card resolves the wait immediately and refuses the
+// batch (previously the card stayed outstanding for ten minutes).
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks confirmation cancellation (B07)", () => {
+  it("a Stop during the confirmation wait refuses promptly", async () => {
+    const { getBatchConfirmWaitRegistry } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    const registry = getBatchConfirmWaitRegistry();
+    let runCalls = 0;
+    const fakeRunAgent = () => ({
+      runSync: async () => {
+        runCalls++;
+        return { status: "completed", output: {} } as never;
+      },
+    }) as never;
+    const controller = new AbortController();
+    // The card NEVER answers — only the Stop can end the wait.
+    registry.setSink(() => undefined);
+    try {
+      const started = Date.now();
+      // Stop the wait after 100ms — registered BEFORE the await.
+      setTimeout(() => controller.abort(), 100);
+      const outcome = await runBrowserTasks(
+        [{ goal: "stopped during confirm" }],
+        1,
+        "conv-b07",
+        controller.signal,
+        { runAgent: fakeRunAgent }
+      );
+      expect(outcome.confirmed).toBe(false);
+      expect(outcome.results).toEqual([]);
+      expect(runCalls).toBe(0);
+      // The wait ended on the abort, not after the 10-minute TTL.
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      registry.setSink(null);
+    }
+  }, 15_000);
+});

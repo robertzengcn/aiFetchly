@@ -364,22 +364,85 @@ function batchTaskSiteOf(startUrl: string | undefined): string | null {
  */
 async function requestBatchConfirmation(
   conversationId: string,
-  tasks: readonly BrowserBatchTaskInput[]
+  tasks: readonly BrowserBatchTaskInput[],
+  signal: AbortSignal
 ): Promise<boolean> {
   if (!batchConfirmRegistry.hasSink()) {
     return true;
   }
+  // B07/M-FR-04: the preview prepopulates sites for ACCOUNT-ONLY tasks —
+  // the account's site registrable domain comes from the site registry,
+  // never guessed from a start URL the caller did not give.
+  const previewTasks = await Promise.all(
+    tasks.map(async (task, index) => {
+      if (task.start_url) {
+        return {
+          index,
+          goal: task.goal,
+          site: batchTaskSiteOf(task.start_url),
+        };
+      }
+      if (typeof task.account_id === "number" && task.account_id > 0) {
+        try {
+          const { SocialAccountModule } = await import(
+            "@/modules/socialAccountModule"
+          );
+          const account = await new SocialAccountModule().getAccountDetail(
+            task.account_id
+          );
+          if (account) {
+            const siteId =
+              (account as { site_id?: number | null }).site_id ??
+              (account as { social_type_id?: number | null })
+                .social_type_id;
+            if (typeof siteId === "number" && siteId > 0) {
+              const { getDefaultBrowserSiteModule } = await import(
+                "@/modules/BrowserSiteModule"
+              );
+              const site = await getDefaultBrowserSiteModule().getSite(siteId);
+              if (site) {
+                return {
+                  index,
+                  goal: task.goal,
+                  site: site.registrableDomain,
+                };
+              }
+            }
+          }
+        } catch {
+          // Unknown account — the preview shows the goal without a site.
+        }
+      }
+      return { index, goal: task.goal, site: null };
+    })
+  );
   const { request, promise } = batchConfirmRegistry.create({
     conversationId,
-    tasks: tasks.map((task, index) => ({
-      index,
-      goal: task.goal,
-      site: batchTaskSiteOf(task.start_url),
-    })),
+    tasks: previewTasks,
   });
-  const resolution = await promise;
   void request;
-  return resolution.confirmed && !resolution.cancelled;
+  // B07/C-FR-09: the wait is CANCELLATION-AWARE — a parent Stop resolves
+  // the wait immediately (refusing the batch) instead of leaving the card
+  // outstanding for up to ten minutes while the batch is already dead.
+  const confirmation = await new Promise<{
+    confirmed: boolean;
+    cancelled: boolean;
+  }>((resolve) => {
+    let settled = false;
+    const settle = (value: { confirmed: boolean; cancelled: boolean }): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(value);
+    };
+    void promise.then(settle);
+    const onAbort = (): void => {
+      settle({ confirmed: false, cancelled: true });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return confirmation.confirmed && !confirmation.cancelled;
 }
 
 export async function runBrowserTasks(
@@ -406,7 +469,7 @@ export async function runBrowserTasks(
   // abort during the wait refuses the batch.
   const confirmed = signal.aborted
     ? false
-    : await requestBatchConfirmation(conversationId, tasks);
+    : await requestBatchConfirmation(conversationId, tasks, signal);
   if (!confirmed || signal.aborted) {
     liveBatches.delete(batchId);
     signal.removeEventListener("abort", onOuterAbort);
