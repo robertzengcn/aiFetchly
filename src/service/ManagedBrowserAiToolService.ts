@@ -1421,6 +1421,11 @@ export class ManagedBrowserAiToolService {
     const { providerConfigKey: currentProviderConfigKey } = await import(
       "@/service/aiProvider/AIProviderConfigVersion"
     );
+    // B06/D-FR-01–04: the settings read and the epoch freeze must
+    // describe ONE configuration — if settings move DURING the read
+    // (the awaited import above can race a concurrent settings save),
+    // admission refuses and the caller re-admits under the new bundle.
+    const epochBeforeAdmission = currentProviderConfigKey();
     // N01/design 5.3: the EXPLICIT native route — only when the user
     // configured mode native_profile with a complete profile. Never
     // inferred; an unusable profile is a structured refusal (B03: a
@@ -1428,6 +1433,13 @@ export class ManagedBrowserAiToolService {
     // never falls through to chat).
     let nativeProfileError: string | null = null;
     const settings = await this.settings.getEffectiveSettings();
+    if (currentProviderConfigKey() !== epochBeforeAdmission) {
+      throw new ManagedBrowserAiToolError(
+        "ai_disabled",
+        undefined,
+        "provider_config_changed"
+      );
+    }
     const nativeProfile =
       settings.decisionRoute.mode === "native_profile"
         ? settings.decisionRoute.nativeProfile

@@ -1,4 +1,5 @@
 import { SystemSettingModule } from "@/modules/SystemSettingModule";
+import { bumpProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { isManagedBrowserReleaseFlagEnabled } from "@/config/featureFlags";
 import {
   MANAGED_BROWSER_CACHE_DEFAULTS,
@@ -370,6 +371,17 @@ export class ManagedBrowserSettingsModule {
         )
       );
     }
+    // B06/D-FR-01–04: decision-relevant settings are part of the route
+    // bundle the runner freezes — a change MUST bump the provider epoch
+    // so in-flight tasks see provider_config_changed and re-admit under
+    // the new configuration.
+    const decisionRelevantChange =
+      patch.decisionRoute !== undefined ||
+      patch.browserDecisionEnabled !== undefined ||
+      patch.parallelAgentsEnabled !== undefined ||
+      patch.maxConcurrentSessions !== undefined ||
+      patch.maxSessionsPerSite !== undefined ||
+      patch.signInEnabled !== undefined;
     // N01/design 5.3: merge the decision-route patch into the stored
     // versioned JSON and persist.
     if (patch.decisionRoute !== undefined) {
@@ -436,6 +448,11 @@ export class ManagedBrowserSettingsModule {
           String(clampCacheMaxSizeMb(patch.cacheMaxSizeMb))
         )
       );
+    }
+    if (decisionRelevantChange) {
+      // B06: bump AFTER the setting writes are queued (the bump is itself
+      // a persisted value, ordered with them by the same Promise.all).
+      bumpProviderConfigVersion();
     }
     await Promise.all(writes);
     return this.getEffectiveSettings();
