@@ -90,7 +90,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       // throws on unknown platform - surface as status:false envelope.
       let platformId = 0;
       if (input.where) {
-        platformId = socialaccount.convertPlatform(input.where);
+        platformId = await socialaccount.convertPlatform(input.where);
       }
       // Original used page=10 default (likely a typo for 0); preserve to
       // avoid changing pagination behavior the frontend may rely on.

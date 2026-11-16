@@ -127,22 +127,24 @@ export class SocialAccountModule extends BaseModule {
           const hasCookies = meta.hasCookies && meta.cookieCount > 0;
 
           // Map social_type_id to platform name — the SITE REGISTRY is
-          // the source of truth (N04/S-FR-06): a registered site with the
-          // id supplies the display name; the static list is the fallback
-          // for legacy ids.
-          const platform = SocialPlatformList.find(
-            (item) => item.id === account.social_type_id
-          );
-          const socialType = platform
-            ? platform.name
-            : ((await (async () => {
-                const { getDefaultBrowserSiteModule } = await import(
-                  "@/modules/BrowserSiteModule"
-                );
-                return getDefaultBrowserSiteModule()
-                  .getSite(account.social_type_id)
-                  .catch(() => null);
-              })())?.name ?? "");
+          // the source of truth (S-FR-06, registry-first): a registered
+          // site with the id supplies the display name; the static list
+          // is the fallback for legacy ids not in the registry.
+          const socialType = await (async () => {
+            const { getDefaultBrowserSiteModule } = await import(
+              "@/modules/BrowserSiteModule"
+            );
+            const site = await getDefaultBrowserSiteModule()
+              .getSite(account.social_type_id)
+              .catch(() => null);
+            if (site) {
+              return site.name;
+            }
+            const platform = SocialPlatformList.find(
+              (item) => item.id === account.social_type_id
+            );
+            return platform ? platform.name : "";
+          })();
 
           return {
             id: account.id,

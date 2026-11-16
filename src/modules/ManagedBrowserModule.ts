@@ -659,7 +659,7 @@ export class ManagedBrowserModule {
     // N05: the capacity is RESERVED synchronously (counting registered
     // sessions AND in-flight starts) before any subsequent await — three
     // parallel starts on one domain can no longer all pass the check.
-    const requestedSiteDomain = this.deriveSessionSiteDomain(
+    const requestedSiteDomain = await this.deriveSessionSiteDomain(
       account.platformId,
       input.requestedStartUrl
     );
@@ -2553,12 +2553,25 @@ record.currentUrl = message.observation.url || record.currentUrl;
    * Registrable domain used for the per-site session cap: the requested
    * start URL when present, otherwise the platform's known login URL.
    */
-  private deriveSessionSiteDomain(
+  private async deriveSessionSiteDomain(
     platformId: number,
     requestedStartUrl: string | undefined
-  ): string | null {
+  ): Promise<string | null> {
     if (requestedStartUrl) {
       return parseUrlIdentity(requestedStartUrl)?.registrableDomain ?? null;
+    }
+    // S-FR-06: the SITE REGISTRY is the authoritative platform→site
+    // source; the static manifest is the fallback for legacy ids.
+    try {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const site = await getDefaultBrowserSiteModule().getSite(platformId);
+      if (site) {
+        return site.registrableDomain;
+      }
+    } catch {
+      // Registry unavailable — fall through to the manifest.
     }
     const manifest = PLATFORM_SESSION_MANIFEST.find(
       (entry) => entry.platformId === platformId

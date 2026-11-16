@@ -38,7 +38,18 @@ export class SocialAccountController {
         this.accountSessionService = new AccountSessionService();
     }
 
-    private getSocialPlatformUrl(socialTypeId: number): string | null {
+    /**
+     * S-FR-06: the SITE REGISTRY is the authoritative platform→login-url
+     * source; the static platform list is the fallback for legacy ids.
+     */
+    private async getSocialPlatformUrl(socialTypeId: number): Promise<string | null> {
+        const { getDefaultBrowserSiteModule } = await import(
+            "@/modules/BrowserSiteModule"
+        );
+        const site = await getDefaultBrowserSiteModule().getSite(socialTypeId);
+        if (site) {
+            return site.loginUrl ?? `https://${site.registrableDomain}`;
+        }
         const platform = SocialPlatformList.find(
             (item) => item.id === socialTypeId
         );
@@ -167,7 +178,7 @@ export class SocialAccountController {
         win.setMenu(null);
 
         const socialTypeUrl = accinfo.data.social_type_id
-            ? this.getSocialPlatformUrl(accinfo.data.social_type_id)
+            ? await this.getSocialPlatformUrl(accinfo.data.social_type_id)
             : null;
         if (!socialTypeUrl) {
             throw new Error("social type url not exist");
@@ -263,8 +274,24 @@ export class SocialAccountController {
         await this.accountSessionService.clearAccountSession(accountId);
     }
 
-    public convertPlatform(name: string): number {
+    /**
+     * S-FR-06: the SITE REGISTRY is the authoritative name→id source; the
+     * static platform list is the fallback for legacy names.
+     */
+    public async convertPlatform(name: string): Promise<number> {
         const lowerCaseName = name.toLowerCase();
+        const { getDefaultBrowserSiteModule } = await import(
+            "@/modules/BrowserSiteModule"
+        );
+        const sites = await getDefaultBrowserSiteModule().listSites();
+        const site = sites.find(
+            (item) =>
+                item.name.toLowerCase().includes(lowerCaseName) ||
+                lowerCaseName.includes(item.name.toLowerCase())
+        );
+        if (site) {
+            return site.siteId;
+        }
         const platform = SocialPlatformList.find(
             (item) =>
                 item.name.toLowerCase().includes(lowerCaseName) ||

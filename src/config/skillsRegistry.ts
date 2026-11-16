@@ -4442,11 +4442,22 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           : 20;
 
       // Resolve platform name → numeric social_type_id used by the model.
+      // S-FR-06: the SITE REGISTRY is authoritative; the static list is
+      // the fallback and the source of the known-platforms hint.
       let platformId: number | undefined;
       if (platformRaw) {
-        const match = SocialPlatformList.find(
-          (p) => p.name.toLowerCase() === platformRaw
+        const { getDefaultBrowserSiteModule } = await import(
+          "@/modules/BrowserSiteModule"
         );
+        const sites = await getDefaultBrowserSiteModule().listSites();
+        const siteMatch = sites.find(
+          (s) => s.name.toLowerCase() === platformRaw
+        );
+        const match = siteMatch
+          ? { id: siteMatch.siteId }
+          : SocialPlatformList.find(
+              (p) => p.name.toLowerCase() === platformRaw
+            );
         if (!match) {
           return {
             success: false,
