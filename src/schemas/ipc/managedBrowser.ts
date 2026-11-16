@@ -244,7 +244,7 @@ export const chatNoticeEventSchema = lazySchema(() =>
     severity: z.enum(["info", "warning", "success", "error"]),
     requiresUserAction: z.boolean(),
     createdAt: z.string().min(8).max(40),
-    messageArgs: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    messageArgs: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
   })
 );
 

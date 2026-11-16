@@ -1515,6 +1515,56 @@ export class EmailReplyDraftModel extends BaseDb {
   }
 
   /**
+   * Invalidate pending reply work for ONE message whose provider location
+   * changed (email-organization feature, design §10.4): approved drafts for
+   * the message return to 'draft' with their active approvals invalidated
+   * and any draft_ready guard released. In-flight sends (phase sending) are
+   * untouched, and already-submitted replies remain unchanged.
+   */
+  async invalidateUnsentDraftsForMessage(
+    messageId: number,
+    reason: string
+  ): Promise<number> {
+    return await runReplyTxn(this.sqliteDb, async (manager) => {
+      const draftRepo = manager.getRepository(EmailReplyDraftEntity);
+      const approvalRepo = manager.getRepository(EmailReplyApprovalEntity);
+      const guardRepo = manager.getRepository(EmailReplyGuardEntity);
+      const now = new Date();
+
+      const approved = await draftRepo.find({
+        where: { messageId, status: "approved" as EmailReplyDraftStatus },
+      });
+      if (approved.length > 0) {
+        await draftRepo.update(
+          { messageId, status: "approved" as EmailReplyDraftStatus },
+          { status: "draft", approvalInvalidatedAt: now }
+        );
+        for (const d of approved) {
+          await approvalRepo.update(
+            { draftId: d.id, invalidatedAt: IsNull() as never },
+            { invalidatedAt: now, invalidationReason: reason }
+          );
+          await guardRepo.update(
+            { activeDraftId: d.id, phase: "draft_ready" as GuardPhase },
+            {
+              phase: "idle" as GuardPhase,
+              ownerToken: null,
+              leaseExpiresAt: null,
+              activeDraftId: null,
+              activeAttemptId: null,
+            }
+          );
+        }
+      }
+      await draftRepo.update(
+        { messageId, status: "draft" as EmailReplyDraftStatus },
+        { approvalInvalidatedAt: now }
+      );
+      return approved.length;
+    });
+  }
+
+  /**
    * Operator-driven manual reconciliation of an ambiguous delivery (P0.6,
    * FR-019, technical design §16). CONDITIONAL transactional update — the
    * operator is the trusted authority, but only over eligible `delivery_unknown`

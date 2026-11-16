@@ -109,7 +109,7 @@ describe("AiMessageTaskAiTools", () => {
         {
           code: "too_small" as const,
           minimum: 1,
-          type: "string",
+          origin: "string",
           inclusive: true,
           exact: false,
           message: "String must contain at least 1 character(s)",

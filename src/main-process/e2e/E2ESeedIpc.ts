@@ -34,6 +34,7 @@ import {
   E2E_SEED_RECEIVED_MESSAGE,
   E2E_SEED_AUTO_REPLY_AUDIT,
   E2E_SEED_REPLY_DRAFT,
+  E2E_SEED_MESSAGE_LOCATION,
 } from "@/config/channellist";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
 import {
@@ -41,6 +42,7 @@ import {
   e2eSeedReceivedMessageInputSchema,
   e2eSeedAutoReplyAuditInputSchema,
   e2eSeedReplyDraftInputSchema,
+  e2eSeedMessageLocationInputSchema,
 } from "@/schemas/ipc/e2eSeed";
 import { EmailServiceModel } from "@/model/EmailService.model";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
@@ -55,6 +57,7 @@ import { EmailReplyApprovalService } from "@/service/emailReply/EmailReplyApprov
 import { buildSendIdempotencyKey } from "@/service/emailReply/EmailReplyRevisionHasher";
 import { EmailReplySendAttemptModule } from "@/modules/EmailReplySendAttemptModule";
 import { EmailReplySendAttemptEntity } from "@/entity/EmailReplySendAttempt.entity";
+import { EmailMessageLocationModel } from "@/model/EmailMessageLocation.model";
 
 /** True only inside the Playwright Electron E2E bootstrap. */
 function isE2eRuntime(): boolean {
@@ -107,6 +110,27 @@ export function registerE2ESeedIpcHandlers(dbpathOverride?: string): void {
       const model = new EmailServiceModel(dbpath);
       const id = await model.create(entity);
       return { id };
+    }
+  );
+
+  // Email-organization journeys: seed one VERIFIED location row so the
+  // message is mutation-eligible (legacy rows stay ineligible by design).
+  registerValidatedHandler(
+    E2E_SEED_MESSAGE_LOCATION,
+    e2eSeedMessageLocationInputSchema,
+    async (input): Promise<{ seeded: boolean }> => {
+      const dbpath = dbpathOverride ?? new Token().getValue(USERSDBPATH) ?? "";
+      const locationModel = new EmailMessageLocationModel(dbpath);
+      const result = await locationModel.upsertLocation({
+        messageId: input.messageId,
+        emailServiceId: input.emailServiceId,
+        protocol: "imap",
+        folderPath: input.folderPath,
+        uidValidity: input.uidValidity,
+        providerUid: input.providerUid,
+        state: "verified",
+      });
+      return { seeded: result.status === "ok" };
     }
   );
 

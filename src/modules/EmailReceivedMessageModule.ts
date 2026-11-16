@@ -120,6 +120,78 @@ export class EmailReceivedMessageModule extends BaseModule {
     }
   }
 
+  /** R05: refresh provider fields on an existing row (occurrence adoption). */
+  async updateProviderFieldsForSync(
+    messageId: number,
+    entity: EmailReceivedMessageEntity
+  ): Promise<EmailReceivedMessageEntity | null> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.updateProviderFieldsForSync(messageId, entity);
+    } catch (error) {
+      console.error("Error updating provider fields for sync:", error);
+      throw error;
+    }
+  }
+
+  /** Organization search over stored rows (PRD FR-17 local mode). */
+  async searchForOrganization(input: Parameters<EmailReceivedMessageModel["searchForOrganization"]>[0]) {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.searchForOrganization(input);
+    } catch (error) {
+      console.error("Error searching messages for organization:", error);
+      throw error;
+    }
+  }
+
+  /** Loads stored messages by exact ids, preserving the requested order. */
+  /** R7-01: stored-message count for one sender on one account (gate input). */
+  async countBySender(emailServiceId: number, fromAddress: string): Promise<number> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.countBySender(emailServiceId, fromAddress);
+    } catch (error) {
+      log.error("Error counting messages by sender:", error);
+      throw error;
+    }
+  }
+
+  async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.readByIds(ids);
+    } catch (error) {
+      console.error("Error reading messages by ids:", error);
+      throw error;
+    }
+  }
+
+  /** Cursor batch for the message-location backfill (provider identity only). */
+  async listForLocationBackfill(
+    afterId: number,
+    limit: number
+  ): Promise<
+    Array<
+      Pick<
+        EmailReceivedMessageEntity,
+        | "id"
+        | "emailServiceId"
+        | "providerUid"
+        | "providerFolder"
+        | "providerUidValidity"
+      >
+    >
+  > {
+    try {
+      await this.ensureConnection();
+      return await this.messageModel.listForLocationBackfill(afterId, limit);
+    } catch (error) {
+      console.error("Error listing messages for location backfill:", error);
+      throw error;
+    }
+  }
+
   async updateNormalization(
     messageId: number,
     fields: {

@@ -119,6 +119,19 @@ function checkPermission(skillName: string): PermissionCheckResult {
     return { allowed: true, needsPrompt: false };
   }
 
+  // Request-scoped actions (email forward/trash/restore) are per-action
+  // authorizations by design (PRD FR-12): a saved "Always allow" or a
+  // session "Allow once" must NEVER silence a later call, because the model
+  // could be steered by email content into silently acting on a different
+  // message/recipients. Mirror the shell one-shot posture: always prompt.
+  if (skill.confirmationPolicy === "request_scoped_action") {
+    return {
+      allowed: false,
+      needsPrompt: true,
+      reason: "Request-scoped actions require a fresh confirmation for every execution",
+    };
+  }
+
   // Check session-only grant first (set by "Allow Once" in the current
   // session). This must come before the shell always-prompt so that a
   // pending session grant can auto-approve the next invocation.

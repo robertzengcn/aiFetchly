@@ -49,9 +49,27 @@ jobs:
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Install Linux system dependencies for native modules
+        # apt indexes can flake during runner-image migrations (exit 100
+        # "unable to locate package" on update or install). Strategy:
+        #   1. skip entirely when the deps are already present;
+        #   2. retry install up to 3x, tolerating `apt-get update`
+        #      failures (the pre-seeded cache is better than nothing).
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev
+          set -euo pipefail
+          if pkg-config --exists libsecret-1 && command -v Xvfb >/dev/null 2>&1; then
+            echo "libsecret-1-dev and xvfb already present; skipping apt"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            echo "apt attempt $attempt"
+            sudo apt-get update || echo "apt-get update failed; using stale index"
+            if sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb; then
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Use HTTPS for GitHub dependencies
         run: |
@@ -133,14 +151,8 @@ jobs:
       # too. Post-package verify checks workers + renderer HTML layout, not
       # runtime native loading.
       FORGE_SKIP_NATIVE_REBUILD: "1"
-      # ubuntu-latest has ~7 GB RAM. An 8 GB heap (the previous value) exceeds
-      # physical RAM and causes the kernel to OOM-kill electron-packager's
-      # finalize/prune phase silently — the runner then "loses communication"
-      # mid-"Finalizing package" with no error. 4096 matches build.yml/release.yml
-      # and stays safely under RAM. Pair with the swap setup step below so
+      # Cap the old-space heap at 3072 MB and pair with swap setup below so
       # transient allocation spikes during galactus prune don't get us killed.
-      # Leave kernel headroom on the 7 GB ubuntu runner (evictions
-      # mid-prune; mac/win green with the same pipeline).
       NODE_OPTIONS: --max-old-space-size=3072
       ELECTRON_FORGE_VITE_CONCURRENT: "1"
       VITE_CONFIG_NATIVE_IGNORE_WARNING: "true"
@@ -154,6 +166,18 @@ jobs:
         with:
           node-version: 22.19.0
           cache: yarn
+
+      - name: Cache Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-gyp
+            ~/.electron-gyp
+            ~/Library/Caches/electron
+          key: ${{ runner.os }}-electron-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
 
       - name: Set up Python for node-gyp
         uses: actions/setup-python@v6
@@ -170,9 +194,27 @@ jobs:
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Install Linux system dependencies for native modules
+        # apt indexes can flake during runner-image migrations (exit 100
+        # "unable to locate package" on update or install). Strategy:
+        #   1. skip entirely when the deps are already present;
+        #   2. retry install up to 3x, tolerating `apt-get update`
+        #      failures (the pre-seeded cache is better than nothing).
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev
+          set -euo pipefail
+          if pkg-config --exists libsecret-1 && command -v Xvfb >/dev/null 2>&1; then
+            echo "libsecret-1-dev and xvfb already present; skipping apt"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            echo "apt attempt $attempt"
+            sudo apt-get update || echo "apt-get update failed; using stale index"
+            if sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb; then
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1 xvfb
 
       - name: Use HTTPS for GitHub dependencies
         run: |
@@ -223,15 +265,17 @@ jobs:
         run: |
           set -euo pipefail
           echo "Memory/swap before:"; free -h
-          # Use a path the runner image does not pre-mount.
-          sudo fallocate -l 4G /swapfile-ci
+          # Use a path the runner image does not pre-mount. Doubled from 4G to
+          # 8G after package-smoke runs lost the runner mid-packaging (memory
+          # starvation kills the runner agent process).
+          sudo fallocate -l 8G /swapfile-ci
           sudo chmod 600 /swapfile-ci
           sudo mkswap /swapfile-ci >/dev/null
           sudo swapon /swapfile-ci
           echo "Memory/swap after:"; free -h
           # Hard-fail if swap did not actually increase: a no-op mitigation is
           # worse than an explicit failure because it hides the OOM root cause.
-          # Runner ships ~3 GB swap; the 4 GB addition should bring total > 6 GB.
+          # Runner ships ~3 GB swap; the 8 GB addition should bring total > 10 GB.
           AFTER_SWAP_KB=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
           if [ "$AFTER_SWAP_KB" -lt 6000000 ]; then
             echo "::error::Swap was not increased (Swap total=${AFTER_SWAP_KB} kB < 6 GB). The finalize OOM mitigation is not active; aborting before the packaging step OOM-kills the runner."
@@ -306,8 +350,21 @@ jobs:
 
       - name: Install Linux dependencies (native modules + xvfb)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev xvfb
+          set -euo pipefail
+          if pkg-config --exists libsecret-1 && command -v Xvfb >/dev/null 2>&1; then
+            echo "libsecret-1-dev and xvfb already present; skipping apt"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            echo "apt attempt $attempt"
+            sudo apt-get update || echo "apt-get update failed; using stale index"
+            if sudo apt-get install -y --no-install-recommends libsecret-1-dev xvfb; then
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Use HTTPS for GitHub dependencies
         run: |

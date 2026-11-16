@@ -166,14 +166,62 @@ export function closeSmtpTransporter(
 export class OutboundSmtpSession {
   private mode: SmtpTlsMode = "configured";
   private transporter: Transporter;
+  /** T16/R4-08: raw MIME captured by the stream plugin of the last send. */
+  private lastRawMessage: Buffer | null = null;
+  /** R5-02: test seam — production builds real nodemailer transporters. */
+  private readonly transporterFactory: (mode: SmtpTlsMode) => Transporter;
 
-  constructor(private readonly param: EmailServiceEntitydata) {
-    this.transporter = createOutboundSmtpTransporter(param);
+  constructor(
+    private readonly param: EmailServiceEntitydata,
+    options?: { transporterFactory?: (mode: SmtpTlsMode) => Transporter }
+  ) {
+    this.transporterFactory =
+      options?.transporterFactory ??
+      ((mode: SmtpTlsMode) => createOutboundSmtpTransporter(this.param, mode));
+    this.transporter = this.createTransporter("configured");
+  }
+
+  /**
+   * R5-02: the 'stream' plugin stage runs AFTER nodemailer compiled
+   * mail.message — tee the raw bytes so the Sent-copy append sends the
+   * same bytes that were submitted. Installed on EVERY transporter the
+   * session builds (the TLS-retry transporter included), otherwise the
+   * successful retry attempt would submit bytes nobody captured.
+   */
+  private createTransporter(mode: SmtpTlsMode): Transporter {
+    const transporter = this.transporterFactory(mode);
+    // Real nodemailer transporters always expose the plugin stage API; a
+    // legacy/test double may not — sending still works, only the Sent-copy
+    // capture stays empty for such a transporter.
+    if (typeof transporter.use === "function") {
+      transporter.use("stream", (mail: { message?: { createReadStream(): NodeJS.ReadableStream } }, callback: () => void) => {
+        const chunks: Buffer[] = [];
+        const stream = mail.message?.createReadStream();
+        if (stream === undefined) {
+          callback();
+          return;
+        }
+        stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+        stream.on("error", () => callback());
+        stream.on("end", () => {
+          this.lastRawMessage = Buffer.concat(chunks);
+          callback();
+        });
+      });
+    }
+    return transporter;
+  }
+
+  /** Raw composed MIME of the last send, when the stream stage captured it. */
+  capturedRawMessage(): Buffer | null {
+    return this.lastRawMessage;
   }
 
   async sendMail(
     mailOptions: SendMailOptions
   ): Promise<SentMessageInfo> {
+    // A fresh send must never observe the previous attempt's bytes.
+    this.lastRawMessage = null;
     try {
       return await this.transporter.sendMail(mailOptions);
     } catch (error: unknown) {
@@ -183,7 +231,7 @@ export class OutboundSmtpSession {
       }
       closeSmtpTransporter(this.transporter);
       this.mode = retryMode;
-      this.transporter = createOutboundSmtpTransporter(this.param, retryMode);
+      this.transporter = this.createTransporter(retryMode);
       return await this.transporter.sendMail(mailOptions);
     }
   }

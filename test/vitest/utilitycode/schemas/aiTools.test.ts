@@ -64,4 +64,28 @@ describe("AI tool LLM-function-calling helpers", () => {
       expect(bulkEmailInputSchema()).toBe(bulkEmailInputSchema());
     });
   });
+
+  // Pins the LLM function-calling envelope contract through the zod v4
+  // migration: io:"input" must keep defaulted args OUT of `required` (the
+  // zod4 output-io default forced them in — see src/utils/zodToJsonSchema.ts).
+  describe("tool envelope required semantics (zod v4 io:input)", () => {
+    it("shell_execute advertises defaults but does not force defaulted args", () => {
+      const tool = getShellToolForLLM();
+      const params = tool.function.parameters as { required?: string[]; properties?: Record<string, { default?: unknown }> };
+      expect(params.properties!.shell).toMatchObject({ default: "auto" });
+      expect(params.properties!.timeout_ms).toMatchObject({ default: 60000 });
+      expect(params.required).toEqual(["command"]);
+    });
+
+    it("bulk_email_task does not force defaulted args", () => {
+      const tool = getBulkEmailToolForLLM();
+      const params = tool.function.parameters as { required?: string[]; properties?: Record<string, { default?: unknown }> };
+      // The load-bearing v3-parity contract: defaulted fields stay OUT of
+      // required (filter_ids default [] / not_duplicate default true).
+      expect(params.required).toEqual(["service_ids"]);
+      expect(params.required).not.toContain("filter_ids");
+      expect(params.required).not.toContain("not_duplicate");
+      expect(params.properties!.not_duplicate).toMatchObject({ default: true });
+    });
+  });
 });

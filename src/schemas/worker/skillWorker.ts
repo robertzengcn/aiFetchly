@@ -19,8 +19,8 @@ export const skillWorkerInboundSchema = lazySchema(() =>
     type: z.literal("EXECUTE_SKILL"),
     requestId: z.string().min(1, "requestId is required"),
     code: z.string(),
-    args: z.record(z.unknown()),
-    context: z.record(z.unknown()),
+    args: z.record(z.string(), z.unknown()),
+    context: z.record(z.string(), z.unknown()),
   })
 );
 

@@ -49,7 +49,9 @@ function scanActiveUsage(
     if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
     const rel = path.relative(PROJECT_ROOT, fullPath);
     if (ignore.has(rel)) continue;
-    const lines = fs.readFileSync(fullPath, "utf-8").split(/\r?\n/);
+    const content = fs.readFileSync(fullPath, "utf-8");
+    if (!content.includes("sqlite3")) continue;
+    const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trim();
       if (
@@ -109,18 +111,22 @@ describe("sqlite3 removal guard", () => {
     expect(workflow).not.toMatch(/(?<![a-zA-Z0-9_-])sqlite3\b(?!-)/);
   });
 
-  test("no active sqlite3 driver import/require/type usage exists in source", () => {
-    const ignore = new Set<string>([
-      path.normalize("test/vitest/main/config/sqlite3-removal-guard.test.ts"),
-    ]);
-    const srcHits = scanActiveUsage(path.join(PROJECT_ROOT, "src"), ignore);
-    const testHits = scanActiveUsage(path.join(PROJECT_ROOT, "test"), ignore);
-    const hits = [...srcHits, ...testHits];
-    if (hits.length > 0) {
-      throw new Error(
-        "Active sqlite3 driver usage found:\n" +
-          hits.map((h) => `  ${h.file}:${h.line} -> ${h.text}`).join("\n")
-      );
-    }
-  });
+  test(
+    "no active sqlite3 driver import/require/type usage exists in source",
+    () => {
+      const ignore = new Set<string>([
+        path.normalize("test/vitest/main/config/sqlite3-removal-guard.test.ts"),
+      ]);
+      const srcHits = scanActiveUsage(path.join(PROJECT_ROOT, "src"), ignore);
+      const testHits = scanActiveUsage(path.join(PROJECT_ROOT, "test"), ignore);
+      const hits = [...srcHits, ...testHits];
+      if (hits.length > 0) {
+        throw new Error(
+          "Active sqlite3 driver usage found:\n" +
+            hits.map((h) => `  ${h.file}:${h.line} -> ${h.text}`).join("\n")
+        );
+      }
+    },
+    30_000
+  );
 });

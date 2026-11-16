@@ -1628,6 +1628,10 @@ async function handleModels(): Promise<CommonMessage<unknown>> {
     const models = await api.listOpenAIModels();
     return ok(models);
   } catch (err) {
+    // Session-expiry re-login: an auth-shaped failure here (401/403 after a
+    // failed token refresh) must sign the user out so they can re-login —
+    // HttpClient already triggers this centrally; this is belt-and-braces.
+    void redirectToLoginOnAuthExpired(err);
     return denied(userSafeError(err));
   }
 }
