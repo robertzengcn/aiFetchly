@@ -41,10 +41,6 @@ aiFetchly はビジネス上の意図を実行可能なワークフローに変�
 
 ![aiFetchly AI agent ワークスペース](docs/images/readme/hero-ai-chat.png)
 
-### AI 画像生成と編集
-
-![aiFetchly チャットでの AI 画像編集](docs/images/readme/edit_image.png)
-
 ### 管理ブラウザ（Browser Use）
 
 ![aiFetchly Browser Use](docs/images/readme/browseruse.png)
@@ -64,6 +60,10 @@ aiFetchly はビジネス上の意図を実行可能なワークフローに変�
 ### AI メモリ管理
 
 ![aiFetchly AI メモリ管理](docs/images/readme/memory_edit.png)
+
+### AI 画像生成と編集
+
+![aiFetchly チャットでの AI 画像編集](docs/images/readme/edit_image.png)
 
 ## Agent の機能
 
