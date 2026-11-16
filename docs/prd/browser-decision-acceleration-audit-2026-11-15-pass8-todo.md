@@ -46,6 +46,51 @@ were added to the preload allowlist (`853c74bf7`). CI run 43909450423
 SUCCESS on all three jobs (Lint+unit 17m39s, Package smoke 5m53s,
 Electron E2E 40m17s) at `853c74bf7`.
 
+**2026-11-17 R-group closure pass:** commits
+`6a54f5e2f`(R01) → `00eb70110`(Q-01/A-FR-08) →
+`0f6535a07`(M-FR-11/C-FR-07) → `4f77c56cb`(S-FR-06) →
+`e0064d343`(A-FR-15) → `9041bd09b`(A-FR-16/19/20) →
+`07aa4924a`(fixture isolation). Summary:
+R01/D-FR-18 the chat output mode is NEGOTIATED (verified JSON Schema →
+forced tool call → json_object/text) from probed capabilities; the
+settings connection test runs THREE separate probes
+(ChatCapabilityProbe: chat round-trip / verified JSON Schema / forced
+tool), reports them independently in the panel (six languages), and
+persists them on decisionRoute.chatCapabilities (the settings update
+schema now accepts decisionRoute and maxConcurrentSessions — the
+panel's route persist was being rejected by the strict input schema);
+R01/D-FR-24 the optional provider verifier gives ONE bounded call when
+deterministic verification missed and recovery is exhausted
+(verified_by_provider_verifier / honest partial, call count rides the
+persisted cursor); the single while-loop is documented as the accepted
+substitute for design §6.3's state machine. R02 A-FR-08 the
+password-wipe comment is honest (no byte-level overwrite claim);
+Q-01 the per-account AI opt-in is editable
+(SOCIAL_ACCOUNT_GET/SET_AI_USE_ENABLED) and the credential card
+UPDATES an existing same-user+site account instead of duplicating;
+S-FR-06 the site registry is the authoritative platform source in
+deriveSessionSiteDomain, the socialaccount controller (platform→login
+url, name→id), the social-account module labels, and the skills
+registry (static-list fallbacks keep legacy ids working; the detail
+page's renderer labels remain on the static list pending a sites IPC —
+follow-up); A-FR-15 the sentinel scan redacts __decrypt_failed__-style
+markers from observation text, structured records, and notice args.
+A-FR-16/19/20 the LoginFormFiller scans SAME-SITE same-origin iframes,
+falls back to ONE focus-verified keystroke pass when the programmatic
+set is rejected, and treats autocomplete=new-password as a registration
+form (login mode refuses it, never creates an account implicitly).
+R04/M-FR-11 the batch boundary dedupes extracted rows (order-preserving,
+key order normalized); C-FR-07 the resume rechecks the session's site
+identity (resume_identity_site_drifted evidence + re-orient note).
+R04/M-FR-10 the chat backoff reads the failure (429 → 5s, else 1s).
+Sweep at the closure HEAD: 669 tests across 55 main-process files, 1622
+component tests, and the utility suite green except two PRE-EXISTING
+Windows-environmental failures (isolated-vm native build for the Node
+26 runtime; EPERM temp cleanup — the documented classes; CI Linux is
+authoritative). Still open: R01 recall measurement and R05 (held-out
+evaluation, real E2E drivers) which are external/CI dependencies, and
+the detail-page renderer label switch-over follow-up.
+
 Specifications:
 
 - [PRD](browser-decision-acceleration-prd.md) v1.1 (2026-11-01)
