@@ -4464,6 +4464,7 @@ export default {
     resume_instructions_label: "指示（任意）",
     taskRunning: "実行中",
     taskWaitingForYou: "あなたの操作を待っています",
+    taskQueued: "待機中",
     taskPaused: "一時停止中",
     taskCompleted: "完了",
     taskFailed: "失敗",

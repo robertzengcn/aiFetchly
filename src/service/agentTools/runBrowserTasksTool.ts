@@ -181,6 +181,7 @@ export interface BrowserBatchEvent {
   readonly state?:
     | "running"
     | "waiting_for_user"
+    | "queued"
     | "paused"
     | "cancelling"
     | "completed"
@@ -316,6 +317,31 @@ const batchConfirmRegistry = new BatchConfirmWaitRegistry();
 /** Renderer-facing accessor for the batch-confirm IPC handler. */
 export function getBatchConfirmWaitRegistry(): BatchConfirmWaitRegistry {
   return batchConfirmRegistry;
+}
+
+/**
+ * W09/M-FR-06: busy-account RESERVATIONS — a queued task holds one across
+ * its retry so two waiters for the SAME account can never both pass
+ * start. The map chains one promise per account id: acquiring awaits the
+ * previous holder's release.
+ */
+const busyAccountReservations = new Map<number, Promise<void>>();
+
+async function acquireBusyAccountReservation(
+  accountId: number
+): Promise<() => void> {
+  const previous = busyAccountReservations.get(accountId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  busyAccountReservations.set(
+    accountId,
+    previous.then(() => gate)
+  );
+  void previous.then(() => gate).catch(() => undefined);
+  await previous;
+  return release;
 }
 
 /** Registrable host of the task's start URL (null when absent/unparseable). */
@@ -469,28 +495,64 @@ export async function runBrowserTasks(
           (resultFailedCode === "account_in_use" ||
             JSON.stringify(result.output ?? {}).includes("account_in_use"));
         if (accountBusy) {
-          // Bounded queue: wait for the holder, then retry exactly once.
+          // W09/M-FR-06/C-FR-09: the task is QUEUED behind the account's
+          // active session — NOT waiting_for_user (no human is involved;
+          // a user-wait clock would wrongly freeze active time). The wait
+          // POLLS the account lease so the retry starts the moment the
+          // holder finishes, instead of one fixed sleep.
           emitBatchEvent({
             batchId,
             conversationId,
             phase: "task",
             taskId,
-            state: "waiting_for_user",
+            state: "queued",
             summary: "account in use — queued behind the active session",
           });
-          await new Promise((resolve) =>
-            setTimeout(resolve, deps.busyQueueWaitMs ?? 8_000)
-          );
-          if (!childAbort.signal.aborted && !batchAbort.signal.aborted && !signal.aborted) {
-            emitBatchEvent({
-              batchId,
-              conversationId,
-              phase: "task",
-              taskId,
-              state: "running",
-              summary: "queued task retrying",
-            });
-            result = await runOnce();
+          const { getDefaultManagedBrowserLeaseService, accountLeaseKey } =
+            await import("@/service/ManagedBrowserLeaseService");
+          const leaseService = getDefaultManagedBrowserLeaseService();
+          const leaseKey = accountLeaseKey(task.account_id!);
+          const queueDeadline = Date.now() + (deps.busyQueueWaitMs ?? 8_000);
+          let leaseFree = false;
+          while (Date.now() < queueDeadline) {
+            if (
+              childAbort.signal.aborted ||
+              batchAbort.signal.aborted ||
+              signal.aborted
+            ) {
+              break;
+            }
+            if (!leaseService.isHeld(leaseKey)) {
+              leaseFree = true;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          leaseFree =
+            leaseFree &&
+            !childAbort.signal.aborted &&
+            !batchAbort.signal.aborted &&
+            !signal.aborted;
+          if (leaseFree) {
+            // W09: hold a RESERVATION across the retry — two queued tasks
+            // for the SAME account can never both pass start (the second
+            // waits for the first's reservation to release).
+            const releaseReservation = await acquireBusyAccountReservation(
+              task.account_id!
+            );
+            try {
+              emitBatchEvent({
+                batchId,
+                conversationId,
+                phase: "task",
+                taskId,
+                state: "running",
+                summary: "queued task retrying",
+              });
+              result = await runOnce();
+            } finally {
+              releaseReservation();
+            }
           }
         }
         // F17: the three abort sources classify DIFFERENTLY.
@@ -603,6 +665,19 @@ export async function runBrowserTasks(
               : "failed",
           error instanceof Error ? error.message : "task_error"
         );
+        // W09/M-AC-01: a child that CRASHED before reporting a session_id
+        // releases every session the conversation owns — the account lease
+        // must not stay held by a dead child (queued siblings would wait
+        // on a ghost).
+        void (async () => {
+          const { getDefaultManagedBrowserModule } = await import(
+            "@/modules/ManagedBrowserModule"
+          );
+          await getDefaultManagedBrowserModule().stopAllForConversation(
+            conversationId,
+            "cancelled"
+          );
+        })().catch(() => undefined);
         return {
           task_index: index,
           status:

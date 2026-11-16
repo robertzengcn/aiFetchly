@@ -117,6 +117,7 @@ export interface BrowserBatchTaskRow {
   state:
     | "running"
     | "waiting_for_user"
+    | "queued"
     | "paused"
     | "cancelling"
     | "completed"
@@ -176,6 +177,8 @@ function stateLabel(state: BrowserBatchTaskRow["state"]): string {
   const map: Record<BrowserBatchTaskRow["state"], string> = {
     running: t('browserTasks.taskRunning') || "Running",
     waiting_for_user: t('browserTasks.taskWaitingForYou') || "Waiting for you",
+    // W09: queued behind a busy account is a machine wait — not a user wait.
+    queued: t('browserTasks.taskQueued') || "Queued",
     paused: t('browserTasks.taskPaused') || "Paused by you",
     cancelling: t('browserTasks.taskCancelled') || "Stopping",
     completed: t('browserTasks.taskCompleted') || "Completed",
@@ -194,7 +197,7 @@ function stateColor(state: BrowserBatchTaskRow["state"]): string {
   if (state === "failed" || state === "cancelled") return "error";
   if (state === "interrupted" || state === "partial") return "warning";
   if (state === "waiting_for_user") return "warning";
-  if (state === "paused") return "info";
+  if (state === "paused" || state === "queued") return "info";
   return "primary";
 }
 </script>

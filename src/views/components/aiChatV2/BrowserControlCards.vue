@@ -95,6 +95,7 @@ interface BrowserBatchTaskRow {
   state:
     | "running"
     | "waiting_for_user"
+    | "queued"
     | "paused"
     | "cancelling"
     | "completed"

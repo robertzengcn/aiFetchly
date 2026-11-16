@@ -8,6 +8,22 @@ import {
   type BrowserBatchTaskResult,
 } from "@/service/agentTools/runBrowserTasksTool";
 import { AgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import {
+  getDefaultManagedBrowserLeaseService,
+  accountLeaseKey,
+  setDefaultManagedBrowserLeaseServiceForTest,
+  ManagedBrowserLeaseService,
+} from "@/service/ManagedBrowserLeaseService";
+import { setBrowserBatchEventSink } from "@/service/agentTools/runBrowserTasksTool";
+
+/** W09: the collector's crash-path cleanup must be observable. */
+const stopAllForConversationMock = vi.fn(async (): Promise<void> => undefined);
+vi.mock("@/modules/ManagedBrowserModule", () => ({
+  getDefaultManagedBrowserModule: () => ({
+    stopAllForConversation: stopAllForConversationMock,
+    stop: vi.fn(async (): Promise<void> => undefined),
+  }),
+}));
 
 /** PRD M-FR-03/05/09: bounded parallelism, isolation, strict results. */
 
@@ -566,5 +582,105 @@ describe("runBrowserTasks batch confirmation gate (W08/M-FR-04)", () => {
       { runAgent: fakeRunAgent }
     );
     expect(results[0]?.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W09/M-FR-06/C-FR-09: the busy-account queue. The queued task's card
+// state is `queued` (NOT waiting_for_user — no human is involved), the
+// wait POLLS the account lease so the retry starts the moment the holder
+// finishes, and a crash before session_id releases the lease.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks busy-account queue (W09)", () => {
+  it("emits queued (not waiting_for_user) and retries once the lease frees", async () => {
+    setDefaultManagedBrowserLeaseServiceForTest(new ManagedBrowserLeaseService());
+    const leaseService = getDefaultManagedBrowserLeaseService();
+    // The account is BUSY: the holder owns the lease...
+    const holderLease = leaseService.acquire(accountLeaseKey(202), {
+      sessionId: "mb_holder_w09",
+      ownerConversationId: "conv-holder",
+    });
+    if (holderLease.status !== "granted") {
+      throw new Error("test lease acquisition failed");
+    }
+    let attempts = 0;
+    const states: Array<string | undefined> = [];
+    setBrowserBatchEventSink((event: { state?: string }) => {
+      states.push(event.state);
+    });
+    const runtime = {
+      runSync: vi.fn(async () => {
+        attempts++;
+        if (attempts === 1) {
+          return {
+            status: "completed",
+            output: {
+              status: "failed",
+              reason: "account_in_use",
+              summary: "busy",
+              extracted: [],
+              final_url: null,
+              evidence: [],
+            },
+          };
+        }
+        return {
+          status: "completed",
+          output: {
+            status: "completed",
+            summary: "done after queue",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+          },
+        };
+      }),
+    };
+    // ...and the holder finishes while the queued task is waiting.
+    setTimeout(() => {
+      leaseService.release(
+        accountLeaseKey(202),
+        "mb_holder_w09",
+        holderLease.leaseToken
+      );
+    }, 100);
+    const queueOutcome = await runBrowserTasks(
+      [{ goal: "queued task", account_id: 202 } as BrowserBatchTaskInput],
+      1,
+      "conv-w09",
+      new AbortController().signal,
+      { runAgent: () => runtime as never, busyQueueWaitMs: 5_000 }
+    );
+    expect(attempts).toBe(2);
+    expect(queueOutcome.results[0]?.status).toBe("completed");
+    // W09: the card says QUEUED — never the user-wait state.
+    expect(states).toContain("queued");
+    expect(states).not.toContain("waiting_for_user");
+    setBrowserBatchEventSink(null);
+    // Cleanup for the next test.
+    setDefaultManagedBrowserLeaseServiceForTest(null);
+  });
+
+  it("a child crash before session_id releases the lease (stopAllForConversation)", async () => {
+    stopAllForConversationMock.mockClear();
+    const crash = {
+      runSync: async () => {
+        throw new Error("worker exit before session_id");
+      },
+    };
+    const outcome = await runBrowserTasks(
+      [{ goal: "crash before session" } as BrowserBatchTaskInput],
+      1,
+      "conv-crash-w09",
+      new AbortController().signal,
+      { runAgent: () => crash as never }
+    );
+    expect(outcome.results[0]?.status).toBe("failed");
+    // The cleanup is a detached best-effort async — flush it.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(stopAllForConversationMock).toHaveBeenCalledWith(
+      "conv-crash-w09",
+      "cancelled"
+    );
   });
 });

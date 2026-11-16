@@ -4578,6 +4578,7 @@ export default {
     resume_instructions_label: "Anweisungen (optional)",
     taskRunning: "Läuft",
     taskWaitingForYou: "Wartet auf Sie",
+    taskQueued: "In Warteschlange",
     taskPaused: "Von Ihnen pausiert",
     taskCompleted: "Abgeschlossen",
     taskFailed: "Fehlgeschlagen",

@@ -4301,6 +4301,7 @@ export default {
     resume_instructions_label: "指示（可选）",
     taskRunning: "运行中",
     taskWaitingForYou: "等待您操作",
+    taskQueued: "排队中",
     taskPaused: "已由您暂停",
     taskCompleted: "已完成",
     taskFailed: "失败",
