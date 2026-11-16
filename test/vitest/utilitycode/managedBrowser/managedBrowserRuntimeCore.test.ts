@@ -485,3 +485,34 @@ describe("ChallengeDetector", () => {
     expect(classifyChallengeFlow(signals())).toBe("unknown");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A-FR-15: the sentinel scan — internal credential markers
+// (__decrypt_failed__-style) never leak through observation text as if
+// they were page content.
+// ---------------------------------------------------------------------------
+describe("A-FR-15 credential sentinel scan", () => {
+  it("redacts double-underscore sentinels from free-form text", async () => {
+    const { redactSecretsInText } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    expect(redactSecretsInText("row user is __decrypt_failed__ on retry")).toBe(
+      "row user is [redacted] on retry"
+    );
+    expect(redactSecretsInText("plain text without markers")).toBe(
+      "plain text without markers"
+    );
+  });
+
+  it("redacts sentinels in structured records too", async () => {
+    const { redactSecrets } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    const cleaned = redactSecrets({
+      user: "__decrypt_failed__",
+      note: "normal value",
+    }) as Record<string, unknown>;
+    expect(cleaned.user).toBe("[redacted]");
+    expect(cleaned.note).toBe("normal value");
+  });
+});

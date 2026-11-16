@@ -113,12 +113,39 @@ export class BrowserChatNoticePublisher {
       requiresUserAction:
         input.requiresUserAction || REQUIRES_ACTION_TYPES.has(input.type),
       createdAt: new Date().toISOString(),
-      messageArgs: sanitizeNoticeArgs(input.messageArgs),
+      // A-FR-15: the sentinel scan — a notice argument carrying an
+      // internal credential marker (__decrypt_failed__-style) or a
+      // secret-shaped value is REDACTED, never forwarded to the chat.
+      messageArgs: sanitizeNoticeArgs(
+        redactSentinelsInArgs(input.messageArgs)
+      ),
       taskLabel: input.taskLabel ?? null,
     };
     this.sink(notice);
     return notice;
   }
+}
+
+/**
+ * A-FR-15: sentinel scan over notice arguments — double-underscore
+ * internal markers and secret-shaped values are redacted in place (the
+ * notice itself still publishes; only the offending VALUE is dropped).
+ */
+function redactSentinelsInArgs(
+  args: Readonly<Record<string, string | number | boolean>> | undefined
+): Readonly<Record<string, string | number | boolean>> | undefined {
+  if (!args) {
+    return args;
+  }
+  const out: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string" && /^__[a-z0-9_]+__$/i.test(value.trim())) {
+      out[key] = "[redacted]";
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
 }
 
 /** Drop any argument key outside the allow-list (defense in depth). */

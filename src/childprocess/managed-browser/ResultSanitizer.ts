@@ -23,6 +23,10 @@ const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
   /^(?:[0-9a-f]{32,})$/i, // hex digest / random token
   /^gh[pousr]_[A-Za-z0-9]{20,}$/, // GitHub-style PAT
   /^sk-[A-Za-z0-9]{16,}$/, // API-key shape
+  // A-FR-15: internal credential sentinels (e.g. __decrypt_failed__) are
+  // markers, never page data — they must never leak through observations
+  // or logs as if they were content.
+  /^__[a-z0-9_]+__$/i,
 ];
 
 /**
