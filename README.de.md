@@ -41,6 +41,10 @@ aiFetchly verwandelt geschäftliche Absichten in ausführbare Workflows:
 
 ![aiFetchly KI-Agent-Arbeitsbereich](docs/images/readme/hero-ai-chat.png)
 
+### KI-Bilderzeugung und -bearbeitung
+
+![KI-Bildbearbeitung im aiFetchly-Chat](docs/images/readme/edit_image.png)
+
 ### Verwalteter Browser (Browser Use)
 
 ![aiFetchly Browser Use](docs/images/readme/browseruse.png)

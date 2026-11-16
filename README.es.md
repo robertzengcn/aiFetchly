@@ -41,6 +41,10 @@ aiFetchly convierte una intención de negocio en flujos ejecutables:
 
 ![Espacio de trabajo del agente de IA de aiFetchly](docs/images/readme/hero-ai-chat.png)
 
+### Generación y edición de imágenes con IA
+
+![Edición de imágenes con IA en el chat de aiFetchly](docs/images/readme/edit_image.png)
+
 ### Navegador gestionado (Browser Use)
 
 ![aiFetchly Browser Use](docs/images/readme/browseruse.png)

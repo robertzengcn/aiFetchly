@@ -41,6 +41,10 @@ aiFetchly 可以把业务意图转化为可执行工作流：
 
 ![aiFetchly AI agent 工作区](docs/images/readme/hero-ai-chat.png)
 
+### AI 图像生成与编辑
+
+![aiFetchly AI 聊天图像编辑](docs/images/readme/edit_image.png)
+
 ### 受管浏览器（Browser Use）
 
 ![aiFetchly Browser Use](docs/images/readme/browseruse.png)

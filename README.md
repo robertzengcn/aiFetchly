@@ -52,6 +52,10 @@ aiFetchly helps you turn business intent into executable workflows:
 
 ![aiFetchly AI agent workspace](docs/images/readme/hero-ai-chat.png)
 
+### AI Image Generation & Editing
+
+![aiFetchly AI image editing in chat](docs/images/readme/edit_image.png)
+
 ### Managed Browser (Browser Use)
 
 ![aiFetchly Browser Use](docs/images/readme/browseruse.png)

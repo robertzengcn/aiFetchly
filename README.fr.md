@@ -41,6 +41,10 @@ aiFetchly transforme une intention métier en workflows exécutables :
 
 ![Espace de travail agent IA aiFetchly](docs/images/readme/hero-ai-chat.png)
 
+### Génération et édition d'images IA
+
+![Édition d'images IA dans le chat aiFetchly](docs/images/readme/edit_image.png)
+
 ### Navigateur géré (Browser Use)
 
 ![aiFetchly Browser Use](docs/images/readme/browseruse.png)
