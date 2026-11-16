@@ -2108,6 +2108,10 @@ const pastedChips = computed<PastedChip[]>(() => {
   background: rgba(255, 255, 255, 0.7);
 }
 .v2-message__image-button {
+  /* Chromium shrink-wraps <button> even when display:block, so the inner
+     width:100% image would resolve against the button's content width and
+     render at its natural pixel size. Stretch the wrapper to the tile. */
+  width: 100%;
   padding: 0;
   color: inherit;
   cursor: pointer;
@@ -2131,6 +2135,9 @@ const pastedChips = computed<PastedChip[]>(() => {
   top: 4px;
   left: 4px;
   z-index: 1;
+  /* Decorative numbering only (aria-hidden): never intercept clicks that
+     land on the action buttons underneath when a tile collapses. */
+  pointer-events: none;
   min-width: 18px;
   height: 18px;
   padding: 0 5px;
