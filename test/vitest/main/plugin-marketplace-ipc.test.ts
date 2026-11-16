@@ -91,6 +91,7 @@ import {
   PLUGIN_MARKETPLACE_ADD,
   PLUGIN_MARKETPLACE_REFRESH,
   PLUGIN_MARKETPLACE_REMOVE,
+  PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS,
   PLUGIN_MARKETPLACE_INSTALL_PLUGIN,
 } from "@/config/channellist";
 
@@ -106,17 +107,27 @@ describe("plugin-marketplace-ipc", () => {
     expect(handlers.has(PLUGIN_MARKETPLACE_ADD)).toBe(true);
     expect(handlers.has(PLUGIN_MARKETPLACE_REMOVE)).toBe(true);
     expect(handlers.has(PLUGIN_MARKETPLACE_INSTALL_PLUGIN)).toBe(true);
+    expect(handlers.has(PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS)).toBe(true);
   });
 
-  it("returns AI-not-enabled envelope when AI is disabled", async () => {
+  it("serves the Sources/Issues listing even when AI is disabled (incident 2026-11-16)", async () => {
+    // Plugin management is NOT an AI feature: the Sources table and Issues
+    // table must render for Free users with USER_AI_ENABLED !== "true".
     aiEnabledValue = "false";
     const fn = handlers.get(PLUGIN_MARKETPLACE_LIST)!;
     const result = await fn({}, undefined);
     expect(result).toEqual({
-      status: false,
-      msg: expect.stringContaining("not enabled"),
-      data: null,
+      status: true,
+      msg: "ok",
+      data: expect.any(Array),
     });
+  });
+
+  it("serves available-plugins even when AI is disabled", async () => {
+    aiEnabledValue = "false";
+    const fn = handlers.get(PLUGIN_MARKETPLACE_AVAILABLE_PLUGINS)!;
+    const result = await fn({}, {});
+    expect(result).toEqual({ status: true, msg: "ok", data: [] });
   });
 
   it("rejects add with empty source", async () => {
