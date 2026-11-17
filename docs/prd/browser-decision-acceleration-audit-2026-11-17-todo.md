@@ -183,3 +183,6 @@ Previous isolated cooldown failure did not recur in this focused run. Previous r
 - **R01 partial**: strict child output validation (missing/unrecognized statuses are FAILED, never silently completed) and the reservation abort recheck (a Stop during the wait cannot start the lane it was meant to cancel).
 
 Sweep at the closure HEAD: **693 tests passed across 58 main-process files**, **1,622 component tests across 183 files**, and the managedBrowser utility suite **159/159**. Still open (external/qualification): R01's agent pause-resume loop (headless runtime has no resume re-entry — deferred), R02's recall measurement and capability-budgeted candidate prep, R03's live-provider/WebRTC qualification, R04's real E2E drivers, held-out evaluation and packaged evidence (operator/CI).
+
+CI run 44112455829 SUCCESS on all three jobs (Lint+unit 18m14s,
+Package smoke 9m5s, Electron E2E 34m32s) at `6f3304843`.
