@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
+import { isAiOrProviderEnabled } from "@/service/AiFeatureGate";
 import {
   MANAGED_BROWSER_ACTION_LIMITS,
   MANAGED_BROWSER_PILOT_PLATFORM_IDS,
@@ -1799,10 +1800,10 @@ async function resolveAccountProxy(
   }
 }
 
-/** Default AI entitlement check (Token + USER_AI_ENABLED). */
+/** Default AI entitlement check (hosted subscription OR configured local provider). */
 function defaultIsAiEnabled(): boolean {
   try {
-    return new Token().getValue(USER_AI_ENABLED) === "true";
+    return isAiOrProviderEnabled();
   } catch {
     return false;
   }

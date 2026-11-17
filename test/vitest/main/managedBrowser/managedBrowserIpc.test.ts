@@ -14,8 +14,10 @@ vi.mock("electron", () => ({
 const isAiEnabledMock = vi.fn(() => true);
 vi.mock("@/service/AiFeatureGate", () => ({
   isAiEnabled: () => isAiEnabledMock(),
+  isAiOrProviderEnabled: () => isAiEnabledMock(),
   // dev's AI-gate wrapper consults the hosted reconcile; mirror the toggle.
   ensureHostedAiEnabled: async () => isAiEnabledMock(),
+  ensureAiOrProviderEnabled: async () => isAiEnabledMock(),
 }));
 
 // Fake the browser module singleton (spies; no DB, no worker).
@@ -237,13 +239,17 @@ describe("managed-browser-ipc", () => {
     expect(browserModuleSpies.getStatus).not.toHaveBeenCalled();
   });
 
-  it("settings and cache channels are NOT AI-gated", async () => {
+  it("settings, list-active and cache channels are NOT AI-gated", async () => {
     isAiEnabledMock.mockReturnValue(false);
     const settings = await invoke(MANAGED_BROWSER_GET_EFFECTIVE_SETTINGS, {});
     expect(settings.status).toBe(true);
     expect(
       browserModuleSpies.getEffectiveSettingsForRenderer
     ).toHaveBeenCalledTimes(1);
+
+    const active = await invoke(MANAGED_BROWSER_LIST_ACTIVE, {});
+    expect(active.status).toBe(true);
+    expect(browserModuleSpies.listActiveSessions).toHaveBeenCalledTimes(1);
   });
 
   it("cache status routes account vs all scopes", async () => {
