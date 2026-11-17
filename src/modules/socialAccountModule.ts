@@ -573,6 +573,34 @@ export class SocialAccountModule extends BaseModule {
     return elapsed >= 0 && elapsed < cooldownMs;
   }
 
+  // B10: per user+site SAVE SERIALIZATION — the credential card's
+  // read-then-write (findRowByUserAndSite → update/save) is a race window;
+  // two simultaneous card requests for the same account/site serialize
+  // here so both cannot pass the duplicate check.
+  private static readonly credentialSaveLocks = new Map<string, Promise<void>>();
+
+  private static async withCredentialSaveLock<T>(
+    key: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous =
+      SocialAccountModule.credentialSaveLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    SocialAccountModule.credentialSaveLocks.set(
+      key,
+      previous.then(() => gate)
+    );
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
   /** Save a credential submitted through the secure card (A-FR-06). */
   public async saveSubmittedCredential(input: {
     readonly siteId: number | null;
@@ -584,7 +612,10 @@ export class SocialAccountModule extends BaseModule {
     if (!input.save) {
       throw new Error("save_not_requested");
     }
-    await this.ensureConnection();
+    return await SocialAccountModule.withCredentialSaveLock(
+      `${input.username}::${input.siteId ?? input.platformId ?? 0}`,
+      async () => {
+        await this.ensureConnection();
     const platformId = input.platformId ?? (input.siteId ?? 0);
     // Q-01/R02: an existing account for the SAME user+site is UPDATED —
     // the credential card never creates a duplicate of a disabled account;
@@ -599,10 +630,12 @@ export class SocialAccountModule extends BaseModule {
       if (encrypted === null) {
         throw new Error("credential_unavailable");
       }
-      await this.socialAccountModel.updatePassword(existing.id, encrypted);
-      if (!existing.ai_use_enabled) {
-        await this.socialAccountModel.updateAiUseEnabled(existing.id, true);
-      }
+      // B10: password and opt-in write TOGETHER — an interruption between
+      // them can no longer leave a saved password with the opt-in off.
+      await this.socialAccountModel.updateCredentialWithOptIn(existing.id, {
+        encryptedPass: encrypted,
+        aiUseEnabled: true,
+      });
       return existing.id;
     }
     const entity = new SocialAccountEntity();
@@ -616,6 +649,8 @@ export class SocialAccountModule extends BaseModule {
     entity.ai_use_enabled = true;
     entity.pass = await this.encryptPass(input.password);
     return await this.socialAccountModel.saveNewAccount(entity);
+    }
+  );
   }
 
   /**

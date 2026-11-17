@@ -205,4 +205,19 @@ export class SocialAccountModel extends BaseDb {
   async updateAiUseEnabled(accountId: number, enabled: boolean): Promise<void> {
     await this.repository.update(accountId, { ai_use_enabled: enabled });
   }
+
+  /**
+   * B10: password and opt-in write TOGETHER — an interruption between two
+   * separate updates can no longer leave a saved credential with the
+   * opt-in off (the duplicate guard assumes both landed).
+   */
+  async updateCredentialWithOptIn(
+    accountId: number,
+    fields: { encryptedPass: string; aiUseEnabled: boolean }
+  ): Promise<void> {
+    await this.repository.update(accountId, {
+      pass: fields.encryptedPass,
+      ai_use_enabled: fields.aiUseEnabled,
+    });
+  }
 }

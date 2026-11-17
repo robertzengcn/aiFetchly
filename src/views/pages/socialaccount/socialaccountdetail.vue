@@ -53,6 +53,28 @@
         <v-btn :value="0" color="primary">{{ t('socialaccount.inactive') }}</v-btn>
         <v-btn :value="1" color="success">{{ t('socialaccount.active') }}</v-btn>
       </v-btn-toggle>
+
+      <!-- Q-01/B10: per-account AI opt-in (editable for existing accounts). -->
+      <div v-if="isEdit" class="mt-3" data-testid="socialaccount-ai-optin">
+        <v-checkbox
+          v-model="aiUseEnabled"
+          :label="t('socialaccount.ai_use_enabled')"
+          :hint="t('socialaccount.ai_use_enabled_hint')"
+          persistent-hint
+          density="compact"
+          :disabled="aiUseSaving"
+          data-testid="socialaccount-ai-optin-checkbox"
+        ></v-checkbox>
+        <v-alert
+          v-if="aiUseError !== null"
+          type="error"
+          density="compact"
+          class="mt-1"
+          data-testid="socialaccount-ai-optin-error"
+        >
+          {{ aiUseError }}
+        </v-alert>
+      </div>
       
       <v-autocomplete
         class="mt-3"
@@ -222,6 +244,8 @@ import {
   requireCookiesselecttab,
   receiveAccountLoginevent,
   getSessionMetadata,
+  getSocialAccountAiUseEnabled,
+  setSocialAccountAiUseEnabled,
 } from "@/views/api/socialaccount";
 import { SOCIAL_ACCOUNT_LOGIN_MESSSAGE } from "@/config/channellist";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -282,6 +306,33 @@ async function openManagedBrowser(): Promise<void> {
   }
 }
 const social_type_id = ref<number>();
+// Q-01/B10: per-account AI opt-in state (existing accounts only).
+const aiUseEnabled = ref(false);
+const aiUseSaving = ref(false);
+const aiUseError = ref<string | null>(null);
+
+async function onAiUseToggled(enabled: boolean): Promise<void> {
+  const id = parseInt($route.params.id?.toString() ?? "", 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return;
+  }
+  aiUseSaving.value = true;
+  aiUseError.value = null;
+  try {
+    await setSocialAccountAiUseEnabled(id, enabled);
+  } catch (error) {
+    // Revert to the persisted state and surface the failure.
+    aiUseEnabled.value = !enabled;
+    aiUseError.value =
+      error instanceof Error ? error.message : t('socialaccount.ai_use_failed');
+  } finally {
+    aiUseSaving.value = false;
+  }
+}
+
+watch(aiUseEnabled, (enabled) => {
+  void onAiUseToggled(enabled);
+});
 const proxyValue = ref<Array<Proxy>>([]);
 const proxyValueshow = ref<Array<string>>([]);
 const loading = ref(false);
@@ -365,7 +416,8 @@ const initialize = async () => {
   if (socialaccountId.value > 0) {
     //edit
     isEdit.value = true;
-    FakeAPI.fetch(parseInt(socialaccountId.value.toString())).then((res) => {
+    FakeAPI.fetch(parseInt(socialaccountId.value.toString())).then(
+      async (res) => {
       user.value = res.user;
       pass.value = res.pass ?? "";
       status.value = res.status;
@@ -391,6 +443,14 @@ const initialize = async () => {
 
       // console.log(proxyValue.value)
       social_type_id.value = res.social_type_id;
+      // Q-01/B10: load the per-account AI opt-in for existing accounts.
+      await getSocialAccountAiUseEnabled(socialaccountId.value)
+        .then((enabled) => {
+          aiUseEnabled.value = enabled;
+        })
+        .catch(() => {
+          aiUseEnabled.value = false;
+        });
     });
   } else {
     //add new item
@@ -417,13 +477,10 @@ const initialize = async () => {
 };
 
 async function onSubmit() {
-  console.log("submit");
   if (!form.value) return;
   const { valid } = await form.value.validate();
-  // console.log(valid);
   loading.value = true;
   if (!valid) {
-    console.log("form is not valid");
     loading.value = false;
     alert.value = true;
     alertcolor.value = "error";
@@ -480,19 +537,11 @@ async function onSubmit() {
   loading.value = false;
 }
 
-// Watch platformitems to debug when they change
-watch(platformitems, (newValue) => {
-  console.log('platformitems changed:', newValue);
-  console.log('platformitems length:', newValue.length);
-}, { immediate: true, deep: true });
-
 onMounted(async () => {
   try {
-    console.log('Component mounted, initializing...');
     await initialize();
     setupUploadCookiesListener();
     void refreshMetadata();
-    console.log('Initialization complete');
   } catch (error) {
     console.error('Error during initialization:', error);
   }
