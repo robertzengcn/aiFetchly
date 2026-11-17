@@ -1599,9 +1599,9 @@ describe("AiChatWorkspaceTranscript remote working indicator & empty bubble supp
     });
     await flushPromises();
 
-    const listEl = wrapper.find('[data-testid="workspace-transcript-list"]').element;
+    const listEl = wrapper.find('[data-testid="workspace-transcript"]').element;
     const childOrder = Array.from(listEl.children).map((el) => {
-      if (el.getAttribute("data-testid") === "execution-group") {
+      if (el.classList.contains("execution-group")) {
         return "execution-group";
       }
       if (el.classList.contains("v2-message--user")) {
@@ -1658,7 +1658,7 @@ describe("AiChatWorkspaceTranscript remote working indicator & empty bubble supp
 
     const messageComponents = wrapper.findAllComponents({ name: "AiChatV2Message" });
     expect(messageComponents).toHaveLength(2);
-    const errorStatus = wrapper.find('[data-testid="stream-status-error"]');
+    const errorStatus = wrapper.find(".v2-stream-status");
     expect(errorStatus.exists()).toBe(true);
     expect(errorStatus.text()).toContain("AI server returned 502 Bad Gateway");
   });
