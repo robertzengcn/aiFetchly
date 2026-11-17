@@ -495,13 +495,22 @@ describe("AgentRuntime control gate before the model call (W07)", () => {
     // wraps the control service's register to pause right after.
     const control = getDefaultAgentTaskControlService();
     const originalRegister = control.register.bind(control);
+    let liveRuntime: AgentRuntime | null = null;
+    let liveTaskId: string | null = null;
     control.register = (taskId: string, conversationId: string) => {
       const record = originalRegister(taskId, conversationId);
+      liveTaskId = taskId;
       control.setState(taskId, "paused", "user_paused");
+      // R01: the loop now BLOCKS in the pause wait (the job stays alive) —
+      // cancel it shortly so the run settles for the assertions below.
+      setTimeout(() => {
+        void liveRuntime?.cancelTask(liveTaskId!);
+      }, 100);
       return record;
     };
     try {
       const runtime = new AgentRuntime();
+      liveRuntime = runtime;
       const result = await runtime.runSync(
         {
           agentId: "agent-test",
@@ -515,10 +524,11 @@ describe("AgentRuntime control gate before the model call (W07)", () => {
           eventSink: deps.eventSink,
         }
       );
-      // Blocked, not cancelled — and NO model request was ever sent.
-      expect(result.status).toBe("blocked");
+      // The paused window sent NOTHING and executed NOTHING.
       expect(requests).toHaveLength(0);
       expect(deps.executeTool).not.toHaveBeenCalled();
+      // The cancel while paused ends the task cancelled.
+      expect(result.status).toBe("cancelled");
     } finally {
       control.register = originalRegister;
     }
@@ -552,6 +562,13 @@ describe("AgentRuntime control gate before the model call (W07)", () => {
     const { events, deps } = makeDeps(streamFn);
 
     const runtime = new AgentRuntime();
+    // R01: the loop blocks in the pause wait after the body finishes —
+    // cancel the paused task so the run settles for the assertions.
+    setTimeout(() => {
+      if (registeredTaskId) {
+        void runtime.cancelTask(registeredTaskId);
+      }
+    }, 100);
     const result = await runtime.runSync(
       {
         agentId: "agent-test",
@@ -567,14 +584,120 @@ describe("AgentRuntime control gate before the model call (W07)", () => {
     );
 
     // The response body finished (one request) but the NEXT round is never
-    // sent — the task ends blocked, not cancelled.
+    // sent, and NONE of the response's tool calls acted: the wrapper
+    // returned the held paused result instead of dispatching the tool.
     expect(requests).toHaveLength(1);
-    expect(result.status).toBe("blocked");
-    // NONE of the response's tool calls acted: the wrapper returned the
-    // held paused result instead of dispatching the tool.
     expect(deps.executeTool).not.toHaveBeenCalled();
     const toolResults = toolResultEvents(events);
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0].agentTaskPaused).toBe(true);
+    // The cancel while paused ends the task cancelled (never resumed).
+    expect(result.status).toBe("cancelled");
   });
+});
+
+// ---------------------------------------------------------------------------
+// R01/C-FR-04: the sub-agent job is RESUMABLE after a user pause — the
+// loop blocks in onPauseWait and resumes safe work when the gate reopens
+// (previously it returned blocked immediately and the work was lost).
+// ---------------------------------------------------------------------------
+describe("AgentRuntime pause-resume (R01/C-FR-04)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    timeoutState.inferClassOverride = undefined;
+  });
+
+  afterEach(() => {
+    setDefaultToolJobRegistry(new ToolJobRegistry());
+  });
+
+  it("a pause before round 1 blocks in-loop and a resume lets the task complete", async () => {
+    const { streamFn, requests } = makeStreamRoundTrips();
+    const { deps } = makeDeps(streamFn);
+    const control = getDefaultAgentTaskControlService();
+    const originalRegister = control.register.bind(control);
+    let paused = false;
+    // The user pauses the task right after registration, then resumes it
+    // while the loop is blocked in the pause wait.
+    control.register = (taskId: string, conversationId: string) => {
+      const record = originalRegister(taskId, conversationId);
+      if (!paused) {
+        paused = true;
+        control.register = originalRegister;
+        control.setState(taskId, "paused", "user_paused");
+        setTimeout(() => {
+          // resume() reopens the gate and RESOLVES the loop's waiters.
+          control.resume(taskId);
+        }, 150);
+      }
+      return record;
+    };
+    try {
+      const runtime = new AgentRuntime();
+      const result = await runtime.runSync(
+        {
+          agentId: "agent-test",
+          prompt: "read a.csv and summarize",
+          executionMode: "foreground",
+          taskPacket: { files: ["a.csv"], instruction: "summarize" },
+        },
+        {
+          streamChatCompletion: streamFn as never,
+          executeTool: deps.executeTool as never,
+          eventSink: deps.eventSink,
+        }
+      );
+      // The resumed task COMPLETES (not blocked, not cancelled).
+      expect(result.status).toBe("completed");
+      expect(result.output?.businessSummary).toBe(
+        "answered without file access"
+      );
+      // The model request was only sent AFTER the resume — the paused
+      // window spent zero tokens.
+      expect(requests.length).toBe(2);
+    } finally {
+      control.register = originalRegister;
+    }
+  }, 30_000);
+
+  it("a cancel while paused ends the task cancelled (never resumed)", async () => {
+    const { streamFn, requests } = makeStreamRoundTrips();
+    const { deps } = makeDeps(streamFn);
+    const control = getDefaultAgentTaskControlService();
+    const originalRegister = control.register.bind(control);
+    let paused = false;
+    control.register = (taskId: string, conversationId: string) => {
+      const record = originalRegister(taskId, conversationId);
+      if (!paused) {
+        paused = true;
+        control.register = originalRegister;
+        control.setState(taskId, "paused", "user_paused");
+        setTimeout(() => {
+          control.setState(taskId, "cancelled", "user_stop");
+        }, 150);
+      }
+      return record;
+    };
+    try {
+      const runtime = new AgentRuntime();
+      const result = await runtime.runSync(
+        {
+          agentId: "agent-test",
+          prompt: "read a.csv and summarize",
+          executionMode: "foreground",
+          taskPacket: { files: ["a.csv"], instruction: "summarize" },
+        },
+        {
+          streamChatCompletion: streamFn as never,
+          executeTool: deps.executeTool as never,
+          eventSink: deps.eventSink,
+        }
+      );
+      expect(result.status).toBe("cancelled");
+      // No model request was ever sent for the cancelled task.
+      expect(requests.length).toBe(0);
+    } finally {
+      control.register = originalRegister;
+    }
+  }, 30_000);
 });

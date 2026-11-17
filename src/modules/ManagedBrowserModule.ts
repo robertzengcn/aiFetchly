@@ -2282,6 +2282,25 @@ record.currentUrl = message.observation.url || record.currentUrl;
    * control (AI commands rejected), and pins the latest observation so
    * refs stay resolvable while paused.
    */
+  /**
+   * R01/C-FR-10: EXPLICIT user-requested window focus ("Open browser" on
+   * the session card). The worker calls page.bringToFront() — the only
+   * sanctioned focus path; launches never steal focus.
+   */
+  public async focusWindow(sessionId: string): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    // Focus is allowed in every non-terminal state — it changes nothing
+    // about the session's control or execution surface.
+    await record.client
+      .request(
+        { type: "FOCUS_WINDOW" },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      )
+      .catch(() => undefined);
+    return this.toSafeStatus(record);
+  }
+
   public async pauseSession(sessionId: string): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
     await record.client

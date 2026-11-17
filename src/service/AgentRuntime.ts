@@ -633,6 +633,15 @@ export class AgentRuntime {
           }
           return "ok";
         },
+        // R01/C-FR-04: a pause BLOCKS IN THE LOOP on the control gate —
+        // the sub-agent job stays alive and resumes safe work when the
+        // user resumes (held pre-pause tool calls were already gated per
+        // call; the gate recheck at the round top discards stale state).
+        // A rejection (cancelled/interrupted) ends the turn as before.
+        onPauseWait: async (signal: AbortSignal) => {
+          const gate = getDefaultAgentTaskControlService().getGate(controlTaskId);
+          await gate.waitUntilOpen(signal);
+        },
         // Retry transient content failures instantly. Agents run under a tight
         // maxRuntimeMs deadline (the abort timer above); spending that budget
         // on exponential backoff sleeps can starve actual work. The agent's
@@ -649,13 +658,14 @@ export class AgentRuntime {
         capturedImages = result.images;
       } else if (result.type === "cancelled") {
         finalText = result.partialContent;
-        // W07/C-FR-05: a gate-reported PAUSE is not a user cancel — the
-        // task is blocked until resume, so persist waiting_user (never
-        // cancelled) and return the blocked status.
+        // W07/C-FR-05/R01: a gate-reported PAUSE is not a user cancel —
+        // the task is blocked until resume. With the loop-level pause
+        // wait (onPauseWait) this branch only fires when the wait was
+        // REJECTED by an expiry/interruption; the persisted status stays
+        // waiting_user WITHOUT finishedAt (the task is not finished —
+        // a resume can still advance it).
         if (result.agentTaskPaused) {
-          await this.taskModule.setStatus(agentTaskId, "waiting_user", {
-            finishedAt: new Date(),
-          });
+          await this.taskModule.setStatus(agentTaskId, "waiting_user", {});
           return this.buildResult(
             agentTaskId,
             definition,

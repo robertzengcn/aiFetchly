@@ -373,6 +373,11 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           ...(resumed ? {} : { reason: "session_resume_failed" }),
         };
       }
+      // R01/C-FR-08: the task stays PAUSED when the browser cannot resume
+      // — the control gate must not reopen onto a dead worker.
+      if (!resumed) {
+        return { ok: false, reason: "session_resume_failed" };
+      }
       controlService.endIntervention(resolvedResumeTaskId);
       // B13/C-FR-07: the user's instructions are stored on the control
       // record and consumed ONCE by the running loop (folded into its
@@ -427,10 +432,22 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   registerValidatedHandler(
     BROWSER_TASK_FOCUS_WINDOW,
     browserTaskFocusWindowSchema,
-    async () => {
-      // C-FR-10: never steals focus automatically; the button requests it.
-      // Chrome window focus is a follow-up worker capability.
-      return { ok: false, reason: "focus_not_supported_yet" };
+    async (input) => {
+      // R01/C-FR-10: the user EXPLICITLY requested focus ("Open browser"
+      // on the session card) — the worker's sanctioned bringToFront path.
+      // Launches never steal focus; only this button does.
+      try {
+        await getDefaultManagedBrowserModule().focusWindow(input.sessionId);
+        return { ok: true };
+      } catch (error) {
+        return {
+          ok: false,
+          reason:
+            error instanceof Error && error.message.length > 0
+              ? error.message
+              : "focus_failed",
+        };
+      }
     }
   );
 

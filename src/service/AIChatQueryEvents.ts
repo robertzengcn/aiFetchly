@@ -685,6 +685,15 @@ export interface AIChatQueryLoopInput {
    */
   onBeforeModelRound?: () => "ok" | "pause" | "cancel";
   /**
+   * R01/C-FR-04: when onBeforeModelRound reports "pause" AND this hook is
+   * present, the loop AWAITS it (blocking on the caller's resume gate)
+   * instead of ending the turn — the job stays alive and RESUMES safe
+   * work when the gate reopens. A rejection (cancelled/expired/interrupted
+   * while waiting) ends the turn cancelled as before. Without the hook
+   * the legacy end-paused behavior applies.
+   */
+  onPauseWait?: (signal: AbortSignal) => Promise<void>;
+  /**
    * Optional override for the transient-failure auto-retry policy. When
    * omitted the loop uses its module-level defaults (3 attempts, exponential
    * backoff from 800ms). Mainly used by tests to make retries instantaneous

@@ -584,6 +584,17 @@ const pinObservationMessageSchema = z.strictObject({
   pinned: z.boolean(),
 });
 
+/**
+ * R01/C-FR-10: EXPLICIT user-requested window focus ("Open browser" on
+ * the session card) — the ONLY sanctioned bringToFront path. Launches
+ * never steal focus; this command exists precisely because the user
+ * asked for it.
+ */
+const focusWindowMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("FOCUS_WINDOW"),
+});
+
 const stopSessionMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("STOP_SESSION"),
@@ -645,6 +656,7 @@ export const managedBrowserInboundSchema = lazySchema(() =>
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
     pauseRequestMessageSchema,
+    focusWindowMessageSchema,
     pinObservationMessageSchema,
     fillLoginFormMessageSchema,
     stopSessionMessageSchema,

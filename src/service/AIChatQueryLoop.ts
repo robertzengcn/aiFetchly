@@ -2549,7 +2549,7 @@ export class AIChatQueryLoop {
         // executeTool wrapper returns paused results per call).
         if (input.onBeforeModelRound) {
           const gateVerdict = input.onBeforeModelRound();
-          if (gateVerdict === "cancel" || gateVerdict === "pause") {
+          if (gateVerdict === "cancel") {
             return {
               type: "cancelled",
               conversationId: input.conversationId,
@@ -2563,9 +2563,59 @@ export class AIChatQueryLoop {
                     announcedDeferredNames
                   )
                 : undefined,
+            };
+          }
+          // R01/C-FR-04: a PAUSE waits on the caller's resume gate IN the
+          // loop — the job stays alive and resumes safe work when the user
+          // reopens the gate (no further tokens are spent while waiting;
+          // the request was never sent). A rejected wait (cancelled/
+          // interrupted) ends the turn cancelled as before. Without the
+          // hook the legacy end-paused behavior applies.
+          if (gateVerdict === "pause" && input.onPauseWait) {
+            try {
+              await input.onPauseWait(input.abortController.signal);
+              // Gate reopened — re-run the round-top checks (a fresh pause
+              // or a cancel may have landed while waiting).
+              continue;
+            } catch (waitError) {
+              // A wait rejected with task_cancelled is a REAL user
+              // cancel; only interrupted/expired waits map to blocked.
+              const waitMessage =
+                waitError instanceof Error
+                  ? waitError.message
+                  : String(waitError);
+              return {
+                type: "cancelled",
+                conversationId: input.conversationId,
+                assistantMessageId: input.assistantMessageId,
+                partialContent: "",
+                toolCatalogState: catalogActive
+                  ? snapshotToolCatalogState(
+                      discoveredToolNames,
+                      announcedDeferredNames
+                    )
+                  : undefined,
+                ...(waitMessage === "task_cancelled"
+                  ? {}
+                  : { agentTaskPaused: true }),
+              };
+            }
+          }
+          if (gateVerdict === "pause") {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              partialContent: "",
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
               // W07: distinguishes a PAUSED turn from a user cancel —
               // the agent runtime maps this to blocked, not cancelled.
-              ...(gateVerdict === "pause" ? { agentTaskPaused: true } : {}),
+              agentTaskPaused: true,
             };
           }
         }

@@ -969,6 +969,24 @@ export class WorkerSession {
     this.currentRunActionsAbort?.abort();
   }
 
+  /**
+   * R01/C-FR-10: EXPLICIT user-requested window focus ("Open browser" on
+   * the session card). The ONLY sanctioned bringToFront path — launches
+   * never steal focus (C-FR-10); this exists because the user asked.
+   * Best-effort: a headless page (no window) resolves silently.
+   */
+  public async focusWindow(): Promise<void> {
+    if (!this.page) {
+      return;
+    }
+    try {
+      await this.page.bringToFront();
+    } catch {
+      // Headless or already-focused — the user request cannot fail the
+      // session; nothing observable changed either way.
+    }
+  }
+
   /** E15/D-FR-26: was input dispatched by the IN-FLIGHT program? */
   public isInputDispatched(): boolean {
     return this.currentDispatchFlag?.inputDispatched === true;

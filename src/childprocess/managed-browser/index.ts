@@ -226,6 +226,18 @@ parentPort.on("message", async (event: { data: unknown }) => {
           })
         );
         return;
+      case "FOCUS_WINDOW":
+        // R01/C-FR-10: EXPLICIT user-requested focus ("Open browser") —
+        // the sanctioned bringToFront path; launches never steal focus.
+        await session.focusWindow();
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+          })
+        );
+        return;
       case "CANCEL_REQUEST":
         session.cancelCurrent();
         parentPort.postMessage(
