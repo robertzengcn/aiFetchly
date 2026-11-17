@@ -778,8 +778,7 @@ export class ManagedBrowserCacheModule
   public async enforceEvictionLimits(settings: {
     readonly cacheMaxBytes: number;
   }): Promise<{ plannedScopes: number; plannedBytes: number; skipped: boolean }> {
-    const plan = this.maintenance.planEviction;
-    if (!plan) {
+    if (!this.maintenance.planEviction) {
       return { plannedScopes: 0, plannedBytes: 0, skipped: true };
     }
     const roots = await this.listManagedRoots();
@@ -788,7 +787,7 @@ export class ManagedBrowserCacheModule
     }
     const { managedRoot } = roots[0];
     const activeScopeTokens = [...this.activeScopes.keys()];
-    const decision = await plan({
+    const decision = await this.maintenance.planEviction({
       managedRoot,
       maxTotalBytes: settings.cacheMaxBytes,
       perScopeTargetBytes:
