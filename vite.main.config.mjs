@@ -90,7 +90,9 @@ export default ({ mode }) => {
                 process.env.VITE_PLUGIN_HUB_URL || ''
             ),
             'process.env.AIFETCHLY_ALLOW_HTTP_HUB': JSON.stringify(
-                process.env.AIFETCHLY_ALLOW_HTTP_HUB || ''
+                process.env.AIFETCHLY_ALLOW_HTTP_HUB ||
+                process.env.VITE_ALLOW_HTTP_HUB ||
+                (String(process.env.VITE_PLUGIN_HUB_URL || '').startsWith('http://') ? '1' : '')
             ),
             // Bake the crash-upload mainLogTail rollout flag for PRODUCTION
             // builds only: packaged apps launched from Finder/Start Menu have
