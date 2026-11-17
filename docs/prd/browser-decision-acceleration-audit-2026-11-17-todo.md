@@ -186,3 +186,25 @@ Sweep at the closure HEAD: **693 tests passed across 58 main-process files**, **
 
 CI run 44112455829 SUCCESS on all three jobs (Lint+unit 18m14s,
 Package smoke 9m5s, Electron E2E 34m32s) at `6f3304843`.
+
+**2026-11-18 continuation pass:** commit `dc31cfd76` closes four more
+R01/R03 items. R01: the sub-agent job is RESUMABLE after a user pause
+(the AIChatQueryLoop's onPauseWait blocks in-loop on the control gate —
+no tokens spent while paused, held tool calls stay gated, and safe
+work resumes when the gate reopens; a cancel while paused ends
+cancelled; the persisted pause status stays waiting_user without
+finishedAt); BROWSER_TASK_FOCUS_WINDOW is implemented (module
+FOCUS_WINDOW → worker page.bringToFront() — the sanctioned EXPLICIT
+user-requested focus; launches still never steal focus); Resume KEEPS
+the task paused when the browser cannot resume. R03: the PRD's A-FR-12
+is reconciled with Q-02 (registration out of scope for v1 —
+registration_disabled; the Create-account card is deferred with the
+future switch). Regressions: pause-before-round blocks then completes
+on resume, cancel-while-paused ends cancelled, the paused window sends
+zero requests and executes zero tool calls. Sweep: 695 tests across 58
+main-process files, 1,622 component tests. Remaining open items are
+external/qualification only: R01's per-provider concurrency/cost
+qualification and sub-agent model selection, R02's recall measurement
+and capability-budgeted candidate prep (held-out sets), R03's
+live-provider/WebRTC qualification, R04's real E2E drivers, held-out
+evaluation and packaged evidence (operator/CI).
