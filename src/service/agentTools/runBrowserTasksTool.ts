@@ -617,18 +617,29 @@ export async function runBrowserTasks(
             const releaseReservation = await acquireBusyAccountReservation(
               task.account_id!
             );
-            try {
-              emitBatchEvent({
-                batchId,
-                conversationId,
-                phase: "task",
-                taskId,
-                state: "running",
-                summary: "queued task retrying",
-              });
-              result = await runOnce();
-            } finally {
+            // R01/M-FR-09: recheck aborts IMMEDIATELY after obtaining the
+            // reservation — a Stop/Return-now during the wait must not
+            // start the lane it was meant to cancel.
+            if (
+              childAbort.signal.aborted ||
+              batchAbort.signal.aborted ||
+              signal.aborted
+            ) {
               releaseReservation();
+            } else {
+              try {
+                emitBatchEvent({
+                  batchId,
+                  conversationId,
+                  phase: "task",
+                  taskId,
+                  state: "running",
+                  summary: "queued task retrying",
+                });
+                result = await runOnce();
+              } finally {
+                releaseReservation();
+              }
             }
           }
         }
@@ -694,19 +705,30 @@ export async function runBrowserTasks(
             ),
           };
         }
-        // T12: the AGENT completing is not the BROWSER task succeeding —
-        // honor the child's own output.status (failed / needs_user).
+        // T12/R01: the AGENT completing is not the BROWSER task succeeding —
+        // the child's output.status is validated STRICTLY against the schema
+        // (completed | failed | needs_user). A missing or unrecognized
+        // status (lenient parse fallback, malformed output) is a FAILED
+        // task, never silently completed.
         const childOutputStatus = (
           result.output as { status?: string } | null
         )?.status;
+        const strictChildStatus =
+          childOutputStatus === "completed" ||
+          childOutputStatus === "failed" ||
+          childOutputStatus === "needs_user"
+            ? childOutputStatus
+            : null;
         const finalStatus: BrowserBatchTaskResult["status"] =
           result.status !== "completed"
             ? "failed"
-            : childOutputStatus === "failed"
+            : strictChildStatus === "failed"
               ? "failed"
-              : childOutputStatus === "needs_user"
+              : strictChildStatus === "needs_user"
                 ? "partial"
-                : "completed";
+                : strictChildStatus === "completed"
+                  ? "completed"
+                  : "failed";
         // F17: cancellation is a CONTROL state, not a failure.
         // W02: the control record carries the result's real status — a
         // needs_user partial is terminal partial, not failed.

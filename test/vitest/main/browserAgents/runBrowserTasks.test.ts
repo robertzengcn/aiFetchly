@@ -991,3 +991,65 @@ describe("runBrowserTasks confirmation cancellation (B07)", () => {
     }
   }, 15_000);
 });
+
+// ---------------------------------------------------------------------------
+// R01: strict child output validation — a missing or unrecognized child
+// status is a FAILED task, never silently completed; and the queued lane
+// rechecks aborts immediately after obtaining the reservation.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks strict child output (R01)", () => {
+  it("an unrecognized child output status is FAILED, never completed", async () => {
+    const runtime = {
+      runSync: vi.fn(async () => ({
+        // AgentRuntime "completed" with a LENIENT parse fallback whose
+        // output.status is neither of the three schema values.
+        status: "completed",
+        agentTaskId: "agt-r1",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 1,
+        sourceUrls: [],
+        output: {
+          status: "maybe-done-ish",
+          summary: "loosely parsed",
+          extracted: [],
+          final_url: null,
+          evidence: [],
+          needs_user: null,
+          user_interventions: [],
+        },
+      })),
+    };
+    const { results } = await runBrowserTasks(
+      [{ goal: "lenient output" }],
+      1,
+      "conv-r1",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    expect(results[0]?.status).toBe("failed");
+    expect(results[0]?.summary).toBe("loosely parsed");
+  });
+
+  it("a missing child output status is FAILED", async () => {
+    const runtime = {
+      runSync: vi.fn(async () => ({
+        status: "completed",
+        agentTaskId: "agt-r1b",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 0,
+        sourceUrls: [],
+        output: null,
+      })),
+    };
+    const { results } = await runBrowserTasks(
+      [{ goal: "no output" }],
+      1,
+      "conv-r1b",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    expect(results[0]?.status).toBe("failed");
+  });
+});
