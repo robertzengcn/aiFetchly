@@ -191,6 +191,8 @@ export interface BrowserBatchEvent {
     // W02: a partial runner ending reaches the card as its own state.
     | "partial";
   readonly summary?: string;
+  /** A05/M-FR-08: the LIVE session id when the lane has one. */
+  readonly sessionId?: string;
 }
 type BatchEventSink = (event: BrowserBatchEvent) => void;
 let batchEventSink: BatchEventSink | null = null;

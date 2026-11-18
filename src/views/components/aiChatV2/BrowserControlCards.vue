@@ -91,6 +91,8 @@ const { t } = useI18n();
 
 interface BrowserBatchTaskRow {
   taskId: string;
+  /** A05/M-FR-08: the LIVE session id when the lane has one. */
+  sessionId?: string;
   label: string;
   state:
     | "running"
@@ -356,6 +358,7 @@ function applyEvent(event: BrowserBatchEvent): void {
     const existing = tasks.find((task) => task.taskId === event.taskId);
     const row: BrowserBatchTaskRow = {
       taskId: event.taskId,
+      sessionId: event.sessionId,
       label:
         event.label ??
         `${t("browserTasks.taskRunning") || LABEL_FALLBACK} ${event.taskId}`,
