@@ -864,20 +864,53 @@ export async function runBrowserTasks(
         const boundedSummary = String(
           rawOutput?.summary ?? result.errorMessage ?? result.status
         ).slice(0, 1000);
-        const boundedEvidence = (rawOutput?.evidence ?? [])
-          .filter((item): item is string => typeof item === "string")
-          .map((item) => item.slice(0, 300))
-          .slice(0, 20);
+        // A09/M-FR-09: evidence/extracted/needs_user are SHAPE-CHECKED —
+        // a malformed value (non-array evidence, wrong container) never
+        // throws into the generic handler or changes task ownership.
+        const boundedEvidence = Array.isArray(rawOutput?.evidence)
+          ? (rawOutput.evidence as unknown[])
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => item.slice(0, 300))
+              .slice(0, 20)
+          : [];
         const boundedFinalUrl =
           typeof rawOutput?.final_url === "string" &&
-          /^https?:\/\//.test(rawOutput.final_url)
+          (() => {
+            try {
+              const parsed = new URL(rawOutput.final_url);
+              return parsed.protocol === "http:" || parsed.protocol === "https:";
+            } catch {
+              return false;
+            }
+          })()
             ? rawOutput.final_url.slice(0, 2048)
+            : null;
+        const boundedExtracted = Array.isArray(
+          (result.output as { extracted?: unknown } | null)?.extracted
+        )
+          ? ((result.output as { extracted: unknown[] }).extracted as unknown[]).slice(0, 200)
+          : [];
+        const rawNeedsUser = (result.output as { needs_user?: unknown } | null)?.needs_user;
+        const boundedNeedsUser =
+          rawNeedsUser !== null &&
+          typeof rawNeedsUser === "object" &&
+          typeof (rawNeedsUser as { type?: unknown }).type === "string"
+            ? {
+                type: (rawNeedsUser as { type: string }).type.slice(0, 32),
+                ...((rawNeedsUser as { proposed_action?: unknown }).proposed_action !== undefined
+                  ? {
+                      proposed_action: String(
+                        (rawNeedsUser as { proposed_action: unknown }).proposed_action
+                      ).slice(0, 1000),
+                    }
+                  : {}),
+              }
             : null;
         return {
           task_index: index,
           status: finalStatus,
           summary: boundedSummary,
-          extracted: (result.output as { extracted?: unknown[] } | null)?.extracted ?? [],
+          extracted: boundedExtracted,
           final_url: boundedFinalUrl,
           evidence: [
             ...boundedEvidence,
@@ -885,7 +918,7 @@ export async function runBrowserTasks(
             // failed cleanup is never silently swallowed.
             ...cleanupEvidence,
           ],
-          needs_user: (result.output as { needs_user?: { type: string } } | null)?.needs_user ?? null,
+          needs_user: boundedNeedsUser,
           user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
           ...(task.keep_open
             ? { session_id: transferredSessionId }

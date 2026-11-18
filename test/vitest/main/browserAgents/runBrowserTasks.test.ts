@@ -991,3 +991,47 @@ describe("runBrowserTasks strict child output (R01)", () => {
     expect(results[0]?.status).toBe("failed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A09/M-FR-09: the WHOLE child result is shape-checked at the collector —
+// malformed containers never throw or change task ownership.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks full output validation (A09)", () => {
+  it("malformed evidence/needs_user/extracted never throw and stay bounded", async () => {
+    const runtime = {
+      runSync: vi.fn(async () => ({
+        status: "completed",
+        agentTaskId: "agt-a09",
+        agentId: "agent-browser-operator",
+        agentVersion: 1,
+        toolCallsCount: 1,
+        sourceUrls: [],
+        output: {
+          status: "completed",
+          summary: "x".repeat(2000),
+          // Malformed containers:
+          evidence: "not-an-array",
+          extracted: "not-an-array-either",
+          needs_user: "not-an-object",
+          final_url: "ftp://bad-protocol/x",
+          user_interventions: [],
+        },
+      })),
+    };
+    const { results } = await runBrowserTasks(
+      [{ goal: "malformed output" }],
+      1,
+      "conv-a09",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    // The malformed fields are bounded/normalized — the task still reports
+    // its real status with a bounded summary.
+    expect(results[0]?.status).toBe("completed");
+    expect((results[0]?.summary ?? "").length).toBeLessThanOrEqual(1000);
+    expect(Array.isArray(results[0]?.evidence)).toBe(true);
+    expect(Array.isArray(results[0]?.extracted)).toBe(true);
+    expect(results[0]?.needs_user).toBeNull();
+    expect(results[0]?.final_url).toBeNull();
+  });
+});
