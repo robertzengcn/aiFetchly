@@ -1783,8 +1783,15 @@ export class BrowserTaskRunner {
         // verifies the live option value still matches before selecting
         // (options reordered/changed after the observation fail the
         // step instead of silently choosing another option).
-        const optionIndex = Number(/^o_(\d+)$/.exec(action.option_id)?.[1] ?? -1);
-        const expectedValue = element.option_values?.[optionIndex];
+        // A03: the token's NUMBER is the ORIGINAL option index in the
+        // live element (el.options[N]) — the outbound values array is
+        // COMPACTED (oversized/credential-bearing options omitted), so
+        // the binding must look up the token's id IN the id list, not
+        // parse a position into the compacted array.
+        const idPosition = element.option_ids
+          ? element.option_ids.indexOf(action.option_id)
+          : -1;
+        const expectedValue = idPosition >= 0 ? element.option_values?.[idPosition] : undefined;
         return {
           type: "select",
           ref: target.candidate_id,

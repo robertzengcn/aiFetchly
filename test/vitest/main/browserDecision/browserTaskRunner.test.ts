@@ -2542,3 +2542,107 @@ describe("BrowserTaskRunner unsupported-operation gate (A02)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// A03/D-FR-17: the SELECT expected value binds by the token's position IN
+// THE KEPT id list (compacted outbound arrays) — not by parsing the o_N
+// number as an index into the compacted values.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner SELECT binding after filtering (A03)", () => {
+  it("selecting the first kept option binds ITS observed value (not the next)", async () => {
+    const dispatched: Array<{ values?: string[]; expected_values?: string[] | null }> = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_1", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      observe: async () => ({
+        ...observation(),
+        url: "https://example.test/results",
+        elements: [
+          {
+            ref: "e_sel",
+            role: "combobox",
+            name: "Choose",
+            // o_0 was OMITTED (credential-bearing/oversized); the kept set
+            // starts at the ORIGINAL index 1.
+            option_ids: ["o_1", "o_2"],
+            option_values: ["value-original-1", "value-original-2"],
+          },
+          { ref: "e_bbb", role: "button", name: "Go" },
+        ],
+      }),
+    };
+    runnerDeps.runActions = async (_sessionId, input) => {
+      for (const a of input.actions) {
+        if (a.type === "select") {
+          dispatched.push({
+            values: (a as unknown as { values?: string[] }).values,
+            expected_values: (a as unknown as { expected_values?: string[] | null }).expected_values ?? null,
+          });
+        }
+      }
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: input.actions.map(() => ({ success: true, errorCode: null })),
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_a03",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      runnerDeps as never
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    // o_1 (kept position 0) binds value-original-1 — NOT the compacted
+    // array's [1] ("value-original-2").
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.values).toEqual(["o_1"]);
+    expect(dispatched[0]?.expected_values).toEqual(["value-original-1"]);
+  });
+
+  it("a kept id beyond the compacted values length refuses the binding", async () => {
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_9", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      observe: async () => ({
+        ...observation(),
+        elements: [
+          {
+            ref: "e_sel",
+            role: "combobox",
+            name: "Choose",
+            // Only two KEPT options — o_9 is not in the id list.
+            option_ids: ["o_1", "o_2"],
+            option_values: ["value-1", "value-2"],
+          },
+        ],
+      }),
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_a03b", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    const result = await runner.run();
+    // o_9 is not in the observed id list — the decision is unsupported.
+    expect(result.evidence.some((e) => e.includes("invalid_decision"))).toBe(true);
+  });
+});
