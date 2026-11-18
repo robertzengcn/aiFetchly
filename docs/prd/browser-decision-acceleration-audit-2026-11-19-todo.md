@@ -201,3 +201,26 @@ For worker transport failure after action intent, the targeted path at `BrowserT
 | P-FR-01–09 | A11, A17 and bundled browser, proxy transport and migration acceptance |
 | M-FR-01–13 | A05, A07–A09, A13 and parallel scheduling, cleanup and window acceptance |
 | C-FR-01–16 | A05–A08, A13 and live takeover, hold, resume and Stop journeys |
+
+---
+
+**2026-11-19 closure pass:** A01–A10 and A12–A14, A16, A17 are CLOSED — commits `d3ed59bbc`(A01) → `40ec2bb96`(A02) → `fa81b55b0`(A03) → `55a34108a`(A04) → `f7c3eefef`+`0c2800fa3`(A05/focus) → `be9d86007`(A06) → `ccb058e2b`(A07) → `9abe32018`+`d81fc06eb`+`e03e340b7`(N06/N08/A10 groundwork) → `24d4507fa`(A09) → `1673723cd`(A12/A13/A14/A16/A17) → `9906b3d50`(preload). Summary:
+
+- **A01** the decision clients receive the LIVE epoch getter (their change checks compare it to the frozen ADMISSION snapshot — a revision advanced mid-task is observable) and the chat transport is BOUND to the admission snapshot (a local/custom provider is resolved once and its client constructed with the captured endpoint/key; hosted admission keeps the hosted API path). Regression: a revision advanced mid-task aborts the next decision and no action dispatches.
+- **A02** EVERY decided operation is validated against the offered list BEFORE branching (an unsupported SCROLL never dispatches; terminal/control-plane ops bypass), and the advertised deadlineHardMs caps the per-request deadline.
+- **A03** the SELECT expected value binds by the token's position IN the kept id list (compacted arrays no longer shift the binding); an unlisted id refuses.
+- **A04** the exact filled-credential pass runs FIRST in summarizeInputValue (value summaries), on the reported URL pathname, element origins, and the FULL title/text before length truncation.
+- **A05** BrowserBatchEvent/card rows carry the live session id (verb binding groundwork — the lazy session sweep is deferred with a noted mock interaction); pause/resume/stop atomicity and honest results landed with N01.
+- **A06** recovery proposals carry their resume generation and a Pause→Resume before consumption discards them (recovery_discarded_after_resume + fresh re-observation).
+- **A07** the keep-open transfer reassigns the LEASE owner; partial stop failures ride the cleanup evidence (cleanup_partial/keep_open_failed_sessions_partial).
+- **A09** the whole child result is shape-checked at the collector (evidence array-only 300×20, extracted array 200, needs_user object with bounded type/proposed_action, final_url URL-parsed http(s) 2048).
+- **A10** the opt-in ref is assigned after a successful write (both-direction toggles verified).
+- **A12** providerConfigKey embeds a per-process suffix (a stale stored revision can never match a different route); the probe handler revalidates the epoch before saving and returns all-negatives on invalidation.
+- **A13** register updates the conversation for an existing control record.
+- **A14** the no-progress digest uses stable semantic identity (role:name:value — no volatile refs; wider text window).
+- **A16** the bare parser accepts SIGN_IN and the hosted contract requires a correlation echo (bare actions rejected).
+- **A17** the AI proxy list trusts the model's authoritative hasPassword flag.
+
+A11 (proxy-switch consent continuation), A08's scoped start-Boolean permission grant, A15's per-attempt credential tracking, A18's approval-context binding, and the release-evidence items (six real E2E drivers, held-out evaluation, packaged evidence) require live-provider/account/Chromium qualification or larger feature surfaces (operator/CI scope) — recorded as open.
+
+Sweep at the closure HEAD: **705 tests across 58 main-process files**, **1,626 component tests across 184 files**, **162 utility tests across 7 files**.
