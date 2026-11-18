@@ -269,6 +269,12 @@ export class BrowserTaskRunner {
   private recoveryCalls = 0;
   /** R01/D-FR-24: the optional provider verifier's own bounded counter. */
   private verifierCalls = 0;
+  /**
+   * R02/D-FR-04: the ADMITTED route's operations — queried from the
+   * decision client's capabilities at admission (null = client without a
+   * capabilities list, all runner operations offered).
+   */
+  private admittedOperations: readonly string[] | null = null;
   private lastFailureKey: string | null = null;
   private consecutiveEquivalentFailures = 0;
   private readonly maxEquivalentFailures: number;
@@ -326,6 +332,24 @@ export class BrowserTaskRunner {
     // substitute — do not "fix" it into a state machine without a reason.
     const control = this.deps.control ?? getDefaultAgentTaskControlService();
     control.register(this.taskId, this.input.conversationId);
+    // R02/D-FR-04: the admitted route's operation capabilities are
+    // queried ONCE at admission — the offered candidate operations are
+    // intersected with them (a client without a capabilities list offers
+    // everything).
+    try {
+      const capabilities = await this.deps.decisionClient.getCapabilities(
+        this.deps.signal ?? new AbortController().signal
+      );
+      if (
+        Array.isArray(capabilities.operations) &&
+        capabilities.operations.length > 0
+      ) {
+        this.admittedOperations = capabilities.operations;
+      }
+    } catch {
+      // Capabilities unavailable — all runner operations offered.
+      this.admittedOperations = null;
+    }
     const gate = control.getGate(this.taskId);
     const signal = this.deps.signal ?? new AbortController().signal;
     const evidence: string[] = [];
@@ -1395,8 +1419,14 @@ export class BrowserTaskRunner {
       // E14/D-FR-25: the REAL executed-step history (bounded) — never an
       // empty list or a fabricated entry.
       recent_actions: this.recentActions.slice(-6),
-      // D-FR-16: every offered operation is executable (T18).
-      allowed_operations: RUNNER_OPERATIONS,
+      // D-FR-16/R02: every offered operation is executable (T18) AND
+      // supported by the admitted route (capabilities intersection).
+      allowed_operations:
+        this.admittedOperations === null
+          ? RUNNER_OPERATIONS
+          : RUNNER_OPERATIONS.filter((operation) =>
+              (this.admittedOperations as readonly string[]).includes(operation)
+            ),
       deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
     };
   }

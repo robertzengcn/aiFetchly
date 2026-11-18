@@ -2336,3 +2336,89 @@ describe("BrowserTaskRunner completion gates (N09)", () => {
     expect(result.reason).toBe("verification_landed_while_paused");
   });
 });
+
+// ---------------------------------------------------------------------------
+// R02/D-FR-04: the admitted route's operations gate the offered candidates
+// — getCapabilities() is consumed at admission.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner capabilities consumption (R02/D-FR-04)", () => {
+  it("offered operations intersect with the admitted route's operations", async () => {
+    const seen: Array<readonly string[]> = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      decisionClient: {
+        getCapabilities: async () => ({
+          advertised: true,
+          // The route supports a SUBSET — NAVIGATE is not offered.
+          operations: ["CLICK", "FILL", "SELECT", "DONE", "ESCALATE"],
+          supportsStructuredJsonSchema: false,
+          supportsForcedToolDecision: false,
+          supportsJsonObject: true,
+          nativeDecision: false,
+          maxCandidates: 120,
+          deadlineDefaultMs: 3_000,
+          deadlineHardMs: 10_000,
+          cacheable: false,
+        }),
+        decide: async (input: { allowed_operations: readonly string[] }) => {
+          seen.push(input.allowed_operations);
+          return {
+            status: "decided",
+            action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+            uncertainty: { source: "unavailable", confidence: null },
+          } as never;
+        },
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r02a", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    await runner.run();
+    // Every offered operation list excludes NAVIGATE (not in capabilities).
+    expect(seen.length).toBeGreaterThan(0);
+    for (const offered of seen) {
+      expect(offered).not.toContain("NAVIGATE");
+      expect(offered).toContain("CLICK");
+    }
+  });
+
+  it("a client without a capabilities list offers all runner operations", async () => {
+    const seen: Array<readonly string[]> = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+    };
+    runnerDeps.decisionClient.getCapabilities = async () => {
+      throw new Error("capabilities unavailable");
+    };
+    runnerDeps.decisionClient.decide = ((
+      input: { allowed_operations: readonly string[] }
+    ) => {
+      seen.push(input.allowed_operations);
+      return Promise.resolve({
+        status: "decided",
+        action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      });
+    }) as unknown as typeof runnerDeps.decisionClient.decide;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r02b", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    await runner.run();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toContain("NAVIGATE");
+  });
+});
