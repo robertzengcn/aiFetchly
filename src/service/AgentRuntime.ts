@@ -597,9 +597,11 @@ export class AgentRuntime {
       const loopInput = {
         conversationId: agentConversationId,
         // B11/M-FR-07: sub-agent identity + the ROOT conversation. Browser
-        // sessions started by the agent record the agent task id and the
-        // parent chat (drive/takeover rights in ensureSession).
-        ownerAgentId: agentTaskId,
+        // N01/M-FR-08: sessions started by the agent record the CONTROL
+        // task id (the batch row) — the same identity the control record,
+        // notices, handoff waits, and cleanup share. Persistence keeps the
+        // internal agt id.
+        ownerAgentId: controlTaskId,
         rootConversationId: request.parentConversationId ?? undefined,
         assistantMessageId: `agent-assistant-${agentTaskId}`,
         messages: [systemMessage, userMessage],
@@ -671,7 +673,8 @@ export class AgentRuntime {
             definition,
             "blocked",
             finalText,
-            "the task is paused by the user — no progress until resumed"
+            "the task is paused by the user — no progress until resumed",
+            controlTaskId
           );
         }
         await this.taskModule.setStatus(agentTaskId, "cancelled", {
@@ -681,7 +684,9 @@ export class AgentRuntime {
           agentTaskId,
           definition,
           "cancelled",
-          finalText
+          finalText,
+          undefined,
+          controlTaskId
         );
       } else if (result.type === "failed") {
         finalText = result.partialContent;
@@ -695,7 +700,8 @@ export class AgentRuntime {
           definition,
           "failed",
           finalText,
-          failedMessage
+          failedMessage,
+          controlTaskId
         );
       } else {
         // paused_for_permission / paused_for_plan_question fallback. The
@@ -716,7 +722,8 @@ export class AgentRuntime {
           definition,
           "failed",
           finalText,
-          msg
+          msg,
+          controlTaskId
         );
       }
     } catch (err) {
@@ -730,7 +737,8 @@ export class AgentRuntime {
         definition,
         "failed",
         finalText,
-        msg
+        msg,
+        controlTaskId
       );
     } finally {
       clearInterval(timer);
@@ -842,6 +850,9 @@ export class AgentRuntime {
 
     const result: AgentResult = {
       agentTaskId,
+      // N01/M-FR-08: the caller's control identity rides the completed
+      // result (the collector validates cleanup against it).
+      ...(request.controlTaskId ? { controlTaskId: request.controlTaskId } : {}),
       agentId: definition.id,
       agentVersion: definition.version,
       status: "completed",
@@ -1047,10 +1058,13 @@ export class AgentRuntime {
     definition: AgentDefinitionView,
     status: AgentResult["status"],
     text: string,
-    errorMessage?: string
+    errorMessage?: string,
+    controlTaskId?: string
   ): AgentResult {
     return {
       agentTaskId,
+      // N01/M-FR-08: the caller's control identity rides every result.
+      ...(controlTaskId ? { controlTaskId } : {}),
       agentId: definition.id,
       agentVersion: definition.version,
       status,

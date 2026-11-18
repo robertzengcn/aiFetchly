@@ -143,11 +143,13 @@ interface ActiveSessionRecord {
   readonly sessionId: string;
   readonly accountId: number;
   readonly platformId: number;
-  readonly conversationId: string | null;
+  // N02/M-FR-07: mutable — the explicit keep-open transfer reassigns
+  // ownership from the child task to the parent conversation.
+  conversationId: string | null;
   /** F03: retained so the account-lease transfer keeps ownership. */
-  readonly ownerAgentTaskId: string | null;
+  ownerAgentTaskId: string | null;
   /** B11: the root (parent) conversation of a sub-agent-owned session. */
-  readonly rootConversationId: string | null;
+  rootConversationId: string | null;
   readonly leaseToken: string;
   /** Lease key (account: or public:) used to release this session. */
   readonly leaseKey: string;
@@ -1049,8 +1051,9 @@ export class ManagedBrowserModule {
   public async stopAllForAgentTask(
     agentTaskId: string,
     reason: "cancelled" | "user_stop" = "cancelled"
-  ): Promise<number> {
+  ): Promise<{ stopped: number; failedSessionIds: readonly string[] }> {
     let stopped = 0;
+    const failedSessionIds: string[] = [];
     for (const record of this.sessions.values()) {
       if (record.ownerAgentTaskId !== agentTaskId) {
         continue;
@@ -1059,10 +1062,12 @@ export class ManagedBrowserModule {
         await this.stop(record.sessionId, reason);
         stopped++;
       } catch {
-        /* best effort */
+        // N02: a caller awaiting cleanup can distinguish full from
+        // partial cleanup — the failed session ids ride the result.
+        failedSessionIds.push(record.sessionId);
       }
     }
-    return stopped;
+    return { stopped, failedSessionIds };
   }
 
   /**
@@ -1073,6 +1078,25 @@ export class ManagedBrowserModule {
    */
   public getSessionOwnerAgentTaskId(sessionId: string): string | null {
     return this.sessions.get(sessionId)?.ownerAgentTaskId ?? null;
+  }
+
+  /**
+   * N02/M-FR-07: EXPLICIT keep-open ownership transfer — the session's
+   * ownerAgentTaskId is cleared and the parent conversation becomes the
+   * direct owner, so child cleanup can never touch it afterwards and the
+   * parent's ownership checks pass. Refuses a session the task does not
+   * own.
+   */
+  public async transferSessionToConversation(
+    sessionId: string,
+    parentConversationId: string
+  ): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    record.ownerAgentTaskId = null;
+    record.conversationId = parentConversationId;
+    record.rootConversationId = null;
+    this.pushStatus(record);
+    return this.toSafeStatus(record);
   }
 
   public listActiveSessions(): readonly SafeManagedBrowserStatus[] {

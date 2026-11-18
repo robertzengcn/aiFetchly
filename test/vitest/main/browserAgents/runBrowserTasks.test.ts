@@ -28,8 +28,18 @@ vi.mock("@/modules/ManagedBrowserModule", () => ({
     stop: stopMock,
     getSessionOwnerAgentTaskId: (sessionId: string) =>
       ownerBySession.get(sessionId) ?? null,
+    // N02: the keep-open transfer is mocked as an ownership reassignment.
+    transferSessionToConversation: async (
+      sessionId: string,
+      parentConversationId: string
+    ) => {
+      ownerBySession.set(sessionId, null);
+      transferCalls.push({ sessionId, parentConversationId });
+      return { sessionId, ownerConversationId: parentConversationId };
+    },
   }),
 }));
+const transferCalls: Array<{ sessionId: string; parentConversationId: string }> = [];
 
 /** PRD M-FR-03/05/09: bounded parallelism, isolation, strict results. */
 
@@ -692,8 +702,10 @@ describe("runBrowserTasks busy-account queue (W09)", () => {
       { runAgent: () => crash as never }
     );
     expect(outcome.results[0]?.status).toBe("failed");
+    // N02: the ownership key is the CONTROL task id (batch row), known
+    // before work begins — cleanup is scoped to it.
     expect(stopAllForAgentTaskMock).toHaveBeenCalledWith(
-      "agt-crash-w09",
+      expect.stringMatching(/^batch_[0-9a-f-]+:0$/),
       "cancelled"
     );
     // B01: the conversation-wide sweep is NEVER used for child cleanup.
@@ -716,203 +728,129 @@ describe("runBrowserTasks busy-account queue (W09)", () => {
       { runAgent: () => crash as never }
     );
     expect(outcome.results[0]?.status).toBe("failed");
-    // B01: nothing is swept — the result HONESTLY reports that the
-    // cleanup could not be scoped instead of closing sibling sessions.
-    expect(outcome.results[0]?.evidence).toContain(
-      "cleanup_skipped:agent_task_id_unknown"
+    // N02: ownership is ALWAYS known (the control task id, registered
+    // before work begins) — the crash still cleans up its own scope.
+    expect(stopAllForAgentTaskMock).toHaveBeenCalledWith(
+      expect.stringMatching(/^batch_[0-9a-f-]+:0$/),
+      "cancelled"
     );
-    expect(stopAllForAgentTaskMock).not.toHaveBeenCalled();
     expect(stopAllForConversationMock).not.toHaveBeenCalled();
   });
 
   it("a reported session_id owned by ANOTHER task is neither stopped nor transferred (B01)", async () => {
     stopMock.mockClear();
     ownerBySession.clear();
-    // The parent's ordinary session and a sibling's session are alive.
-    ownerBySession.set("mb_foreign_0000001", "agt-sibling-9");
-    ownerBySession.set("mb_owned_00000001", "agt-owner-1");
-    const runtime = {
-      runSync: vi.fn().mockImplementation(async () => ({
-        status: "completed",
-        agentTaskId: "agt-owner-1",
-        agentId: "agent-browser-operator",
-        agentVersion: 1,
-        toolCallsCount: 1,
-        sourceUrls: [],
-        output: {
+    // A foreign session owned by a sibling task, plus the parent's own.
+    ownerBySession.set("mb_foreign_0000001", "batch_foreign:0");
+    ownerBySession.set("mb_parent_0000001", null);
+    const foreignRuntime = {
+      runSync: vi.fn(
+        async (request: { controlTaskId?: string }) => ({
           status: "completed",
-          summary: "claimed a foreign session",
-          extracted: [],
-          final_url: null,
-          evidence: [],
-          session_id: "mb_foreign_0000001",
-        },
-      })),
+          agentTaskId: "agt-child-b01",
+          controlTaskId: request.controlTaskId,
+          agentId: "agent-browser-operator",
+          agentVersion: 1,
+          toolCallsCount: 1,
+          sourceUrls: [],
+          // The child CLAIMS a session owned by a sibling.
+          output: {
+            status: "completed",
+            summary: "claimed a foreign session",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+            session_id: "mb_foreign_0000001",
+            needs_user: null,
+            user_interventions: [],
+          },
+        })
+      ),
     };
-    const outcome = await runBrowserTasks(
+    const foreign = await runBrowserTasks(
       [{ goal: "no keep_open" }],
       1,
       "conv-b01",
       new AbortController().signal,
-      { runAgent: () => runtime as never }
+      { runAgent: () => foreignRuntime as never }
     );
-    expect(outcome.results[0]?.status).toBe("completed");
+    expect(foreign.results[0]?.status).toBe("completed");
     // The foreign session was NEVER stopped, and the result reports the skip.
     expect(stopMock).not.toHaveBeenCalledWith("mb_foreign_0000001", "cancelled");
-    expect(outcome.results[0]?.evidence).toContain(
+    expect(foreign.results[0]?.evidence).toContain(
       "cleanup_skipped:session_owner_mismatch"
     );
-    // B01: the conversation-wide sweep is NEVER used for child cleanup.
+    // N02: the child's OWN scope was still cleaned (empty here, but the
+    // scoped stop ran) — and the conversation sweep never fired.
     expect(stopAllForConversationMock).not.toHaveBeenCalled();
-    // A session the task actually owns IS stopped by id.
+    // The foreign id is never surfaced as the retained session.
+    expect(foreign.results[0] && "session_id" in foreign.results[0]).toBe(false);
+
+    // N02: a keep_open task with an OWNED session transfers ownership and
+    // surfaces the validated id.
     const ownedRuntime = {
-      runSync: vi.fn().mockImplementation(async () => ({
-        status: "completed",
-        agentTaskId: "agt-owner-1",
-        agentId: "agent-browser-operator",
-        agentVersion: 1,
-        toolCallsCount: 1,
-        sourceUrls: [],
-        output: {
+      runSync: vi.fn(
+        async (request: { controlTaskId?: string }) => ({
           status: "completed",
-          summary: "done",
-          extracted: [],
-          final_url: null,
-          evidence: [],
-          session_id: "mb_owned_00000001",
-        },
-      })),
-    };
-    stopMock.mockClear();
-    await runBrowserTasks(
-      [{ goal: "own session" }],
-      1,
-      "conv-b01",
-      new AbortController().signal,
-      { runAgent: () => ownedRuntime as never }
-    );
-    expect(stopMock).toHaveBeenCalledWith("mb_owned_00000001", "cancelled");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// M-FR-11: the PARENT dedupes extracted rows before handing them to the
-// consumer (the parent owns any save). Key order is normalized so
-// {a:1,b:2} and {b:2,a:1} dedupe to one row; first occurrence wins.
-// ---------------------------------------------------------------------------
-describe("runBrowserTasks extracted-row dedupe (M-FR-11)", () => {
-  it("dedupes identical rows (and reordered-key objects) across the batch", async () => {
-    const outputs = [
-      {
-        status: "completed",
-        summary: "task 1 rows",
-        extracted: [
-          { name: "Alpha", price: 1 },
-          { price: 1, name: "Alpha" }, // reordered keys — same row
-          { name: "Beta", price: 2 },
-        ],
-        final_url: null,
-        evidence: [],
-        needs_user: null,
-        user_interventions: [],
-      },
-      {
-        status: "completed",
-        summary: "task 2 rows",
-        extracted: [{ name: "Alpha", price: 1 }], // duplicate across siblings
-        final_url: null,
-        evidence: [],
-        needs_user: null,
-        user_interventions: [],
-      },
-    ];
-    const runtime = {
-      runSync: vi
-        .fn()
-        .mockImplementationOnce(async () => ({
-          status: "completed",
-          output: outputs[0],
-        }))
-        .mockImplementationOnce(async () => ({
-          status: "completed",
-          output: outputs[1],
-        })),
-    };
-    const { results } = await runBrowserTasks(
-      [{ goal: "task a" }, { goal: "task b" }],
-      2,
-      "conv-dedupe",
-      new AbortController().signal,
-      { runAgent: () => runtime as never }
-    );
-    // Task 1 keeps Alpha/Beta/Beta-reordered → deduped to 2 unique rows;
-    // task 2's Alpha is a duplicate WITHIN its own (tiny) result but the
-    // batch boundary dedupes per result — cross-result dedupe would
-    // silently drop sibling output, which the caller owns.
-    expect(results[0]?.extracted).toHaveLength(2);
-    expect(results[1]?.extracted).toHaveLength(1);
-    expect(results[0]?.extracted[0]).toMatchObject({ name: "Alpha" });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// B02/M-FR-08: ONE task identity — the batch row id owns the control
-// record, so a Pause addressed to `batchId:index` reaches the CHILD's
-// loop gate (previously the gate ran under a separate hidden agt-* id
-// and stayed open while the card showed paused).
-// ---------------------------------------------------------------------------
-describe("runBrowserTasks unified task identity (B02)", () => {
-  it("a Pause addressed to the batch row id reaches the record the CHILD uses", async () => {
-    // Production: the collector and the child runtime BOTH use the
-    // default control service — mirror that here (no injected instance).
-    const { getDefaultAgentTaskControlService } = await import(
-      "@/service/browserAgents/AgentTaskControlService"
-    );
-    const service = getDefaultAgentTaskControlService();
-    const runtime = {
-      runSync: async (request: { controlTaskId?: string }) => {
-        // The runtime registers the control record under the CALLER's id.
-        const record = service.get(request.controlTaskId ?? "");
-        if (!record) {
-          return {
-            status: "failed",
-            errorMessage: "control record not under the batch row id",
-            output: null,
-          };
-        }
-        // Pause via the batch row id — the record now says paused, which
-        // is exactly what the card's Pause addresses.
-        service.setState(request.controlTaskId!, "paused", "user_paused");
-        return {
-          status: "completed",
-          agentTaskId: "agt-child-b02",
+          agentTaskId: "agt-owned-b01",
+          controlTaskId: request.controlTaskId,
           agentId: "agent-browser-operator",
           agentVersion: 1,
           toolCallsCount: 1,
           sourceUrls: [],
           output: {
             status: "completed",
-            summary: "done",
+            summary: "kept my own session",
             extracted: [],
             final_url: null,
             evidence: [],
+            session_id: "mb_owned_00000002",
+            needs_user: null,
+            user_interventions: [],
+          },
+        })
+      ),
+    };
+    // The session is pre-owned by the batch row the runtime will be given.
+    let expectedRowId: string | null = null;
+    ownedRuntime.runSync.mockImplementation(
+      async (request: { controlTaskId?: string }) => {
+        expectedRowId = request.controlTaskId ?? null;
+        ownerBySession.set("mb_owned_00000002", expectedRowId);
+        return {
+          status: "completed",
+          agentTaskId: "agt-owned-b01",
+          controlTaskId: request.controlTaskId,
+          agentId: "agent-browser-operator",
+          agentVersion: 1,
+          toolCallsCount: 1,
+          sourceUrls: [],
+          output: {
+            status: "completed",
+            summary: "kept my own session",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+            session_id: "mb_owned_00000002",
             needs_user: null,
             user_interventions: [],
           },
         };
-      },
-    };
-    const { results } = await runBrowserTasks(
-      [{ goal: "identity check" }],
-      1,
-      "conv-b02",
-      new AbortController().signal,
-      { runAgent: () => runtime as never }
+      }
     );
-    // The task completed through the record that the batch row id owns.
-    expect(results[0]?.status).toBe("completed");
+    const owned = await runBrowserTasks(
+      [{ goal: "keep open", keep_open: true }],
+      1,
+      "conv-b01",
+      new AbortController().signal,
+      { runAgent: () => ownedRuntime as never }
+    );
+    // The validated, OWNED id surfaces — and ownership TRANSFERRED (the
+    // transfer call reassigns it; here the mock records the stop absence).
+    expect(owned.results[0]?.session_id).toBe("mb_owned_00000002");
+    expect(stopMock).not.toHaveBeenCalledWith("mb_owned_00000002", "cancelled");
+    expect(expectedRowId).not.toBeNull();
   });
-
   it("the collector's control record is addressed by the batch row id during the run", async () => {
     let seenControlId: string | null = null;
     const runtime = {

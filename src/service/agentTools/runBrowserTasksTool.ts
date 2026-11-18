@@ -511,11 +511,11 @@ export async function runBrowserTasks(
       batchAbort.signal.addEventListener("abort", onParentAbort, {
         once: true,
       });
-      // B01: the child's AUTHORITATIVE agent task id is captured from
-      // whatever result (or error) the lane settles with — cleanup and
-      // session-id validation scope to THIS task's ownership only. The
-      // declaration lives at LANE level so the catch path can use it.
-      let childAgentTaskId: string | null = null;
+      // N02/M-AC-01: the child's AUTHORITATIVE ownership key is the
+      // CONTROL task id — the child registers it BEFORE any session
+      // starts (AgentRuntime passes it as ownerAgentId), so cleanup is
+      // scoped correctly even when a crash loses the result.
+      const childAgentTaskId: string = taskId;
       try {
         const prompt = buildTaskPrompt(task, index, tasks.length);
         const runtime = (deps.runAgent ?? AgentRuntimeRegistry.getRuntime)();
@@ -556,11 +556,6 @@ export async function runBrowserTasks(
             }
           );
         let result = await runOnce();
-        // B01: capture the child's authoritative agent task id.
-        childAgentTaskId =
-          typeof (result as { agentTaskId?: unknown }).agentTaskId === "string"
-            ? (result as { agentTaskId: string }).agentTaskId
-            : childAgentTaskId;
         const resultFailedCode = (
           result.output as { reason?: string } | null
         )?.reason;
@@ -745,49 +740,76 @@ export async function runBrowserTasks(
         // does not claim released leases before the module acted.
         const cleanupEvidence: string[] = [];
         if (!task.keep_open) {
+          // N02/M-AC-01: the reported id, when owned by this task, is
+          // stopped; a FOREIGN id is refused AND the child's own sessions
+          // (its true ownership) are still closed — the reported id never
+          // suppresses the real cleanup.
           try {
             const { getDefaultManagedBrowserModule } = await import(
               "@/modules/ManagedBrowserModule"
             );
             const module = getDefaultManagedBrowserModule();
             if (typeof outputSessionId === "string" && outputSessionId) {
-              const owner =
-                module.getSessionOwnerAgentTaskId(outputSessionId);
-              if (owner !== null && owner === childAgentTaskId) {
-                await module.stop(outputSessionId, "cancelled");
-              } else if (owner === null && childAgentTaskId === null) {
-                // Both unknown (bare fakes): keep the direct stop.
+              const owner = module.getSessionOwnerAgentTaskId(outputSessionId);
+              if (owner === childAgentTaskId) {
                 await module.stop(outputSessionId, "cancelled");
               } else {
-                cleanupEvidence.push(
-                  "cleanup_skipped:session_owner_mismatch"
-                );
+                cleanupEvidence.push("cleanup_skipped:session_owner_mismatch");
+                // The foreign session is left alone, but THIS task's own
+                // sessions (e.g. a first attempt's) must still close.
+                await module.stopAllForAgentTask(childAgentTaskId, "cancelled");
               }
-            } else if (childAgentTaskId) {
+            } else {
               await module.stopAllForAgentTask(childAgentTaskId, "cancelled");
             }
           } catch {
             cleanupEvidence.push("cleanup_failed");
           }
         }
-        // B01/M-FR-07: a keep_open result transfers the session to the
-        // parent ONLY when the reported session actually belongs to this
-        // task; a foreign id is dropped (never surfaced as session_id).
+        // N02/M-FR-07: a keep_open transfer happens ONLY on a successful
+        // keep-open result with an OWNED session — the transfer then
+        // actually REASSIGNS ownership to the parent conversation; a
+        // foreign or unknown-owner id is refused and never surfaced. A
+        // FAILED keep-open result cleans the child's sessions up.
         let transferredSessionId: string | undefined = undefined;
-        if (task.keep_open && typeof outputSessionId === "string" && outputSessionId) {
-          try {
-            const { getDefaultManagedBrowserModule } = await import(
-              "@/modules/ManagedBrowserModule"
-            );
-            const owner = getDefaultManagedBrowserModule()
-              .getSessionOwnerAgentTaskId(outputSessionId);
-            if (childAgentTaskId === null || owner === childAgentTaskId) {
-              transferredSessionId = outputSessionId;
-            } else {
-              cleanupEvidence.push("keep_open_transfer_refused:owner_mismatch");
+        if (task.keep_open) {
+          if (finalStatus !== "completed") {
+            try {
+              const { getDefaultManagedBrowserModule } = await import(
+                "@/modules/ManagedBrowserModule"
+              );
+              await getDefaultManagedBrowserModule().stopAllForAgentTask(
+                childAgentTaskId,
+                "cancelled"
+              );
+              cleanupEvidence.push("keep_open_failed_sessions_released");
+            } catch {
+              cleanupEvidence.push("keep_open_failed_cleanup_error");
             }
-          } catch {
-            cleanupEvidence.push("keep_open_transfer_refused:owner_unknown");
+          } else if (typeof outputSessionId === "string" && outputSessionId) {
+            try {
+              const { getDefaultManagedBrowserModule } = await import(
+                "@/modules/ManagedBrowserModule"
+              );
+              const module = getDefaultManagedBrowserModule();
+              const owner = module.getSessionOwnerAgentTaskId(outputSessionId);
+              if (owner === childAgentTaskId) {
+                // N02: the transfer is EXPLICIT — the session is
+                // reassigned from the child to the parent conversation.
+                await module.transferSessionToConversation(
+                  outputSessionId,
+                  conversationId
+                );
+                transferredSessionId = outputSessionId;
+              } else {
+                cleanupEvidence.push("keep_open_transfer_refused:owner_mismatch");
+                // Refused transfer: the retained id must NOT surface.
+                await module.stopAllForAgentTask(childAgentTaskId, "cancelled");
+                cleanupEvidence.push("keep_open_refused_sessions_released");
+              }
+            } catch {
+              cleanupEvidence.push("keep_open_transfer_refused:error");
+            }
           }
         }
         return {
@@ -805,7 +827,7 @@ export async function runBrowserTasks(
           needs_user: (result.output as { needs_user?: { type: string } } | null)?.needs_user ?? null,
           user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
           ...(task.keep_open
-            ? { session_id: transferredSessionId ?? (result.output as { session_id?: string } | null)?.session_id }
+            ? { session_id: transferredSessionId }
             : {}),
         };
       } catch (error) {

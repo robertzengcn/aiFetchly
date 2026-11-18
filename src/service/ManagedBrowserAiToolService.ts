@@ -354,7 +354,8 @@ export class ManagedBrowserAiToolService {
 
   private ensureSession(
     sessionId: string,
-    callerConversationId?: string
+    callerConversationId?: string,
+    options?: { mutation?: boolean }
   ): SafeManagedBrowserStatus {
     const status = this.browserModule.getStatus(sessionId);
     if (!status) {
@@ -383,6 +384,22 @@ export class ManagedBrowserAiToolService {
         "worker_exited",
         undefined,
         "session_not_owned"
+      );
+    }
+    // N02/M-AC-02: MUTATING calls from the root conversation require a
+    // completed keep-open TRANSFER (ownership reassigned to the parent) —
+    // root-scoped INSPECTION stays available, but while the session is
+    // still owned by a (possibly unfinished) child task, the root may not
+    // write through it.
+    if (
+      options?.mutation === true &&
+      callerIsRoot &&
+      status.ownerConversationId !== callerConversationId
+    ) {
+      throw new ManagedBrowserAiToolError(
+        "worker_exited",
+        undefined,
+        "session_transfer_pending"
       );
     }
     return status;
@@ -555,7 +572,11 @@ export class ManagedBrowserAiToolService {
     }
     // F16/P0: an active runner owns this session — legacy tools wait.
     this.assertNoRunnerOwnership(parsed.data.session_id);
-    this.ensureSession(parsed.data.session_id, context?.conversationId);
+    // N02/M-AC-02: these tools MUTATE the page — a root-conversation
+    // caller needs a completed keep-open transfer (ownership reassigned).
+    this.ensureSession(parsed.data.session_id, context?.conversationId, {
+      mutation: true,
+    });
     const assessment = this.classifier.classify({
       actionType: "navigate",
       url: parsed.data.url,
@@ -636,7 +657,13 @@ export class ManagedBrowserAiToolService {
         page_revision: data.page_revision,
       },
     };
-    const sessionStatus = this.ensureSession(parsed.data.session_id, context?.conversationId);
+    // N02/M-AC-02: page mutations from a root-conversation caller need a
+    // completed keep-open transfer.
+    const sessionStatus = this.ensureSession(
+      parsed.data.session_id,
+      context?.conversationId,
+      { mutation: true }
+    );
     let program = parsed.data.program as BrowserActionProgram;
 
     // Risk gate over the whole program (§15.4).
@@ -950,7 +977,11 @@ export class ManagedBrowserAiToolService {
     }
     // F16/D-FR-08: an active runner owns this session — legacy tools wait.
     this.assertNoRunnerOwnership(parsed.data.session_id);
-    this.ensureSession(parsed.data.session_id, context?.conversationId);
+    // N02/M-AC-02: these tools MUTATE the page — a root-conversation
+    // caller needs a completed keep-open transfer (ownership reassigned).
+    this.ensureSession(parsed.data.session_id, context?.conversationId, {
+      mutation: true,
+    });
     // privileged_script: no permission mode may skip this confirmation.
     const assessment = this.classifier.classify({
       actionType: "run_actions",
@@ -1144,6 +1175,8 @@ export class ManagedBrowserAiToolService {
     // G01/D-FR-08: an active runner owns this session — the model tool
     // does not fight the runner for the dialog.
     this.assertNoRunnerOwnership(parsed.data.session_id);
+    // N02/M-AC-02: these tools MUTATE the page — a root-conversation
+    // caller needs a completed keep-open transfer (ownership reassigned).
     this.ensureSession(parsed.data.session_id, context?.conversationId);
     // B12/E04/C-FR-02/09 (design 18.2): inside an agent turn, the handoff
     // BLOCKS in the tool call until the user resolves, the window expires,
@@ -2185,7 +2218,11 @@ export class ManagedBrowserAiToolService {
     }
     // F16/D-FR-08: an active runner owns this session — legacy tools wait.
     this.assertNoRunnerOwnership(parsed.data.session_id);
-    this.ensureSession(parsed.data.session_id, context?.conversationId);
+    // N02/M-AC-02: these tools MUTATE the page — a root-conversation
+    // caller needs a completed keep-open transfer (ownership reassigned).
+    this.ensureSession(parsed.data.session_id, context?.conversationId, {
+      mutation: true,
+    });
     try {
       const status = await this.browserModule.stop(
         parsed.data.session_id,

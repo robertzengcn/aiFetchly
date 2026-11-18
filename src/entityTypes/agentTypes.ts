@@ -206,6 +206,14 @@ export interface RunAgentRequest {
 /** Result of one specialist agent run. */
 export interface AgentResult {
   agentTaskId: string;
+  /**
+   * N01/M-FR-08: the CONTROL task id the caller provided
+   * (RunAgentRequest.controlTaskId) — the identity sessions, handoff
+   * waits, and control records share. Null when the run used its own
+   * internal id. The batch collector validates session ownership and
+   * scopes cleanup against THIS id.
+   */
+  controlTaskId?: string;
   agentId: string;
   agentVersion: number;
   status: "completed" | "failed" | "cancelled" | "timeout" | "blocked";
