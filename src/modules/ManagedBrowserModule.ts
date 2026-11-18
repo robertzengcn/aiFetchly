@@ -1095,6 +1095,26 @@ export class ManagedBrowserModule {
     record.ownerAgentTaskId = null;
     record.conversationId = parentConversationId;
     record.rootConversationId = null;
+    // A07/M-FR-07: the LEASE owner stays in sync with the transferred
+    // identity — account reuse/ownership checks read the lease's owner
+    // conversation too.
+    try {
+      const { getDefaultManagedBrowserLeaseService } = await import(
+        "@/service/ManagedBrowserLeaseService"
+      );
+      const lease = getDefaultManagedBrowserLeaseService().getLease(
+        record.leaseKey
+      );
+      if (lease && lease.sessionId === sessionId) {
+        getDefaultManagedBrowserLeaseService().reassignLeaseOwner(
+          record.leaseKey,
+          parentConversationId
+        );
+      }
+    } catch {
+      // Lease sync is best-effort — release/stop still uses the stored
+      // leaseKey/token.
+    }
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }

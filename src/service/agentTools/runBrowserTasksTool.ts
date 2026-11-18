@@ -775,10 +775,26 @@ export async function runBrowserTasks(
                 cleanupEvidence.push("cleanup_skipped:session_owner_mismatch");
                 // The foreign session is left alone, but THIS task's own
                 // sessions (e.g. a first attempt's) must still close.
-                await module.stopAllForAgentTask(childAgentTaskId, "cancelled");
+                const released = await module.stopAllForAgentTask(
+                  childAgentTaskId,
+                  "cancelled"
+                );
+                if (released.failedSessionIds.length > 0) {
+                  cleanupEvidence.push(
+                    `cleanup_partial:${released.failedSessionIds.join(",")}`
+                  );
+                }
               }
             } else {
-              await module.stopAllForAgentTask(childAgentTaskId, "cancelled");
+              const released = await module.stopAllForAgentTask(
+                childAgentTaskId,
+                "cancelled"
+              );
+              if (released.failedSessionIds.length > 0) {
+                cleanupEvidence.push(
+                  `cleanup_partial:${released.failedSessionIds.join(",")}`
+                );
+              }
             }
           } catch {
             cleanupEvidence.push("cleanup_failed");
@@ -796,11 +812,17 @@ export async function runBrowserTasks(
               const { getDefaultManagedBrowserModule } = await import(
                 "@/modules/ManagedBrowserModule"
               );
-              await getDefaultManagedBrowserModule().stopAllForAgentTask(
+              const released = await getDefaultManagedBrowserModule().stopAllForAgentTask(
                 childAgentTaskId,
                 "cancelled"
               );
-              cleanupEvidence.push("keep_open_failed_sessions_released");
+              // A07/M-AC-01: partial stop failures are REPORTED — the
+              // caller can distinguish full cleanup from partial.
+              cleanupEvidence.push(
+                released.failedSessionIds.length === 0
+                  ? "keep_open_failed_sessions_released"
+                  : `keep_open_failed_sessions_partial:${released.failedSessionIds.join(",")}`
+              );
             } catch {
               cleanupEvidence.push("keep_open_failed_cleanup_error");
             }

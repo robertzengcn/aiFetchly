@@ -146,6 +146,20 @@ export class ManagedBrowserLeaseService {
   }
 
   /** The active lease for a key, if any (main-process internal use). */
+  /**
+   * A07/M-FR-07: reassign a live lease's owner conversation (the
+   * keep-open transfer) — account reuse/ownership checks then read the
+   * transferred identity. The lease token/session stay stable.
+   */
+  public reassignLeaseOwner(leaseKey: string, ownerConversationId: string): void {
+    const lease = this.leases.get(leaseKey);
+    if (!lease) {
+      return;
+    }
+    (lease as { ownerConversationId: string | null }).ownerConversationId =
+      ownerConversationId;
+  }
+
   public getLease(leaseKey: string): AccountLease | null {
     return this.leases.get(leaseKey) ?? null;
   }
