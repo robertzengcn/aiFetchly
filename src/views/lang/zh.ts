@@ -4008,6 +4008,7 @@ export default {
     },
     controls: {
       take_over: "接管",
+      open_browser: "打开浏览器",
       pause_ai: "暂停 AI",
       verify_login: "我已完成登录",
       resume: "继续任务",

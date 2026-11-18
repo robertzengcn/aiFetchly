@@ -34,6 +34,7 @@ import {
   BROWSER_TASK_PAUSE,
   BROWSER_TASK_RESUME,
   BROWSER_TASK_STOP,
+  BROWSER_TASK_FOCUS_WINDOW,
   BROWSER_BATCH_RETURN_NOW,
   MANAGED_BROWSER_BATCH_EVENT,
 } from "@/config/channellist";
@@ -320,6 +321,18 @@ export async function resumeBrowserTask(input: {
   instructions?: string;
 }): Promise<{ ok: boolean }> {
   return await windowInvoke(BROWSER_TASK_RESUME, input);
+}
+
+/**
+ * R01/C-FR-10: the user EXPLICITLY requested focus ("Open browser" on
+ * the session card) — the sanctioned bringToFront path. A headless or
+ * closed window is an honest ok:false.
+ */
+export async function focusBrowserWindow(input: {
+  taskId: string;
+  sessionId: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return await windowInvoke(BROWSER_TASK_FOCUS_WINDOW, input);
 }
 
 export async function stopBrowserTask(input: {

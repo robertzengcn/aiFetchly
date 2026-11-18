@@ -102,6 +102,17 @@
         </v-btn>
       </template>
       <template v-else>
+        <!-- R01/C-FR-10: the user EXPLICITLY requests focus — the only
+             sanctioned bringToFront path. -->
+        <v-btn
+          size="small"
+          variant="tonal"
+          data-testid="mb-btn-open-browser"
+          :disabled="busy || !status.sessionId"
+          @click="onOpenBrowser"
+        >
+          {{ t("managedBrowser.controls.open_browser") || "Open browser" }}
+        </v-btn>
         <v-btn
           size="small"
           variant="tonal"
@@ -458,6 +469,28 @@ async function run(action: () => Promise<unknown>): Promise<void> {
   } finally {
     busy.value = false;
   }
+}
+
+// R01/C-FR-10: the user requested focus — the only sanctioned path.
+async function onOpenBrowser(): Promise<void> {
+  const current = status.value;
+  if (!current) {
+    return;
+  }
+  await run(async () => {
+    const { focusBrowserWindow } = await import("@/views/api/managedBrowser");
+    const outcome = await focusBrowserWindow({
+      taskId: current.sessionId,
+      sessionId: current.sessionId,
+    });
+    if (!outcome.ok) {
+      // An honest failure: the window could not be raised.
+      progressLine.value =
+        outcome.reason === "focus_failed"
+          ? "window not focusable"
+          : (outcome.reason ?? "window not focusable");
+    }
+  });
 }
 
 async function onPauseAi(): Promise<void> {

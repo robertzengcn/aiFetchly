@@ -976,15 +976,17 @@ export class WorkerSession {
    * never steal focus (C-FR-10); this exists because the user asked.
    * Best-effort: a headless page (no window) resolves silently.
    */
-  public async focusWindow(): Promise<void> {
+  public async focusWindow(): Promise<boolean> {
+    // N08: the caller distinguishes a raised window from a headless/
+    // closed one — false is an honest failure the IPC surfaces.
     if (!this.page) {
-      return;
+      return false;
     }
     try {
       await this.page.bringToFront();
+      return true;
     } catch {
-      // Headless or already-focused — the user request cannot fail the
-      // session; nothing observable changed either way.
+      return false;
     }
   }
 

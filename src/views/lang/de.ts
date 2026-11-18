@@ -4252,6 +4252,7 @@ export default {
     },
     controls: {
       take_over: "Übernehmen",
+      open_browser: "Browser öffnen",
       pause_ai: "KI pausieren",
       verify_login: "Ich habe mich angemeldet",
       resume: "Aufgabe fortsetzen",

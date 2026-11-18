@@ -226,10 +226,23 @@ parentPort.on("message", async (event: { data: unknown }) => {
           })
         );
         return;
-      case "FOCUS_WINDOW":
+      case "FOCUS_WINDOW": {
         // R01/C-FR-10: EXPLICIT user-requested focus ("Open browser") —
         // the sanctioned bringToFront path; launches never steal focus.
-        await session.focusWindow();
+        // N08: a headless/closed window is an HONEST failure — the
+        // worker replies with a typed error instead of success.
+        const focused = await session.focusWindow();
+        if (!focused) {
+          parentPort.postMessage(
+            JSON.stringify({
+              ...baseMessage(message.requestId),
+              type: "WORKER_ERROR",
+              errorCode: "focus_unavailable",
+              message: "window not focusable (headless or closed)",
+            })
+          );
+          return;
+        }
         parentPort.postMessage(
           JSON.stringify({
             ...baseMessage(message.requestId),
@@ -238,6 +251,7 @@ parentPort.on("message", async (event: { data: unknown }) => {
           })
         );
         return;
+      }
       case "CANCEL_REQUEST":
         session.cancelCurrent();
         parentPort.postMessage(

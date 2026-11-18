@@ -4232,6 +4232,7 @@ export default {
     },
     controls: {
       take_over: "Take over",
+      open_browser: "Open browser",
       pause_ai: "Pause AI",
       verify_login: "I've finished logging in",
       resume: "Continue task",

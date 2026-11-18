@@ -4234,6 +4234,7 @@ export default {
     },
     controls: {
       take_over: "Prendre la main",
+      open_browser: "Ouvrir le navigateur",
       pause_ai: "Suspendre l'IA",
       verify_login: "Je me suis connecté",
       resume: "Continuer la tâche",

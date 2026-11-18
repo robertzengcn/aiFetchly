@@ -2311,17 +2311,27 @@ record.currentUrl = message.observation.url || record.currentUrl;
    * the session card). The worker calls page.bringToFront() — the only
    * sanctioned focus path; launches never steal focus.
    */
-  public async focusWindow(sessionId: string): Promise<SafeManagedBrowserStatus> {
+  public async focusWindow(
+    sessionId: string
+  ): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
-    // Focus is allowed in every non-terminal state — it changes nothing
-    // about the session's control or execution surface.
-    await record.client
-      .request(
+    // N08 follow-up: the worker FOCUSes or the call FAILS — a suppressed
+    // error would let the IPC acknowledge success without raising a
+    // window (headless/closed windows are honest failures).
+    try {
+      await record.client.request(
         { type: "FOCUS_WINDOW" },
         MANAGED_BROWSER_TIMEOUTS.singleActionMs,
         (m) => m.type === "SESSION_STATE_CHANGED"
-      )
-      .catch(() => undefined);
+      );
+    } catch (error) {
+      throw new ManagedBrowserError(
+        "worker_exited",
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "focus_failed"
+      );
+    }
     return this.toSafeStatus(record);
   }
 
