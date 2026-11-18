@@ -310,6 +310,21 @@ class BatchConfirmWaitRegistry {
     this.pending.delete(input.requestId);
     return entry;
   }
+
+  /**
+   * N06/M-FR-04: RETIRE a pending confirmation — a parent Stop during the
+   * wait resolves the waiting lane AND removes the card (the stale request
+   * no longer lingers until the TTL or a stray renderer response).
+   */
+  public cancel(requestId: string): boolean {
+    const entry = this.pending.get(requestId);
+    if (!entry) {
+      return false;
+    }
+    this.pending.delete(requestId);
+    entry.resolve({ confirmed: false, cancelled: true });
+    return true;
+  }
 }
 
 const batchConfirmRegistry = new BatchConfirmWaitRegistry();
@@ -384,29 +399,26 @@ async function requestBatchConfirmation(
       }
       if (typeof task.account_id === "number" && task.account_id > 0) {
         try {
+          // N06/S-FR-06: credential-FREE metadata — getAccountDetail
+          // decrypts the stored password for the editor; the preview needs
+          // only the site identity.
           const { SocialAccountModule } = await import(
             "@/modules/socialAccountModule"
           );
-          const account = await new SocialAccountModule().getAccountDetail(
+          const meta = await new SocialAccountModule().getAccountSiteMetadata(
             task.account_id
           );
-          if (account) {
-            const siteId =
-              (account as { site_id?: number | null }).site_id ??
-              (account as { social_type_id?: number | null })
-                .social_type_id;
-            if (typeof siteId === "number" && siteId > 0) {
-              const { getDefaultBrowserSiteModule } = await import(
-                "@/modules/BrowserSiteModule"
-              );
-              const site = await getDefaultBrowserSiteModule().getSite(siteId);
-              if (site) {
-                return {
-                  index,
-                  goal: task.goal,
-                  site: site.registrableDomain,
-                };
-              }
+          if (meta) {
+            const { getDefaultBrowserSiteModule } = await import(
+              "@/modules/BrowserSiteModule"
+            );
+            const site = await getDefaultBrowserSiteModule().getSite(meta.siteId);
+            if (site) {
+              return {
+                index,
+                goal: task.goal,
+                site: site.registrableDomain,
+              };
             }
           }
         } catch {
@@ -420,10 +432,9 @@ async function requestBatchConfirmation(
     conversationId,
     tasks: previewTasks,
   });
-  void request;
-  // B07/C-FR-09: the wait is CANCELLATION-AWARE — a parent Stop resolves
-  // the wait immediately (refusing the batch) instead of leaving the card
-  // outstanding for up to ten minutes while the batch is already dead.
+  // B07/C-FR-09 + N06: the wait is CANCELLATION-AWARE — a parent Stop
+  // resolves the wait immediately AND RETIRES the card (the stale request
+  // no longer lingers until the TTL or a stray renderer response).
   const confirmation = await new Promise<{
     confirmed: boolean;
     cancelled: boolean;
@@ -438,6 +449,7 @@ async function requestBatchConfirmation(
     };
     void promise.then(settle);
     const onAbort = (): void => {
+      batchConfirmRegistry.cancel(request.requestId);
       settle({ confirmed: false, cancelled: true });
     };
     signal.addEventListener("abort", onAbort, { once: true });

@@ -654,6 +654,24 @@ export class SocialAccountModule extends BaseModule {
   }
 
   /**
+   * N06/S-FR-06: credential-FREE account metadata for the batch
+   * confirmation preview — site identity only, NEVER the stored
+   * password (getAccountDetail decrypts for the editor and must not be
+   * used by the preview path).
+   */
+  public async getAccountSiteMetadata(accountId: number): Promise<{
+    siteId: number;
+  } | null> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      return null;
+    }
+    const siteId = account.site_id ?? account.social_type_id;
+    return typeof siteId === "number" && siteId > 0 ? { siteId } : null;
+  }
+
+  /**
    * Q-01/R02: per-account AI opt-in editing for EXISTING accounts — the
    * only writer besides the credential card (which sets true on save).
    */
