@@ -195,6 +195,20 @@ export class HostedDecisionClient implements BrowserDecisionClient {
           reason_code: "correlation_mismatch",
         };
       }
+      // A16/design §9.2: the hosted contract REQUIRES the correlation echo
+      // — a bare action with no request/task/step ids is rejected (an
+      // unrelated or replayed reply can never authorize an action).
+      const hasCorrelationEcho = correlations.some(([key]) => {
+        const echoed =
+          (record[key] as unknown) ?? (action ? action[key] : undefined);
+        return echoed !== undefined && echoed !== null;
+      });
+      if (!hasCorrelationEcho) {
+        return {
+          status: "provider_error",
+          reason_code: "correlation_mismatch",
+        };
+      }
       return normalizeWireResult(raw);
     } catch (error) {
       if (this.configChanged()) {
@@ -565,9 +579,13 @@ function validatePressKey(value: unknown): BrowserProposedAction["key"] {
     : null;
 }
 
+// A16: SIGN_IN is part of the advertised contract (the prompt asks for
+// it at credential walls) — the bare parser must accept it like the
+// strict schema does.
 const BARE_OPERATIONS = new Set([
   "CLICK", "FILL", "SELECT", "PRESS_KEY", "NAVIGATE", "GO_BACK", "HOVER",
-  "SCROLL_UP", "SCROLL_DOWN", "WAIT", "EXTRACT", "DONE", "ESCALATE",
+  "SCROLL_UP", "SCROLL_DOWN", "WAIT", "EXTRACT", "SIGN_IN", "DONE",
+  "ESCALATE",
 ]);
 
 function parseBareAction(raw: unknown): {

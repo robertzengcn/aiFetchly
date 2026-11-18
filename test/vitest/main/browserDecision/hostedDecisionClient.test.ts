@@ -113,6 +113,32 @@ describe("HostedDecisionClient correlation validation (N01/design §9.2)", () =>
     }
   });
 
+  // A16/design §9.2: the hosted contract REQUIRES the correlation echo —
+  // a bare action without any ids is rejected.
+  it("rejects a bare action with no correlation echo (A16)", async () => {
+    const bare = {
+      status: "decided",
+      action: {
+        operation: "CLICK",
+        target_id: "e_1",
+        option_id: null,
+        key: null,
+        url: null,
+        text: null,
+      },
+      uncertainty: { source: "native_distribution", confidence: 0.9 },
+    };
+    const client = new HostedDecisionClient(
+      async () => ({ advertised: true }),
+      async () => bare
+    );
+    const decision = await client.decide(baseInput, new AbortController().signal);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("correlation_mismatch");
+    }
+  });
+
   it("rejects a stale page revision echo", async () => {
     const stale = { ...decidedEnvelope, page_revision: 1 };
     const client = new HostedDecisionClient(
