@@ -234,6 +234,11 @@ export function summarizeInputValue(
   if (inputType && isSensitiveInputType(inputType)) {
     return "[password-like]";
   }
+  // A04: the EXACT filled credential pass runs FIRST — a value echoed
+  // into another nonsensitive input is contained regardless of shape.
+  if (containsTrustedSecret(value)) {
+    return redactTrustedSecrets(value);
+  }
   if (isLikelySecretValue(value)) {
     return REDACTED_MARKER;
   }

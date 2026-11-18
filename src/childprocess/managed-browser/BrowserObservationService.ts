@@ -346,7 +346,9 @@ export function shapeElementRecord(
     disabled: record.disabled,
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
-    ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
+    ...(record.hrefOrigin
+      ? { hrefOrigin: redactTrustedSecrets(record.hrefOrigin) }
+      : {}),
     // B04: full normalized URL rides the summary for NAVIGATE provenance.
     // N07: a page can echo a filled credential into a link (query param);
     // the trusted pass applies before the shape heuristics.
@@ -528,7 +530,10 @@ async function buildObservationBody(
   if (textBudget.truncated) {
     notices.push({ code: "truncated" });
   }
-  const url = sanitizeUrlForReport(input.page.url());
+  // A04: the URL pathname can carry the exact filled credential (a page
+  // can navigate to a URL embedding it) — the trusted pass applies before
+  // the report-safe shape.
+  const url = redactTrustedSecrets(sanitizeUrlForReport(input.page.url()));
   const visibleSensitive = records.some(
     (r) => r.inputType != null && isSensitiveInputType(r.inputType)
   );
@@ -538,9 +543,12 @@ async function buildObservationBody(
 
   input.registry.commitObservation(observationId);
   // Final payload scrub (GAP-04): free-form page text is the leak surface —
-  // planted canaries, rendered tokens, key=value pairs in prose.
-  const safeTitle = redactSecretsInText(title);
-  const safeText = redactSecretsInText(textBudget.text);
+  // planted canaries, rendered tokens, key=value pairs in prose. A04: the
+  // exact filled credential is redacted FIRST (the trusted pass applies
+  // to the FULL text — a length limit before it can cut through a known
+  // value and prevent the match).
+  const safeTitle = redactSecretsInText(redactTrustedSecrets(title));
+  const safeText = redactSecretsInText(redactTrustedSecrets(textBudget.text));
   return {
     sessionId: input.sessionId,
     observationId,
