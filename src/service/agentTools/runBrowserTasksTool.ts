@@ -547,10 +547,14 @@ export async function runBrowserTasks(
             {
               ...getDefaultAgentRuntimeDeps(),
               signal: childAbort.signal,
-              // F06: a blocking handoff/credential wait freezes this
-              // child's active-time deadline (D-21).
+              // F06 + N03/C-FR-09: a blocking handoff/credential wait AND
+              // an explicit Pause freeze the child's active-time deadline
+              // (the registry flag alone misses an explicit pause).
               isUserWaiting: (childConversationId: string) =>
                 getDefaultToolJobRegistry().isConversationWaitingForUser(
+                  childConversationId
+                ) ||
+                getDefaultAgentTaskControlService().isUserWaitState(
                   childConversationId
                 ),
             }

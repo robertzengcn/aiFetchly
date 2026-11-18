@@ -428,6 +428,12 @@ export type AIChatQueryLoopResult =
        * a blocked/paused outcome instead of a cancelled one.
        */
       agentTaskPaused?: boolean;
+      /**
+       * N03/C-FR-09: true when the pause wait failed because the pause
+       * EXPIRED (interrupted) — the caller persists the honest terminal
+       * state instead of a resumable waiting_user.
+       */
+      agentTaskInterrupted?: boolean;
     }
   | {
       type: "paused_for_permission";

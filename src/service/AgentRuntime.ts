@@ -413,6 +413,27 @@ export class AgentRuntime {
           };
         }
       }
+      // N03/C-FR-06: a response generated BEFORE a pause+resume must not
+      // execute its pre-pause tool calls after the gate reopened — the
+      // resume generation captured at the round top is compared here, and
+      // stale calls are held (same discard rule as the runner).
+      if (
+        typeof generationBeforeModel === "number" &&
+        getDefaultAgentTaskControlService().getResumeGeneration(controlTaskId) >
+          generationBeforeModel
+      ) {
+        return {
+          tool_call_id: ctx.toolCallId,
+          tool_name: name,
+          success: false,
+          result: {
+            agentTaskPaused: true,
+            reason:
+              "tool call predates a user pause/resume — held and discarded",
+          },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
       const res = await executeClaudeCompatibleTool(
         name,
         args,
@@ -593,6 +614,9 @@ export class AgentRuntime {
       },
     };
 
+    // N03: the resume generation at the current model round — the per-tool
+    // gate compares it so pre-pause tool calls never execute.
+    let generationBeforeModel: number | undefined = undefined;
     try {
       const loopInput = {
         conversationId: agentConversationId,
@@ -624,6 +648,10 @@ export class AgentRuntime {
         // branch in policyCheckedExecute below (held as a set).
         onBeforeModelRound: () => {
           const record = getDefaultAgentTaskControlService().get(controlTaskId);
+          // N03: snapshot the resume generation at the round top — the
+          // per-tool gate compares it to discard pre-pause calls.
+          generationBeforeModel = getDefaultAgentTaskControlService()
+            .getResumeGeneration(controlTaskId);
           if (!record) {
             return "ok";
           }
@@ -667,6 +695,22 @@ export class AgentRuntime {
         // waiting_user WITHOUT finishedAt (the task is not finished —
         // a resume can still advance it).
         if (result.agentTaskPaused) {
+          // N03/C-FR-09: an EXPIRED pause (interrupted) is a terminal
+          // state — persisted honestly, never a resumable waiting_user.
+          if (result.agentTaskInterrupted) {
+            await this.taskModule.setStatus(agentTaskId, "failed", {
+              finishedAt: new Date(),
+              errorMessage: "the pause expired before the task could resume",
+            });
+            return this.buildResult(
+              agentTaskId,
+              definition,
+              "failed",
+              finalText,
+              "the pause expired before the task could resume",
+              controlTaskId
+            );
+          }
           await this.taskModule.setStatus(agentTaskId, "waiting_user", {});
           return this.buildResult(
             agentTaskId,

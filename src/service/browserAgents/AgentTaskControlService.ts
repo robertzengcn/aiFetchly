@@ -111,6 +111,24 @@ export class AgentTaskControlService {
     return this.tasks.get(taskId)?.state ?? null;
   }
 
+  /**
+   * N03/C-FR-09: does the given id resolve to a task currently in a user
+   * wait state (paused/waiting)? Used by the runtime clock to freeze the
+   * deadline on an EXPLICIT pause (the job registry alone misses it).
+   */
+  public isUserWaitState(taskIdOrConversationId: string): boolean {
+    for (const record of this.tasks.values()) {
+      if (
+        (record.taskId === taskIdOrConversationId ||
+          record.conversationId === taskIdOrConversationId) &&
+        isWaitingState(record.state)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   public setState(
     taskId: string,
     state: AgentTaskControlState,
@@ -247,6 +265,11 @@ export class AgentTaskControlService {
         return readRecord()?.state ?? "cancelled";
       },
       waitUntilOpen: async (signal: AbortSignal): Promise<void> => {
+        // N03: an ALREADY-aborted signal rejects immediately — the waiter
+        // is never added after the fact.
+        if (signal.aborted) {
+          throw new Error("task_cancelled");
+        }
         const record = this.tasks.get(taskId);
         if (!record) {
           throw new Error("task_not_found");

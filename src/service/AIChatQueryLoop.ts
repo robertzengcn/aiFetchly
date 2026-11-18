@@ -2574,8 +2574,10 @@ export class AIChatQueryLoop {
           if (gateVerdict === "pause" && input.onPauseWait) {
             try {
               await input.onPauseWait(input.abortController.signal);
-              // Gate reopened — re-run the round-top checks (a fresh pause
-              // or a cancel may have landed while waiting).
+              // N03: gate reopened — re-run the round-top checks WITHOUT
+              // consuming a round (the for-increment is cancelled by the
+              // decrement; no request occurred during the pause).
+              round -= 1;
               continue;
             } catch (waitError) {
               // A wait rejected with task_cancelled is a REAL user
@@ -2595,9 +2597,11 @@ export class AIChatQueryLoop {
                       announcedDeferredNames
                     )
                   : undefined,
-                ...(waitMessage === "task_cancelled"
-                  ? {}
-                  : { agentTaskPaused: true }),
+                // N03: an EXPIRED pause (interrupted) is distinguishable
+              // from both a cancel and a still-blocked pause.
+              ...(waitMessage === "task_cancelled"
+                ? {}
+                : { agentTaskPaused: true, agentTaskInterrupted: waitMessage === "task_interrupted" }),
               };
             }
           }
