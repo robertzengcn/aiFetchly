@@ -203,6 +203,12 @@ export interface RunnerObservation {
   readonly pageRevision: number;
   readonly url: string;
   readonly title: string;
+  /**
+   * R01/C-FR-07: the session's authenticated flag at observation time —
+   * the resume recheck records a signed-out page (the runner never types
+   * credentials; SIGN_IN routes to the credential service).
+   */
+  readonly authenticated?: boolean | null;
   readonly elements: ReadonlyArray<{
     ref: string;
     role: string;
@@ -451,6 +457,38 @@ export class BrowserTaskRunner {
             this.pendingSubgoal = this.pendingSubgoal
               ? `${this.pendingSubgoal} ${driftNote}`
               : driftNote;
+          }
+          // R01: the AUTHORITATIVE allowed-sites check — the site registry
+          // (BrowserSite) must still recognize the live page (or match the
+          // start site's domain). An unregistered, unrelated domain is
+          // recorded and rides the decision note.
+          if (
+            startIdentity &&
+            nowIdentity &&
+            startIdentity.registrableDomain === nowIdentity.registrableDomain
+          ) {
+            const { getDefaultBrowserSiteModule } = await import(
+              "@/modules/BrowserSiteModule"
+            );
+            const siteMatch = await getDefaultBrowserSiteModule()
+              .matchByUrl(observation.url)
+              .catch(() => null);
+            if (!siteMatch) {
+              evidence.push("resume_identity_site_unregistered");
+            }
+          }
+          // R01: the account identity recheck — a signed-out fresh page
+          // (authenticated === false on the same origin) is recorded and
+          // rides the decision note so the model re-authenticates before
+          // acting (the runner never types credentials; SIGN_IN routes to
+          // the credential service).
+          if (typeof observation.authenticated === "boolean" && !observation.authenticated) {
+            evidence.push("resume_identity_signed_out");
+            const authNote =
+              "the session appears SIGNED OUT after the user's takeover — re-verify the login state (SIGN_IN) before acting";
+            this.pendingSubgoal = this.pendingSubgoal
+              ? `${this.pendingSubgoal} ${authNote}`
+              : authNote;
           }
         }
         const decisionInput = this.buildDecisionInput(observation, candidates);

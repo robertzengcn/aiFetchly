@@ -1726,7 +1726,11 @@ export class ManagedBrowserAiToolService {
               elements: Array<{ ref: string; role: string; name: string; valueSummary?: string | null; disabled?: boolean | null }>;
               visibleText: string;
             };
-            return observation;
+            // R01/C-FR-07: the session's authenticated flag rides the
+            // observation for the resume identity recheck.
+            const authenticated =
+              this.browserModule.getStatus(sessionId)?.authenticated ?? null;
+            return { ...observation, authenticated };
           } catch {
             return null;
           }

@@ -670,7 +670,23 @@ export class AgentRuntime {
         // A rejection (cancelled/interrupted) ends the turn as before.
         onPauseWait: async (signal: AbortSignal) => {
           const gate = getDefaultAgentTaskControlService().getGate(controlTaskId);
+          // R01/C-FR-07: the RESUME NOTE persists in the ACTUAL agent
+          // transcript — gate reopened means the user controlled the
+          // browser; the model must observe first. The user's
+          // instructions ride the transcript entry (and are consumed by
+          // the runner through the control record).
           await gate.waitUntilOpen(signal);
+          const resumeInstructions =
+            getDefaultAgentTaskControlService().consumeResumeInstructions(
+              controlTaskId
+            ) ?? "";
+          await transcript.appendSystemText(
+            agentTaskId,
+            `[resume ${new Date().toISOString()}] the user controlled the browser; observe before acting.` +
+              (resumeInstructions
+                ? ` user instructions: ${resumeInstructions}`
+                : "")
+          );
         },
         // Retry transient content failures instantly. Agents run under a tight
         // maxRuntimeMs deadline (the abort timer above); spending that budget
