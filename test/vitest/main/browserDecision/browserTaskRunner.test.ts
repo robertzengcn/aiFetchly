@@ -2646,3 +2646,70 @@ describe("BrowserTaskRunner SELECT binding after filtering (A03)", () => {
     expect(result.evidence.some((e) => e.includes("invalid_decision"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A06/C-FR-06: a recovery proposal produced BEFORE a Pause→Resume is
+// discarded at consumption — the stale action never dispatches.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner stale recovery discard (A06)", () => {
+  it("a recovery proposal predating a Pause→Resume is discarded", async () => {
+    const control = new AgentTaskControlService();
+    let recoveryProduced = false;
+    let dispatched: string[] = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([]),
+      control,
+      observe: async () => observation(),
+    };
+    runnerDeps.decisionClient.decide = ((
+      input: { allowed_operations: readonly string[] }
+    ) => {
+      if (!recoveryProduced) {
+        recoveryProduced = true;
+        // First decision fails structurally → recovery produces a proposal.
+        return Promise.resolve({
+          status: "decided",
+          action: { operation: "CLICK", target_id: "nonexistent", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        });
+      }
+      return Promise.resolve({
+        status: "decided",
+        action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      });
+    }) as unknown as typeof runnerDeps.decisionClient.decide;
+    runnerDeps.runActions = async (_sessionId, input) => {
+      for (const a of input.actions) {
+        dispatched.push(a.type);
+      }
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: input.actions.map(() => ({ success: true, errorCode: null })),
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_a06", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    const runPromise = runner.run();
+    // Poll until the control record exists, then Pause→Resume BEFORE the
+    // recovery proposal is consumed (the proposal is produced during the
+    // first iteration's violation handling).
+    const waitAndResume = async (): Promise<void> => {
+      for (let i = 0; i < 100; i++) {
+        if (control.get(runner.taskId)) {
+          control.beginIntervention(runner.taskId, "user_paused");
+          control.resume(runner.taskId);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    };
+    await waitAndResume();
+    await runPromise;
+    // The stale recovery never dispatched a click.
+    expect(dispatched).not.toContain("click");
+  });
+});

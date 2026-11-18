@@ -282,6 +282,8 @@ export class BrowserTaskRunner {
   private readonly maxEquivalentFailures: number;
   /** T18: a bounded recovery decision awaiting execution. */
   private pendingRecovery: BrowserDecisionResult | null = null;
+  /** A06/C-FR-06: the resume generation when the recovery was produced. */
+  private pendingRecoveryGeneration: number | null = null;
   /** B16: the URL the task started on (documented DONE fallback). */
   private startUrl: string | null = null;
   /** A-FR-14: bounded credential-service attempts per task. */
@@ -533,10 +535,26 @@ export class BrowserTaskRunner {
         const generationBeforeDecide = control.getResumeGeneration(this.taskId);
         let decisionFromRecovery = false;
         if (this.pendingRecovery) {
-          // T18: consume the bounded recovery decision through the normal
-          // validate/execute path (no second execution machinery).
+          // T18 + A06/C-FR-06: consume the bounded recovery decision ONLY
+          // if no Pause→Resume happened since it was produced — a stale
+          // proposal is discarded and the loop re-observes.
+          const staleRecovery =
+            this.pendingRecoveryGeneration !== null &&
+            control.getResumeGeneration(this.taskId) >
+              this.pendingRecoveryGeneration;
+          if (staleRecovery) {
+            evidence.push("recovery_discarded_after_resume");
+            this.pendingRecovery = null;
+            this.pendingRecoveryGeneration = null;
+            observation = await this.deps.observe(this.input.sessionId);
+            if (!observation) {
+              return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
+            }
+            continue;
+          }
           decision = this.pendingRecovery;
           this.pendingRecovery = null;
+          this.pendingRecoveryGeneration = null;
           this.decisionRequests++;
           decisionFromRecovery = true;
         } else
@@ -1548,7 +1566,12 @@ export class BrowserTaskRunner {
         !attemptController.signal.aborted &&
         !signal.aborted
       ) {
+        // A06/C-FR-06: the proposal carries the resume generation it was
+        // produced under — a Pause→Resume before consumption discards it.
         this.pendingRecovery = result;
+        this.pendingRecoveryGeneration = (
+          this.deps.control ?? getDefaultAgentTaskControlService()
+        ).getResumeGeneration(this.taskId);
         return true;
       }
       return false;
