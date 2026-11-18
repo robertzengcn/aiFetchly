@@ -46,8 +46,16 @@ vi.mock("@/service/aiProvider/AIProviderSettingsService", () => ({
   },
 }));
 
+// A01: the provider epoch is MUTABLE — tests can advance it to verify
+// that the live getter observes the change.
+const providerEpochState = vi.hoisted(() => ({ epoch: 0 }));
 vi.mock("@/service/aiProvider/AIProviderConfigVersion", () => ({
-  providerConfigKey: () => "provider-config:test",
+  providerConfigKey: () => `provider-config:test:${providerEpochState.epoch}`,
+  currentProviderConfigVersion: () => providerEpochState.epoch,
+  bumpProviderConfigVersion: () => {
+    providerEpochState.epoch += 1;
+    return providerEpochState.epoch;
+  },
 }));
 
 vi.mock("@/api/aiChatApi", () => ({
@@ -404,6 +412,63 @@ describe("executeTask native route + model override (E01/E02)", () => {
         }
       },
     }));
+    // A01: the admission-bound local client is mocked — its complete()
+    // records the model and returns the same scripted decisions.
+    vi.doMock("@/service/aiProvider/OpenAICompatibleProviderClient", () => ({
+      OpenAICompatibleProviderClient: class {
+        constructor(
+          public config: unknown,
+          public apiKey: string
+        ) {}
+        public async complete(request: {
+          model?: string;
+          messages: ReadonlyArray<{ role: string; content: string }>;
+        }): Promise<unknown> {
+          if (request.model) {
+            modelsRequested.push(request.model);
+          }
+          const prompt = request.messages[1]?.content ?? "";
+          if (prompt.includes("PLAN ONCE")) {
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      operation: "DONE",
+                      target_id: null,
+                      option_id: null,
+                      key: null,
+                      url: null,
+                      text: JSON.stringify({
+                        completion_criteria: [],
+                        bindings: [],
+                        first_subgoal: "go",
+                      }),
+                    }),
+                  },
+                },
+              ],
+            };
+          }
+          return {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    operation: "DONE",
+                    target_id: null,
+                    option_id: null,
+                    key: null,
+                    url: null,
+                    text: null,
+                  }),
+                },
+              },
+            ],
+          };
+        }
+      },
+    }));
     vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
       AIProviderResolver: class {
         public resolveForChat(): { canUse: boolean; kind: string; config: { defaultModel: string } } {
@@ -749,6 +814,63 @@ describe("executeTask native route + model override (E01/E02)", () => {
         }
       },
     }));
+    // A01: the admission-bound local client is mocked — complete()
+    // records the model and returns the scripted decisions.
+    vi.doMock("@/service/aiProvider/OpenAICompatibleProviderClient", () => ({
+      OpenAICompatibleProviderClient: class {
+        constructor(
+          public config: unknown,
+          public apiKey: string
+        ) {}
+        public async complete(request: {
+          model?: string;
+          messages: ReadonlyArray<{ role: string; content: string }>;
+        }): Promise<unknown> {
+          if (request.model) {
+            modelsRequested.push(request.model);
+          }
+          const prompt = request.messages[1]?.content ?? "";
+          if (prompt.includes("PLAN ONCE")) {
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      operation: "DONE",
+                      target_id: null,
+                      option_id: null,
+                      key: null,
+                      url: null,
+                      text: JSON.stringify({
+                        completion_criteria: [],
+                        bindings: [],
+                        first_subgoal: "go",
+                      }),
+                    }),
+                  },
+                },
+              ],
+            };
+          }
+          return {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    operation: "DONE",
+                    target_id: null,
+                    option_id: null,
+                    key: null,
+                    url: null,
+                    text: null,
+                  }),
+                },
+              },
+            ],
+          };
+        }
+      },
+    }));
     vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
       AIProviderResolver: class {
         public resolveForChat(): {
@@ -778,5 +900,128 @@ describe("executeTask native route + model override (E01/E02)", () => {
     for (const model of modelsRequested) {
       expect(model).toBe("gpt-4o-mini");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A01/D-FR-02: the epoch getter handed to the decision client is LIVE —
+// advancing the provider revision during the first decision makes the
+// client refuse the next dispatch (previously the getter returned the
+// frozen epoch itself, so a change was unobservable).
+// ---------------------------------------------------------------------------
+describe("executeTask live epoch getter (A01)", () => {
+  it("a provider revision advanced mid-task aborts the next decision", async () => {
+    EXECUTE_TASK_DECISION_ROUTE = {
+      version: 1,
+      mode: "follow_chat",
+      chatDecisionModel: null,
+      nativeProfile: null,
+      requestTimeoutMs: null,
+      chatCapabilities: null,
+    };
+    // The A01 live-epoch capture: advance the revision after the first
+    // decision round completes.
+    let decisions = 0;
+    const configVersion = await import(
+      "@/service/aiProvider/AIProviderConfigVersion"
+    );
+    const before = configVersion.currentProviderConfigVersion();
+    const scriptedChat = vi.fn(async (request: { model?: string }) => {
+      decisions++;
+      if (decisions === 2) {
+        configVersion.bumpProviderConfigVersion();
+      }
+      const prompt = request.model ? "" : "";
+      void prompt;
+      return {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                operation: "CLICK",
+                target_id: "e_bbb",
+                option_id: null,
+                key: null,
+                url: null,
+                text: null,
+              }),
+            },
+          },
+        ],
+      };
+    });
+    vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
+      AIProviderResolver: class {
+        public resolveForChat(): {
+          canUse: boolean;
+          kind: string;
+          config: { defaultModel: string };
+          apiKey: string;
+        } {
+          return {
+            canUse: true,
+            kind: "local",
+            config: { defaultModel: "m" },
+            apiKey: "k",
+          };
+        }
+      },
+    }));
+    vi.doMock("@/service/aiProvider/OpenAICompatibleProviderClient", () => ({
+      OpenAICompatibleProviderClient: class {
+        constructor(
+          public config: unknown,
+          public apiKey: string
+        ) {}
+        public async complete(): Promise<unknown> {
+          return scriptedChat({}) as never;
+        }
+      },
+    }));
+    // After the revision bump, the NEXT decide must refuse via
+    // provider_config_changed — count CLICK actions dispatched.
+    let clicks = 0;
+    const module = makeModule();
+    const originalRunActions = (module as unknown as {
+      runActions: (sessionId: string, program: { actions: Array<{ type: string }> }) => Promise<unknown>;
+    }).runActions;
+    (module as unknown as {
+      runActions: (sessionId: string, program: { actions: Array<{ type: string }> }) => Promise<unknown>;
+    }).runActions = async (sessionId, program) => {
+      for (const action of program.actions) {
+        if (action.type === "click") clicks++;
+      }
+      return {
+        type: "ACTION_RESULT",
+        effect: "known",
+        pageRevision: 3,
+        results: program.actions.map(() => ({
+          actionIndex: 0,
+          type: "click",
+          success: true,
+          errorCode: null,
+          elementFound: true,
+        })),
+        stopCode: null,
+        extracted: [],
+        observation: null,
+      };
+    };
+    void originalRunActions;
+    const service = makeService(module);
+    const result = (await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "do it",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      CTX
+    )) as Record<string, unknown>;
+    void before;
+    // The provider change was observed: the task must NOT have dispatched
+    // clicks after the bump (the decision client refuses with
+    // provider_config_changed → the runner ends partial/failed).
+    expect(result.status).not.toBe("completed");
+    expect(clicks).toBeLessThanOrEqual(1);
   });
 });

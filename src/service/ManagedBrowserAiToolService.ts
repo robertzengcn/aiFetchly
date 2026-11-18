@@ -1523,8 +1523,9 @@ export class ManagedBrowserAiToolService {
               postQuestion: async (endpoint, body, signal) =>
                 postNativeDecision(endpoint, body, nativeCredential, signal),
             },
-            // N05: the ADMISSION epoch — never a fresh one.
-            () => epochAdmission
+            // A01/D-FR-02: the LIVE epoch getter — the client's change
+            // check compares it to the frozen ADMISSION snapshot below.
+            () => currentProviderConfigKey()
           );
           nativeClient.freezeRoute(epochAdmission);
           decisionClient = nativeClient;
@@ -1574,8 +1575,9 @@ export class ManagedBrowserAiToolService {
         async (body, signal) => api.postDecisionEnvelope(body, { signal }),
         // R01/D-FR-02: the hosted client re-checks the frozen provider
         // config identity around every request.
-        // N05: the ADMISSION epoch — never a fresh one.
-        () => epochAdmission
+        // A01/D-FR-02: the LIVE epoch getter — the client's change check
+        // compares it to the frozen ADMISSION snapshot below.
+        () => currentProviderConfigKey()
       );
       hostedClient.freezeRoute(epochAdmission);
       // N05: the hosted capability probe was an awaited network call — the
@@ -1639,8 +1641,46 @@ export class ManagedBrowserAiToolService {
           decisionModel = defaultModel;
         }
       }
+      // A01/D-AC-01: the chat transport is BOUND to the ADMISSION snapshot
+      // — for a local/custom provider the client is constructed ONCE with
+      // the captured endpoint/key (requests never re-resolve current
+      // settings); hosted admission keeps the hosted API path and the
+      // epoch check catches a mid-task route change.
+      const { AIProviderResolver } = await import(
+        "@/service/aiProvider/AIProviderResolver"
+      );
+      const admissionResolution = new AIProviderResolver().resolveForChat();
+      let admissionLocalClient: import("@/service/aiProvider/OpenAICompatibleProviderClient").OpenAICompatibleProviderClient | null = null;
+      if (admissionResolution.canUse && admissionResolution.kind === "local") {
+        const { OpenAICompatibleProviderClient } = await import(
+          "@/service/aiProvider/OpenAICompatibleProviderClient"
+        );
+        admissionLocalClient = new OpenAICompatibleProviderClient(
+          admissionResolution.config,
+          admissionResolution.apiKey
+        );
+      }
       const chatClient = new ChatCompletionDecisionClient(
         async (request, signal) => {
+          if (admissionLocalClient) {
+            return (await admissionLocalClient.complete(
+              {
+                messages: request.messages as never,
+                model: admissionResolution.canUse &&
+                  admissionResolution.kind === "local"
+                  ? request.model
+                  : request.model,
+                stream: false,
+                temperature: request.temperature,
+                response_format: request.response_format,
+                ...(request.tools ? { tools: request.tools as never } : {}),
+                ...(request.tool_choice
+                  ? { tool_choice: request.tool_choice as never }
+                  : {}),
+              },
+              { signal }
+            )) as ChatCompletionLike;
+          }
           const { AiChatApi } = await import("@/api/aiChatApi");
           const api = new AiChatApi();
           return (await api.openAIChatCompletion(
@@ -1659,9 +1699,10 @@ export class ManagedBrowserAiToolService {
           )) as ChatCompletionLike;
         },
         decisionModel,
-        // R01/D-FR-02 + N05: each decision call re-checks the frozen
-        // ADMISSION epoch; a mid-task change returns provider_error.
-        () => epochAdmission,
+        // R01/D-FR-02 + A01: each decision call re-checks the LIVE epoch
+        // against the frozen ADMISSION snapshot; a mid-task change returns
+        // provider_error.
+        () => currentProviderConfigKey(),
         // R01/D-FR-18 + B04/D-AC-08: the probed chat output
         // capabilities apply ONLY when they were probed under the
         // CURRENT provider revision — flags from another revision are
