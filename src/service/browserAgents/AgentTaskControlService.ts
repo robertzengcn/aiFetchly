@@ -44,7 +44,9 @@ export interface AgentTaskControlGate {
 
 export interface TaskControlRecord {
   readonly taskId: string;
-  readonly conversationId: string;
+  // A13: mutable — the runtime re-registers the control task against the
+  // CHILD conversation (the clock's pause lookup uses it).
+  conversationId: string;
   state: AgentTaskControlState;
   reason: string | null;
   /** Accumulated active (non-waiting) time in ms. */
@@ -87,6 +89,12 @@ export class AgentTaskControlService {
   ): TaskControlRecord {
     const existing = this.tasks.get(taskId);
     if (existing) {
+      // A13/C-FR-09: the conversation id is UPDATED for an existing record
+      // — the batch collector registers the row against the root
+      // conversation, and the runtime re-registers it against the CHILD
+      // conversation when the loop starts; the runtime clock's pause
+      // lookup uses the child conversation, so the record must reflect it.
+      existing.conversationId = conversationId;
       return existing;
     }
     const record: TaskControlRecord = {

@@ -1595,15 +1595,17 @@ export class BrowserTaskRunner {
       return "ok";
     }
     this.stepsSinceProgressCheck = 0;
-    // F15: the digest covers FORM STATE (field values change on a
-    // successful fill even when the URL/text stand still) and criterion
-    // progress — newly satisfied completion criteria count as progress.
+    // F15 + A14/D-FR-22: the digest uses STABLE SEMANTIC identity —
+    // volatile element refs (fresh per observation) are EXCLUDED (ten
+    // identical pages with fresh refs all counted as progress before),
+    // the visible-text window is wider (600), and form values ride
+    // without refs.
     const formSignature = observation.elements
       .slice(0, 60)
-      .map((el) => `${el.ref}:${el.valueSummary ?? ""}`)
+      .map((el) => `${el.role}:${el.name}:${el.valueSummary ?? ""}`)
       .join("|");
     const criterionProgress = this.verifyCompletion(observation, []).verified;
-    const digest = `${observation.url}|${observation.visibleText.slice(0, 200)}|${formSignature}|${criterionProgress ? "criterion" : ""}`;
+    const digest = `${observation.url}|${observation.visibleText.slice(0, 600)}|${formSignature}|${criterionProgress ? "criterion" : ""}`;
     if (
       this.lastProgressDigest !== null &&
       digest === this.lastProgressDigest &&

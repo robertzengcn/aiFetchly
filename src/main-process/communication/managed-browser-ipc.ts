@@ -752,7 +752,20 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
         };
       }
       // Persist the probed flags scoped to the probed revision (B04/D-AC-08):
-      // flags from another revision never apply.
+      // flags from another revision never apply. A12: the epoch is
+      // REVALIDATED BEFORE the save — a concurrent route change during the
+      // probes discards the results entirely (nothing persisted, all
+      // negatives returned); a late old probe can never overwrite a newer
+      // result.
+      if (providerConfigKey() !== probedRevision) {
+        return {
+          chat: false,
+          structuredJsonSchema: false,
+          forcedToolDecision: false,
+          structuredError: "probe_invalidated_by_concurrent_change",
+          forcedToolError: "probe_invalidated_by_concurrent_change",
+        };
+      }
       const effective = effectiveBeforeProbe;
       await new ManagedBrowserSettingsModule().updatePreferences({
         decisionRoute: {
@@ -763,19 +776,9 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           },
         },
       });
-      // N04: the post-save revision must still equal the probed revision —
-      // a concurrent route change invalidates the results (surfaced
-      // honestly in the payload the panel shows).
-      const invalidated = providerConfigKey() !== probedRevision;
       return {
         ...result,
-        ...(invalidated
-          ? {
-              structuredError: result.structuredError ?? "probe_invalidated_by_concurrent_change",
-              forcedToolError: result.forcedToolError ?? "probe_invalidated_by_concurrent_change",
-            }
-          : {}),
-        providerRevision: invalidated ? null : probedRevision,
+        providerRevision: probedRevision,
         ...(effective.decisionRoute.chatDecisionModel
           ? { probedModel: effective.decisionRoute.chatDecisionModel }
           : {}),
