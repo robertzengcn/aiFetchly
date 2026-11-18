@@ -2422,3 +2422,123 @@ describe("BrowserTaskRunner capabilities consumption (R02/D-FR-04)", () => {
     expect(seen[0]).toContain("NAVIGATE");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A02/D-FR-04: EVERY decided operation is validated against the offered
+// list before branching — an unsupported SCROLL never reaches the worker.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner unsupported-operation gate (A02)", () => {
+  it("an unsupported SCROLL_UP is refused and never dispatched", async () => {
+    const dispatched: string[] = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "SCROLL_UP", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+    };
+    (runnerDeps.decisionClient as unknown as {
+      getCapabilities: () => Promise<Record<string, unknown>>;
+    }).getCapabilities = async () => ({
+      advertised: true,
+      // The route advertises a subset WITHOUT scroll operations.
+      operations: ["CLICK", "FILL", "SELECT", "DONE", "ESCALATE"],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    runnerDeps.runActions = async (_sessionId, input) => {
+      for (const a of input.actions) {
+        dispatched.push(a.type);
+      }
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: input.actions.map(() => ({ success: true, errorCode: null })),
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_a02",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/results" }],
+        budget: { recoveryCalls: 5 },
+      },
+      {
+        ...runnerDeps,
+        observe: async () => ({ ...observation(), url: "https://example.test/results" }),
+      } as never
+    );
+    const result = await runner.run();
+    // The unsupported SCROLL_UP never dispatched; the loop re-decided and
+    // completed via CLICK + DONE on the /results URL.
+    expect(dispatched).toEqual(["click"]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence.some((e) => e.includes("unsupported_operation:SCROLL_UP"))).toBe(true);
+  });
+
+  it("the advertised deadline ceiling caps the decision deadline", async () => {
+    const seen: number[] = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+    };
+    (runnerDeps.decisionClient as unknown as {
+      getCapabilities: () => Promise<Record<string, unknown>>;
+    }).getCapabilities = async () => ({
+      advertised: true,
+      operations: ["CLICK", "DONE"],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      // A tiny advertised ceiling — the runner must honor it.
+      deadlineDefaultMs: 20,
+      deadlineHardMs: 20,
+      cacheable: false,
+    });
+    runnerDeps.decisionClient.decide = ((
+      input: { deadline_ms: number }
+    ) => {
+      seen.push(input.deadline_ms);
+      return Promise.resolve({
+        status: "decided",
+        action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      });
+    }) as unknown as typeof runnerDeps.decisionClient.decide;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_a02b", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    await runner.run();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const deadline of seen) {
+      expect(deadline).toBeLessThanOrEqual(20);
+    }
+  });
+});

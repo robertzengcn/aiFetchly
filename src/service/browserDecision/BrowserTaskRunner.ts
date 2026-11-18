@@ -275,6 +275,8 @@ export class BrowserTaskRunner {
    * capabilities list, all runner operations offered).
    */
   private admittedOperations: readonly string[] | null = null;
+  /** A02/D-FR-19: the advertised deadline ceiling (null = no list). */
+  private advertisedDeadlineMs: number | null = null;
   private lastFailureKey: string | null = null;
   private consecutiveEquivalentFailures = 0;
   private readonly maxEquivalentFailures: number;
@@ -345,6 +347,13 @@ export class BrowserTaskRunner {
         capabilities.operations.length > 0
       ) {
         this.admittedOperations = capabilities.operations;
+      }
+      if (
+        typeof capabilities.deadlineHardMs === "number" &&
+        capabilities.deadlineHardMs > 0
+      ) {
+        // A02: the advertised ceiling bounds the per-request deadline.
+        this.advertisedDeadlineMs = capabilities.deadlineHardMs;
       }
     } catch {
       // Capabilities unavailable — all runner operations offered.
@@ -679,6 +688,35 @@ export class BrowserTaskRunner {
           return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
         }
         const action = decision.action;
+        // A02/D-FR-04: EVERY decided operation is validated against the
+        // offered list BEFORE branching — an unsupported operation (e.g. a
+        // SCROLL from a capabilities subset that never offered it) is an
+        // invalid decision routed through the violation handling, never a
+        // worker dispatch. DONE/ESCALATE/SIGN_IN are always allowed
+        // (terminal/control-plane operations).
+        const terminalOrControlOp = ["DONE", "ESCALATE", "SIGN_IN"].includes(
+          action.operation
+        );
+        if (
+          !terminalOrControlOp &&
+          decisionInput.allowed_operations.length > 0 &&
+          !decisionInput.allowed_operations.includes(action.operation)
+        ) {
+          evidence.push(`unsupported_operation:${action.operation}`);
+          if (
+            ++this.consecutiveEquivalentFailures >= this.maxEquivalentFailures
+          ) {
+            return this.terminal(
+              "partial",
+              `unsupported_operation:${action.operation}`,
+              evidence,
+              extracted,
+              observation
+            );
+          }
+          this.pendingSubgoal = `the operation ${action.operation} is NOT offered by the current provider route — choose from the allowed list or ESCALATE`;
+          continue;
+        }
         if (action.operation === "DONE") {
           // D-AC-09/R16: verification uses FRESH state. If the fresh
           // observation FAILS, the task is partial/unverified — never
@@ -1427,7 +1465,13 @@ export class BrowserTaskRunner {
           : RUNNER_OPERATIONS.filter((operation) =>
               (this.admittedOperations as readonly string[]).includes(operation)
             ),
-      deadline_ms: Math.min(this.budget.requestTimeoutMs, 30_000),
+      // A02: the advertised ceiling caps the deadline (never exceeding the
+      // route budget).
+      deadline_ms: Math.min(
+        this.budget.requestTimeoutMs,
+        30_000,
+        this.advertisedDeadlineMs ?? Number.POSITIVE_INFINITY
+      ),
     };
   }
 
