@@ -289,12 +289,10 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           : { reason: "session_pause_failed" }),
       };
     }
-    controlService.setState(resolvedTaskId, "paused", "user_paused");
-    // F06: the 60-minute pause cap only covers pauses with an open
-    // intervention record — explicit pause opens one.
-    if (resolvedTaskId !== undefined) {
-      controlService.beginIntervention(resolvedTaskId, "user_paused");
-    }
+    // N01/C-FR-01: the browser pause runs FIRST — the control record
+    // moves to paused only when the worker accepted the pause, so the
+    // two layers can never disagree (a worker refusal leaves the gate
+    // open and the browser unpaused).
     let sessionPaused = true;
     if (input.sessionId) {
       // T24/C-FR-05: PAUSE_REQUEST stops the in-flight program between
@@ -307,10 +305,19 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
         sessionPaused = false;
       }
     }
-    return {
-      ok: sessionPaused,
-      ...(sessionPaused ? {} : { reason: "session_pause_failed" }),
-    };
+    if (!sessionPaused) {
+      return { ok: false, reason: "session_pause_failed" };
+    }
+    // N01: an unknown task id is an honest failure — a silent no-op would
+    // report ok while nothing was paused.
+    if (!controlService.get(resolvedTaskId)) {
+      return { ok: false, reason: "task_not_found" };
+    }
+    controlService.setState(resolvedTaskId, "paused", "user_paused");
+    // F06: the 60-minute pause cap only covers pauses with an open
+    // intervention record — explicit pause opens one.
+    controlService.beginIntervention(resolvedTaskId, "user_paused");
+    return { ok: true };
   };
   registerValidatedHandler(
     BROWSER_TASK_PAUSE,
@@ -378,17 +385,24 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       if (!resumed) {
         return { ok: false, reason: "session_resume_failed" };
       }
+      // N01: an unknown or terminal task id cannot resume — the boolean
+      // result of the transition is surfaced, never ignored.
       controlService.endIntervention(resolvedResumeTaskId);
       // B13/C-FR-07: the user's instructions are stored on the control
-      // record and consumed ONCE by the running loop (folded into its
-      // next decision input) — they never vanish into the renderer.
+      // record BEFORE the gate reopens — the resumed loop consumes them
+      // ONCE (folded into its next decision input).
       if (input.instructions) {
         controlService.recordResumeInstructions(
           resolvedResumeTaskId,
           input.instructions
         );
       }
-      controlService.resume(resolvedResumeTaskId);
+      // N01: the transition result is surfaced, never ignored — an
+      // unknown or terminal task id cannot resume.
+      const resumeOutcome = controlService.resume(resolvedResumeTaskId);
+      if (!resumeOutcome) {
+        return { ok: false, reason: "task_not_resumable" };
+      }
       return { ok: true, instructions: input.instructions ?? null };
     }
   );
@@ -396,6 +410,21 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
     BROWSER_TASK_STOP,
     browserTaskStopSchema,
     async (input) => {
+      // N01/D-FR-08: a paired task/session Stop validates the pair (same
+      // check as Resume) — a task that does not own the session is
+      // refused instead of silently stopping a foreign session.
+      if (input.taskId && input.sessionId) {
+        const owner =
+          getDefaultManagedBrowserAiToolService().runnerTaskIdForSession(
+            input.sessionId
+          ) ??
+          getDefaultManagedBrowserModule().getSessionOwnerAgentTaskId(
+            input.sessionId
+          );
+        if (owner !== null && owner !== input.taskId) {
+          return { ok: false, reason: "task_session_mismatch" };
+        }
+      }
       controlService.cancel(input.taskId, "user_stop");
       // F17: stopping ONE batch child (`<batch>:<i>`) aborts only that
       // child — its siblings keep running. Whole-batch termination is
@@ -406,12 +435,23 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
         );
         abortTask(input.taskId);
       }
+      // N01/C-FR-16: the worker stop failure is SURFACED — a swallowed
+      // error would report ok while the browser is still running.
+      let sessionStopped = true;
       if (input.sessionId) {
-        await getDefaultManagedBrowserModule()
-          .stop(input.sessionId, "user_stop")
-          .catch(() => undefined);
+        try {
+          await getDefaultManagedBrowserModule().stop(
+            input.sessionId,
+            "user_stop"
+          );
+        } catch {
+          sessionStopped = false;
+        }
       }
-      return { ok: true };
+      return {
+        ok: sessionStopped,
+        ...(sessionStopped ? {} : { reason: "session_stop_failed" }),
+      };
     }
   );
   registerValidatedHandler(
