@@ -192,4 +192,7 @@ list offers everything). Sweep: 697 main-process tests across 58
 files, 1,625 component tests. Remaining open: qualification/release
 evidence only (recall measurement, live-provider/WebRTC, real E2E
 drivers, held-out evaluation, packaged evidence — operator/CI), and
-the deferred scoped start-Boolean permission grant. Still open: qualification/release evidence only — R02's recall measurement, live-provider/WebRTC qualification, the six real E2E drivers, held-out evaluation and packaged evidence (operator/CI), and the scoped start-Boolean grant into the permission layer (deferred with the permission redesign).
+the deferred scoped start-Boolean permission grant.
+
+CI run 44383359610 SUCCESS on all three jobs (Lint+unit 19m52s,
+Package smoke 5m14s, Electron E2E 45m32s) at `cb40906c1`. Still open: qualification/release evidence only — R02's recall measurement, live-provider/WebRTC qualification, the six real E2E drivers, held-out evaluation and packaged evidence (operator/CI), and the scoped start-Boolean grant into the permission layer (deferred with the permission redesign).
