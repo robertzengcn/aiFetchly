@@ -62,7 +62,14 @@ export async function postNativeDecision(
     headers,
     body: JSON.stringify(body),
     signal,
+    // N05/D-AC-11: redirects are REFUSED — the initial HTTPS validation
+    // must hold for the FINAL destination too; a redirect could otherwise
+    // carry the credential to a different origin.
+    redirect: "manual",
   });
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error("native_request_failed_redirect");
+  }
   if (!response.ok) {
     // The status surfaces as a typed reason upstream (native 401/403/404).
     throw new Error(`native_request_failed_${response.status}`);

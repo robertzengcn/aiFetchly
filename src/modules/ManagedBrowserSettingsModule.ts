@@ -461,9 +461,13 @@ export class ManagedBrowserSettingsModule {
       );
     }
     if (decisionRelevantChange) {
-      // B06: bump AFTER the setting writes are queued (the bump is itself
-      // a persisted value, ordered with them by the same Promise.all).
+      // B06: bump the epoch. N05: the bump runs AFTER ALL writes have
+      // COMMITTED — a task capturing the new epoch between two incomplete
+      // writes would otherwise read partially-committed settings under a
+      // fresh epoch.
+      await Promise.all(writes);
       bumpProviderConfigVersion();
+      return this.getEffectiveSettings();
     }
     await Promise.all(writes);
     return this.getEffectiveSettings();

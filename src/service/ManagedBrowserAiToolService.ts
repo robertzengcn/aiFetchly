@@ -1446,19 +1446,24 @@ export class ManagedBrowserAiToolService {
     if (!availability.available) {
       throw new ManagedBrowserAiToolError("ai_disabled", undefined, availability.reasonCode ?? undefined);
     }
+    const { providerConfigKey: currentProviderConfigKey } = await import(
+      "@/service/aiProvider/AIProviderConfigVersion"
+    );
+    // N05/D-FR-01–04: ONE immutable route bundle — the epoch is captured
+    // BEFORE any provider-dependent read (provider mode, settings), every
+    // await revalidates it, and clients freeze the ADMISSION epoch (never
+    // a fresh one) so the bundle cannot silently mix two configurations.
+    const epochAdmission = currentProviderConfigKey();
     const { AIProviderSettingsService } = await import(
       "@/service/aiProvider/AIProviderSettingsService"
     );
     const providerMode = new AIProviderSettingsService().getMode();
     const route: "hosted" | "chat" = providerMode === "hosted" ? "hosted" : "chat";
-    const { providerConfigKey: currentProviderConfigKey } = await import(
-      "@/service/aiProvider/AIProviderConfigVersion"
-    );
     // B06/D-FR-01–04: the settings read and the epoch freeze must
     // describe ONE configuration — if settings move DURING the read
     // (the awaited import above can race a concurrent settings save),
     // admission refuses and the caller re-admits under the new bundle.
-    const epochBeforeAdmission = currentProviderConfigKey();
+    const epochBeforeAdmission = epochAdmission;
     // N01/design 5.3: the EXPLICIT native route — only when the user
     // configured mode native_profile with a complete profile. Never
     // inferred; an unusable profile is a structured refusal (B03: a
@@ -1518,9 +1523,10 @@ export class ManagedBrowserAiToolService {
               postQuestion: async (endpoint, body, signal) =>
                 postNativeDecision(endpoint, body, nativeCredential, signal),
             },
-            () => currentProviderConfigKey()
+            // N05: the ADMISSION epoch — never a fresh one.
+            () => epochAdmission
           );
-          nativeClient.freezeRoute(currentProviderConfigKey());
+          nativeClient.freezeRoute(epochAdmission);
           decisionClient = nativeClient;
         }
       }
@@ -1568,9 +1574,20 @@ export class ManagedBrowserAiToolService {
         async (body, signal) => api.postDecisionEnvelope(body, { signal }),
         // R01/D-FR-02: the hosted client re-checks the frozen provider
         // config identity around every request.
-        () => currentProviderConfigKey()
+        // N05: the ADMISSION epoch — never a fresh one.
+        () => epochAdmission
       );
-      hostedClient.freezeRoute(currentProviderConfigKey());
+      hostedClient.freezeRoute(epochAdmission);
+      // N05: the hosted capability probe was an awaited network call — the
+      // epoch is revalidated BEFORE freezing, so a probe that raced a
+      // settings change cannot bless a mixed bundle.
+      if (currentProviderConfigKey() !== epochAdmission) {
+        throw new ManagedBrowserAiToolError(
+          "ai_disabled",
+          undefined,
+          "provider_config_changed"
+        );
+      }
       decisionClient = hostedClient;
     } else if (decisionClient === undefined) {
       // E01: the chat client is built ONLY when no native client was
@@ -1642,9 +1659,9 @@ export class ManagedBrowserAiToolService {
           )) as ChatCompletionLike;
         },
         decisionModel,
-        // R01/D-FR-02: each decision call re-checks the frozen provider
-        // config identity; a mid-task change returns provider_error.
-        () => currentProviderConfigKey(),
+        // R01/D-FR-02 + N05: each decision call re-checks the frozen
+        // ADMISSION epoch; a mid-task change returns provider_error.
+        () => epochAdmission,
         // R01/D-FR-18 + B04/D-AC-08: the probed chat output
         // capabilities apply ONLY when they were probed under the
         // CURRENT provider revision — flags from another revision are
@@ -1656,7 +1673,7 @@ export class ManagedBrowserAiToolService {
           }
           if (
             stored.providerRevision === null ||
-            stored.providerRevision !== currentProviderConfigKey()
+            stored.providerRevision !== epochAdmission
           ) {
             return undefined;
           }
@@ -1666,7 +1683,7 @@ export class ManagedBrowserAiToolService {
           };
         })()
       );
-      chatClient.freezeRoute(currentProviderConfigKey());
+      chatClient.freezeRoute(epochAdmission);
       decisionClient = chatClient;
     }
     if (decisionClient === undefined) {
