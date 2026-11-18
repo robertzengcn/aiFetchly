@@ -181,6 +181,24 @@ describe("SocialAccountDetailPage AI opt-in (N08/Q-01)", () => {
     wrapper.unmount();
   });
 
+  it("two successful toggles in each direction each write and update the ref", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const checkbox = wrapper.find(
+      "[data-testid='socialaccount-ai-optin-checkbox']"
+    );
+    // true → false (writes false, ref updated).
+    await checkbox.setValue(false);
+    await flushPromises();
+    expect(setSocialAccountAiUseEnabled).toHaveBeenCalledWith(77, false);
+    // false → true (writes true, ref updated — the dropped-toggle bug).
+    await checkbox.setValue(true);
+    await flushPromises();
+    expect(setSocialAccountAiUseEnabled).toHaveBeenCalledWith(77, true);
+    expect(setSocialAccountAiUseEnabled).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
   it("a failed write rolls back without scheduling a second write", async () => {
     vi.mocked(setSocialAccountAiUseEnabled).mockRejectedValueOnce(
       new Error("storage unavailable")

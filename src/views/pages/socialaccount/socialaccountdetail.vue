@@ -336,6 +336,10 @@ function onAiUseToggled(enabled: boolean | null): void {
   aiUseError.value = null;
   setSocialAccountAiUseEnabled(id, next)
     .then(() => {
+      // A10: the saved value is ASSIGNED after success — a true→false
+      // write leaves the ref false (previously the ref stayed true and
+      // the next toggle was dropped by the equality guard).
+      aiUseEnabled.value = next;
       aiUseError.value = null;
     })
     .catch((error: unknown) => {
