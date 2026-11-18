@@ -828,14 +828,35 @@ export async function runBrowserTasks(
             }
           }
         }
+        // R01/M-FR-02: batch-boundary output VALIDATION — the child's
+        // summary/evidence/final_url are bounded and shape-checked (the
+        // schema allows longer strings through the lenient parse path),
+        // and a malformed retained session id is dropped.
+        const rawOutput = result.output as {
+          summary?: string;
+          evidence?: string[];
+          final_url?: string | null;
+        } | null;
+        const boundedSummary = String(
+          rawOutput?.summary ?? result.errorMessage ?? result.status
+        ).slice(0, 1000);
+        const boundedEvidence = (rawOutput?.evidence ?? [])
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.slice(0, 300))
+          .slice(0, 20);
+        const boundedFinalUrl =
+          typeof rawOutput?.final_url === "string" &&
+          /^https?:\/\//.test(rawOutput.final_url)
+            ? rawOutput.final_url.slice(0, 2048)
+            : null;
         return {
           task_index: index,
           status: finalStatus,
-          summary: (result.output as { summary?: string } | null)?.summary ?? String(result.errorMessage ?? result.status),
+          summary: boundedSummary,
           extracted: (result.output as { extracted?: unknown[] } | null)?.extracted ?? [],
-          final_url: (result.output as { final_url?: string } | null)?.final_url ?? null,
+          final_url: boundedFinalUrl,
           evidence: [
-            ...((result.output as { evidence?: string[] } | null)?.evidence ?? []),
+            ...boundedEvidence,
             // B01: cleanup facts ride the returned evidence — a skipped or
             // failed cleanup is never silently swallowed.
             ...cleanupEvidence,
