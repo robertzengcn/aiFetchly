@@ -172,4 +172,24 @@ A-FR-01–21, S-FR-01–06, P-FR-01–09, design §§13–16.
 Sweep at the closure HEAD: **695 tests across 58 main-process files** (after the preload fix), **1,625 component tests across 184 files** (including the three mounted opt-in tests), and the managedBrowser utility suite green.
 
 CI run 44331718503 SUCCESS on all three jobs (Lint+unit 19m41s,
-Package smoke 6m6s, Electron E2E 40m40s) at `1d0079764`. Still open: qualification/release evidence only — R02's recall measurement, live-provider/WebRTC qualification, the six real E2E drivers, held-out evaluation and packaged evidence (operator/CI), and the scoped start-Boolean grant into the permission layer (deferred with the permission redesign).
+Package smoke 6m6s, Electron E2E 40m40s) at `1d0079764`.
+
+**2026-11-19 continuation:** commits `3510fea36`(R01 resume rechecks +
+transcript) → `d4ceed767`(batch-boundary output bounds) →
+`cae25709b`(capabilities consumption). R01: the resume recheck consults
+the AUTHORITATIVE site registry (matchByUrl — an unregistered domain is
+recorded as resume_identity_site_unregistered), the session's
+authenticated flag rides the observation (a signed-out page is
+recorded as resume_identity_signed_out and rides the decision note so
+the model re-authenticates via SIGN_IN), and the resume note + user
+instructions persist in the ACTUAL agent transcript (appendSystemText
+after the gate reopens, timestamped). R01/M-FR-02: the batch boundary
+bounds and shape-checks the child's summary/evidence/final_url (1000
+chars, string-only 300×20, http(s) 2048). R02/D-FR-04: the runner
+consumes the admitted route's capabilities once at admission — offered
+operations are intersected with the advertised set (a client without a
+list offers everything). Sweep: 697 main-process tests across 58
+files, 1,625 component tests. Remaining open: qualification/release
+evidence only (recall measurement, live-provider/WebRTC, real E2E
+drivers, held-out evaluation, packaged evidence — operator/CI), and
+the deferred scoped start-Boolean permission grant. Still open: qualification/release evidence only — R02's recall measurement, live-provider/WebRTC qualification, the six real E2E drivers, held-out evaluation and packaged evidence (operator/CI), and the scoped start-Boolean grant into the permission layer (deferred with the permission redesign).
