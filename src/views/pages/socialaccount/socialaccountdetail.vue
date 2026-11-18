@@ -57,13 +57,14 @@
       <!-- Q-01/B10: per-account AI opt-in (editable for existing accounts). -->
       <div v-if="isEdit" class="mt-3" data-testid="socialaccount-ai-optin">
         <v-checkbox
-          v-model="aiUseEnabled"
+          :model-value="aiUseEnabled"
           :label="t('socialaccount.ai_use_enabled')"
           :hint="t('socialaccount.ai_use_enabled_hint')"
           persistent-hint
           density="compact"
-          :disabled="aiUseSaving"
+          :disabled="aiUseSaving || !aiUseLoaded"
           data-testid="socialaccount-ai-optin-checkbox"
+          @update:model-value="onAiUseToggled"
         ></v-checkbox>
         <v-alert
           v-if="aiUseError !== null"
@@ -246,6 +247,7 @@ import {
   getSessionMetadata,
   getSocialAccountAiUseEnabled,
   setSocialAccountAiUseEnabled,
+  listBrowserSites,
 } from "@/views/api/socialaccount";
 import { SOCIAL_ACCOUNT_LOGIN_MESSSAGE } from "@/config/channellist";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -308,31 +310,46 @@ async function openManagedBrowser(): Promise<void> {
 const social_type_id = ref<number>();
 // Q-01/B10: per-account AI opt-in state (existing accounts only).
 const aiUseEnabled = ref(false);
+// N08: the checkbox is inert until the initial read finishes — loading
+// and rollback mutate the ref WITHOUT triggering a write (the write is
+// an explicit user toggle only).
+const aiUseLoaded = ref(false);
 const aiUseSaving = ref(false);
 const aiUseError = ref<string | null>(null);
+// N08: the error text type is string | undefined from the i18n fallback.
 
-async function onAiUseToggled(enabled: boolean): Promise<void> {
+// N08: the ONLY write path is the user's checkbox change (@update:model-
+// value) — the async initial load and the failure rollback assign the ref
+// directly, so no implicit write fires.
+function onAiUseToggled(enabled: boolean | null): void {
   const id = parseInt($route.params.id?.toString() ?? "", 10);
   if (!Number.isFinite(id) || id <= 0) {
     return;
   }
+  // Vuetify can emit null while clearing — treated as unchecked.
+  const next = enabled === true;
+  if (!aiUseLoaded.value || aiUseSaving.value || next === aiUseEnabled.value) {
+    return;
+  }
+  const previous = aiUseEnabled.value;
   aiUseSaving.value = true;
   aiUseError.value = null;
-  try {
-    await setSocialAccountAiUseEnabled(id, enabled);
-  } catch (error) {
-    // Revert to the persisted state and surface the failure.
-    aiUseEnabled.value = !enabled;
-    aiUseError.value =
-      error instanceof Error ? error.message : t('socialaccount.ai_use_failed');
-  } finally {
-    aiUseSaving.value = false;
-  }
+  setSocialAccountAiUseEnabled(id, next)
+    .then(() => {
+      aiUseError.value = null;
+    })
+    .catch((error: unknown) => {
+      // Rollback assigns the ref directly — no write fires.
+      aiUseEnabled.value = previous;
+      aiUseError.value =
+        error instanceof Error
+          ? error.message
+          : (t('socialaccount.ai_use_failed') || null);
+    })
+    .finally(() => {
+      aiUseSaving.value = false;
+    });
 }
-
-watch(aiUseEnabled, (enabled) => {
-  void onAiUseToggled(enabled);
-});
 const proxyValue = ref<Array<Proxy>>([]);
 const proxyValueshow = ref<Array<string>>([]);
 const loading = ref(false);
@@ -443,13 +460,18 @@ const initialize = async () => {
 
       // console.log(proxyValue.value)
       social_type_id.value = res.social_type_id;
-      // Q-01/B10: load the per-account AI opt-in for existing accounts.
+      // Q-01/B10/N08: load the per-account AI opt-in — the assignment is
+      // NOT a write (the handler only fires on user toggles), and the
+      // checkbox stays inert until this read finishes.
       await getSocialAccountAiUseEnabled(socialaccountId.value)
         .then((enabled) => {
           aiUseEnabled.value = enabled;
         })
         .catch(() => {
           aiUseEnabled.value = false;
+        })
+        .finally(() => {
+          aiUseLoaded.value = true;
         });
     });
   } else {
@@ -459,20 +481,40 @@ const initialize = async () => {
     // campaignId.value=parseInt($route.params.campaignId.toString());
     // }
   }
-  //get social task type
-  if (SocialPlatformList && Array.isArray(SocialPlatformList) && SocialPlatformList.length > 0) {
-    platformitems.value = SocialPlatformList.map((item) => {
-      return {
+  // N08/S-FR-06: the SITE REGISTRY is the authoritative selector source —
+  // custom/registered sites appear alongside the legacy static list.
+  try {
+    const registrySites = await listBrowserSites();
+    const registryItems = registrySites.map((site) => ({
+      id: site.id,
+      name: site.name,
+      displayName: `${site.name} (${site.registrableDomain})`,
+      category: "site",
+      url: `https://${site.registrableDomain}`,
+    }));
+    const staticItems = (SocialPlatformList ?? []).map((item) => ({
+      id: item.id,
+      name: item.name,
+      displayName: `${item.name} (${item.category})`,
+      category: item.category,
+      url: item.url,
+    }));
+    // Registry entries win; static entries fill gaps (legacy ids).
+    const seen = new Set(registryItems.map((item) => item.id));
+    platformitems.value = [...registryItems, ...staticItems.filter((item) => !seen.has(item.id))];
+  } catch {
+    // Registry unavailable — the static list keeps the editor usable.
+    if (SocialPlatformList && Array.isArray(SocialPlatformList) && SocialPlatformList.length > 0) {
+      platformitems.value = SocialPlatformList.map((item) => ({
         id: item.id,
         name: item.name,
         displayName: `${item.name} (${item.category})`,
         category: item.category,
         url: item.url,
-      };
-    });
-  } else {
-    console.error('SocialPlatformList is not available or empty');
-    platformitems.value = [];
+      }));
+    } else {
+      platformitems.value = [];
+    }
   }
 };
 
@@ -568,7 +610,6 @@ const handleSelectedChanged = (newValue: ProxyListEntity[]) => {
             isexist = true;
           }
         }
-        console.log("isexist:" + isexist.toString());
         if (!isexist) {
           proxyValue.value.push({
             id: newValue[i].id,
@@ -578,7 +619,6 @@ const handleSelectedChanged = (newValue: ProxyListEntity[]) => {
             password: newValue[i].password,
             protocol: newValue[i].protocol,
           });
-          console.log(proxyValue.value);
         }
       }
     }

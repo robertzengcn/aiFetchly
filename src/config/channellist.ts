@@ -127,6 +127,9 @@ export const SOCIAL_ACCOUNT_GET_AI_USE_ENABLED =
   "socialaccount:get-ai-use-enabled";
 export const SOCIAL_ACCOUNT_SET_AI_USE_ENABLED =
   "socialaccount:set-ai-use-enabled";
+// N08/S-FR-06: the SITE REGISTRY list for renderer selectors (names +
+// ids only — no secrets).
+export const BROWSER_SITE_LIST = "browser-site:list";
 // Browser-profile import (feature-flagged; see src/config/featureFlags.ts).
 export const SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY =
   "socialaccount:browser-import:availability";

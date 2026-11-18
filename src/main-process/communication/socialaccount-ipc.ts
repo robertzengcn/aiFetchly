@@ -14,6 +14,7 @@ import {
   SOCIAL_ACCOUNT_SESSION_METADATA,
   SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
   SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+  BROWSER_SITE_LIST,
 } from "@/config/channellist";
 import { SocialAccount } from "@/modules/socialaccount";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
@@ -25,6 +26,7 @@ import fs from "fs";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import { SocialPlatformList } from "@/config/generate";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { noInputSchema } from "@/schemas/ipc/_shared/common";
 import {
   socialAccountListInputSchema,
   socialAccountByIdInputSchema,
@@ -109,6 +111,27 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     async (input) => {
       const socialaccount = new SocialAccountController();
       return socialaccount.getAccountdetail(input.id);
+    }
+  );
+
+  // N08/S-FR-06: the site registry list — renderer selectors source
+  // platform names/ids from the AUTHORITATIVE registry (the static list
+  // is the renderer's fallback for legacy ids).
+  registerValidatedHandler(
+    BROWSER_SITE_LIST,
+    noInputSchema,
+    async () => {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const sites = await getDefaultBrowserSiteModule().listSites();
+      return {
+        sites: sites.map((site) => ({
+          id: site.siteId,
+          name: site.name,
+          registrableDomain: site.registrableDomain,
+        })),
+      };
     }
   );
 

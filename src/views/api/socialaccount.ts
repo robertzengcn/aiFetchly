@@ -22,6 +22,7 @@ import {
   SOCIAL_ACCOUNT_SESSION_METADATA,
   SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
   SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+  BROWSER_SITE_LIST,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
@@ -104,6 +105,20 @@ export async function setSocialAccountAiUseEnabled(
   enabled: boolean
 ): Promise<void> {
   await windowInvoke(SOCIAL_ACCOUNT_SET_AI_USE_ENABLED, { id, enabled });
+}
+
+/** N08/S-FR-06: the AUTHORITATIVE site registry (names + ids only). */
+export interface BrowserSiteListItem {
+  readonly id: number;
+  readonly name: string;
+  readonly registrableDomain: string;
+}
+
+export async function listBrowserSites(): Promise<BrowserSiteListItem[]> {
+  const resp = (await windowInvoke(BROWSER_SITE_LIST, {})) as {
+    sites?: BrowserSiteListItem[];
+  } | null;
+  return resp?.sites ?? [];
 }
 //save social account
 export async function saveSocialAccount(
