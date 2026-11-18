@@ -56,7 +56,10 @@ const trustedSecrets: string[] = [];
 const TRUSTED_SECRET_MAX = 8;
 
 export function registerTrustedSecret(value: string): void {
-  if (!value || value.length < 3) {
+  // N07: the credential schemas accept values of length 1 — containment
+  // covers EVERY accepted length. An empty value is skipped (nothing to
+  // contain), and a same-value re-registration just moves it to newest.
+  if (!value) {
     return;
   }
   const existing = trustedSecrets.indexOf(value);
@@ -80,7 +83,7 @@ function containsTrustedSecret(text: string): boolean {
 }
 
 /** Replace every registered trusted secret occurrence in text. */
-function redactTrustedSecrets(text: string): string {
+export function redactTrustedSecrets(text: string): string {
   let out = text;
   for (const secret of trustedSecrets) {
     if (out.includes(secret)) {
@@ -88,6 +91,16 @@ function redactTrustedSecrets(text: string): string {
     }
   }
   return out;
+}
+
+/** Does text carry an ACTUAL filled credential (exact value)? */
+export function containsTrustedSecretValue(text: string): boolean {
+  return containsTrustedSecret(text);
+}
+
+/** N07: clear registered secrets when the session/work ends. */
+export function clearTrustedSecrets(): void {
+  trustedSecrets.length = 0;
 }
 
 export function isLikelySecretValue(value: string): boolean {

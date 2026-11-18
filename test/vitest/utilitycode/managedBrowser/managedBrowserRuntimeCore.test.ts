@@ -567,3 +567,84 @@ describe("B09 trusted-secret containment", () => {
     expect(redactSecretsInText(text)).toBe(text);
   });
 });
+
+// ---------------------------------------------------------------------------
+// N07/A-FR-15: containment of every accepted credential length and of the
+// raw observation outbound fields (role/href/option values).
+// ---------------------------------------------------------------------------
+describe("N07 trusted-secret containment coverage", () => {
+  it("a two-character credential is contained after registration", async () => {
+    const {
+      registerTrustedSecret,
+      clearTrustedSecretsForTest,
+      redactSecretsInText,
+    } = await import("@/childprocess/managed-browser/ResultSanitizer");
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("p5");
+    expect(redactSecretsInText("login hint: p5 works")).toBe(
+      "login hint: [redacted] works"
+    );
+    const { redactSecrets } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    expect(redactSecrets({ note: "pw is p5 ok" })).toMatchObject({
+      note: "pw is [redacted] ok",
+    });
+    clearTrustedSecretsForTest();
+  });
+
+  it("an option value carrying the credential is OMITTED from the shaped element", async () => {
+    const { registerTrustedSecret, clearTrustedSecretsForTest } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    const { shapeElementRecord } = await import(
+      "@/childprocess/managed-browser/BrowserObservationService"
+    );
+    clearTrustedSecretsForTest();
+    const secret = "summer2024!field";
+    registerTrustedSecret(secret);
+    const shaped = shapeElementRecord({
+      ref: "e_sel",
+      role: "combobox",
+      name: "Security question",
+      options: [
+        { l: "safe option", v: "safe-value" },
+        { l: "echoed credential", v: secret },
+        { l: "another safe", v: "another-value" },
+      ],
+    } as never);
+    const shapedRec = shaped as unknown as {
+      option_ids: string[];
+      option_values: string[];
+      option_labels: string[];
+    };
+    // The credential-bearing option is OMITTED; the safe ones keep their
+    // ORIGINAL o_N indices (executor maps o_N → el.options[N]).
+    expect(shapedRec.option_ids).toEqual(["o_0", "o_2"]);
+    expect(shapedRec.option_values).toEqual(["safe-value", "another-value"]);
+    expect(shapedRec.option_labels).toEqual(["safe option", "another safe"]);
+    expect(JSON.stringify(shapedRec)).not.toContain(secret);
+    clearTrustedSecretsForTest();
+  });
+
+  it("the role and hrefFull fields get the trusted pass", async () => {
+    const { registerTrustedSecret, clearTrustedSecretsForTest } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    const { shapeElementRecord } = await import(
+      "@/childprocess/managed-browser/BrowserObservationService"
+    );
+    clearTrustedSecretsForTest();
+    const secret = "summer2024!field";
+    registerTrustedSecret(secret);
+    const shaped = shapeElementRecord({
+      ref: "e_link",
+      role: `link ${secret}`,
+      name: "harmless name",
+      hrefFull: `https://page.test/?echo=${encodeURIComponent(secret)}`,
+    } as never) as unknown as { role: string; hrefFull: string };
+    expect(shaped.role).not.toContain(secret);
+    expect(shaped.hrefFull).not.toContain(secret);
+    clearTrustedSecretsForTest();
+  });
+});

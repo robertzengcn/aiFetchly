@@ -55,6 +55,7 @@ import type {
   PlatformBrowserAdapter,
 } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
+  clearTrustedSecrets,
   redactSecrets,
   registerTrustedSecret,
   sanitizeScriptResult,
@@ -1038,7 +1039,10 @@ export class WorkerSession {
   }
 
   public async stop(requestId: string, reason: string): Promise<void> {
-    // Stop is idempotent in every state.
+    // Stop is idempotent in every state. N07/A-FR-08: the page/session
+    // lifetime is over — the registered filled credentials are dropped
+    // (plaintext references released).
+    clearTrustedSecrets();
     this.runtime.transition("stopping", reason);
     // Orderly close: capture refreshed cookies when safe (FR-COOKIE-016).
     try {

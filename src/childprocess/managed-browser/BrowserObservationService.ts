@@ -10,7 +10,9 @@ import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageRefere
 import {
   budgetName,
   isSensitiveInputType,
+  containsTrustedSecretValue,
   redactSecretsInText,
+  redactTrustedSecrets,
   summarizeInputValue,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -323,8 +325,12 @@ export function shapeElementRecord(
   return {
     // E11: page-authored role can exceed the wire bound (48) — slice
     // here too so the in-page collector's raw records never drop the
-    // whole observation at parse time.
-    role: (record.role || "generic").slice(0, 48),
+    // whole observation at parse time. N07: the role is page-authored
+    // and the trusted-secret pass applies (a page can echo a filled
+    // credential into any attribute).
+    role: redactTrustedSecrets(
+      (record.role || "generic").slice(0, 48)
+    ),
     // Accessible names are page-authored: scrub secret-shaped content
     // BEFORE budgeting (GAP-04).
     // F09/A-AC-01: credential fields also redact their accessible name —
@@ -342,7 +348,11 @@ export function shapeElementRecord(
     ...(record.selected == null ? {} : { selected: record.selected }),
     ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
     // B04: full normalized URL rides the summary for NAVIGATE provenance.
-    ...(record.hrefFull ? { hrefFull: record.hrefFull } : {}),
+    // N07: a page can echo a filled credential into a link (query param);
+    // the trusted pass applies before the shape heuristics.
+    ...(record.hrefFull
+      ? { hrefFull: redactSecretsInText(redactTrustedSecrets(record.hrefFull)) }
+      : {}),
     // D-FR-13: focused/dialog elements surface first in the shortlist.
     ...(record.priority === true ? { priority: true } : {}),
     // F14: positional option ids (o_0..) plus sanitized labels/values
@@ -350,16 +360,36 @@ export function shapeElementRecord(
     // map it back to the real value.
     ...(record.options && record.options.length > 0
       ? {
-          option_ids: record.options.map((_, i) => `o_${i}`),
-          option_labels: record.options.map((o) =>
-            redactSecretsInText(o.l || o.v || "")
-          ),
+          // N07: the ids/values/labels below all come from the KEPT set —
+          // oversized and credential-bearing options are omitted together,
+          // and the o_N id preserves the original option index.
           // R05: option VALUES stay EXACT (bounded) — they are the
           // identity verified against the live element at dispatch;
           // only the display LABELS are redacted.
-          option_values: record.options
-            .filter((o) => (o.v || "").length <= 512)
-            .map((o) => o.v || ""),
+          // N07: an option whose value CONTAINS the actual filled
+          // credential is OMITTED entirely (same treatment as oversized
+          // options) — dispatching it would send the credential, and
+          // carrying it outbound would leak it. The worker resolves the
+          // exact value for the remaining o_N ids from its live element.
+          // The o_N id PRESERVES the original option index (the executor
+          // maps it to el.options[N] on the LIVE element) — the two arrays
+          // stay index-aligned over the KEPT options.
+          ...(() => {
+            const kept = record.options
+              .map((o, i) => ({ o, i }))
+              .filter(
+                ({ o }) =>
+                  (o.v || "").length <= 512 &&
+                  !containsTrustedSecretValue(o.v || "")
+              );
+            return {
+              option_ids: kept.map(({ i }) => `o_${i}`),
+              option_labels: kept.map(({ o }) =>
+                redactSecretsInText(redactTrustedSecrets(o.l || o.v || ""))
+              ),
+              option_values: kept.map(({ o }) => o.v || ""),
+            };
+          })(),
         }
       : {}),
     ...(record.value != null && record.value !== ""
