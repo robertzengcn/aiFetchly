@@ -637,6 +637,20 @@ export class BrowserTaskRunner {
             );
           }
           observation = freshObservation;
+          // N09/C-FR-05/06: a task left in a USER WAIT (paused or
+          // waiting_for_user — no intervening Resume) or over active
+          // budget cannot complete on a verification that landed
+          // mid-pause; the completion is gated like every other boundary.
+          const verificationState = control.getState(this.taskId);
+          if (
+            verificationState === "paused" ||
+            verificationState === "waiting_for_user"
+          ) {
+            return this.terminal("partial", "verification_landed_while_paused", [...evidence, "done:paused_at_verify"], extracted, observation);
+          }
+          if (control.activeTimeMs(this.taskId) > this.budget.activeRuntimeMs) {
+            return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
+          }
           const verification = this.verifyCompletion(observation, extracted);
           if (verification.verified) {
             return this.terminal("completed", "verified", [...evidence, verification.evidence], extracted, observation);
@@ -696,6 +710,23 @@ export class BrowserTaskRunner {
               if (generationAfterVerifier > generationBeforeDecide) {
                 evidence.push("verifier_discarded_after_resume");
                 continue;
+              }
+              // N09/C-FR-05: a verdict from a callback that IGNORED its
+              // abort can still resolve — the wait state and active
+              // budget gate the completion here too.
+              const verifierState = control.getState(this.taskId);
+              if (
+                verifierState === "paused" ||
+                verifierState === "waiting_for_user" ||
+                control.activeTimeMs(this.taskId) > this.budget.activeRuntimeMs
+              ) {
+                return this.terminal(
+                  "partial",
+                  "verification_landed_while_paused",
+                  [...evidence, "verifier_used:1", "done:paused_at_verify"],
+                  extracted,
+                  observation
+                );
               }
               if (verdict !== null && verdict.verified) {
                 return this.terminal(

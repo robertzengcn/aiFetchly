@@ -2259,3 +2259,80 @@ describe("BrowserTaskRunner provider verifier (R01/D-FR-24)", () => {
     expect(result.evidence.some((e) => e.startsWith("verifier"))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// N09/C-FR-05/06: completion gates — a verification (deterministic or
+// semantic) that lands while the task is PAUSED or over active budget
+// cannot complete; late replies from callbacks that ignore their abort
+// are gated here too.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner completion gates (N09)", () => {
+  it("an affirmative verifier result landing while PAUSED never completes", async () => {
+    const control = new AgentTaskControlService();
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      control,
+      verifyWithProvider: async () => {
+        // The user pauses WHILE the verifier runs; no resume follows.
+        control.beginIntervention(runnerTaskIdStatic ?? "pending", "user_paused");
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    let runnerTaskIdStatic: string | null = null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09a",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    runnerTaskIdStatic = runner.taskId;
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_landed_while_paused");
+    expect(result.evidence).toContain("verifier_used:1");
+  });
+
+  it("a deterministic verification landing while PAUSED never completes", async () => {
+    const control = new AgentTaskControlService();
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      control,
+    };
+    // The fresh observation CHANGES the URL (deterministic criteria pass),
+    // and pause is set inside the observe call.
+    let observed = false;
+    runnerDeps.observe = async () => {
+      if (!observed) {
+        observed = true;
+        return observation();
+      }
+      // The fresh DONE observation — pause lands right here.
+      control.beginIntervention(runnerTaskId2 ?? "pending", "user_paused");
+      return { ...observation(), url: "https://example.test/results" };
+    };
+    let runnerTaskId2: string | null = null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09b",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        completionCriteria: [{ kind: "url_contains", value: "/results" }],
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    runnerTaskId2 = runner.taskId;
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_landed_while_paused");
+  });
+});
