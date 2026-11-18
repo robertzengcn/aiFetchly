@@ -375,8 +375,19 @@ export class ManagedBrowserSettingsModule {
     // bundle the runner freezes — a change MUST bump the provider epoch
     // so in-flight tasks see provider_config_changed and re-admit under
     // the new configuration.
+    // N04: a decisionRoute patch that carries ONLY the probed chat
+    // capabilities does NOT bump the epoch — the model/endpoint/key are
+    // unchanged, and bumping would make the just-stored revision stale on
+    // arrival (the probe could never validate its own result). Any other
+    // route change (mode, model, profile) still bumps.
+    const routePatchChangesBehavior =
+      patch.decisionRoute !== undefined &&
+      (patch.decisionRoute.mode !== undefined ||
+        patch.decisionRoute.chatDecisionModel !== undefined ||
+        patch.decisionRoute.nativeProfile !== undefined ||
+        patch.decisionRoute.requestTimeoutMs !== undefined);
     const decisionRelevantChange =
-      patch.decisionRoute !== undefined ||
+      routePatchChangesBehavior ||
       patch.browserDecisionEnabled !== undefined ||
       patch.parallelAgentsEnabled !== undefined ||
       patch.maxConcurrentSessions !== undefined ||

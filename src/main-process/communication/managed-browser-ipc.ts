@@ -708,6 +708,17 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       );
       const { AiChatApi } = await import("@/api/aiChatApi");
       const api = new AiChatApi();
+      // N04: the revision is captured BEFORE probing — the probes run
+      // under THIS epoch, and the capabilities-only save (below) does not
+      // bump it, so the stored revision matches the probed route. The
+      // configured decision-model override is honored in the probes.
+      const { providerConfigKey } = await import(
+        "@/service/aiProvider/AIProviderConfigVersion"
+      );
+      const probedRevision = providerConfigKey();
+      const effectiveBeforeProbe = await new ManagedBrowserSettingsModule()
+        .getEffectiveSettings();
+      const probedModel = effectiveBeforeProbe.decisionRoute.chatDecisionModel ?? undefined;
       let result;
       try {
         result = await probeChatDecisionCapabilities(
@@ -715,7 +726,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
             return (await api.openAIChatCompletion(
               {
                 messages: request.messages as never,
-                ...(request.model ? { model: request.model } : {}),
+                model: probedModel,
                 response_format: request.response_format as never,
                 ...(request.tools ? { tools: request.tools as never } : {}),
                 ...(request.tool_choice
@@ -726,7 +737,8 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
               },
               { signal }
             )) as never;
-          }
+          },
+          probedModel
         );
       } catch {
         // B04: a throwing transport is an all-false honest verdict —
@@ -739,21 +751,35 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           forcedToolError: "probe_transport_failed",
         };
       }
-      // Persist the probed flags scoped to the CURRENT provider revision
-      // (B04/D-AC-08): flags from another revision never apply.
-      const { providerConfigKey } = await import(
-        "@/service/aiProvider/AIProviderConfigVersion"
-      );
+      // Persist the probed flags scoped to the probed revision (B04/D-AC-08):
+      // flags from another revision never apply.
+      const effective = effectiveBeforeProbe;
       await new ManagedBrowserSettingsModule().updatePreferences({
         decisionRoute: {
           chatCapabilities: {
             structuredJsonSchema: result.structuredJsonSchema,
             forcedToolDecision: result.forcedToolDecision,
-            providerRevision: providerConfigKey(),
+            providerRevision: probedRevision,
           },
         },
       });
-      return result;
+      // N04: the post-save revision must still equal the probed revision —
+      // a concurrent route change invalidates the results (surfaced
+      // honestly in the payload the panel shows).
+      const invalidated = providerConfigKey() !== probedRevision;
+      return {
+        ...result,
+        ...(invalidated
+          ? {
+              structuredError: result.structuredError ?? "probe_invalidated_by_concurrent_change",
+              forcedToolError: result.forcedToolError ?? "probe_invalidated_by_concurrent_change",
+            }
+          : {}),
+        providerRevision: invalidated ? null : probedRevision,
+        ...(effective.decisionRoute.chatDecisionModel
+          ? { probedModel: effective.decisionRoute.chatDecisionModel }
+          : {}),
+      };
     }
   );
 
