@@ -96,3 +96,42 @@ Reviewed `feature/browser-decision-acceleration` at `4f0ae271db2957d31355ff061b2
 - Managed-browser utility sweep, including TypeScript precheck: **162 passed across seven files**.
 - Full component sweep initially reported **1,625 passed and one timeout**. The affected `ManagedBrowserSettingsPanel.test.ts:215` case timed out at 5 seconds while other suites overlapped. All 19 tests in that file passed when run alone. The full rerun with six workers passed **1,626 tests across 184 files**. Treat the initial timeout as a test stability concern and recheck on recurrence.
 - The numbered findings use source and existing-test inspection. Local testing used the existing suites. This pass did not run Electron feature or packaged acceptance.
+
+---
+
+## Fix pass — November 20, 2026
+
+Implementable findings from this recheck were fixed on `feature/browser-decision-acceleration`, one commit per logical unit (R13 `59129a70f`, R02 `59129a70f`+`9a00fce38` line, R05 `9a00fce38`, R12 `71558cafe`, R03 `2481aeeeb`, R01 `ba0349bde`, R04 `28e5b9a7b`, R06 `bb0670cb0`, R07 `5ddd0a489`, R08 `721d90ef6`, R09 `aa50fc56e`, R10 `ccca70e08`, R11 `1abcc5748`).
+
+**Closed in this pass**
+
+- **R13/A18** — the runner pins the EXACT observation around every inference window (main decide and recovery) and releases the same ID; the approval pin ack is awaited; the module releases THE PINNED ID (not the latest) when the decision is recorded; the in-job wait issues a one-time pre-approval ticket so the redispatch consumes the SAME approval exactly once (one approval → one prompt → one dispatch, digest/revision/session bound); the redispatch journals intent/outcome like the initial dispatch; an untargeted worker throw classifies as an unknown effect like the targeted path.
+- **R02/A03** — SELECT requires a trusted observed value (an unbindable token refuses); the worker validates AND commits the selection in ONE page-side pass BY INDEX (duplicate values keep their identity; no DOM change window between validation and commit); stale throws remain proven no-effect.
+- **R05/A06** — the resume generation is captured BEFORE recovery inference (a Pause→Resume during inference makes the proposal stale); DONE reobservation crossing a resume is discarded; a verifier verdict resolving after its own enforced deadline is discarded; the no-criteria URL-change fallback requires the same registrable domain. The held-recovery race test was verified to FAIL against the previous post-await capture.
+- **R12/A14** — the progress digest counts extracted results; an already-true criterion no longer suppresses no-progress detection (stall recovery with a DONE-oriented instruction); the no-progress recovery returns ONE bound snapshot the outer loop adopts; untargeted steps carry semantic context in the executed-step record.
+- **R03/A04** — the collector gathers names/roles/labels at 3x the wire bound so a credential echoed into an attribute cannot be SPLIT before the trusted pass; the top-frame origin derives from the sanitized URL; every redacted outbound field re-enforces its wire cap after scrubbing (the summarizeInputValue early return no longer skips the budget); deep redaction applies the trusted pass to property KEYS; learned recipe metadata passes deep redaction at worker emission AND site storage.
+- **R01/A01-A02** — the runner rechecks the admitted provider epoch at every mutation boundary (after journaling/field resolution, before dispatch, before an approval re-dispatch); the journal records the CAPTURED admission epoch; capability data is three-state via `operationsReported` (explicit-empty is authoritative and blocks dispatch; unsupported probes and legacy routes keep the wide fallback); the advertised maxCandidates caps every candidate build; merged criteria truncate to the wire cap of 8 and the folded subgoal to 1000; the full decision input is wire-validated before every transport call.
+- **R04/A05** — every batch lane event carries the row's live session id (authoritative owner mapping, kept-open id first); pause/resume worker failures surface instead of being acknowledged; a HANDOFF_REQUIRED reply no longer counts as a completed resume.
+- **R06/A07** — lease reassignment moves BOTH owner fields and is verified before the transfer reports success (module's own lease service, never a global re-read); all child-owned sessions release on every cleanup path (after the reported id, after transfer, on refusal, on exception, on a missing id); clearing a conversation cascades to its retained browser sessions.
+- **R07/A08/A09** — the confirmation gate rechecks Stop after the async preview; a declined card is an honest tool failure (never success with empty results); child envelopes are deeply bounded (per-item + total-byte extraction caps, enum-validated proposal types with drop evidence).
+- **R08/Q-01** — a failed opt-in load keeps the checkbox inert with an explicit retry (never "editable unchecked"); i18n added in all six languages; component tests cover the failure/retry flow.
+- **R09/A11/A17 (partial)** — start-session maps the wire proxy union through the discriminated mapper and preserves proxy + ownership in the unavailable-account fallback; the tool registry advertises the proxy option; legacy NULL protocols read as HTTP in the AI projection; unchecked rows no longer inherit "Active"; plaintext migration is an atomic compare-and-set; the social-account proxy relation is projected to public fields.
+- **R10/A12/A16** — the probe re-reads the persisted settings after the awaited save (a concurrent save invalidates the slot); the hosted contract now requires FULL correlation (all four id echoes + page revision, schema_version ≠ v1 refused).
+- **R11/A13 (partial)** — the batch threads the parent job id and a watchdog freezes the parent turn deadline while any lane sits in a user wait; return-now results carry the child's bounded partial evidence.
+
+**Still open (design-level, unchanged from the audit)**
+
+- R04: one authoritative owner/control mapping across outer agent and nested runner (nested runner control-id unification), waiting/paused batch events, the structured consequential-action proposal bridge, and the explicit per-task focus tests.
+- R07: the confirmation-card dismissal event (registry + renderer card retirement) and sibling output-receipt dedupe across results.
+- R08: per-account/site attempt-window tracking across sessions, rejected-credential blocking until replacement, ordered login-recipe lifecycle beyond step zero, cookie restore under the selected site's policy (lifecycle redesign scope).
+- R09: consent continuation bound to a real cross-country switch flow, exact resume-location capture, the bundled-browser locale/timezone/WebRTC qualification.
+- R13: worker-settlement ownership (step timeout vs abort settlement) and per-command effect classification for navigation dispatch.
+- Release evidence: the six Electron acceptance scenarios remain `test.fixme`, the paired held-out evaluation, and packaged-process evidence remain operator/CI scope per AGENTS.md.
+
+**Verification (this pass)**
+
+- Managed-browser + browser-decision focused sweeps: **634 passed across 49 files** (main config, tsc precheck included).
+- Utility managedBrowser sweep: **164 passed across 7 files**.
+- Full component sweep: **1,628 passed across 184 files**.
+- Full main-process sweep: 9,148 passed; the 364 failures are the documented environmental suites (SkillInstallation native builds, outbound-email-gate SQLite interference, Windows-specific PATH/TMPDIR/path-separator assertions) — none in the touched areas; the three adjacent failures (`proxyModuleRedaction`, `searchTaskProxyReplace`, `PromptSkillTools`) are the shared-DB lock contention and pass in isolation.
+- Discriminating tests were verified by temporary revert (R05 recovery race and R12 criterion suppression both fail without their fixes).
