@@ -103,7 +103,9 @@ export async function runBrowserTasksForTool(
   concurrency: number,
   conversationId: string,
   signal: AbortSignal,
-  deps: RunBrowserTasksDeps = {}
+  deps: RunBrowserTasksDeps = {},
+  /** R11: the calling tool's registry job id (parent poll freeze). */
+  parentJobId?: string
 ): Promise<{
   batchId: string;
   results: BrowserBatchTaskResult[];
@@ -129,7 +131,14 @@ export async function runBrowserTasksForTool(
   if (!effective.parallelAgentsEnabled) {
     throw new Error("managed_browser_disabled:parallel_agents_disabled");
   }
-  return runBrowserTasks(tasks, concurrency, conversationId, signal, deps);
+  return runBrowserTasks(
+    tasks,
+    concurrency,
+    conversationId,
+    signal,
+    deps,
+    parentJobId
+  );
 }
 
 /** Bounded-concurrency worker-pool executor (modeled on process_artifact_batch). */
@@ -469,7 +478,10 @@ export async function runBrowserTasks(
   concurrency: number,
   conversationId: string,
   signal: AbortSignal,
-  deps: RunBrowserTasksDeps = {}
+  deps: RunBrowserTasksDeps = {},
+  /** R11/C-FR-09: the PARENT registry job — its user-wait clock freezes
+   * while any lane's child sits in a user wait. */
+  parentJobId?: string
 ): Promise<{
   batchId: string;
   results: BrowserBatchTaskResult[];
@@ -500,6 +512,32 @@ export async function runBrowserTasks(
   }
   // F21: the batch card lives from the first lane start.
   emitBatchEvent({ batchId, conversationId, phase: "started" });
+  // R11/C-FR-09: freeze the PARENT poll's deadline for the full active
+  // user wait — a lane's child sitting in an approval/handoff/pause
+  // wait must not burn the parent's turn deadline. The watchdog samples
+  // the lane control records and flags the parent job accordingly.
+  let parentWaitWatchdog: ReturnType<typeof setInterval> | null = null;
+  if (parentJobId) {
+    const registry = getDefaultToolJobRegistry();
+    parentWaitWatchdog = setInterval(() => {
+      try {
+        const waiting = tasks.some((_, index) => {
+          const record = control.get(`${batchId}:${index}`);
+          return (
+            record?.state === "waiting_for_user" || record?.state === "paused"
+          );
+        });
+        registry.setUserWait(
+          parentJobId,
+          waiting,
+          waiting ? "browser_batch_user_wait" : undefined
+        );
+      } catch {
+        // best-effort: the poll deadline is advisory here
+      }
+    }, 1_000);
+    parentWaitWatchdog.unref?.();
+  }
 
   let results: BrowserBatchTaskResult[];
   try {
@@ -719,15 +757,52 @@ export async function runBrowserTasks(
               /* best effort */
             }
           }
+          // R11/C-FR-11: partial EVIDENCE the child already produced is
+          // carried into the interrupted/cancelled result (bounded like
+          // the terminal path) instead of a synthesized empty partial.
+          const partialOutput = result.output as {
+            evidence?: unknown;
+            extracted?: unknown;
+            final_url?: unknown;
+          } | null;
+          const partialEvidence = Array.isArray(partialOutput?.evidence)
+            ? (partialOutput.evidence as unknown[])
+                .filter((item): item is string => typeof item === "string")
+                .map((item) => item.slice(0, 300))
+                .slice(0, 20)
+            : [];
+          const partialExtracted = Array.isArray(partialOutput?.extracted)
+            ? (partialOutput.extracted as unknown[])
+                .filter(
+                  (item) =>
+                    typeof item === "string" ||
+                    (item !== null && typeof item === "object")
+                )
+                .slice(0, 50)
+            : [];
+          const partialFinalUrl =
+            typeof partialOutput?.final_url === "string" &&
+            (() => {
+              try {
+                const parsed = new URL(partialOutput.final_url);
+                return parsed.protocol === "http:" || parsed.protocol === "https:";
+              } catch {
+                return false;
+              }
+            })()
+              ? (partialOutput.final_url as string).slice(0, 2048)
+              : null;
           return {
             task_index: index,
             status: returnNow ? "partial" : "cancelled",
             summary: returnNow
               ? "returned early (user requested results)"
               : "cancelled by user stop",
-            extracted: [],
-            final_url: null,
-            evidence: returnNow ? ["return_now:unfinished"] : [],
+            extracted: partialExtracted,
+            final_url: partialFinalUrl,
+            evidence: returnNow
+              ? [...partialEvidence, "return_now:unfinished"]
+              : partialEvidence,
             needs_user: null,
             user_interventions: mapInterventions(
               control.get(taskId)?.interventions ?? []
@@ -1150,6 +1225,17 @@ export async function runBrowserTasks(
         getDefaultManagedBrowserModule().findSessionIdForAgentTask(rowTaskId) ??
         undefined,
     });
+  }
+  if (parentWaitWatchdog !== null) {
+    clearInterval(parentWaitWatchdog);
+    parentWaitWatchdog = null;
+    if (parentJobId) {
+      try {
+        getDefaultToolJobRegistry().setUserWait(parentJobId, false);
+      } catch {
+        // best-effort
+      }
+    }
   }
   emitBatchEvent({ batchId, conversationId, phase: "finished" });
   // M-FR-11: the PARENT dedupes extracted rows before returning them to

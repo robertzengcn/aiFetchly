@@ -5397,7 +5397,11 @@ function managedBrowserToolEntries(): SkillDefinition[] {
           parsed.data.tasks,
           parsed.data.concurrency ?? 2,
           context.conversationId,
-          context.signal ?? new AbortController().signal
+          context.signal ?? new AbortController().signal,
+          {},
+          // R11/C-FR-09: the parent job id — the turn's poll deadline
+          // freezes while any batch lane sits in a user wait.
+          context.jobId
         );
         // R07/M-FR-04: a DECLINED (or cancelled) confirmation card means
         // NOTHING ran — reporting success with an empty result set would
