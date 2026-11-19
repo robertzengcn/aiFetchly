@@ -291,6 +291,22 @@ export class ManagedBrowserAiToolService {
     { programDigest: string; pageRevision: number; sessionId: string }
   >();
   /**
+   * R13/D-AC-05: ONE-TIME pre-approval tickets recorded by the in-job
+   * wait when it consumes an "approve". The runner's redispatch through
+   * the gate honors the SAME approval instead of re-consuming (nothing
+   * left in the registry) and issuing a fresh prompt. Bound to the
+   * exact digest/revision/session recorded at publish time; single use.
+   */
+  private readonly preApprovedRunnerPrograms = new Map<
+    string,
+    {
+      programDigest: string;
+      pageRevision: number;
+      sessionId: string;
+      recordedAtEpochMs: number;
+    }
+  >();
+  /**
    * F16: session-long RUNNER ownership — while a decision runner is
    * executing a task on a session, no other runner (and no legacy tool
    * path) may interleave decisions/programs on the SAME session.
@@ -784,16 +800,35 @@ export class ManagedBrowserAiToolService {
           sessionStatus.currentOrigin
         ),
       });
-      const priorDecision =
-        this.browserModule.consumeApprovalForProgram?.({
-          sessionId: parsed.data.session_id,
-          programDigest,
-          pageRevision: parsed.data.page_revision,
-        }) ?? null;
+      // R13/D-AC-05: the in-job approval wait consumed the recorded
+      // decision and left a ONE-TIME ticket — this redispatch honors
+      // the SAME approval (one approval, one dispatch, no second
+      // prompt). Bound to the exact digest/revision/session recorded at
+      // publish time; a changed page re-requests approval as before.
+      const preApproved =
+        this.preApprovedRunnerPrograms.get(context.toolCallId);
+      const preApprovedValid =
+        preApproved !== undefined &&
+        preApproved.sessionId === parsed.data.session_id &&
+        preApproved.programDigest === programDigest &&
+        preApproved.pageRevision === parsed.data.page_revision &&
+        Date.now() - preApproved.recordedAtEpochMs <= 10 * 60_000;
+      if (preApprovedValid) {
+        this.preApprovedRunnerPrograms.delete(context.toolCallId);
+      }
+      const priorDecision = preApprovedValid
+        ? "approve"
+        : (this.browserModule.consumeApprovalForProgram?.({
+            sessionId: parsed.data.session_id,
+            programDigest,
+            pageRevision: parsed.data.page_revision,
+          }) ?? null);
       if (priorDecision !== "approve") {
         // PRD D-FR-15a: keep this observation's refs alive while the user
-        // decides; the module unpins when the decision is recorded.
-        void this.browserModule.setObservationPin?.(
+        // decides; the module releases THE PINNED ID when the decision is
+        // recorded. The pin ack is awaited so a dead worker cannot leave
+        // the approval published against an unpinned observation.
+        await this.browserModule.setObservationPin?.(
           parsed.data.session_id,
           observation?.observationId ?? null,
           true
@@ -1065,6 +1100,9 @@ export class ManagedBrowserAiToolService {
     /** Test/override for the 10-minute approval window. */
     readonly waitWindowMs?: number;
   }): Promise<"approved" | "denied" | "expired"> {
+    // R13: a ticket only survives an APPROVED wait (the redispatch
+    // consumes it); denied/expired waits never leave one behind.
+    let resolution: "approved" | "denied" | "expired" = "expired";
     const entry = this.pendingRunnerApprovals.get(input.requestId);
     if (!entry || entry.sessionId !== input.sessionId) {
       return "expired";
@@ -1098,9 +1136,26 @@ export class ManagedBrowserAiToolService {
               pageRevision: entry.pageRevision,
             }) ?? null;
           if (consumed === "approve") {
+            // R13: hand the redispatch a ONE-TIME ticket for THIS digest
+            // — the gate honors it exactly once without a second prompt.
+            if (this.preApprovedRunnerPrograms.size >= 32) {
+              const oldest =
+                this.preApprovedRunnerPrograms.keys().next().value;
+              if (oldest !== undefined) {
+                this.preApprovedRunnerPrograms.delete(oldest);
+              }
+            }
+            this.preApprovedRunnerPrograms.set(input.requestId, {
+              programDigest: entry.programDigest,
+              pageRevision: entry.pageRevision,
+              sessionId: input.sessionId,
+              recordedAtEpochMs: Date.now(),
+            });
+            resolution = "approved";
             return "approved";
           }
           if (consumed === "deny") {
+            resolution = "denied";
             return "denied";
           }
           // Consumed but expired between peek and consume: keep polling
@@ -1112,6 +1167,9 @@ export class ManagedBrowserAiToolService {
       return "expired";
     } finally {
       this.pendingRunnerApprovals.delete(input.requestId);
+      if (resolution !== "approved") {
+        this.preApprovedRunnerPrograms.delete(input.requestId);
+      }
       if (input.jobId) {
         getDefaultToolJobRegistry().setUserWait(input.jobId, false);
       }
@@ -2035,6 +2093,24 @@ export class ManagedBrowserAiToolService {
               .recordActionOutcome({ taskId: awaitedResultRef.taskId, outcome })
               .catch(() => undefined);
           }
+        },
+        // R13/D-FR-15a: pin the EXACT observation for the duration of
+        // model inference — the same ID is released when the decide
+        // settles, so a concurrent reobservation cannot evict the refs
+        // the pending decision is about to consume.
+        pinObservation: (
+          sessionId: string,
+          observationId: string | null,
+          pinned: boolean
+        ): Promise<void> => {
+          if (this.browserModule.setObservationPin) {
+            return this.browserModule.setObservationPin(
+              sessionId,
+              observationId,
+              pinned
+            );
+          }
+          return Promise.resolve();
         },
         // F06/D-AC-05: the ALWAYS-CONFIRM approval gate becomes an
         // in-job wait — the pending step is preserved and re-dispatched

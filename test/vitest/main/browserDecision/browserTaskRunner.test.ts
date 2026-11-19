@@ -1015,6 +1015,139 @@ describe("BrowserTaskRunner F06 in-job approval wait", () => {
   });
 });
 
+describe("BrowserTaskRunner R13 pin, journal and effect classification", () => {
+  const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  };
+
+  it("pins the EXACT observation through inference and releases the same ID (R13/D-FR-15a)", async () => {
+    const pinCalls: Array<[string, string | null, boolean]> = [];
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r13pin",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        pinObservation: async (sessionId, observationId, pinned) => {
+          pinCalls.push([sessionId, observationId, pinned]);
+        },
+      }
+    );
+    await runner.run();
+    // Each inference window pins before decide and releases the SAME id
+    // after (CLICK decide + DONE decide = two pinned windows).
+    expect(pinCalls).toEqual([
+      ["mb_r13pin", "obs-1", true],
+      ["mb_r13pin", "obs-1", false],
+      ["mb_r13pin", "obs-1", true],
+      ["mb_r13pin", "obs-1", false],
+    ]);
+  });
+
+  it("releases the inference pin when the decide throws (transport error)", async () => {
+    const pinCalls: Array<[string, string | null, boolean]> = [];
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient.decide = async () => {
+      throw new Error("transport down");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r13pinerr", conversationId: "conv-1", goal: "click" },
+      {
+        ...deps,
+        pinObservation: async (sessionId, observationId, pinned) => {
+          pinCalls.push([sessionId, observationId, pinned]);
+        },
+      }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("decision_client_error");
+    // The release runs in the finally — no pin survives the failure.
+    expect(pinCalls).toEqual([
+      ["mb_r13pinerr", "obs-1", true],
+      ["mb_r13pinerr", "obs-1", false],
+    ]);
+  });
+
+  it("approval re-dispatch journals intent and outcome like the initial dispatch (R13)", async () => {
+    const approvalRequiredStop: RunnerExecutionResult = {
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    };
+    const intents: string[] = [];
+    const outcomes: string[] = [];
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      if (dispatchCount === 1) {
+        return approvalRequiredStop;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r13journal",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        persistActionIntent: async (actionType) => {
+          intents.push(actionType);
+        },
+        persistActionOutcome: async (outcome) => {
+          outcomes.push(outcome);
+        },
+        awaitApproval: async () => "approved",
+      }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    // Intent before EACH dispatch (initial + re-dispatch); an outcome for
+    // each execution.
+    expect(intents).toEqual(["CLICK", "CLICK"]);
+    expect(outcomes.length).toBe(2);
+  });
+
+  it("an untargeted worker throw is classified as an unknown effect, not a clean failure (R13)", async () => {
+    const outcomes: string[] = [];
+    const scrollDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "SCROLL_DOWN", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([scrollDecision]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      throw new Error("worker crashed mid-step");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r13throw", conversationId: "conv-1", goal: "scroll" },
+      {
+        ...deps,
+        persistActionOutcome: async (outcome) => {
+          outcomes.push(outcome);
+        },
+      }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+    expect(result.evidence).toContain("SCROLL_DOWN:worker_error:worker crashed mid-step");
+    // The unknown outcome is journaled BEFORE the terminal lands.
+    expect(outcomes).toEqual(["unknown"]);
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

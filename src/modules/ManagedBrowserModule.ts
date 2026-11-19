@@ -321,6 +321,12 @@ export class ManagedBrowserModule {
   private readonly sessionRedirectLedger = new Map<string, Set<string>>();
   /** E15/D-FR-26: input-dispatch state of the in-flight program, per session. */
   private readonly sessionInputDispatched = new Map<string, boolean>();
+  /**
+   * R13/D-FR-15a: the observation ID actually pinned for a pending
+   * approval, per session — the release path unpins THIS ID, not
+   * whatever observation happens to be latest at decision time.
+   */
+  private readonly approvalPinnedObservations = new Map<string, string>();
   private readonly approvalDecisions = new Map<
     string,
     {
@@ -452,6 +458,15 @@ export class ManagedBrowserModule {
     if (!observationId) {
       return;
     }
+    // R13: remember WHICH observation is pinned for the pending approval
+    // — the release path must unpin this exact ID, not the latest one.
+    if (pinned) {
+      this.approvalPinnedObservations.set(sessionId, observationId);
+    } else if (
+      this.approvalPinnedObservations.get(sessionId) === observationId
+    ) {
+      this.approvalPinnedObservations.delete(sessionId);
+    }
     const record = this.sessions.get(sessionId);
     if (!record || !record.client) {
       return;
@@ -465,11 +480,21 @@ export class ManagedBrowserModule {
       .catch(() => undefined);
   }
 
-  /** Unpin the session's latest observation (approval decided/resumed). */
+  /**
+   * R13: release the observation pinned for the pending approval — THE
+   * PINNED ID, not whatever observation is latest at decision time (a
+   * passive reobservation between publish and decision must not leave
+   * the original refs pinned forever, nor unpin the wrong epoch).
+   */
   private unpinLastObservation(sessionId: string): void {
     const record = this.sessions.get(sessionId);
-    const observationId = record?.lastObservation?.observationId ?? null;
+    const pinnedId = this.approvalPinnedObservations.get(sessionId) ?? null;
+    const observationId =
+      pinnedId ?? record?.lastObservation?.observationId ?? null;
     if (observationId) {
+      if (pinnedId !== null) {
+        this.approvalPinnedObservations.delete(sessionId);
+      }
       void this.setObservationPin(sessionId, observationId, false);
     }
   }

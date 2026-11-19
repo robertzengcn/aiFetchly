@@ -1238,6 +1238,70 @@ describe("ManagedBrowserModule renderer sinks", () => {
       },
     ]);
   });
+
+  it("releases THE PINNED observation on approval resolution, not the latest (R13/D-FR-15a)", async () => {
+    let sessionId = "";
+    const h = makeHarness({
+      startScript: {
+        OBSERVE: () =>
+          ({
+            ...replyBase(sessionId),
+            type: "OBSERVATION_RESULT",
+            observation: {
+              // A NEW observation identity — a passive reobservation
+              // between approval publish and decision.
+              observationId: "obs-B",
+              sessionId,
+              pageRevision: 2,
+              url: "https://www.youtube.com/",
+              origin: "https://www.youtube.com",
+              title: "YouTube",
+              state: "ready",
+              elements: [],
+              visibleText: "",
+              notices: [],
+              truncated: false,
+            },
+          } as unknown as ManagedBrowserOutboundMessage),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("ready");
+    const sid = status.sessionId;
+
+    // The approval pins the ORIGINAL observation (obs-A).
+    await h.module.setObservationPin(sid, "obs-A", true);
+    expect(
+      h.clients[0].sent.filter((m) => m.type === "PIN_OBSERVATION")
+    ).toHaveLength(1);
+
+    // A passive reobservation makes obs-B the latest.
+    await h.module.observe(sid);
+    expect(h.module.getLastObservation(sid)?.observationId).toBe("obs-B");
+
+    // Recording the decision releases THE PINNED ID (obs-A) — not the
+    // latest observation (obs-B, which was never pinned).
+    h.module.recordApproval({
+      sessionId: sid,
+      requestId: "call-r13",
+      decision: "approve",
+      programDigest: "b".repeat(64),
+      pageRevision: 2,
+    });
+    const pinMessages = h.clients[0].sent.filter(
+      (m) => m.type === "PIN_OBSERVATION"
+    );
+    expect(pinMessages).toHaveLength(2);
+    const unpin = pinMessages[1];
+    if (unpin.type !== "PIN_OBSERVATION") {
+      throw new Error("unreachable");
+    }
+    expect(unpin.observationId).toBe("obs-A");
+    expect(unpin.pinned).toBe(false);
+  });
 });
 
 describe("handoff-window expiry enforcement (FR-P0-013)", () => {

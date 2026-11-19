@@ -186,6 +186,17 @@ export interface RunnerDeps {
     outcome: "confirmed" | "no_effect" | "unknown"
   ) => Promise<void>;
   /**
+   * R13/D-FR-15a: pin/unpin the EXACT observation while model inference
+   * is pending — a concurrent reobservation must not evict the refs the
+   * in-flight decision is about to consume. Best-effort; absent in bare
+   * test fakes.
+   */
+  readonly pinObservation?: (
+    sessionId: string,
+    observationId: string | null,
+    pinned: boolean
+  ) => Promise<void>;
+  /**
    * F06/D-AC-05: blocks INSIDE the job for the user's approve/deny
    * decision on the pending approval. User-wait time is excluded from
    * active budgets by the control service. Omit to keep the terminal
@@ -577,12 +588,35 @@ export class BrowserTaskRunner {
             () => attemptController.abort(),
             deadlineMs
           );
+          // R13/D-FR-15a: pin THIS observation through inference — a
+          // concurrent reobservation must not evict the refs the pending
+          // decision is about to consume. The same ID is released when
+          // the decide settles (result, deadline or transport error).
+          const inferenceObservationId = observation.observationId;
+          try {
+            await this.deps.pinObservation?.(
+              this.input.sessionId,
+              inferenceObservationId,
+              true
+            );
+          } catch {
+            // best-effort: a failed pin must not block the decision
+          }
           try {
             decision = await this.deps.decisionClient.decide(
               decisionInput,
               attemptController.signal
             );
           } finally {
+            try {
+              await this.deps.pinObservation?.(
+                this.input.sessionId,
+                inferenceObservationId,
+                false
+              );
+            } catch {
+              // best-effort release
+            }
             clearTimeout(timer);
             signal.removeEventListener("abort", onOuterAbort);
           }
@@ -1102,9 +1136,31 @@ export class BrowserTaskRunner {
             observation = await this.deps.observe(this.input.sessionId);
             continue;
           }
-          const execution = await this.deps.runActions(this.input.sessionId, {
-            actions: [programAction],
-          });
+          let execution: RunnerExecutionResult;
+          try {
+            execution = await this.deps.runActions(this.input.sessionId, {
+              actions: [programAction],
+            });
+          } catch (stepError) {
+            // R13: same classification as the targeted path — a worker
+            // throw MID-STEP leaves the page state unknown; the outcome
+            // is journaled unknown and nothing runs on top of it.
+            const detail =
+              stepError instanceof Error ? stepError.message : "unknown";
+            await this.deps.persistActionOutcome?.("unknown").catch(
+              () => undefined
+            );
+            return this.terminal(
+              "partial",
+              "unknown_execution_effect",
+              [
+                ...evidence,
+                `${action.operation}:worker_error:${detail.slice(0, 64)}`,
+              ],
+              extracted,
+              observation
+            );
+          }
           await this.deps.persistActionOutcome?.(this.stepOutcomeOf(execution));
           // E14/D-FR-25: record the executed (untargeted) step.
           {
@@ -1127,10 +1183,31 @@ export class BrowserTaskRunner {
             null,
             execution,
             evidence,
-            () =>
-              this.deps.runActions(this.input.sessionId, {
-                actions: [programAction],
-              })
+            async () => {
+              // R13: re-dispatch journals like the initial dispatch —
+              // intent before, outcome after; the approval wait never
+              // skips the step's durable record.
+              try {
+                await this.deps.persistActionIntent?.(action.operation);
+              } catch {
+                await this.deps.persistActionOutcome?.("unknown").catch(
+                  () => undefined
+                );
+                return {
+                  effect: "unknown" as const,
+                  pageRevision: execution.pageRevision,
+                  results: [],
+                };
+              }
+              const retryExecution = await this.deps.runActions(
+                this.input.sessionId,
+                { actions: [programAction] }
+              );
+              await this.deps.persistActionOutcome?.(
+                this.stepOutcomeOf(retryExecution)
+              );
+              return retryExecution;
+            }
           );
           if (processed.stop) {
             return this.terminal(
@@ -1303,10 +1380,31 @@ export class BrowserTaskRunner {
           { role: target.role, name: target.name },
           execution,
           evidence,
-          () =>
-            this.deps.runActions(this.input.sessionId, {
-              actions: [programAction],
-            })
+          async () => {
+            // R13: re-dispatch journals like the initial dispatch —
+            // intent before, outcome after; the approval wait never
+            // skips the step's durable record.
+            try {
+              await this.deps.persistActionIntent?.(action.operation);
+            } catch {
+              await this.deps.persistActionOutcome?.("unknown").catch(
+                () => undefined
+              );
+              return {
+                effect: "unknown" as const,
+                pageRevision: execution.pageRevision,
+                results: [],
+              };
+            }
+            const retryExecution = await this.deps.runActions(
+              this.input.sessionId,
+              { actions: [programAction] }
+            );
+            await this.deps.persistActionOutcome?.(
+              this.stepOutcomeOf(retryExecution)
+            );
+            return retryExecution;
+          }
         );
         if (execution.effect === "unknown" && action.operation === "FILL") {
           // D-FR-21: an unknown effect on the field invalidates cached
@@ -1552,12 +1650,33 @@ export class BrowserTaskRunner {
       signal.addEventListener("abort", onOuterAbort, { once: true });
       const timer = setTimeout(() => attemptController.abort(), deadlineMs);
       let result: BrowserDecisionResult;
+      // R13/D-FR-15a: recovery inference is pinned like the main decide
+      // — the same observation ID rides the recovery input.
+      const recoveryObservationId = recoveryInput.observation_id;
+      try {
+        await this.deps.pinObservation?.(
+          this.input.sessionId,
+          recoveryObservationId,
+          true
+        );
+      } catch {
+        // best-effort
+      }
       try {
         result = await this.deps.decisionClient.decide(
           recoveryInput,
           attemptController.signal
         );
       } finally {
+        try {
+          await this.deps.pinObservation?.(
+            this.input.sessionId,
+            recoveryObservationId,
+            false
+          );
+        } catch {
+          // best-effort release
+        }
         clearTimeout(timer);
         signal.removeEventListener("abort", onOuterAbort);
       }

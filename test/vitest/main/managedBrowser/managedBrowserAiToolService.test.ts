@@ -274,6 +274,158 @@ describe("runAuthorizedForRunner (D-AC-05 runner seam)", () => {
     expect(outcome.kind).toBe("executed");
     expect(module.runActions).toHaveBeenCalled();
   });
+
+  it("honors the in-job wait's approval exactly once on redispatch — one approval, one dispatch, ONE prompt (R13/D-AC-05)", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        sessionId: SESSION_ID,
+        pageRevision: 4,
+        url: "https://www.youtube.com/upload",
+        origin: "https://www.youtube.com",
+        title: "Upload",
+        state: "ready",
+        elements: [
+          { ref: "e_pub", role: "button", name: "Publish", disabled: false },
+        ],
+        visibleText: "",
+        notices: [],
+        truncated: false,
+      })
+    );
+    // Call 1 = the gate check on the FIRST dispatch (nothing recorded →
+    // prompt); call 2 = the in-job wait's consume (approve → ticket).
+    // The redispatch must NOT consume again — the ticket covers it.
+    let consumeCalls = 0;
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (_input: unknown): "approve" | "deny" | null => {
+        consumeCalls++;
+        return consumeCalls === 2 ? "approve" : null;
+      }
+    );
+    const moduleWithPeek = module as BrowserModuleLike & {
+      peekApprovalForProgram?: (input: unknown) => "approve" | "deny" | null;
+    };
+    moduleWithPeek.peekApprovalForProgram = vi.fn(
+      (_input: unknown): "approve" | "deny" | null => "approve"
+    );
+    const service = makeService({ module });
+    const clickAction = {
+      type: "click",
+      ref: "e_pub",
+      pageRevision: 4,
+      expectedRole: "button",
+      expectedName: "Publish",
+    } as never;
+
+    // 1. First dispatch → approval_required + exactly ONE prompt.
+    const first = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13" }
+    );
+    expect(first).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    expect(module.notifyApprovalRequired).toHaveBeenCalledTimes(1);
+    expect(module.runActions).not.toHaveBeenCalled();
+
+    // 2. The in-job wait consumes the recorded decision → ticket.
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: SESSION_ID,
+      requestId: "call-r13",
+      taskId: "task-r13",
+    });
+    expect(resolution).toBe("approved");
+    expect(consumeCalls).toBe(2);
+
+    // 3. Redispatch → the ticket is honored: the action dispatches, the
+    // registry is NOT consumed a second time, and NO second prompt.
+    const second = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13" }
+    );
+    expect(second.kind).toBe("executed");
+    expect(module.runActions).toHaveBeenCalledTimes(1);
+    expect(consumeCalls).toBe(2);
+    expect(module.notifyApprovalRequired).toHaveBeenCalledTimes(1);
+  });
+
+  it("a ticket does NOT authorize a different digest or session (R13 binding)", async () => {
+    const module = makeModule();
+    let observeCount = 0;
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => {
+        observeCount++;
+        return {
+          sessionId: SESSION_ID,
+          pageRevision: 4,
+          url: "https://www.youtube.com/upload",
+          origin: "https://www.youtube.com",
+          title: "Upload",
+          state: "ready",
+          elements: [
+            // The target CHANGES between publish and redispatch — a
+            // different semantic program must never reuse the ticket.
+            {
+              ref: "e_pub",
+              role: "button",
+              name: observeCount === 1 ? "Publish" : "Delete",
+              disabled: false,
+            },
+          ],
+          visibleText: "",
+          notices: [],
+          truncated: false,
+        };
+      }
+    );
+    let consumeCalls = 0;
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (_input: unknown): "approve" | "deny" | null => {
+        consumeCalls++;
+        return consumeCalls === 2 ? "approve" : null;
+      }
+    );
+    const moduleWithPeek = module as BrowserModuleLike & {
+      peekApprovalForProgram?: (input: unknown) => "approve" | "deny" | null;
+    };
+    moduleWithPeek.peekApprovalForProgram = vi.fn(
+      (_input: unknown): "approve" | "deny" | null => "approve"
+    );
+    const service = makeService({ module });
+    const clickAction = {
+      type: "click",
+      ref: "e_pub",
+      pageRevision: 4,
+      expectedRole: "button",
+      expectedName: "Publish",
+    } as never;
+
+    const first = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13b" }
+    );
+    expect(first).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: SESSION_ID,
+      requestId: "call-r13b",
+      taskId: "task-r13b",
+    });
+    expect(resolution).toBe("approved");
+
+    // The redispatch sees a DIFFERENT semantic target (Publish → Delete)
+    // — the digest no longer matches the ticket, so a FRESH prompt is
+    // issued and nothing dispatches.
+    const second = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13b" }
+    );
+    expect(second).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    expect(module.notifyApprovalRequired).toHaveBeenCalledTimes(2);
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
 });
 
 describe("risk routing", () => {
