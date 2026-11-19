@@ -612,6 +612,81 @@ describe("runBrowserTasks batch confirmation gate (W08/M-FR-04)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// R04/M-FR-08: the lane's waiting/paused state reaches the batch card as a
+// TRANSITION event (the card labels both, but no producer ever emitted
+// them), and the parent job's user-wait flag follows the same signal.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks waiting/paused lane events (R04)", () => {
+  it("emits waiting_for_user on transition and running again afterwards", async () => {
+    type WaitEvent = { taskId?: string; state?: string };
+    const events: WaitEvent[] = [];
+    setBrowserBatchEventSink((event: WaitEvent) => {
+      events.push(event);
+    });
+    // The child flips ITS lane's control state mid-run: it reads the row
+    // id from the lane's "running" event (the batch id is generated
+    // inside runBrowserTasks).
+    let rowTaskId: string | null = null;
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const control = getDefaultAgentTaskControlService();
+    const runtime = {
+      runSync: vi.fn(async () => {
+        // The row id is only knowable from the lane's live "running"
+        // event (the batch id is generated inside runBrowserTasks).
+        rowTaskId =
+          events.find(
+            (event) => event.state === "running" && event.taskId != null
+          )?.taskId ?? rowTaskId;
+        if (rowTaskId !== null) {
+          control.setState(rowTaskId, "waiting_for_user");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1300));
+        if (rowTaskId !== null) {
+          control.setState(rowTaskId, "running");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        return {
+          status: "completed",
+          output: {
+            status: "completed",
+            summary: "done after wait",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+          },
+        };
+      }),
+    };
+    const outcome = await runBrowserTasks(
+      [{ goal: "waited task" } as BrowserBatchTaskInput],
+      1,
+      "conv-r04",
+      new AbortController().signal,
+      { runAgent: () => runtime as never },
+      // R11: the parent job id activates the watchdog that emits the
+      // lane transitions.
+      "job-r04"
+    );
+    // Recover the row id from the lane's initial running event.
+    rowTaskId =
+      events.find((event) => event.state === "running")?.taskId ?? null;
+    expect(outcome.results[0]?.status).toBe("completed");
+    const rowStates = events
+      .filter((event) => event.taskId === rowTaskId)
+      .map((event) => event.state);
+    expect(rowStates).toContain("waiting_for_user");
+    // The transition back to running is emitted too (no infinite spam).
+    const waitIndex = rowStates.indexOf("waiting_for_user");
+    expect(
+      rowStates.slice(waitIndex + 1).some((state) => state === "running")
+    ).toBe(true);
+    setBrowserBatchEventSink(null);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // W09/M-FR-06/C-FR-09: the busy-account queue. The queued task's card
 // state is `queued` (NOT waiting_for_user — no human is involved), the
 // wait POLLS the account lease so the retry starts the moment the holder

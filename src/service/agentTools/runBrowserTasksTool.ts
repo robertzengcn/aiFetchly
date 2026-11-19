@@ -543,16 +543,46 @@ export async function runBrowserTasks(
   // wait must not burn the parent's turn deadline. The watchdog samples
   // the lane control records and flags the parent job accordingly.
   let parentWaitWatchdog: ReturnType<typeof setInterval> | null = null;
+  // R04/M-FR-08: the last emitted lane wait-state — the card sees the
+  // waiting/paused TRANSITION once, not a per-second repeat.
+  const laneWaitState = new Map<string, string>();
   if (parentJobId) {
     const registry = getDefaultToolJobRegistry();
     parentWaitWatchdog = setInterval(() => {
       try {
-        const waiting = tasks.some((_, index) => {
-          const record = control.get(`${batchId}:${index}`);
-          return (
-            record?.state === "waiting_for_user" || record?.state === "paused"
-          );
-        });
+        let waiting = false;
+        for (let index = 0; index < tasks.length; index++) {
+          const rowTaskId = `${batchId}:${index}`;
+          const record = control.get(rowTaskId);
+          const isWaiting =
+            record?.state === "waiting_for_user" || record?.state === "paused";
+          if (isWaiting) {
+            waiting = true;
+          }
+          // R04: emit the lane's waiting/paused state on TRANSITION —
+          // the card already labels both ("Waiting for you" /
+          // "Paused by you") but no producer ever emitted them.
+          const waitState = isWaiting
+            ? (record?.state as string)
+            : record?.state === "running"
+              ? "running"
+              : null;
+          const previous = laneWaitState.get(rowTaskId);
+          if (waitState !== null && waitState !== previous) {
+            laneWaitState.set(rowTaskId, waitState);
+            emitBatchEvent({
+              batchId,
+              conversationId,
+              phase: "task",
+              taskId: rowTaskId,
+              state: waitState as BrowserBatchEvent["state"],
+              summary:
+                waitState === "paused"
+                  ? "paused by user (browser under your control)"
+                  : "waiting for your decision",
+            });
+          }
+        }
         registry.setUserWait(
           parentJobId,
           waiting,
