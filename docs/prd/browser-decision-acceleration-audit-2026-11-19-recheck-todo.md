@@ -154,3 +154,4 @@ Implementable findings from this recheck were fixed on `feature/browser-decision
 - R09: consent continuation bound to a real cross-country switch flow, exact resume-location capture, bundled-browser locale/timezone/WebRTC qualification.
 - R13: worker-settlement ownership (step timeout vs abort settlement sampling a session-wide flag) — the navigation half is fixed; the timeout/settlement half needs the module's ownership release redesign.
 - Release evidence: the six Electron acceptance scenarios remain `test.fixme`, the paired held-out evaluation, and packaged-process evidence remain operator/CI scope per AGENTS.md.
+- CI run `44629163296` (second-pass head `eb574dff6`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright).
