@@ -243,7 +243,7 @@ export type RunnerAction =
   | { type: "extract"; refs: string[] }
   | { type: "click"; ref: string; pageRevision: number; expectedRole: string; expectedName: string }
   | { type: "fill"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; value: string }
-  | { type: "select"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; values: string[] }
+  | { type: "select"; ref: string; pageRevision: number; expectedRole: string; expectedName: string; values: string[]; expected_values?: string[] }
   | { type: "press_key"; key: string }
   | { type: "scroll"; direction: "up" | "down"; amount: number }
   | { type: "hover"; ref: string; pageRevision: number; expectedRole: string; expectedName: string }
@@ -1936,15 +1936,21 @@ export class BrowserTaskRunner {
           ? element.option_ids.indexOf(action.option_id)
           : -1;
         const expectedValue = idPosition >= 0 ? element.option_values?.[idPosition] : undefined;
+        // R02: a trusted option identity REQUIRES the observed value —
+        // dispatching without the expectation would let a changed or
+        // misaligned option list select a different option silently
+        // (the worker's staleness check has nothing to compare against).
+        // Misaligned/legacy data refuses the step; the model re-decides.
+        if (expectedValue === undefined) {
+          return null;
+        }
         return {
           type: "select",
           ref: target.candidate_id,
           pageRevision: observation.pageRevision,
           ...expected,
           values: [action.option_id],
-          ...(expectedValue !== undefined
-            ? { expected_values: [expectedValue] }
-            : {}),
+          expected_values: [expectedValue],
         };
       }
       case "HOVER":

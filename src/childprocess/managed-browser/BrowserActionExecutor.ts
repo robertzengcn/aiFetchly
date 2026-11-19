@@ -156,32 +156,77 @@ function clearElementWithEventFn(el: HTMLInputElement): void {
 }
 
 /**
- * P1/D-FR-17: resolve positional o_N tokens against the LIVE select's
- * options — the exact native value (however long) is used, so truncated
- * display summaries can never select the wrong option.
+ * P1/D-FR-17 + R02: validate AND commit the selection in ONE page-side
+ * pass. Positional o_N tokens resolve against the LIVE select's options
+ * and the selection is applied BY INDEX — the exact native option
+ * identity survives duplicate values (select-by-value would always pick
+ * the first equal option) — and the DOM cannot change between
+ * validation and commit because both run in the same function.
+ * N09: the LIVE option value must still match the value OBSERVED when
+ * the decision was made; a stale throw happens BEFORE any mutation —
+ * a proven no-effect failure the runner can reobserve from.
  */
-function resolveSelectOptionsFn(
+export function selectOptionsByIdentityFn(
   el: HTMLSelectElement,
   values: string[],
   expectedValues: string[] | null
-): string[] {
-  return values.map((value, index) => {
+): { ok: boolean; selectedValues: string[] } {
+  const indexes: number[] = [];
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i];
     const match = /^o_(\d+)$/.exec(value);
     if (!match) {
-      return value;
+      // Non-positional value: resolve by value, still verified against
+      // the expected binding when one exists.
+      const expected = expectedValues?.[i];
+      const option = Array.from(el.options ?? []).find(
+        (o) => o.value === value
+      );
+      if (!option) {
+        throw new Error("stale_select_option");
+      }
+      if (
+        expected !== undefined &&
+        expected !== null &&
+        option.value !== expected
+      ) {
+        throw new Error("stale_select_option");
+      }
+      indexes.push(Array.prototype.indexOf.call(el.options, option));
+      continue;
     }
-    const option = el.options?.[Number(match[1])];
-    const liveValue = option ? option.value : value;
-    // N09: the LIVE option value must still match the value OBSERVED
-    // when the decision was made — options reordering or changing after
-    // the observation fails the step instead of silently choosing
-    // another option.
-    const expected = expectedValues?.[index];
-    if (expected !== undefined && expected !== null && liveValue !== expected) {
+    indexes.push(Number(match[1]));
+  }
+  // Validate EVERY option before mutating anything.
+  for (let i = 0; i < indexes.length; i++) {
+    const option = el.options?.[indexes[i]];
+    if (!option) {
       throw new Error("stale_select_option");
     }
-    return liveValue;
-  });
+    const expected = expectedValues?.[i];
+    if (
+      expected !== undefined &&
+      expected !== null &&
+      option.value !== expected
+    ) {
+      throw new Error("stale_select_option");
+    }
+  }
+  // Commit by index (parity with elementHandle.select: a multi-select
+  // ADDS the given options; a single-select picks the resolved one).
+  for (let i = 0; i < indexes.length; i++) {
+    if (el.multiple) {
+      el.options[indexes[i]].selected = true;
+    } else if (i === 0) {
+      el.selectedIndex = indexes[i];
+    }
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return {
+    ok: true,
+    selectedValues: indexes.map((idx) => el.options?.[idx]?.value ?? ''),
+  };
 }
 
 function extractElementDataFn(el: Element): {
@@ -421,23 +466,26 @@ export class BrowserActionExecutor {
         case "select":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
-            // P1/D-FR-17: positional tokens resolve against the LIVE
-            // element's native options before the selection.
-            let resolved: string[];
+            // P1/D-FR-17 + R02: validate AND commit in ONE page-side
+            // pass — the selection is applied BY INDEX (exact native
+            // identity; equal-valued options stay distinguishable) and
+            // the DOM cannot change between validation and commit.
+            // The evaluate is the first possible mutation, so inputSent
+            // covers it; a stale throw happens BEFORE the mutation and
+            // stays a PROVEN no-effect failure (effectUnknown: false)
+            // the runner reobserves from instead of halting on
+            // unknown_execution_effect.
+            bumpDispatch();
             try {
-              resolved = await entry.element.evaluate<string[]>(
-                resolveSelectOptionsFn,
+              await entry.element.evaluate<{ ok: boolean; selectedValues: string[] }>(
+                selectOptionsByIdentityFn,
                 action.values,
                 action.expected_values ?? null
               );
             } catch (error) {
-              // B07/D-FR-26: the stale-option throw happens BEFORE any
-              // input is dispatched — it is a PROVEN no-effect failure
-              // (effectUnknown: false) so the runner reobserves instead
-              // of halting the task with unknown_execution_effect.
               if (
                 error instanceof Error &&
-                error.message === "stale_select_option"
+                error.message.includes("stale_select_option")
               ) {
                 return {
                   success: false,
@@ -447,10 +495,6 @@ export class BrowserActionExecutor {
               }
               throw error;
             }
-            // The select() call is the first mutation — inputSent only
-            // covers everything AFTER the resolution succeeded.
-            bumpDispatch();
-            await entry.element.select(...resolved);
             return { success: true };
           });
         case "press_key":

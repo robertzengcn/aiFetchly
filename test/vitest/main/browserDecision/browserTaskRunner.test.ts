@@ -1309,6 +1309,113 @@ describe("BrowserTaskRunner F14 SELECT option mapping", () => {
     expect(seen).toEqual([]);
     expect(result.status).toBe("completed");
   });
+
+  it("refuses a dispatch when the observed VALUE cannot be bound to the token (R02)", async () => {
+    const seen: RunnerAction[] = [];
+    // The token IS in the id list but the value list is missing — no
+    // trusted expectation can be bound, so the step must refuse instead
+    // of dispatching a verification-less selection.
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_0", "o_1"],
+          option_values: undefined,
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_0", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r02sel",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("unsupported_operation:SELECT");
+  });
+
+  it("binds the expected value for a FILTERED earlier option (compacted list, R02)", async () => {
+    const seen: RunnerAction[] = [];
+    // o_2 sits at position 1 in the COMPACTED id list (o_0 was omitted
+    // as oversized); the bound value must come from the aligned value
+    // list, not from parsing the token into the compacted array.
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_2"],
+          option_values: ["jp"],
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_2", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r02sel2",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([
+      {
+        type: "select",
+        ref: "e_sel",
+        pageRevision: 3,
+        expectedRole: "combobox",
+        expectedName: "Country",
+        values: ["o_2"],
+        expected_values: ["jp"],
+      },
+    ]);
+    expect(result.status).toBe("completed");
+  });
 });
 
 describe("BrowserTaskRunner F15 progress and recovery", () => {

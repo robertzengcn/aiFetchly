@@ -80,11 +80,10 @@ class FakeHandle implements ExecutorElementHandle {
       if (fnName === "extractElementDataFn") {
         return this.extractValue as T;
       }
-      // P1/D-FR-17: the live option resolution — the fake returns the
-      // values the test configured for the o_N token mapping.
-      if (fnName === "resolveSelectOptionsFn") {
-        // N09: verify the LIVE value against the OBSERVED value bound
-        // at decision time — mismatch = stale option.
+      // P1/D-FR-17 + R02: the live identity commit — the fake mirrors
+      // the page function's contract: verify the OBSERVED value, then
+      // commit (the real function selects by index page-side).
+      if (fnName === "selectOptionsByIdentityFn") {
         const resolved = this.resolvedSelectValues;
         if (this.expectedSelectValue !== null) {
           const expected = this.expectedSelectValue;
@@ -92,7 +91,7 @@ class FakeHandle implements ExecutorElementHandle {
             throw new Error("stale_select_option");
           }
         }
-        return resolved as T;
+        return { ok: true, selectedValues: resolved } as T;
       }
       return undefined as T;
     }

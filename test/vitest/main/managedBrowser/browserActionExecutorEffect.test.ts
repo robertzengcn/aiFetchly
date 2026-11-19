@@ -253,9 +253,10 @@ describe("BrowserActionExecutor B07 SELECT stale-option classification", () => {
   };
 
   it("a stale_select_option throw before dispatch is a KNOWN no-effect failure", async () => {
-    // Options were reordered after the observation: the resolution throws
-    // before element.select is invoked — the page state is unchanged, so
-    // the runner must be able to reobserve (not halt on unknown effect).
+    // R02: validation and commit run in ONE page-side pass — a stale
+    // throw happens BEFORE the mutation inside the page function, so
+    // the page state is unchanged and the runner can reobserve (not
+    // halt on unknown effect).
     const selectCalls: string[][] = [];
     const element = makeElement({
       descriptor: { role: "combobox", name: "Country" },
@@ -264,7 +265,7 @@ describe("BrowserActionExecutor B07 SELECT stale-option classification", () => {
         return values;
       },
       onEvaluate: async (fnName) => {
-        if (fnName === "resolveSelectOptionsFn") {
+        if (fnName === "selectOptionsByIdentityFn") {
           throw new Error("stale_select_option");
         }
         return undefined;
@@ -280,19 +281,16 @@ describe("BrowserActionExecutor B07 SELECT stale-option classification", () => {
     expect(outcome.stopCode).toBe("completed");
     expect(outcome.results[0]?.success).toBe(false);
     expect(outcome.results[0]?.errorCode).toBe("stale_select_option");
-    // Nothing was dispatched to the page.
+    // The value-based element.select path is never used.
     expect(selectCalls).toHaveLength(0);
   });
 
-  it("a select failure AFTER the resolution dispatched is still unknown", async () => {
+  it("a non-stale failure after the identity commit dispatched is still unknown", async () => {
     const element = makeElement({
       descriptor: { role: "combobox", name: "Country" },
-      select: async () => {
-        throw new Error("select detached");
-      },
       onEvaluate: async (fnName) => {
-        if (fnName === "resolveSelectOptionsFn") {
-          return ["live-value"];
+        if (fnName === "selectOptionsByIdentityFn") {
+          throw new Error("select detached");
         }
         return undefined;
       },
@@ -305,6 +303,23 @@ describe("BrowserActionExecutor B07 SELECT stale-option classification", () => {
     );
     expect(outcome.effect).toBe("unknown");
     expect(outcome.stopCode).toBe("unknown_effect");
+  });
+
+  it("a successful identity commit dispatches and reports success", async () => {
+    const element = makeElement({
+      descriptor: { role: "combobox", name: "Country" },
+      onEvaluate: async (fnName) => {
+        if (fnName === "selectOptionsByIdentityFn") {
+          return { ok: true, selectedValues: ["expected-live-value"] };
+        }
+        return undefined;
+      },
+    });
+    const { registry, ref } = makeRegistry(element, "combobox", "Country");
+    const outcome = await run([{ ...selectAction, ref }], makePage({}), registry);
+    expect(outcome.effect).toBe("known");
+    expect(outcome.results[0]?.success).toBe(true);
+    expect(outcome.results[0]?.errorCode).toBeNull();
   });
 });
 
