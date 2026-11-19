@@ -776,6 +776,25 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           },
         },
       });
+      // R10/D-AC-08: POST-SAVE recheck — the settings write is an
+      // awaited read/merge; a concurrent settings save (route/model
+      // change) that landed after the precheck must not silently keep
+      // stale probe flags. The persisted revision is read back and the
+      // probe reports invalidated when it no longer owns the slot.
+      const persisted = await new ManagedBrowserSettingsModule()
+        .getEffectiveSettings();
+      if (
+        persisted.decisionRoute.chatCapabilities?.providerRevision !==
+        probedRevision
+      ) {
+        return {
+          chat: false,
+          structuredJsonSchema: false,
+          forcedToolDecision: false,
+          structuredError: "probe_invalidated_by_concurrent_change",
+          forcedToolError: "probe_invalidated_by_concurrent_change",
+        };
+      }
       return {
         ...result,
         providerRevision: probedRevision,

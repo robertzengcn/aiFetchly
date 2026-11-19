@@ -201,15 +201,39 @@ export class HostedDecisionClient implements BrowserDecisionClient {
           reason_code: "correlation_mismatch",
         };
       }
-      // A16/design §9.2: the hosted contract REQUIRES the correlation echo
-      // — a bare action with no request/task/step ids is rejected (an
-      // unrelated or replayed reply can never authorize an action).
-      const hasCorrelationEcho = correlations.some(([key]) => {
+      // A16/design §9.2/R10: the hosted contract REQUIRES FULL
+      // correlation — every id echo (request, task, step, observation)
+      // and the page revision must be present AND equal. A reply missing
+      // any of them is a misrouted/replayed/partially-correlated reply
+      // and can never authorize an action.
+      for (const [key, expected] of correlations) {
         const echoed =
           (record[key] as unknown) ?? (action ? action[key] : undefined);
-        return echoed !== undefined && echoed !== null;
-      });
-      if (!hasCorrelationEcho) {
+        if (echoed === undefined || echoed === null || echoed !== expected) {
+          return {
+            status: "provider_error",
+            reason_code: "correlation_mismatch",
+          };
+        }
+      }
+      if (
+        echoedRevision === undefined ||
+        echoedRevision === null ||
+        echoedRevision !== input.page_revision
+      ) {
+        return {
+          status: "provider_error",
+          reason_code: "correlation_mismatch",
+        };
+      }
+      // R10: a claimed contract version that is not v1 is refused — the
+      // client only speaks schema_version 1.
+      const echoedSchemaVersion = record["schema_version"];
+      if (
+        echoedSchemaVersion !== undefined &&
+        echoedSchemaVersion !== null &&
+        echoedSchemaVersion !== input.schema_version
+      ) {
         return {
           status: "provider_error",
           reason_code: "correlation_mismatch",
