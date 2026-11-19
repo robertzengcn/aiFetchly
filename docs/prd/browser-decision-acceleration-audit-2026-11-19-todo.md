@@ -224,3 +224,6 @@ For worker transport failure after action intent, the targeted path at `BrowserT
 A11 (proxy-switch consent continuation), A08's scoped start-Boolean permission grant, A15's per-attempt credential tracking, A18's approval-context binding, and the release-evidence items (six real E2E drivers, held-out evaluation, packaged evidence) require live-provider/account/Chromium qualification or larger feature surfaces (operator/CI scope) — recorded as open.
 
 Sweep at the closure HEAD: **705 tests across 58 main-process files**, **1,626 component tests across 184 files**, **162 utility tests across 7 files**.
+
+CI run 44424905120 SUCCESS on all three jobs (Lint+unit 19m55s,
+Package smoke 7m47s, Electron E2E 38m24s) at `d72f71136`.
