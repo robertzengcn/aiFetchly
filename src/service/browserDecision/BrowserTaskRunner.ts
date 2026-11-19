@@ -30,6 +30,7 @@ import {
 } from "@/service/browserDecision/BrowserCandidateBuilder";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { fieldIsForbiddenToFill } from "@/service/browserDecision/FieldValueService";
+import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
 
 export interface CompletionCriterion {
   readonly kind: "url_contains" | "element_present" | "extract_nonempty" | "text_contains";
@@ -235,6 +236,15 @@ export interface RunnerObservation {
     readonly href_full?: string | null;
   }>;
   readonly visibleText: string;
+}
+
+/** R05: hostname extraction that never throws on malformed URLs. */
+function safeHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
 }
 
 export type RunnerAction =
@@ -789,6 +799,15 @@ export class BrowserTaskRunner {
             );
           }
           observation = freshObservation;
+          // R05/C-FR-06: a Pause→Resume DURING the DONE reobservation
+          // discards held work — a verification gathered across the
+          // resume never completes the task.
+          if (
+            control.getResumeGeneration(this.taskId) > generationBeforeDecide
+          ) {
+            evidence.push("done_reobservation_discarded_after_resume");
+            continue;
+          }
           // N09/C-FR-05/06: a task left in a USER WAIT (paused or
           // waiting_for_user — no intervening Resume) or over active
           // budget cannot complete on a verification that landed
@@ -854,6 +873,13 @@ export class BrowserTaskRunner {
               }
               if (signal.aborted) {
                 return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
+              }
+              // R05: a verdict that resolved after its OWN enforced
+              // deadline is discarded — the callback may have ignored the
+              // abort, and a late verdict never completes.
+              if (verifierController.signal.aborted) {
+                verdict = null;
+                evidence.push("verifier_deadline_exceeded");
               }
               // B05/C-FR-06: a Pause+Resume DURING verification invalidates
               // the evidence — held work is discarded on resume, so a
@@ -1650,6 +1676,12 @@ export class BrowserTaskRunner {
       signal.addEventListener("abort", onOuterAbort, { once: true });
       const timer = setTimeout(() => attemptController.abort(), deadlineMs);
       let result: BrowserDecisionResult;
+      // R05/C-FR-06: capture the resume generation BEFORE inference — a
+      // Pause→Resume DURING the decide bumps the generation, and the
+      // proposal must carry the PRE-inference generation so the
+      // consumption stale check discards it (a post-await read would
+      // make the stale reply appear current).
+      const generationBeforeRecovery = control.getResumeGeneration(this.taskId);
       // R13/D-FR-15a: recovery inference is pinned like the main decide
       // — the same observation ID rides the recovery input.
       const recoveryObservationId = recoveryInput.observation_id;
@@ -1685,12 +1717,11 @@ export class BrowserTaskRunner {
         !attemptController.signal.aborted &&
         !signal.aborted
       ) {
-        // A06/C-FR-06: the proposal carries the resume generation it was
-        // produced under — a Pause→Resume before consumption discards it.
+        // A06/C-FR-06/R05: the proposal carries the resume generation it
+        // was produced UNDER (captured before inference) — a Pause→Resume
+        // before OR DURING inference discards it.
         this.pendingRecovery = result;
-        this.pendingRecoveryGeneration = (
-          this.deps.control ?? getDefaultAgentTaskControlService()
-        ).getResumeGeneration(this.taskId);
+        this.pendingRecoveryGeneration = generationBeforeRecovery;
         return true;
       }
       return false;
@@ -1979,7 +2010,23 @@ export class BrowserTaskRunner {
       // (evidence: verified_by_url_change_fallback). An unchanged page
       // stays unverified — a DONE on the landing page never completes.
       if (this.startUrl !== null && observation.url !== this.startUrl) {
-        return { verified: true, evidence: "verified_by_url_change_fallback" };
+        // R05: the fallback must not accept an UNRELATED change — the
+        // new URL stays on the task's start registrable domain
+        // (navigation to another site is not progress on this task).
+        const startDomain = registrableDomainOf(
+          safeHostname(this.startUrl)
+        );
+        const currentDomain = registrableDomainOf(
+          safeHostname(observation.url)
+        );
+        if (
+          startDomain !== null &&
+          currentDomain !== null &&
+          startDomain === currentDomain
+        ) {
+          return { verified: true, evidence: "verified_by_url_change_fallback" };
+        }
+        return { verified: false, evidence: "url_change_off_site" };
       }
       return { verified: false, evidence: "no_completion_criteria" };
     }

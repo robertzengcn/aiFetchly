@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { BrowserTaskRunner } from "@/service/browserDecision/BrowserTaskRunner";
 import type {
   RunnerAction,
@@ -199,6 +199,72 @@ describe("BrowserTaskRunner (D-FR-05..25)", () => {
     expect(result.counts.recoveryCalls).toBe(2);
     expect(result.status).toBe("partial");
     expect(result.reason).toBe("escalated:script_end");
+  });
+
+  it("discards the recovery proposal when a Pause+Resume lands DURING its inference (R05)", async () => {
+    const dispatched: RunnerAction[] = [];
+    let observeCalls = 0;
+    let decideCount = 0;
+    let releaseRecovery: ((r: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult) => void) | null = null;
+    const recoveryResult = new Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult>(
+      (resolve) => {
+        releaseRecovery = resolve;
+      }
+    );
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([]);
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      observeCalls++;
+      return observation();
+    };
+    deps.decisionClient.decide = async (): Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> => {
+      decideCount++;
+      if (decideCount === 1) {
+        return { status: "llm_required", reason_code: "needs_model" };
+      }
+      if (decideCount === 2) {
+        // The recovery inference is HELD — the resume lands while it is
+        // pending, proving the generation is captured BEFORE inference.
+        return await recoveryResult;
+      }
+      return doneEntry();
+    };
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    let runnerRef: BrowserTaskRunner | null = null;
+    const runner: BrowserTaskRunner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r05rec",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    runnerRef = runner;
+    const runPromise = runner.run();
+    // Wait until the recovery decide is actually pending.
+    await vi.waitFor(() => expect(decideCount).toBe(2));
+    // Pause+Resume DURING inference bumps the generation.
+    deps.control.setState(runnerRef.taskId, "paused");
+    deps.control.resume(runnerRef.taskId);
+    releaseRecovery!(clickDecision);
+    const result = await runPromise;
+    // The stale recovery proposal was discarded and the recovery-sourced
+    // CLICK never dispatched; a FRESH observation fed the next decision.
+    expect(dispatched).toEqual([]);
+    expect(result.evidence).toContain("recovery_discarded_after_resume");
+    expect(observeCalls).toBeGreaterThanOrEqual(2);
+    expect(result.status).toBe("completed");
   });
 
   it("normalizes ESCALATE to a truthful partial result", async () => {
