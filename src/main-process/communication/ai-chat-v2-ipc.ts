@@ -1739,6 +1739,20 @@ async function handleClearConversation(
     } catch (err) {
       console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
     }
+    // R06/M-FR-09: retained managed-browser sessions belong to this
+    // conversation — clearing it closes them (leases released with the
+    // stop path) instead of leaking live browsers for a deleted chat.
+    try {
+      const { getDefaultManagedBrowserModule } = await import(
+        "@/modules/ManagedBrowserModule"
+      );
+      await getDefaultManagedBrowserModule().stopAllForConversation(
+        conversationId,
+        "user_stop"
+      );
+    } catch (err) {
+      log.error("[ai-chat-v2] retained browser cleanup failed:", err);
+    }
     return ok({ deleted });
   } catch (err) {
     return denied(userSafeError(err));

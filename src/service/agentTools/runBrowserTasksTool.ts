@@ -782,6 +782,19 @@ export async function runBrowserTasks(
               const owner = module.getSessionOwnerAgentTaskId(outputSessionId);
               if (owner === childAgentTaskId) {
                 await module.stop(outputSessionId, "cancelled");
+                // R06: the reported id is closed AND every OTHER
+                // child-owned session (a first attempt's leftover) is
+                // released too — the reported id never suppresses the
+                // full child-scoped cleanup.
+                const others = await module.stopAllForAgentTask(
+                  childAgentTaskId,
+                  "cancelled"
+                );
+                if (others.failedSessionIds.length > 0) {
+                  cleanupEvidence.push(
+                    `cleanup_partial:${others.failedSessionIds.join(",")}`
+                  );
+                }
               } else {
                 cleanupEvidence.push("cleanup_skipped:session_owner_mismatch");
                 // The foreign session is left alone, but THIS task's own
@@ -852,6 +865,17 @@ export async function runBrowserTasks(
                   conversationId
                 );
                 transferredSessionId = outputSessionId;
+                // R06: the transferred session is no longer child-owned —
+                // any OTHER child-owned session still closes.
+                const others = await module.stopAllForAgentTask(
+                  childAgentTaskId,
+                  "cancelled"
+                );
+                if (others.failedSessionIds.length > 0) {
+                  cleanupEvidence.push(
+                    `keep_open_others_partial:${others.failedSessionIds.join(",")}`
+                  );
+                }
               } else {
                 cleanupEvidence.push("keep_open_transfer_refused:owner_mismatch");
                 // Refused transfer: the retained id must NOT surface.
@@ -860,6 +884,38 @@ export async function runBrowserTasks(
               }
             } catch {
               cleanupEvidence.push("keep_open_transfer_refused:error");
+              // R06: a transfer EXCEPTION still releases the child's
+              // sessions — a failed transfer never leaves them running.
+              try {
+                const released = await getDefaultManagedBrowserModule().stopAllForAgentTask(
+                  childAgentTaskId,
+                  "cancelled"
+                );
+                if (released.failedSessionIds.length > 0) {
+                  cleanupEvidence.push(
+                    `keep_open_refused_partial:${released.failedSessionIds.join(",")}`
+                  );
+                }
+              } catch {
+                cleanupEvidence.push("keep_open_refused_cleanup_error");
+              }
+            }
+          } else {
+            // R06: a completed keep-open result with NO session id — the
+            // child's sessions are still released (a missing id must not
+            // leak retained browsers).
+            try {
+              const released = await getDefaultManagedBrowserModule().stopAllForAgentTask(
+                childAgentTaskId,
+                "cancelled"
+              );
+              cleanupEvidence.push(
+                released.failedSessionIds.length === 0
+                  ? "keep_open_missing_id_sessions_released"
+                  : `keep_open_missing_id_partial:${released.failedSessionIds.join(",")}`
+              );
+            } catch {
+              cleanupEvidence.push("keep_open_missing_id_cleanup_error");
             }
           }
         }

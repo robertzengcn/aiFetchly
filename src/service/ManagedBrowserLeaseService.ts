@@ -151,13 +151,24 @@ export class ManagedBrowserLeaseService {
    * keep-open transfer) — account reuse/ownership checks then read the
    * transferred identity. The lease token/session stay stable.
    */
-  public reassignLeaseOwner(leaseKey: string, ownerConversationId: string): void {
+  public reassignLeaseOwner(
+    leaseKey: string,
+    ownerConversationId: string,
+    ownerAgentTaskId: string | null = null
+  ): void {
     const lease = this.leases.get(leaseKey);
     if (!lease) {
       return;
     }
-    (lease as { ownerConversationId: string | null }).ownerConversationId =
-      ownerConversationId;
+    // R06/M-FR-07: BOTH owner fields move together — leaving the child
+    // task owner on the lease let child-scoped cleanup and ownership
+    // checks still see the pre-transfer identity.
+    const mutable = lease as {
+      ownerConversationId: string | null;
+      ownerAgentTaskId: string | null;
+    };
+    mutable.ownerConversationId = ownerConversationId;
+    mutable.ownerAgentTaskId = ownerAgentTaskId;
   }
 
   public getLease(leaseKey: string): AccountLease | null {

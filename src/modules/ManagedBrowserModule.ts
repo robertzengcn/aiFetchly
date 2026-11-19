@@ -1131,29 +1131,35 @@ export class ManagedBrowserModule {
     parentConversationId: string
   ): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
+    // A07/M-FR-07/R06: the LEASE owner moves TOGETHER with the session —
+    // through the module's OWN lease service (the same instance that
+    // acquired it, not a global re-read that diverges in tests/embedded
+    // hosts), and the reassignment is VERIFIED before the transfer
+    // reports success. A lease that cannot move fails the transfer: the
+    // caller keeps the child ownership and the lease stays consistent.
+    const lease = this.leaseService.getLease(record.leaseKey);
+    if (lease && lease.sessionId === sessionId) {
+      this.leaseService.reassignLeaseOwner(
+        record.leaseKey,
+        parentConversationId,
+        null
+      );
+      const moved = this.leaseService.getLease(record.leaseKey);
+      if (
+        !moved ||
+        moved.sessionId !== sessionId ||
+        moved.ownerConversationId !== parentConversationId ||
+        moved.ownerAgentTaskId !== null
+      ) {
+        throw new ManagedBrowserError(
+          "session_not_owned",
+          "lease owner reassignment did not take effect; transfer refused"
+        );
+      }
+    }
     record.ownerAgentTaskId = null;
     record.conversationId = parentConversationId;
     record.rootConversationId = null;
-    // A07/M-FR-07: the LEASE owner stays in sync with the transferred
-    // identity — account reuse/ownership checks read the lease's owner
-    // conversation too.
-    try {
-      const { getDefaultManagedBrowserLeaseService } = await import(
-        "@/service/ManagedBrowserLeaseService"
-      );
-      const lease = getDefaultManagedBrowserLeaseService().getLease(
-        record.leaseKey
-      );
-      if (lease && lease.sessionId === sessionId) {
-        getDefaultManagedBrowserLeaseService().reassignLeaseOwner(
-          record.leaseKey,
-          parentConversationId
-        );
-      }
-    } catch {
-      // Lease sync is best-effort — release/stop still uses the stored
-      // leaseKey/token.
-    }
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }
