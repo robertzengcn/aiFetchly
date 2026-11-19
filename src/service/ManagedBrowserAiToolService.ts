@@ -489,7 +489,12 @@ export class ManagedBrowserAiToolService {
           ...(context.rootConversationId
             ? { rootConversationId: context.rootConversationId }
             : {}),
-          ...(parsed.data.proxy ? { proxy: parsed.data.proxy } : {}),
+          // R09/P-FR-01: the wire union is mapped through the SAME
+          // discriminated selection mapper the switch tool uses — the
+          // module selector reads `kind`, never the raw wire shape.
+          ...(parsed.data.proxy
+            ? { proxy: this.mapProxySelection(parsed.data.proxy) }
+            : {}),
         },
         { aiEntryPoint: true }
       );
@@ -505,10 +510,24 @@ export class ManagedBrowserAiToolService {
       );
       if (parsed.data.account_id !== undefined && unavailableAccount) {
         try {
+          // R09/P-FR-01: the fallback preserves the REQUESTED proxy and
+          // the caller's ownership (agent task + root conversation) —
+          // a dropped proxy silently changed the network route, and a
+          // dropped owner broke child-scoped cleanup for the fallback
+          // session.
           const status = await this.browserModule.start({
             purpose: parsed.data.purpose,
             requestedStartUrl: parsed.data.requested_start_url,
             conversationId: context.conversationId,
+            ...(context.ownerAgentId
+              ? { agentTaskId: context.ownerAgentId }
+              : {}),
+            ...(context.rootConversationId
+              ? { rootConversationId: context.rootConversationId }
+              : {}),
+            ...(parsed.data.proxy
+              ? { proxy: this.mapProxySelection(parsed.data.proxy) }
+              : {}),
           }, { aiEntryPoint: true });
           return { ...status, notice: "saved_account_unavailable_using_account_free_browser" };
         } catch (fallbackError) {

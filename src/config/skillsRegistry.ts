@@ -4962,6 +4962,26 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             type: "string",
             description: "Optional http(s) start URL.",
           },
+          proxy: {
+            description:
+              "Optional proxy route for the session: { proxy_id } for a saved proxy (from proxy_list), { auto: true, country_code? } for automatic country selection, or \"direct\" for no proxy. Ids only — never host/port/credentials.",
+            oneOf: [
+              {
+                type: "object",
+                properties: { proxy_id: { type: "number" } },
+                required: ["proxy_id"],
+              },
+              {
+                type: "object",
+                properties: {
+                  auto: { type: "boolean", enum: [true] },
+                  country_code: { type: "string" },
+                },
+                required: ["auto"],
+              },
+              { type: "string", enum: ["direct"] },
+            ],
+          },
         },
         required: ["purpose"],
       },

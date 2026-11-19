@@ -51,7 +51,11 @@ export class ProxyModel extends BaseDb {
     for (const proxy of records) {
       const decrypted = await ProxyCredentialCodec.decryptForUse(proxy.pass);
       if (decrypted.needsMigration && decrypted.password) {
-        await this.migratePlaintextPass(proxy.id, decrypted.password);
+        await this.migratePlaintextPass(
+          proxy.id,
+          decrypted.password,
+          proxy.pass
+        );
       }
       proxyListEntities.push({
         id: proxy.id,
@@ -66,8 +70,12 @@ export class ProxyModel extends BaseDb {
         country_code: proxy.country_code,
         addtime: proxy.addtime || "",
         checktime: proxy.updatedAt?.toISOString(),
-        status: 1, // Default status
-        statusName: "Active",
+        // R09/P-FR: an unchecked row inherits NO passing result from the
+        // defaults — statusName stays "Unchecked" until the controller
+        // enrichment confirms a real check record (the AI projection's
+        // mapBasicStatus already requires a checktime for "pass").
+        status: 0,
+        statusName: "Unchecked",
         browser_usable:
           proxy.protocol === null || proxy.protocol === undefined
             ? true
@@ -144,13 +152,21 @@ export class ProxyModel extends BaseDb {
   /** N04: migrate a legacy plaintext row to encrypted at rest. */
   public async migratePlaintextPass(
     id: number,
-    plaintext: string
+    plaintext: string,
+    /** R09: the stored value the plaintext was decrypted FROM. */
+    storedPass?: string
   ): Promise<void> {
     try {
       const encrypted = await ProxyCredentialCodec.encryptForStorage(plaintext);
       if (encrypted) {
         const repository = await this.getRepository();
-        await repository.update(id, { pass: encrypted });
+        // R09: atomic compare-and-set — the migration lands ONLY when
+        // the stored value is still the one we decrypted from; a
+        // concurrent password edit is never overwritten by the stale
+        // plaintext.
+        const criteria =
+          typeof storedPass === "string" ? { id, pass: storedPass } : { id };
+        await repository.update(criteria, { pass: encrypted });
       }
     } catch (error) {
       // Migration is best-effort; the plaintext row is retried on next read.

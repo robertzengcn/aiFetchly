@@ -94,7 +94,8 @@ export function registerGoogleMapsHandlers(): void {
               if (decrypted.needsMigration && decrypted.password) {
                 await proxyModel.migratePlaintextPass(
                   entity.id,
-                  decrypted.password
+                  decrypted.password,
+                  entity.pass
                 );
               }
               if (!decrypted.password) {

@@ -206,7 +206,16 @@ export class SocialAccountModule extends BaseModule {
         name: account.name,
         phone: account.phone,
         email: account.email,
-        proxy: account.proxy || [],
+        // R09/P-FR-08: the proxy relation is projected to its PUBLIC
+        // fields — storage secrets (the password column) and internal
+        // columns never reach the renderer.
+        proxy: (account.proxy ?? []).map((row) => ({
+          id: row.id,
+          host: row.host,
+          port: row.port,
+          protocol: row.protocol,
+          user: row.user,
+        })),
       };
 
       return {

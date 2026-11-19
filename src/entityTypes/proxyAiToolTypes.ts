@@ -234,6 +234,13 @@ export function mapGooglePassStatus(
 export function mapProtocol(
   protocol: string | undefined | null
 ): ProxyProtocol | undefined {
+  // R09/P-FR: legacy rows store a NULL protocol — the browser selector
+  // and the list's browser_usable already read that as HTTP, so the AI
+  // projection unifies on the same default instead of reporting
+  // undefined for the same row.
+  if (protocol === null || protocol === undefined) {
+    return "http";
+  }
   if (typeof protocol !== "string") {
     return undefined;
   }
