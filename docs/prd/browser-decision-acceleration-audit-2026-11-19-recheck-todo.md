@@ -136,3 +136,21 @@ Implementable findings from this recheck were fixed on `feature/browser-decision
 - Full main-process sweep: 9,148 passed; the 364 failures are the documented environmental suites (SkillInstallation native builds, outbound-email-gate SQLite interference, Windows-specific PATH/TMPDIR/path-separator assertions) — none in the touched areas; the three adjacent failures (`proxyModuleRedaction`, `searchTaskProxyReplace`, `PromptSkillTools`) are the shared-DB lock contention and pass in isolation.
 - Discriminating tests were verified by temporary revert (R05 recovery race and R12 criterion suppression both fail without their fixes).
 - CI run `44571739895` (branch head `f71cab809`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright).
+
+---
+
+## Second fix pass — November 20, 2026 (remaining implementable items)
+
+- **R07 dismissal event** (`5102f3ee2`) — pending batch-confirmation cards retire IMMEDIATELY when the main process dismisses them without a user decision (parent Stop cancel / TTL expiry) through the new `managed-browser:batch-confirm-cancelled` channel (registry dismissal sink → IPC → preload whitelist → renderer API → BrowserControlCards removal); a stray submit can no longer hit a consumed request. Component test included.
+- **R04 waiting/paused events** (`c003e63c5`) — the lane watchdog emits the row's `waiting_for_user` / `paused` state ON TRANSITION and `running` when the wait ends; the card's existing labels ("Waiting for you" / "Paused by you") now actually receive their events. Transition test included.
+- **R13 navigation progress** (`37d83b789`) — a started navigation fires the same per-leaf dispatch progress as click/fill/select; a crash after the goto classifies uniformly.
+- **R07 receipt dedupe** (`b8bcd19ec`) — batch rows carry the child's externalized output receipts (parent access granted), deduplicated within the row AND across siblings; the deduped rows feed both the final events and the returned result. Test included.
+- **R08 rejected-credential block** (`ef31b431c`) — wrong_credential/wrong_password records the `WRONG_CREDENTIAL_SAVED` marker; the cooldown does not lift it with time and is account-wide; `updatePasswordForAccount` lifts it via `credentialReplaced`. Tests included.
+- **R04 control-id unification** (`d7bbcfbc9`) — the nested runner ADOPTS the caller's control id (batch row id / child agent task id via ownerAgentId): one authoritative owner/control mapping; pause/take-control/stop on the outer id gate the runner directly; journal/admission/terminal share the identity; the IPC resolver ambiguity disappears for new tasks. Adoption + fallback tests included.
+
+**Still open after this pass**
+
+- R08: full attempt-count ledger (needs new entity columns + migration — the wrong-credential hard block covers the abusive path), ordered login-recipe lifecycle beyond step zero, cookie restore under the selected site's policy, session reservation across the switched-account fill.
+- R09: consent continuation bound to a real cross-country switch flow, exact resume-location capture, bundled-browser locale/timezone/WebRTC qualification.
+- R13: worker-settlement ownership (step timeout vs abort settlement sampling a session-wide flag) — the navigation half is fixed; the timeout/settlement half needs the module's ownership release redesign.
+- Release evidence: the six Electron acceptance scenarios remain `test.fixme`, the paired held-out evaluation, and packaged-process evidence remain operator/CI scope per AGENTS.md.
