@@ -46,6 +46,7 @@ export default {
     ai_use_enabled: "L’IA peut utiliser ce compte",
     ai_use_enabled_hint: "Permet aux connexions de navigateur automatisées de réutiliser les identifiants enregistrés de ce compte.",
     ai_use_failed: "Impossible de mettre à jour l’autorisation IA",
+    ai_use_retry: "Réessayer",
     delete_confirm_tip: "Êtes-vous sûr de vouloir supprimer ?",
     comfirm_delete: "Confirmer la suppression",
     single_choose: "Sélection unique",

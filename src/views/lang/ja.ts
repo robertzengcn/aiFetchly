@@ -46,6 +46,7 @@ export default {
     ai_use_enabled: "AIがこのアカウントを使用することを許可",
     ai_use_enabled_hint: "自動ブラウザログインがこのアカウントの保存済み資格情報を再利用できるようにします。",
     ai_use_failed: "AI許可を更新できませんでした",
+    ai_use_retry: "再試行",
     delete_confirm_tip: "削除してもよろしいですか？",
     comfirm_delete: "削除を確認",
     single_choose: "単一選択",

@@ -127,7 +127,7 @@ function mountPage() {
         "v-autocomplete": { template: "<select />" },
         "v-checkbox": {
           template:
-            "<input type='checkbox' :checked='modelValue' @change=\"$emit('update:model-value', $event.target.checked)\" />",
+            "<input type='checkbox' :checked='modelValue' :disabled='disabled' @change=\"$emit('update:model-value', $event.target.checked)\" />",
           props: ["modelValue", "label", "disabled"],
           emits: ["update:model-value"],
         },
@@ -196,6 +196,54 @@ describe("SocialAccountDetailPage AI opt-in (N08/Q-01)", () => {
     await flushPromises();
     expect(setSocialAccountAiUseEnabled).toHaveBeenCalledWith(77, true);
     expect(setSocialAccountAiUseEnabled).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it("a FAILED opt-in load keeps the checkbox inert and offers a retry (R08/Q-01)", async () => {
+    vi.mocked(getSocialAccountAiUseEnabled).mockRejectedValueOnce(
+      new Error("storage unavailable")
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+    // The failed read is NOT a confirmed disabled state: the checkbox
+    // stays disabled (inert) and the load error + retry are shown.
+    const checkbox = wrapper.find(
+      "[data-testid='socialaccount-ai-optin-checkbox']"
+    );
+    expect(checkbox.attributes("disabled")).toBeDefined();
+    const loadError = wrapper.find(
+      "[data-testid='socialaccount-ai-optin-load-error']"
+    );
+    expect(loadError.exists()).toBe(true);
+    expect(loadError.text()).toBe("storage unavailable");
+    expect(
+      wrapper.find("[data-testid='socialaccount-ai-optin-retry']").exists()
+    ).toBe(true);
+    expect(setSocialAccountAiUseEnabled).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("the explicit retry performs a read and unlocks editing on success (R08/Q-01)", async () => {
+    vi.mocked(getSocialAccountAiUseEnabled)
+      .mockRejectedValueOnce(new Error("storage unavailable"))
+      .mockResolvedValueOnce(true);
+    const wrapper = mountPage();
+    await flushPromises();
+    const retry = wrapper.find("[data-testid='socialaccount-ai-optin-retry']");
+    expect(retry.exists()).toBe(true);
+    await retry.trigger("click");
+    await flushPromises();
+    // The retry READ (never writes) and a success unlocks editing with
+    // the loaded value; the load error clears.
+    expect(getSocialAccountAiUseEnabled).toHaveBeenCalledTimes(2);
+    expect(setSocialAccountAiUseEnabled).not.toHaveBeenCalled();
+    expect(
+      wrapper.find("[data-testid='socialaccount-ai-optin-load-error']").exists()
+    ).toBe(false);
+    const checkbox = wrapper.find(
+      "[data-testid='socialaccount-ai-optin-checkbox']"
+    );
+    expect(checkbox.attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
 

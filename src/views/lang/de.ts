@@ -46,6 +46,7 @@ export default {
     ai_use_enabled: "KI darf dieses Konto verwenden",
     ai_use_enabled_hint: "Erlaubt automatisierten Browser-Anmeldungen, die gespeicherten Zugangsdaten dieses Kontos wiederzuverwenden.",
     ai_use_failed: "KI-Freigabe konnte nicht aktualisiert werden",
+    ai_use_retry: "Erneut versuchen",
     delete_confirm_tip: "Möchten Sie wirklich löschen?",
     comfirm_delete: "Löschen bestätigen",
     single_choose: "Einzelauswahl",

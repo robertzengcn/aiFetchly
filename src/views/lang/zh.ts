@@ -37,6 +37,7 @@ export default {
     ai_use_enabled: "允许AI使用此账户",
     ai_use_enabled_hint: "允许自动化浏览器登录复用此账户的已保存凭据。",
     ai_use_failed: "无法更新AI授权状态",
+    ai_use_retry: "重试",
     delete_confirm_tip: "您确定要删除吗",
     comfirm_delete: "确认删除",
     single_choose: "单选",

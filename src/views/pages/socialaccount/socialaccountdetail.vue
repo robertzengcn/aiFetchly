@@ -75,6 +75,28 @@
         >
           {{ aiUseError }}
         </v-alert>
+        <!-- R08/Q-01: a FAILED opt-in load is distinct from a confirmed
+             disabled state — the checkbox stays inert until a successful
+             read, with an explicit retry. -->
+        <div v-if="aiUseLoadError !== null" class="mt-1">
+          <v-alert
+            type="warning"
+            density="compact"
+            data-testid="socialaccount-ai-optin-load-error"
+          >
+            {{ aiUseLoadError }}
+          </v-alert>
+          <v-btn
+            size="x-small"
+            variant="text"
+            class="mt-1"
+            :disabled="aiUseLoadRetrying"
+            data-testid="socialaccount-ai-optin-retry"
+            @click="loadAiUseOptIn"
+          >
+            {{ t('socialaccount.ai_use_retry') }}
+          </v-btn>
+        </div>
       </div>
       
       <v-autocomplete
@@ -316,7 +338,38 @@ const aiUseEnabled = ref(false);
 const aiUseLoaded = ref(false);
 const aiUseSaving = ref(false);
 const aiUseError = ref<string | null>(null);
+// R08/Q-01: a failed INITIAL LOAD keeps the checkbox inert — editing a
+// value we could not read would silently write unchecked.
+const aiUseLoadError = ref<string | null>(null);
+const aiUseLoadRetrying = ref(false);
 // N08: the error text type is string | undefined from the i18n fallback.
+
+// R08/Q-01: the opt-in read (initial load AND explicit retry). Success
+// unlocks editing with the loaded value; failure keeps the checkbox
+// inert and surfaces a retryable error — never "editable unchecked".
+async function loadAiUseOptIn(): Promise<void> {
+  const id = parseInt($route.params.id?.toString() ?? "", 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return;
+  }
+  aiUseLoadRetrying.value = true;
+  try {
+    const enabled = await getSocialAccountAiUseEnabled(id);
+    aiUseEnabled.value = enabled;
+    aiUseLoaded.value = true;
+    aiUseLoadError.value = null;
+    aiUseError.value = null;
+  } catch (error: unknown) {
+    aiUseEnabled.value = false;
+    aiUseLoaded.value = false;
+    aiUseLoadError.value =
+      error instanceof Error
+        ? error.message
+        : t('socialaccount.ai_use_failed') || null;
+  } finally {
+    aiUseLoadRetrying.value = false;
+  }
+}
 
 // N08: the ONLY write path is the user's checkbox change (@update:model-
 // value) — the async initial load and the failure rollback assign the ref
@@ -464,19 +517,12 @@ const initialize = async () => {
 
       // console.log(proxyValue.value)
       social_type_id.value = res.social_type_id;
-      // Q-01/B10/N08: load the per-account AI opt-in — the assignment is
-      // NOT a write (the handler only fires on user toggles), and the
-      // checkbox stays inert until this read finishes.
-      await getSocialAccountAiUseEnabled(socialaccountId.value)
-        .then((enabled) => {
-          aiUseEnabled.value = enabled;
-        })
-        .catch(() => {
-          aiUseEnabled.value = false;
-        })
-        .finally(() => {
-          aiUseLoaded.value = true;
-        });
+      // Q-01/B10/N08/R08: load the per-account AI opt-in — the
+      // assignment is NOT a write (the handler only fires on user
+      // toggles), and the checkbox stays inert until this read finishes.
+      // A FAILED read is NOT a confirmed disabled state: the checkbox
+      // stays disabled and an explicit retry is offered.
+      await loadAiUseOptIn();
     });
   } else {
     //add new item

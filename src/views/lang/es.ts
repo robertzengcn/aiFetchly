@@ -46,6 +46,7 @@ export default {
     ai_use_enabled: "La IA puede usar esta cuenta",
     ai_use_enabled_hint: "Permite que los inicios de sesión automatizados reutilicen la credencial guardada de esta cuenta.",
     ai_use_failed: "No se pudo actualizar la autorización de IA",
+    ai_use_retry: "Reintentar",
     delete_confirm_tip: "¿Seguro que desea eliminar?",
     comfirm_delete: "Confirmar eliminación",
     single_choose: "Selección única",

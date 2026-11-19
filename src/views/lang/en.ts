@@ -45,6 +45,7 @@ export default {
     ai_use_enabled: "AI may use this account",
     ai_use_enabled_hint: "Lets automated browser sign-ins reuse the saved credential for this account.",
     ai_use_failed: "Could not update the AI opt-in",
+    ai_use_retry: "Retry",
     delete_confirm_tip: "Are you sure to delete",
     comfirm_delete: "Confirm delete",
     single_choose: "single choose",
