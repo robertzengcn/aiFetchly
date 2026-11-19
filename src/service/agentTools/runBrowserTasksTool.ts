@@ -525,6 +525,15 @@ export async function runBrowserTasks(
       batchAbort.signal.addEventListener("abort", onParentAbort, {
         once: true,
       });
+      // R04/M-FR-08: the row's LIVE session id rides every event so the
+      // card's browser controls address the right session even before
+      // the child finishes (resolved from the module's authoritative
+      // owner mapping).
+      const { getDefaultManagedBrowserModule: getModuleForEvents } =
+        await import("@/modules/ManagedBrowserModule");
+      const liveSessionId = (): string | undefined =>
+        getModuleForEvents().findSessionIdForAgentTask(childAgentTaskId) ??
+        undefined;
       // N02/M-AC-01: the child's AUTHORITATIVE ownership key is the
       // CONTROL task id — the child registers it BEFORE any session
       // starts (AgentRuntime passes it as ownerAgentId), so cleanup is
@@ -597,6 +606,7 @@ export async function runBrowserTasks(
             taskId,
             state: "queued",
             summary: "account in use — queued behind the active session",
+            sessionId: liveSessionId(),
           });
           const { getDefaultManagedBrowserLeaseService, accountLeaseKey } =
             await import("@/service/ManagedBrowserLeaseService");
@@ -648,6 +658,7 @@ export async function runBrowserTasks(
                   taskId,
                   state: "running",
                   summary: "queued task retrying",
+                  sessionId: liveSessionId(),
                 });
                 result = await runOnce();
               } finally {
@@ -1002,6 +1013,9 @@ export async function runBrowserTasks(
     "interrupted",
     "partial",
   ]);
+  const { getDefaultManagedBrowserModule } = await import(
+    "@/modules/ManagedBrowserModule"
+  );
   for (const result of results) {
     const rowTaskId = `${batchId}:${result.task_index}`;
     const recordState = control.getState(rowTaskId);
@@ -1015,6 +1029,12 @@ export async function runBrowserTasks(
           ? recordState
           : result.status,
       summary: result.summary,
+      // R04/M-FR-08: the kept-open transferred id first, then the
+      // authoritative owner mapping — the row keeps its live session.
+      sessionId:
+        result.session_id ??
+        getDefaultManagedBrowserModule().findSessionIdForAgentTask(rowTaskId) ??
+        undefined,
     });
   }
   emitBatchEvent({ batchId, conversationId, phase: "finished" });

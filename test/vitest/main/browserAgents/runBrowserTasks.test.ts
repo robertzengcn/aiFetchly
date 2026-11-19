@@ -28,6 +28,16 @@ vi.mock("@/modules/ManagedBrowserModule", () => ({
     stop: stopMock,
     getSessionOwnerAgentTaskId: (sessionId: string) =>
       ownerBySession.get(sessionId) ?? null,
+    // R04: the batch row events resolve the LIVE session id through the
+    // module's owner mapping.
+    findSessionIdForAgentTask: (agentTaskId: string) => {
+      for (const [sid, owner] of ownerBySession) {
+        if (owner === agentTaskId) {
+          return sid;
+        }
+      }
+      return null;
+    },
     // N02: the keep-open transfer is mocked as an ownership reassignment.
     transferSessionToConversation: async (
       sessionId: string,

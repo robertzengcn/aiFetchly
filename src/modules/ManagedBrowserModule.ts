@@ -1106,6 +1106,20 @@ export class ManagedBrowserModule {
   }
 
   /**
+   * R04/M-FR-08: the LIVE session id owned by an agent task — the batch
+   * card events carry it on every lane emission so the row's browser
+   * controls address the right session even before the child finishes.
+   */
+  public findSessionIdForAgentTask(agentTaskId: string): string | null {
+    for (const [sessionId, record] of this.sessions) {
+      if (record.ownerAgentTaskId === agentTaskId) {
+        return sessionId;
+      }
+    }
+    return null;
+  }
+
+  /**
    * N02/M-FR-07: EXPLICIT keep-open ownership transfer — the session's
    * ownerAgentTaskId is cleared and the parent conversation becomes the
    * direct owner, so child cleanup can never touch it afterwards and the
@@ -1688,9 +1702,23 @@ record.currentUrl = message.observation.url || record.currentUrl;
       // follow so held approvals and stale refs against the pre-handoff
       // page can never match again. The agent must observe before acting.
       record.pageRevision += 1;
+      // PRD D-FR-15a: handoff ended; the pinned observation's TTL
+      // restarts.
+      this.unpinLastObservation(sessionId);
+    } else {
+      // R04: a HANDOFF_REQUIRED reply means the worker REFUSED the
+      // resume (an action or dialog is still held) — the session stays
+      // in user control and the caller learns the resume did NOT
+      // happen, instead of reading a success card while the worker is
+      // still blocked.
+      // The code is the existing worker-safe "challenge_in_progress":
+      // the worker still holds an action/dialog — the resume did NOT
+      // happen and the session stays under user control.
+      throw new ManagedBrowserError(
+        "challenge_in_progress",
+        "worker reported HANDOFF_REQUIRED — resolve the held action first; resume refused"
+      );
     }
-    // PRD D-FR-15a: handoff ended; the pinned observation's TTL restarts.
-    this.unpinLastObservation(sessionId);
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }
@@ -2382,15 +2410,35 @@ record.currentUrl = message.observation.url || record.currentUrl;
 
   public async pauseSession(sessionId: string): Promise<SafeManagedBrowserStatus> {
     const record = this.requireSession(sessionId);
-    await record.client
-      .request(
+    // R04: the pause round-trip is NOT best-effort — a swallowed worker
+    // failure let the IPC acknowledge success while the browser kept
+    // running. Both legs surface structured failures.
+    try {
+      await record.client.request(
         { type: "PAUSE_REQUEST" },
         MANAGED_BROWSER_TIMEOUTS.singleActionMs,
         (m) => m.type === "SESSION_STATE_CHANGED" || m.type === "ACTION_RESULT"
-      )
-      .catch(() => undefined);
-    // Session moves to user control via the handoff state.
-    await this.requestHandoff(sessionId, "user_paused").catch(() => undefined);
+      );
+    } catch (error) {
+      throw new ManagedBrowserError(
+        "worker_exited",
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "pause_failed"
+      );
+    }
+    // Session moves to user control via the handoff state; a refused
+    // handoff is also surfaced (never a silently half-paused session).
+    try {
+      await this.requestHandoff(sessionId, "user_paused");
+    } catch (error) {
+      throw new ManagedBrowserError(
+        "worker_exited",
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "pause_handoff_failed"
+      );
+    }
     return this.toSafeStatus(this.requireSession(sessionId));
   }
 
