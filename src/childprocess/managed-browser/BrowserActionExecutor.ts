@@ -203,6 +203,18 @@ export function selectOptionsByIdentityFn(
     if (!option) {
       throw new Error("stale_select_option");
     }
+    // R02/D-FR-17: a DISABLED option (or one inside a disabled optgroup)
+    // can never take the selection — refusing is a proven no-effect, not
+    // a silent skip.
+    const group = option.parentElement;
+    if (
+      option.disabled === true ||
+      (group !== null &&
+        group.tagName === 'OPTGROUP' &&
+        (group as HTMLOptGroupElement).disabled === true)
+    ) {
+      throw new Error("option_disabled");
+    }
     const expected = expectedValues?.[i];
     if (
       expected !== undefined &&
@@ -212,14 +224,20 @@ export function selectOptionsByIdentityFn(
       throw new Error("stale_select_option");
     }
   }
-  // Commit by index (parity with elementHandle.select: a multi-select
-  // ADDS the given options; a single-select picks the resolved one).
-  for (let i = 0; i < indexes.length; i++) {
-    if (el.multiple) {
-      el.options[indexes[i]].selected = true;
-    } else if (i === 0) {
-      el.selectedIndex = indexes[i];
+  // Commit by index. R02/D-FR-17: the action semantics are REPLACE —
+  // a multi-select ends up with EXACTLY the requested options selected
+  // (the previous ADDS behavior left earlier selections in place, so a
+  // requested second value kept the first); a single-select picks the
+  // resolved one.
+  if (el.multiple) {
+    for (const option of Array.from(el.options)) {
+      option.selected = false;
     }
+    for (const idx of indexes) {
+      el.options[idx].selected = true;
+    }
+  } else {
+    el.selectedIndex = indexes[0];
   }
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -490,6 +508,19 @@ export class BrowserActionExecutor {
                 return {
                   success: false,
                   errorCode: "stale_select_option" as const,
+                  effectUnknown: false,
+                };
+              }
+              // R02: a disabled requested option can never take the
+              // selection — the throw happens BEFORE any mutation, a
+              // proven no-effect the runner reobserves from.
+              if (
+                error instanceof Error &&
+                error.message.includes("option_disabled")
+              ) {
+                return {
+                  success: false,
+                  errorCode: "element_disabled" as const,
                   effectUnknown: false,
                 };
               }

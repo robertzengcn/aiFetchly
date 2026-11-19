@@ -63,9 +63,10 @@ describe("selectOptionsByIdentityFn (R02/D-FR-17)", () => {
     expect(select.selectedIndex).toBe(0);
   });
 
-  it("a multi-select adds every resolved option without clearing others", () => {
+  it("a multi-select REPLACES the selection with exactly the requested options (R02)", () => {
     const select = buildSelect(["a", "b", "c"], true);
-    // Pre-select "a", then commit o_1 and o_2 (b, c).
+    // Pre-select "a", then commit o_1 and o_2 (b, c) — the REPLACE
+    // semantics leave exactly b and c selected.
     select.options[0].selected = true;
     const result = selectOptionsByIdentityFn.call(
       select,
@@ -78,7 +79,38 @@ describe("selectOptionsByIdentityFn (R02/D-FR-17)", () => {
       Array.from(select.options)
         .filter((o) => o.selected)
         .map((o) => o.value)
-    ).toEqual(["a", "b", "c"]);
+    ).toEqual(["b", "c"]);
+  });
+
+  it("a DISABLED requested option throws before any mutation (R02)", () => {
+    const select = buildSelect(["de", "fr"]);
+    select.options[1].disabled = true;
+    expect(() =>
+      selectOptionsByIdentityFn.call(select, select, ["o_1"], ["fr"])
+    ).toThrowError("option_disabled");
+    // No mutation happened — still the initial selection.
+    expect(select.selectedIndex).toBe(0);
+  });
+
+  it("an option inside a DISABLED optgroup throws before any mutation (R02)", () => {
+    const select = document.createElement("select");
+    const group = document.createElement("optgroup");
+    group.disabled = true;
+    const option = document.createElement("option");
+    option.value = "eu";
+    option.text = "Europe";
+    group.append(option);
+    select.append(group);
+    const standalone = document.createElement("option");
+    standalone.value = "other";
+    select.append(standalone);
+    document.body.append(select);
+    expect(() =>
+      selectOptionsByIdentityFn.call(select, select, ["o_0"], ["eu"])
+    ).toThrowError("option_disabled");
+    // Browsers skip disabled options for the initial selection — the
+    // state is unchanged (still the first ENABLED option).
+    expect(select.selectedIndex).toBe(1);
   });
 
   it("a non-positional value resolves by value and still verifies the expectation", () => {
