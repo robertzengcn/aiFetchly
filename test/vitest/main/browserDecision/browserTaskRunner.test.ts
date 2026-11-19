@@ -1214,6 +1214,71 @@ describe("BrowserTaskRunner R13 pin, journal and effect classification", () => {
   });
 });
 
+describe("BrowserTaskRunner R12 no-progress accounting", () => {
+  it("an already-true criterion no longer suppresses no-progress detection (R12)", async () => {
+    // The fixture URL already satisfies url_contains — a model that
+    // keeps clicking a static page for 15+ steps must still end
+    // no_progress instead of looping forever behind the criterion flag.
+    const script = Array.from({ length: 20 }, () => ({
+      status: "decided" as const,
+      action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable" as const, confidence: null },
+    }));
+    const deps = makeRunnerDeps(script);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12crit",
+        conversationId: "conv-1",
+        goal: "click forever",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        budget: { recoveryCalls: 1 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("no_progress");
+  });
+
+  it("fresh EXTRACT results count as progress while the page stands still (R12)", async () => {
+    // 15 extracts with DISTINCT payloads: progress checks at steps 5/10
+    // record, and the check at step 15 must see a CHANGED extraction
+    // digest (progress) instead of triggering a no-progress terminal
+    // through the exhausted recovery budget.
+    const script: Array<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> =
+      Array.from({ length: 15 }, () => ({
+        status: "decided" as const,
+        action: { operation: "EXTRACT" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      }));
+    script.push(doneEntry());
+    const deps = makeRunnerDeps(script);
+    let extractCall = 0;
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      extractCall++;
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: [{ success: true, errorCode: null }],
+        extracted: [`row-${extractCall}`],
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12extr",
+        conversationId: "conv-1",
+        goal: "extract rows",
+        completionCriteria: [{ kind: "extract_nonempty", value: "" }],
+        budget: { recoveryCalls: 1 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    expect(extractCall).toBe(15);
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

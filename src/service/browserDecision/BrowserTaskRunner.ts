@@ -7,7 +7,7 @@
  * execution authority (D-01). Intermediate observations stay out of chat
  * history; the final result carries a compact final observation (D-FR-10b).
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   BrowserDecisionClient,
   BrowserDecisionInput,
@@ -1193,7 +1193,23 @@ export class BrowserTaskRunner {
             const step = execution.results[execution.results.length - 1];
             this.recentActions.push({
               operation: action.operation,
-              target_descriptor: null,
+              // R12: untargeted steps carry SEMANTIC context in the
+              // record (the recovery lastAction and the equivalent-
+              // failure accounting read it) instead of a null blob.
+              target_descriptor:
+                action.operation === "NAVIGATE" && action.url
+                  ? `navigate ${action.url.slice(0, 120)}`
+                  : action.operation === "EXTRACT" && action.target_id
+                    ? `extract ${action.target_id}`
+                    : action.operation === "PRESS_KEY" && action.key
+                      ? `key ${action.key}`
+                      : action.operation === "SCROLL_UP"
+                        ? "scroll up 600"
+                        : action.operation === "SCROLL_DOWN"
+                          ? "scroll down 600"
+                          : action.operation === "GO_BACK"
+                            ? "go back"
+                            : action.operation,
               outcome:
                 execution.effect === "unknown"
                   ? "effect_unknown"
@@ -1256,11 +1272,15 @@ export class BrowserTaskRunner {
             const untargetedProgress = await this.checkProgress(
               observation,
               decisionInput,
-              signal
+              signal,
+              extracted
             );
-            if (untargetedProgress === "no_progress") {
-              return this.terminal("partial", "no_progress", evidence, extracted, observation);
+            if (untargetedProgress.status === "no_progress") {
+              return this.terminal("partial", "no_progress", evidence, extracted, untargetedProgress.observation);
             }
+            // R12: adopt the ONE BOUND snapshot the recovery decided
+            // against.
+            observation = untargetedProgress.observation;
           }
           continue;
         }
@@ -1491,11 +1511,14 @@ export class BrowserTaskRunner {
         const progress = await this.checkProgress(
           observation,
           decisionInput,
-          signal
+          signal,
+          extracted
         );
-        if (progress === "no_progress") {
-          return this.terminal("partial", "no_progress", evidence, extracted, observation);
+        if (progress.status === "no_progress") {
+          return this.terminal("partial", "no_progress", evidence, extracted, progress.observation);
         }
+        // R12: adopt the ONE BOUND snapshot the recovery decided against.
+        observation = progress.observation;
       }
       return this.terminal(
         "partial",
@@ -1738,31 +1761,44 @@ export class BrowserTaskRunner {
   private async checkProgress(
     observation: RunnerObservation,
     decisionInput: BrowserDecisionInput,
-    signal: AbortSignal
-  ): Promise<"ok" | "no_progress"> {
+    signal: AbortSignal,
+    extracted: readonly unknown[]
+  ): Promise<{ status: "ok" | "no_progress"; observation: RunnerObservation }> {
     this.stepsSinceProgressCheck++;
     if (this.stepsSinceProgressCheck < 5) {
-      return "ok";
+      return { status: "ok", observation };
     }
     this.stepsSinceProgressCheck = 0;
     // F15 + A14/D-FR-22: the digest uses STABLE SEMANTIC identity —
     // volatile element refs (fresh per observation) are EXCLUDED (ten
     // identical pages with fresh refs all counted as progress before),
     // the visible-text window is wider (600), and form values ride
-    // without refs.
+    // without refs. R12: EXTRACTED RESULTS also count — an extraction
+    // that produced new data with a static page IS progress — and an
+    // already-true criterion no longer suppresses detection (a model
+    // that keeps acting on a satisfied criterion with a static page is
+    // precisely a stall).
     const formSignature = observation.elements
       .slice(0, 60)
       .map((el) => `${el.role}:${el.name}:${el.valueSummary ?? ""}`)
       .join("|");
+    const extractionDigest =
+      extracted.length > 0
+        ? createHash("sha256")
+            .update(JSON.stringify(extracted.slice(-3)))
+            .digest("hex")
+            .slice(0, 16)
+        : "";
     const criterionProgress = this.verifyCompletion(observation, []).verified;
-    const digest = `${observation.url}|${observation.visibleText.slice(0, 600)}|${formSignature}|${criterionProgress ? "criterion" : ""}`;
-    if (
-      this.lastProgressDigest !== null &&
-      digest === this.lastProgressDigest &&
-      !criterionProgress
-    ) {
-      // E14/D-FR-22: recovery decides against the observation it will
-      // execute on — re-observe, rebuild candidates/input FIRST.
+    const digest = `${observation.url}|${observation.visibleText.slice(0, 600)}|${formSignature}|${extractionDigest}`;
+    if (this.lastProgressDigest !== null && digest === this.lastProgressDigest) {
+      // E14/D-FR-22/R12: recovery decides against the observation it
+      // will execute on — re-observe FIRST and return that ONE BOUND
+      // snapshot so the outer loop adopts exactly the state the
+      // recovery decision was made against (its element ids must be
+      // resolvable). When the reobservation FAILS, the recovery runs
+      // against the still-bound previous input/observation pair —
+      // consistent, never a mixed snapshot.
       const freshNoProgressObservation = await this.deps.observe(
         this.input.sessionId
       );
@@ -1776,7 +1812,9 @@ export class BrowserTaskRunner {
         : decisionInput;
       const recovered = await this.recoverOnce(
         recoveryContext,
-        "no progress for 5 steps; the page did not change - try a DIFFERENT approach or ESCALATE",
+        criterionProgress
+          ? "no page change for 5 steps; the completion criterion is already satisfied - choose DONE if the goal is met, or try a DIFFERENT approach"
+          : "no progress for 5 steps; the page did not change - try a DIFFERENT approach or ESCALATE",
         signal,
         {
           operation:
@@ -1786,13 +1824,14 @@ export class BrowserTaskRunner {
             this.recentActions.at(-1)?.target_descriptor ?? null,
         }
       );
+      const boundObservation = freshNoProgressObservation ?? observation;
       if (recovered) {
-        return "ok";
+        return { status: "ok", observation: boundObservation };
       }
-      return "no_progress";
+      return { status: "no_progress", observation: boundObservation };
     }
     this.lastProgressDigest = digest;
-    return "ok";
+    return { status: "ok", observation };
   }
 
   /**
