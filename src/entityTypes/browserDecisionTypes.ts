@@ -190,6 +190,13 @@ export interface BrowserDecisionCapabilities {
    * means honest unavailability — no runner run is started.
    */
   readonly advertised: boolean;
+  /**
+   * R01/D-FR-16: TRUE only when the route actually REPORTED its
+   * operations list (an explicit empty then means "nothing offered").
+   * A route that does not report operations (the user's own chat
+   * endpoint, a failed probe) leaves the wide legacy fallback standing.
+   */
+  readonly operationsReported: boolean;
   readonly operations: readonly BrowserDecisionOperation[];
   readonly supportsStructuredJsonSchema: boolean;
   readonly supportsForcedToolDecision: boolean;

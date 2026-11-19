@@ -198,6 +198,15 @@ export interface RunnerDeps {
     pinned: boolean
   ) => Promise<void>;
   /**
+   * R01/D-FR-01: live provider-config epoch getter. The decision is
+   * admitted under one configuration; the runner rechecks the epoch at
+   * every MUTATION BOUNDARY (after journaling/field resolution, before
+   * dispatch, and before an approval re-dispatch) so a provider change
+   * mid-task can never execute a decision admitted under the old one.
+   * Absent in bare test fakes (no recheck).
+   */
+  readonly providerEpoch?: () => string | null;
+  /**
    * F06/D-AC-05: blocks INSIDE the job for the user's approve/deny
    * decision on the pending approval. User-wait time is excluded from
    * active budgets by the control service. Omit to keep the terminal
@@ -296,6 +305,17 @@ export class BrowserTaskRunner {
    * capabilities list, all runner operations offered).
    */
   private admittedOperations: readonly string[] | null = null;
+  /**
+   * R01/D-FR-16: three-state capability data — "unknown" (legacy client
+   * or probe failure: the wide fallback offer stands), "admitted" (the
+   * route reported its operations; an EMPTY list is explicit and means
+   * NOTHING is offered), never conflated with unknown.
+   */
+  private capabilitiesState: "unknown" | "admitted" = "unknown";
+  /** R01: the advertised shortlist bound (wire cap 120, default 16). */
+  private advertisedMaxCandidates: number | null = null;
+  /** R01: the provider epoch the PENDING recovery decision was admitted under. */
+  private pendingRecoveryEpoch: string | null = null;
   /** A02/D-FR-19: the advertised deadline ceiling (null = no list). */
   private advertisedDeadlineMs: number | null = null;
   private lastFailureKey: string | null = null;
@@ -365,11 +385,21 @@ export class BrowserTaskRunner {
       const capabilities = await this.deps.decisionClient.getCapabilities(
         this.deps.signal ?? new AbortController().signal
       );
+      // R01/D-FR-16: the three states are distinguished by the
+      // ADVERTISED flag — advertised=true with an operations array is
+      // authoritative (an EMPTY list explicitly offers nothing);
+      // advertised=false (probe failure / unsupported route) and absent
+      // data both stay legacy-unknown (wide fallback), never conflated
+      // with an explicit empty.
       if (
-        Array.isArray(capabilities.operations) &&
-        capabilities.operations.length > 0
+        capabilities.advertised === true &&
+        capabilities.operationsReported === true &&
+        Array.isArray(capabilities.operations)
       ) {
         this.admittedOperations = capabilities.operations;
+        this.capabilitiesState = "admitted";
+      } else {
+        this.capabilitiesState = "unknown";
       }
       if (
         typeof capabilities.deadlineHardMs === "number" &&
@@ -378,9 +408,20 @@ export class BrowserTaskRunner {
         // A02: the advertised ceiling bounds the per-request deadline.
         this.advertisedDeadlineMs = capabilities.deadlineHardMs;
       }
+      if (
+        typeof capabilities.maxCandidates === "number" &&
+        capabilities.maxCandidates > 0
+      ) {
+        this.advertisedMaxCandidates = Math.min(
+          capabilities.maxCandidates,
+          120
+        );
+      }
     } catch {
-      // Capabilities unavailable — all runner operations offered.
+      // Capabilities unavailable — legacy-unknown: all runner operations
+      // offered (wide fallback), NEVER conflated with an explicit empty.
       this.admittedOperations = null;
+      this.capabilitiesState = "unknown";
     }
     const gate = control.getGate(this.taskId);
     const signal = this.deps.signal ?? new AbortController().signal;
@@ -467,6 +508,8 @@ export class BrowserTaskRunner {
 
         const candidates = buildDecisionCandidates({
           elements: observation.elements,
+          // R01: the advertised shortlist bound (wire-capped at admission).
+          maxCandidates: this.advertisedMaxCandidates ?? undefined,
           taskTerms: taskTermsOf(this.input),
         });
         // B13/C-FR-07: instructions the user typed when resuming the task
@@ -554,6 +597,9 @@ export class BrowserTaskRunner {
         }
         let decision: BrowserDecisionResult;
         const generationBeforeDecide = control.getResumeGeneration(this.taskId);
+        // R01/D-FR-01: the provider epoch the consumed decision was
+        // admitted under — rechecked at the mutation boundary.
+        let epochAtDecide: string | null = null;
         let decisionFromRecovery = false;
         if (this.pendingRecovery) {
           // T18 + A06/C-FR-06: consume the bounded recovery decision ONLY
@@ -567,6 +613,7 @@ export class BrowserTaskRunner {
             evidence.push("recovery_discarded_after_resume");
             this.pendingRecovery = null;
             this.pendingRecoveryGeneration = null;
+            this.pendingRecoveryEpoch = null;
             observation = await this.deps.observe(this.input.sessionId);
             if (!observation) {
               return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
@@ -576,6 +623,10 @@ export class BrowserTaskRunner {
           decision = this.pendingRecovery;
           this.pendingRecovery = null;
           this.pendingRecoveryGeneration = null;
+          // R01: the recovery proposal was admitted under the epoch
+          // captured before ITS inference.
+          epochAtDecide = this.pendingRecoveryEpoch;
+          this.pendingRecoveryEpoch = null;
           this.decisionRequests++;
           decisionFromRecovery = true;
         } else
@@ -598,6 +649,22 @@ export class BrowserTaskRunner {
             () => attemptController.abort(),
             deadlineMs
           );
+          // R01/D-AC-08: the FULL decision input is validated against
+          // the wire schema BEFORE transport — a malformed input is an
+          // honest terminal, never a partially-serialized request.
+          const inputCheck = decisionInputSchema.safeParse(decisionInput);
+          if (!inputCheck.success) {
+            return this.terminal(
+              "failed",
+              "decision_input_invalid",
+              evidence,
+              extracted,
+              observation
+            );
+          }
+          // R01/D-FR-01: the epoch this decision is admitted under —
+          // rechecked at the mutation boundary before dispatch.
+          epochAtDecide = this.deps.providerEpoch?.() ?? null;
           // R13/D-FR-15a: pin THIS observation through inference — a
           // concurrent reobservation must not evict the refs the pending
           // decision is about to consume. The same ID is released when
@@ -673,6 +740,8 @@ export class BrowserTaskRunner {
                     freshLlmObservation,
                     buildDecisionCandidates({
                       elements: freshLlmObservation.elements,
+                      // R01: the advertised shortlist bound (wire-capped at admission).
+                      maxCandidates: this.advertisedMaxCandidates ?? undefined,
                     })
                   ),
                   `the model answered llm_required (${decision.reason_code}); pick a concrete allowed operation that advances the goal`,
@@ -759,9 +828,13 @@ export class BrowserTaskRunner {
         const terminalOrControlOp = ["DONE", "ESCALATE", "SIGN_IN"].includes(
           action.operation
         );
+        // R01/D-FR-16: the admitted capabilities list is AUTHORITATIVE —
+        // including when it is explicitly EMPTY (nothing may dispatch).
+        // The wide legacy fallback (unknown state) keeps the old
+        // includes() behavior.
         if (
           !terminalOrControlOp &&
-          decisionInput.allowed_operations.length > 0 &&
+          this.capabilitiesState === "admitted" &&
           !decisionInput.allowed_operations.includes(action.operation)
         ) {
           evidence.push(`unsupported_operation:${action.operation}`);
@@ -1003,6 +1076,8 @@ export class BrowserTaskRunner {
             if (freshEscalationObservation) {
               const freshEscalationCandidates = buildDecisionCandidates({
                 elements: freshEscalationObservation.elements,
+                // R01: the advertised shortlist bound (wire-capped at admission).
+                maxCandidates: this.advertisedMaxCandidates ?? undefined,
               });
               const recovered = await this.recoverOnce(
                 this.buildDecisionInput(
@@ -1162,6 +1237,12 @@ export class BrowserTaskRunner {
             observation = await this.deps.observe(this.input.sessionId);
             continue;
           }
+          // R01/D-FR-01: MUTATION BOUNDARY (untargeted) — same epoch
+          // recheck after journaling and before dispatch.
+          if (this.providerEpochMoved(epochAtDecide)) {
+            evidence.push("provider_changed_before_dispatch");
+            continue;
+          }
           let execution: RunnerExecutionResult;
           try {
             execution = await this.deps.runActions(this.input.sessionId, {
@@ -1241,6 +1322,22 @@ export class BrowserTaskRunner {
                   results: [],
                 };
               }
+              // R01/D-FR-01: the approval wait is asynchronous
+              // preparation — the epoch is rechecked before the
+              // re-dispatch; a changed provider is a KNOWN no-effect
+              // step failure (nothing was dispatched).
+              if (this.providerEpochMoved(epochAtDecide)) {
+                return {
+                  effect: "known" as const,
+                  pageRevision: execution.pageRevision,
+                  results: [
+                    {
+                      success: false,
+                      errorCode: "provider_changed_before_dispatch",
+                    },
+                  ],
+                };
+              }
               const retryExecution = await this.deps.runActions(
                 this.input.sessionId,
                 { actions: [programAction] }
@@ -1300,6 +1397,8 @@ export class BrowserTaskRunner {
                 freshRecoveryObservation,
                 buildDecisionCandidates({
                   elements: freshRecoveryObservation.elements,
+                  // R01: the advertised shortlist bound (wire-capped at admission).
+                  maxCandidates: this.advertisedMaxCandidates ?? undefined,
                 })
               );
               const recovered = await this.recoverOnce(
@@ -1385,6 +1484,15 @@ export class BrowserTaskRunner {
           observation = await this.deps.observe(this.input.sessionId);
           continue;
         }
+        // R01/D-FR-01: MUTATION BOUNDARY — journaling and field
+        // resolution are asynchronous preparation; the provider epoch is
+        // rechecked HERE so a changed configuration can never execute a
+        // decision admitted under the old one. The step is discarded and
+        // the loop re-decides under the new epoch.
+        if (this.providerEpochMoved(epochAtDecide)) {
+          evidence.push("provider_changed_before_dispatch");
+          continue;
+        }
         let execution: RunnerExecutionResult;
         try {
           execution = await this.deps.runActions(this.input.sessionId, {
@@ -1442,6 +1550,22 @@ export class BrowserTaskRunner {
                 results: [],
               };
             }
+            // R01/D-FR-01: the approval wait is asynchronous
+            // preparation — the epoch is rechecked before the
+            // re-dispatch; a changed provider is a KNOWN no-effect
+            // step failure (nothing was dispatched).
+            if (this.providerEpochMoved(epochAtDecide)) {
+              return {
+                effect: "known" as const,
+                pageRevision: execution.pageRevision,
+                results: [
+                  {
+                    success: false,
+                    errorCode: "provider_changed_before_dispatch",
+                  },
+                ],
+              };
+            }
             const retryExecution = await this.deps.runActions(
               this.input.sessionId,
               { actions: [programAction] }
@@ -1471,6 +1595,8 @@ export class BrowserTaskRunner {
                 freshRecoveryObservation,
                 buildDecisionCandidates({
                   elements: freshRecoveryObservation.elements,
+                  // R01: the advertised shortlist bound (wire-capped at admission).
+                  maxCandidates: this.advertisedMaxCandidates ?? undefined,
                 })
               );
               const recovered = await this.recoverOnce(
@@ -1576,6 +1702,18 @@ export class BrowserTaskRunner {
    * failed step or a policy stop did NOT take effect; only a known
    * success is confirmed; unknown stays unknown.
    */
+  /**
+   * R01/D-FR-01: has the provider configuration moved away from the
+   * epoch the current decision was admitted under? A null snapshot
+   * means no live getter (bare fakes) — no recheck.
+   */
+  private providerEpochMoved(epochAtDecide: string | null): boolean {
+    if (epochAtDecide === null) {
+      return false;
+    }
+    return this.deps.providerEpoch?.() !== epochAtDecide;
+  }
+
   private stepOutcomeOf(
     execution: RunnerExecutionResult
   ): "confirmed" | "no_effect" | "unknown" {
@@ -1609,27 +1747,36 @@ export class BrowserTaskRunner {
       goal: this.input.goal.slice(0, 2000),
       // B16/D-AC-09: a failed completion check puts its MISS into the
       // next decision input so the model knows what was still missing.
-      subgoal: this.pendingSubgoal,
+      // R01: the wire bound (1000) is enforced HERE — resume
+      // instructions folded into the subgoal could exceed it and the
+      // transport would reject the whole input.
+      subgoal: this.pendingSubgoal
+        ? this.pendingSubgoal.slice(0, 1000)
+        : null,
       constraints: [...(this.input.constraints ?? [])].slice(0, 16),
       // P1/D-FR-24: the model sees the completion criteria (DONE is
       // then an informed decision; verification stays independent).
-      completion_criteria: (this.input.completionCriteria ?? []).map(
-        (criterion) => `${criterion.kind}:${criterion.value}`
-      ),
+      // R01: the wire cap is 8 — merged planner/caller criteria are
+      // truncated to the bound instead of rejecting the input.
+      completion_criteria: (this.input.completionCriteria ?? [])
+        .slice(0, 8)
+        .map((criterion) => `${criterion.kind}:${criterion.value}`),
       url: observation.url,
       title: observation.title.slice(0, 512),
       candidates: candidates as BrowserDecisionInput["candidates"],
       // E14/D-FR-25: the REAL executed-step history (bounded) — never an
       // empty list or a fabricated entry.
       recent_actions: this.recentActions.slice(-6),
-      // D-FR-16/R02: every offered operation is executable (T18) AND
-      // supported by the admitted route (capabilities intersection).
+      // D-FR-16/R02/R01: every offered operation is executable (T18)
+      // AND supported by the admitted route. Three states: unknown →
+      // the wide legacy fallback; admitted → the intersection (an
+      // EXPLICIT empty stays empty — nothing is offered); never mixed.
       allowed_operations:
-        this.admittedOperations === null
-          ? RUNNER_OPERATIONS
-          : RUNNER_OPERATIONS.filter((operation) =>
+        this.capabilitiesState === "admitted" && this.admittedOperations
+          ? RUNNER_OPERATIONS.filter((operation) =>
               (this.admittedOperations as readonly string[]).includes(operation)
-            ),
+            )
+          : RUNNER_OPERATIONS,
       // A02: the advertised ceiling caps the deadline (never exceeding the
       // route budget).
       deadline_ms: Math.min(
@@ -1698,6 +1845,12 @@ export class BrowserTaskRunner {
       const onOuterAbort = (): void => attemptController.abort();
       signal.addEventListener("abort", onOuterAbort, { once: true });
       const timer = setTimeout(() => attemptController.abort(), deadlineMs);
+      // R01/D-AC-08: the recovery input is validated against the wire
+      // schema BEFORE transport too.
+      const recoveryInputCheck = decisionInputSchema.safeParse(recoveryInput);
+      if (!recoveryInputCheck.success) {
+        return false;
+      }
       let result: BrowserDecisionResult;
       // R05/C-FR-06: capture the resume generation BEFORE inference — a
       // Pause→Resume DURING the decide bumps the generation, and the
@@ -1705,6 +1858,7 @@ export class BrowserTaskRunner {
       // consumption stale check discards it (a post-await read would
       // make the stale reply appear current).
       const generationBeforeRecovery = control.getResumeGeneration(this.taskId);
+      const epochBeforeRecovery = this.deps.providerEpoch?.() ?? null;
       // R13/D-FR-15a: recovery inference is pinned like the main decide
       // — the same observation ID rides the recovery input.
       const recoveryObservationId = recoveryInput.observation_id;
@@ -1745,6 +1899,7 @@ export class BrowserTaskRunner {
         // before OR DURING inference discards it.
         this.pendingRecovery = result;
         this.pendingRecoveryGeneration = generationBeforeRecovery;
+        this.pendingRecoveryEpoch = epochBeforeRecovery;
         return true;
       }
       return false;
@@ -1807,6 +1962,8 @@ export class BrowserTaskRunner {
             freshNoProgressObservation,
             buildDecisionCandidates({
               elements: freshNoProgressObservation.elements,
+              // R01: the advertised shortlist bound (wire-capped at admission).
+              maxCandidates: this.advertisedMaxCandidates ?? undefined,
             })
           )
         : decisionInput;

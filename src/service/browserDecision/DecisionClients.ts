@@ -70,13 +70,14 @@ export class HostedDecisionClient implements BrowserDecisionClient {
 
   public async getCapabilities(signal: AbortSignal): Promise<BrowserDecisionCapabilities> {
     if (signal.aborted) {
-      return { advertised: false, operations: [], supportsStructuredJsonSchema: false, supportsForcedToolDecision: false, supportsJsonObject: false, nativeDecision: true, maxCandidates: 0, deadlineDefaultMs: 0, deadlineHardMs: 0, cacheable: true } as BrowserDecisionCapabilities;
+      return { advertised: false, operationsReported: false, operations: [], supportsStructuredJsonSchema: false, supportsForcedToolDecision: false, supportsJsonObject: false, nativeDecision: true, maxCandidates: 0, deadlineDefaultMs: 0, deadlineHardMs: 0, cacheable: true } as BrowserDecisionCapabilities;
     }
     try {
       const probe = await this.getCapabilitiesProbe(signal);
       if (!probe.advertised) {
         return {
           advertised: false,
+          operationsReported: false,
           operations: [],
           supportsStructuredJsonSchema: false,
           supportsForcedToolDecision: false,
@@ -90,6 +91,10 @@ export class HostedDecisionClient implements BrowserDecisionClient {
       }
       return {
         advertised: true,
+        // R01: operations are authoritative only when the probe payload
+        // actually CARRIED the field; an advertised payload without it
+        // stays legacy-unknown.
+        operationsReported: Array.isArray(probe.operations),
         operations: (probe.operations ?? []) as BrowserDecisionCapabilities["operations"],
         supportsStructuredJsonSchema: true,
         supportsForcedToolDecision: true,
@@ -105,6 +110,7 @@ export class HostedDecisionClient implements BrowserDecisionClient {
       // doomed runner run.
       return {
         advertised: false,
+        operationsReported: false,
         operations: [],
         supportsStructuredJsonSchema: false,
         supportsForcedToolDecision: false,
@@ -344,7 +350,12 @@ export class ChatCompletionDecisionClient implements BrowserDecisionClient {
     void signal;
     return {
       // The chat route is always "advertised" — the user's own endpoint.
+      // R01: the chat endpoint does NOT report per-operation
+      // capabilities — operationsReported stays false so the runner
+      // keeps the wide legacy fallback (an empty list here is a
+      // placeholder, never an explicit "nothing offered").
       advertised: true,
+      operationsReported: false,
       operations: [],
       // R01/D-FR-18: the negotiated output modes are REPORTED, not
       // hardcoded — the flags come from the settings connection probe.

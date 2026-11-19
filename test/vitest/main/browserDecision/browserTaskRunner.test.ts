@@ -1279,6 +1279,172 @@ describe("BrowserTaskRunner R12 no-progress accounting", () => {
   });
 });
 
+describe("BrowserTaskRunner R01 epoch carry-through and capability 3-state", () => {
+  const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  };
+
+  it("a provider epoch change between decide and dispatch discards the held action (R01/D-FR-01)", async () => {
+    const dispatched: RunnerAction[] = [];
+    let epoch = "epoch-1";
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01epoch",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        providerEpoch: () => epoch,
+      }
+    );
+    // The provider configuration moves AFTER the decide produced the
+    // CLICK but BEFORE dispatch — the mutation boundary discards it.
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (input: unknown) => {
+      const result = (await (originalDecide as unknown as (
+        i: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input)) as import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult;
+      if (
+        result.status === "decided" &&
+        result.action?.operation === "CLICK"
+      ) {
+        epoch = "epoch-2";
+      }
+      return result;
+    }) as typeof deps.decisionClient.decide;
+    const result = await runner.run();
+    // The CLICK never dispatched; the loop re-decided (DONE) under the
+    // new epoch and completed.
+    expect(dispatched).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("provider_changed_before_dispatch");
+  });
+
+  it("an EXPLICIT empty operations list blocks every non-control dispatch (R01/D-FR-16)", async () => {
+    const dispatched: RunnerAction[] = [];
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    (
+      deps.decisionClient as unknown as {
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).getCapabilities = async () => ({
+      advertised: true,
+      operationsReported: true,
+      // The route REPORTED an empty list — explicitly nothing offered.
+      operations: [],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r01empty", conversationId: "conv-1", goal: "click" },
+      deps
+    );
+    const result = await runner.run();
+    expect(dispatched).toEqual([]);
+    expect(result.evidence).toContain("unsupported_operation:CLICK");
+  });
+
+  it("a route that does NOT report operations keeps the wide legacy fallback (R01/D-FR-16)", async () => {
+    const seen: Array<readonly string[]> = [];
+    const deps = makeRunnerDeps([doneEntry()]);
+    (
+      deps.decisionClient as unknown as {
+        decide: (input: { allowed_operations: readonly string[] }) => Promise<unknown>;
+      }
+    ).decide = async (input: { allowed_operations: readonly string[] }) => {
+      seen.push(input.allowed_operations);
+      return doneEntry();
+    };
+    (
+      deps.decisionClient as unknown as {
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).getCapabilities = async () => ({
+      // The chat route: advertised but operations NOT reported.
+      advertised: true,
+      operationsReported: false,
+      operations: [],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01legacy",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    // The wide fallback stands — every runner operation is offered.
+    expect(seen[0]!.length).toBeGreaterThan(4);
+  });
+
+  it("caps the merged criteria at the wire bound of 8 and the folded subgoal at 1000 (R01)", async () => {
+    const seenInputs: Array<{ subgoal: string | null; criteria: readonly string[] }> = [];
+    const deps = makeRunnerDeps([doneEntry()]);
+    (
+      deps.decisionClient as unknown as {
+        decide: (input: { subgoal: string | null; completion_criteria: readonly string[] }) => Promise<unknown>;
+      }
+    ).decide = async (input: { subgoal: string | null; completion_criteria: readonly string[] }) => {
+      seenInputs.push({ subgoal: input.subgoal, criteria: input.completion_criteria });
+      return doneEntry();
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01caps",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: Array.from({ length: 12 }, (_, i) => ({
+          kind: "url_contains" as const,
+          value: `/c${i}`,
+        })),
+      },
+      deps
+    );
+    // Resume instructions fold into the pending subgoal — long user
+    // input must still fit the wire bound (1000).
+    deps.control.recordResumeInstructions(runner.taskId, "r".repeat(1500));
+    await runner.run();
+    expect(seenInputs[0]!.criteria.length).toBe(8);
+    expect((seenInputs[0]!.subgoal ?? "").length).toBeLessThanOrEqual(1000);
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",
@@ -2726,6 +2892,7 @@ describe("BrowserTaskRunner capabilities consumption (R02/D-FR-04)", () => {
       decisionClient: {
         getCapabilities: async () => ({
           advertised: true,
+          operationsReported: true,
           // The route supports a SUBSET — NAVIGATE is not offered.
           operations: ["CLICK", "FILL", "SELECT", "DONE", "ESCALATE"],
           supportsStructuredJsonSchema: false,
@@ -2824,6 +2991,7 @@ describe("BrowserTaskRunner unsupported-operation gate (A02)", () => {
       getCapabilities: () => Promise<Record<string, unknown>>;
     }).getCapabilities = async () => ({
       advertised: true,
+      operationsReported: true,
       // The route advertises a subset WITHOUT scroll operations.
       operations: ["CLICK", "FILL", "SELECT", "DONE", "ESCALATE"],
       supportsStructuredJsonSchema: false,

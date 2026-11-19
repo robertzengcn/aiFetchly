@@ -2094,6 +2094,11 @@ export class ManagedBrowserAiToolService {
               .catch(() => undefined);
           }
         },
+        // R01/D-FR-01: the live provider epoch getter — the runner
+        // rechecks it at every mutation boundary (journaling, field
+        // resolution, approval re-dispatch) so a decision admitted under
+        // one configuration can never execute under another.
+        providerEpoch: () => currentProviderConfigKey(),
         // R13/D-FR-15a: pin the EXACT observation for the duration of
         // model inference — the same ID is released when the decide
         // settles, so a concurrent reobservation cannot evict the refs
@@ -2154,9 +2159,6 @@ export class ManagedBrowserAiToolService {
       const { getDefaultBrowserTaskModule } = await import(
         "@/modules/BrowserTaskModule"
       );
-      const { providerConfigKey: admissionProviderConfigKey } = await import(
-        "@/service/aiProvider/AIProviderConfigVersion"
-      );
       await getDefaultBrowserTaskModule().recordAdmission({
         taskId: runner.taskId,
         sessionId: parsed.data.session_id,
@@ -2167,7 +2169,10 @@ export class ManagedBrowserAiToolService {
         jobId: context.jobId ?? null,
         agentTaskId: context.ownerAgentId ?? null,
         providerMode: route,
-        providerConfigKey: admissionProviderConfigKey(),
+        // R01: the CAPTURED admission epoch — the journal must describe
+        // the configuration the task was actually admitted under, never
+        // a fresh read that a concurrent provider change could alter.
+        providerConfigKey: epochAdmission,
       });
     } catch {
       throw new ManagedBrowserAiToolError(

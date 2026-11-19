@@ -66,6 +66,9 @@ export class SystemOneDecisionClient implements BrowserDecisionClient {
     void signal;
     return {
       advertised: true,
+      // R01: the native route does not report per-operation capabilities
+      // — the wide legacy fallback stands (never an explicit empty).
+      operationsReported: false,
       operations: [],
       supportsStructuredJsonSchema: false,
       supportsForcedToolDecision: false,
