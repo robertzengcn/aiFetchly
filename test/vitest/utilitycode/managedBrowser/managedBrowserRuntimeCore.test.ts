@@ -21,7 +21,9 @@ import {
   budgetName,
   isLikelySecretKey,
   isLikelySecretValue,
+  clearTrustedSecretsForTest,
   redactSecrets,
+  registerTrustedSecret,
   summarizeInputValue,
   toSafeErrorMessage,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -411,6 +413,31 @@ describe("ResultSanitizer", () => {
     expect(summarizeInputValue("hunter2!", "password")).toBe("[password-like]");
     expect(summarizeInputValue("hello world", "text")).toBe("hello world");
     expect(summarizeInputValue(undefined, "text")).toBeUndefined();
+  });
+
+  it("re-enforces the value budget AFTER the trusted-credential redaction (R03)", () => {
+    // The trusted pass used to return early WITHOUT the budget — a long
+    // surrounding value could expand past the wire cap and reject the
+    // whole observation.
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("s3cret-value-42");
+    const value = `filler ${"x".repeat(120)} s3cret-value-42 ${"y".repeat(120)}`;
+    const out = summarizeInputValue(value, "text");
+    expect(out).toBeDefined();
+    expect(out!.length).toBeLessThanOrEqual(100);
+    expect(out).not.toContain("s3cret-value-42");
+    clearTrustedSecretsForTest();
+  });
+
+  it("redacts a trusted credential echoed into a structured KEY (R03)", () => {
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("s3cret-value-42");
+    const out = redactSecrets({
+      "note s3cret-value-42": "payload",
+    }) as Record<string, unknown>;
+    expect(Object.keys(out)[0]).not.toContain("s3cret-value-42");
+    expect(out[Object.keys(out)[0]]).toBe("payload");
+    clearTrustedSecretsForTest();
   });
 
   it("budgets names and error messages", () => {

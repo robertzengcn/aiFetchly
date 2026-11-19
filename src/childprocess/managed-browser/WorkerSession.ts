@@ -882,7 +882,13 @@ export class WorkerSession {
         outcome: result.outcome,
         reasonCode: result.reasonCode ?? null,
         filledFieldStamps: [...result.filledFieldStamps],
-        recipe: result.recipe ?? null,
+        // R03: recipe metadata (form action, field fingerprints) is
+        // page-authored and rides the standard deep redaction before
+        // emission — the same invariant as every other outbound field.
+        recipe:
+          result.recipe != null
+            ? (redactSecrets(result.recipe) as typeof result.recipe)
+            : null,
       });
     } finally {
       // A-FR-08: wipe local references to the credential.

@@ -142,7 +142,12 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = isLikelySecretKey(key)
+      // R03: the trusted pass applies to KEYS as well — a credential
+      // echoed into a property name must not survive structured output.
+      const safeKey = containsTrustedSecret(key)
+        ? redactTrustedSecrets(key)
+        : key;
+      out[safeKey] = isLikelySecretKey(key)
         ? REDACTED_MARKER
         : redactSecrets(val, depth + 1);
     }
@@ -236,8 +241,14 @@ export function summarizeInputValue(
   }
   // A04: the EXACT filled credential pass runs FIRST — a value echoed
   // into another nonsensitive input is contained regardless of shape.
+  // R03: the budget is re-enforced AFTER the redaction — the replacement
+  // can expand the summary past the wire cap and reject the observation.
   if (containsTrustedSecret(value)) {
-    return redactTrustedSecrets(value);
+    const { text } = truncateText(
+      redactTrustedSecrets(value),
+      MANAGED_BROWSER_OBSERVATION_BUDGETS.maxValueSummaryChars
+    );
+    return text;
   }
   if (isLikelySecretValue(value)) {
     return REDACTED_MARKER;

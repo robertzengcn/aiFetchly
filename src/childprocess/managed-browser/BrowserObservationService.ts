@@ -162,7 +162,11 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       || htmlEl.getAttribute('title')
       || htmlEl.getAttribute('value')
       || '';
-    name = name.replace(/\\s+/g, ' ').trim().slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxAccessibleNameChars});
+    // R03: collect at 3x the wire bound — the main-side trusted pass
+    // runs on the FULLER value before the final budget; a 200-char cap
+    // here could SPLIT a credential echoed into an attribute and defeat
+    // the exact-value match.
+    name = name.replace(/\\s+/g, ' ').trim().slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxAccessibleNameChars * 3});
     const isCredential = htmlEl.getAttribute('data-mb-cred') === '1';
     const inputTypeRaw = htmlEl.getAttribute('type');
     const inputType = htmlEl.tagName === 'INPUT' || htmlEl.tagName === 'TEXTAREA' ? (inputTypeRaw || 'text') : null;
@@ -197,7 +201,9 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
           // R05: exact native value (bounded by the wire schema's 512)
           // — the value IS the option identity used for verification.
           v: rawValue,
-          l: String(opt.text ?? '').replace(/\\s+/g, ' ').trim().slice(0, 200),
+          // R03: label collected at 3x the wire bound for the same
+          // split-secret reason as accessible names.
+          l: String(opt.text ?? '').replace(/\\s+/g, ' ').trim().slice(0, 600),
         });
       }
     }
@@ -205,9 +211,10 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       obsId: String(obsIndex),
       ...(entry.priority === true ? { priority: true } : {}),
       tag: htmlEl.tagName.toLowerCase(),
-      // E11: role is page-authored and can exceed the wire bound (48) —
-      // an unsliced role drops the WHOLE observation at parse time.
-      role: String(role).slice(0, 48),
+      // E11/R03: role is page-authored and can exceed the wire bound
+      // (48) — collected at 3x so the main-side trusted pass sees the
+      // fuller value before the final slice.
+      role: String(role).slice(0, 144),
       name,
       inputType,
       value: inputType && !/^hidden$/.test(inputType) ? String(htmlEl.value ?? '') : null,
@@ -328,8 +335,12 @@ export function shapeElementRecord(
     // whole observation at parse time. N07: the role is page-authored
     // and the trusted-secret pass applies (a page can echo a filled
     // credential into any attribute).
-    role: redactTrustedSecrets(
-      (record.role || "generic").slice(0, 48)
+    // R03: the trusted pass runs on the FULLER collected value and the
+    // wire cap is enforced AFTER redaction (a replacement can expand
+    // the field past its cap and reject the whole observation).
+    role: redactSecretsInText(redactTrustedSecrets(record.role || "generic")).slice(
+      0,
+      48
     ),
     // Accessible names are page-authored: scrub secret-shaped content
     // BEFORE budgeting (GAP-04).
@@ -347,13 +358,18 @@ export function shapeElementRecord(
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
     ...(record.hrefOrigin
-      ? { hrefOrigin: redactTrustedSecrets(record.hrefOrigin) }
+      ? { hrefOrigin: redactTrustedSecrets(record.hrefOrigin).slice(0, 512) }
       : {}),
     // B04: full normalized URL rides the summary for NAVIGATE provenance.
     // N07: a page can echo a filled credential into a link (query param);
     // the trusted pass applies before the shape heuristics.
     ...(record.hrefFull
-      ? { hrefFull: redactSecretsInText(redactTrustedSecrets(record.hrefFull)) }
+      ? {
+          hrefFull: redactSecretsInText(redactTrustedSecrets(record.hrefFull)).slice(
+            0,
+            2048
+          ),
+        }
       : {}),
     // D-FR-13: focused/dialog elements surface first in the shortlist.
     ...(record.priority === true ? { priority: true } : {}),
@@ -387,7 +403,7 @@ export function shapeElementRecord(
             return {
               option_ids: kept.map(({ i }) => `o_${i}`),
               option_labels: kept.map(({ o }) =>
-                redactSecretsInText(redactTrustedSecrets(o.l || o.v || ""))
+                redactSecretsInText(redactTrustedSecrets(o.l || o.v || "")).slice(0, 200)
               ),
               option_values: kept.map(({ o }) => o.v || ""),
             };
@@ -533,7 +549,11 @@ async function buildObservationBody(
   // A04: the URL pathname can carry the exact filled credential (a page
   // can navigate to a URL embedding it) — the trusted pass applies before
   // the report-safe shape.
-  const url = redactTrustedSecrets(sanitizeUrlForReport(input.page.url()));
+  // R03: the top-frame origin is derived from the SANITIZED URL (never
+  // the raw one) and every redacted field is re-capped to its wire
+  // bound — redaction replacement can expand a field past the cap and
+  // the schema would reject the whole observation.
+  const url = redactTrustedSecrets(sanitizeUrlForReport(input.page.url())).slice(0, 2048);
   const visibleSensitive = records.some(
     (r) => r.inputType != null && isSensitiveInputType(r.inputType)
   );
@@ -548,13 +568,18 @@ async function buildObservationBody(
   // to the FULL text — a length limit before it can cut through a known
   // value and prevent the match).
   const safeTitle = redactSecretsInText(redactTrustedSecrets(title));
-  const safeText = redactSecretsInText(redactTrustedSecrets(textBudget.text));
+  // R03: redaction replacement can EXPAND the text past the wire cap —
+  // the cap is re-enforced after scrubbing so the observation survives.
+  const safeText = truncateText(
+    redactSecretsInText(redactTrustedSecrets(textBudget.text)),
+    MANAGED_BROWSER_OBSERVATION_BUDGETS.maxVisibleTextChars
+  ).text;
   return {
     sessionId: input.sessionId,
     observationId,
     pageRevision: input.registry.currentRevision,
     url,
-    origin: extractOrigin(input.page.url()) ?? url,
+    origin: (extractOrigin(url) ?? url).slice(0, 512),
     title: truncateText(safeTitle, 300).text,
     state: input.state,
     elements,

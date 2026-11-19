@@ -477,7 +477,14 @@ export class BrowserSiteModule extends BaseModule {
     if (!entity) {
       return false;
     }
-    entity.loginRecipe = JSON.stringify(recipe);
+    // R03: the learned recipe is page-authored metadata — it passes the
+    // standard deep redaction (trusted values + secret-shaped strings +
+    // secret-shaped keys) before storage, the same invariant as every
+    // other persisted field.
+    const { redactSecrets } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    entity.loginRecipe = JSON.stringify(redactSecrets(recipe));
     await model.saveSite(entity);
     return true;
   }

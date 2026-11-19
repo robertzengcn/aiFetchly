@@ -91,6 +91,9 @@ class FakeHandle implements ExecutorElementHandle {
             throw new Error("stale_select_option");
           }
         }
+        // The commit lands INSIDE the page function now — record what
+        // the real function would have selected.
+        this.lastSelectedValues = [...resolved];
         return { ok: true, selectedValues: resolved } as T;
       }
       return undefined as T;
