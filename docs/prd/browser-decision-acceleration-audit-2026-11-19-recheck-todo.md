@@ -135,3 +135,4 @@ Implementable findings from this recheck were fixed on `feature/browser-decision
 - Full component sweep: **1,628 passed across 184 files**.
 - Full main-process sweep: 9,148 passed; the 364 failures are the documented environmental suites (SkillInstallation native builds, outbound-email-gate SQLite interference, Windows-specific PATH/TMPDIR/path-separator assertions) — none in the touched areas; the three adjacent failures (`proxyModuleRedaction`, `searchTaskProxyReplace`, `PromptSkillTools`) are the shared-DB lock contention and pass in isolation.
 - Discriminating tests were verified by temporary revert (R05 recovery race and R12 criterion suppression both fail without their fixes).
+- CI run `44571739895` (branch head `f71cab809`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright).
