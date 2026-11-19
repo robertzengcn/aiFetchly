@@ -5373,12 +5373,25 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             },
           };
         }
-        const { batchId, results } = await runBrowserTasksForTool(
+        const { batchId, results, confirmed } = await runBrowserTasksForTool(
           parsed.data.tasks,
           parsed.data.concurrency ?? 2,
           context.conversationId,
           context.signal ?? new AbortController().signal
         );
+        // R07/M-FR-04: a DECLINED (or cancelled) confirmation card means
+        // NOTHING ran — reporting success with an empty result set would
+        // let the model claim an approved batch that never started.
+        if (confirmed === false) {
+          return {
+            success: false,
+            result: {
+              error: "batch_confirmation_declined",
+              details:
+                "the user declined the batch confirmation card; no tasks were started",
+            },
+          };
+        }
         return { success: true, result: { batch_id: batchId, results } };
       },
     },

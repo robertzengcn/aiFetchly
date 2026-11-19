@@ -430,6 +430,11 @@ async function requestBatchConfirmation(
       return { index, goal: task.goal, site: null };
     })
   );
+  // R07/M-FR-04: the preview lookup is asynchronous — a parent Stop that
+  // lands DURING it must not start a wait (or publish a card) afterwards.
+  if (signal.aborted) {
+    return false;
+  }
   const { request, promise } = batchConfirmRegistry.create({
     conversationId,
     tasks: previewTasks,
@@ -952,18 +957,71 @@ export async function runBrowserTasks(
           })()
             ? rawOutput.final_url.slice(0, 2048)
             : null;
+        // R07/M-FR-09: nested extraction is bounded PER ITEM and in
+        // TOTAL bytes — the top-level cap alone let one oversized item
+        // (or an oversized aggregate) through to the parent envelope.
         const boundedExtracted = Array.isArray(
           (result.output as { extracted?: unknown } | null)?.extracted
         )
-          ? ((result.output as { extracted: unknown[] }).extracted as unknown[]).slice(0, 200)
+          ? ((): unknown[] => {
+              const items = ((result.output as { extracted: unknown[] }).extracted as unknown[])
+                .slice(0, 200);
+              const bounded: unknown[] = [];
+              let totalBytes = 0;
+              for (const item of items) {
+                let safe: unknown = item;
+                if (typeof item === "string") {
+                  safe = item.slice(0, 2000);
+                } else if (item !== null && typeof item === "object") {
+                  try {
+                    const serialized = JSON.stringify(item);
+                    if (serialized.length > 2000) {
+                      // An oversized object degrades to a bounded marker —
+                      // its content never reaches the parent verbatim.
+                      safe = { truncated: true, bytes: serialized.length };
+                    }
+                  } catch {
+                    safe = { truncated: true, bytes: 0 };
+                  }
+                } else if (typeof item === "number" || typeof item === "boolean") {
+                  safe = item;
+                } else {
+                  safe = null;
+                }
+                totalBytes += JSON.stringify(safe ?? null).length;
+                if (totalBytes > 64 * 1024) {
+                  cleanupEvidence.push("extracted_total_bytes_capped");
+                  break;
+                }
+                bounded.push(safe);
+              }
+              return bounded;
+            })()
           : [];
+        // R07/M-FR-09: the proposal TYPE is enum-validated against the
+        // child output schema (approval | login | input) — a permissive
+        // type check let arbitrary strings surface as actionable cards.
         const rawNeedsUser = (result.output as { needs_user?: unknown } | null)?.needs_user;
+        const needsUserType = (
+          rawNeedsUser as { type?: unknown } | null
+        )?.type;
+        if (
+          rawNeedsUser !== null &&
+          typeof rawNeedsUser === "object" &&
+          !(
+            typeof needsUserType === "string" &&
+            ["approval", "login", "input"].includes(needsUserType)
+          )
+        ) {
+          cleanupEvidence.push("needs_user_proposal_dropped:unknown_type");
+        }
         const boundedNeedsUser =
           rawNeedsUser !== null &&
           typeof rawNeedsUser === "object" &&
-          typeof (rawNeedsUser as { type?: unknown }).type === "string"
+          typeof needsUserType === "string" &&
+          ["approval", "login", "input"].includes(needsUserType)
             ? {
-                type: (rawNeedsUser as { type: string }).type.slice(0, 32),
+                type: needsUserType,
                 ...((rawNeedsUser as { proposed_action?: unknown }).proposed_action !== undefined
                   ? {
                       proposed_action: String(
