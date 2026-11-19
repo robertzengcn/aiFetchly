@@ -987,9 +987,17 @@ export class BrowserCredentialLoginService {
       const startsCooldown =
         result.outcome !== "challenge" && !SKIP_COOLDOWN_REASONS.has(failureReason);
       if (credential.accountId !== null && startsCooldown) {
+        // R08/A-FR-10: a REJECTED SAVED credential records the dedicated
+        // marker — the block does not expire with the window; it lifts
+        // only when the credential is replaced (updatePasswordForAccount).
+        const isRejectedSavedCredential =
+          result.outcome === "wrong_credential" ||
+          result.reasonCode === "wrong_password";
         await accountModule.recordLoginFailure(
           credential.accountId,
-          failureReason,
+          isRejectedSavedCredential
+            ? SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON
+            : failureReason,
           { siteId: site.siteId }
         );
       }

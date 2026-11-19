@@ -531,8 +531,19 @@ export class SocialAccountModule extends BaseModule {
     const encrypted = await this.encryptPass(password);
     if (encrypted) {
       await this.socialAccountModel.updatePassword(accountId, encrypted);
+      // R08/A-FR-10: the credential was REPLACED — a prior wrong-
+      // credential block lifts with it.
+      await this.credentialReplaced(accountId);
     }
   }
+
+  /**
+   * R08/A-FR-10: the marker reason for a REJECTED SAVED credential — the
+   * cooldown does not expire for it; the block lifts only when the
+   * credential is REPLACED (updatePasswordForAccount clears it).
+   */
+  public static readonly WRONG_CREDENTIAL_SAVED_REASON =
+    "WRONG_CREDENTIAL_SAVED";
 
   /** A-FR-10: record a failed automated sign-in (cooldown + UI reason). */
   public async recordLoginFailure(
@@ -557,6 +568,22 @@ export class SocialAccountModule extends BaseModule {
     });
   }
 
+  /**
+   * R08/A-FR-10: a credential REPLACEMENT lifts the wrong-credential
+   * block — the saved password that was rejected is no longer the one
+   * that would be typed, so automated sign-in may try again.
+   */
+  public async credentialReplaced(accountId: number): Promise<void> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (
+      account?.last_login_failure_reason ===
+      SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON
+    ) {
+      await this.recordLoginFailureClear(accountId);
+    }
+  }
+
   /** A-FR-10: cooldown check (1 automated attempt per account+site/window). */
   public async isSignInCoolingDown(
     accountId: number,
@@ -568,6 +595,17 @@ export class SocialAccountModule extends BaseModule {
     const account = await this.socialAccountModel.findRowById(accountId);
     if (!account?.last_login_failure_at) {
       return false;
+    }
+    // R08/A-FR-10: a REJECTED SAVED credential blocks until the
+    // credential is REPLACED — the time window does not lift it (the
+    // same saved password would be typed again and rejected again). The
+    // block is account-wide: the saved credential is an account-level
+    // secret, so its rejection is not site-scoped.
+    if (
+      account.last_login_failure_reason ===
+      SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON
+    ) {
+      return true;
     }
     // A-FR-10: the window is per account AND SITE — a failure on site B
     // never cools down attempts on site A.

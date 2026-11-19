@@ -8,6 +8,105 @@ import { SocialAccountModule } from "@/modules/socialAccountModule";
  */
 
 describe("sign-in cooldown scope (A-FR-10)", () => {
+  it("a REJECTED SAVED credential blocks until replacement, account-wide, regardless of elapsed time (R08)", async () => {
+    const module = new SocialAccountModule();
+    (
+      module as unknown as {
+        ensureConnection: () => Promise<void>;
+      }
+    ).ensureConnection = async () => undefined;
+    (
+      module as unknown as {
+        socialAccountModel: { findRowById: (id: number) => Promise<unknown> };
+      }
+    ).socialAccountModel.findRowById = async () => ({
+      // The rejection marker was recorded DAYS ago — the time window
+      // does not lift this block.
+      last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
+      last_login_failure_site: null,
+      last_login_failure_reason:
+        SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON,
+    });
+    const now = new Date("2026-11-14T12:00:00Z");
+    // Blocked on the failure site…
+    expect(
+      await module.isSignInCoolingDown(7, { siteId: 42, now })
+    ).toBe(true);
+    // …and account-wide (the saved credential is an account secret).
+    expect(
+      await module.isSignInCoolingDown(7, { siteId: 43, now })
+    ).toBe(true);
+    // A regular (non-marker) failure older than the window is NOT blocked.
+    (
+      module as unknown as {
+        socialAccountModel: { findRowById: (id: number) => Promise<unknown> };
+      }
+    ).socialAccountModel.findRowById = async () => ({
+      last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
+      last_login_failure_site: 42,
+      last_login_failure_reason: "form_not_submitted",
+    });
+    expect(
+      await module.isSignInCoolingDown(7, { siteId: 42, now })
+    ).toBe(false);
+  });
+
+  it("credentialReplaced lifts only the wrong-credential block (R08)", async () => {
+    const module = new SocialAccountModule();
+    (
+      module as unknown as {
+        ensureConnection: () => Promise<void>;
+      }
+    ).ensureConnection = async () => undefined;
+    let stored = {
+      last_login_failure_at: new Date("2026-11-01T00:00:00Z") as Date | null,
+      last_login_failure_site: 42 as number | null,
+      last_login_failure_reason:
+        SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON as string | null,
+    };
+    let cleared = 0;
+    (
+      module as unknown as {
+        socialAccountModel: {
+          findRowById: (id: number) => Promise<unknown>;
+          updateLoginFailure: (
+            id: number,
+            fields: Record<string, unknown>
+          ) => Promise<void>;
+        };
+      }
+    ).socialAccountModel = {
+      findRowById: async () => stored,
+      updateLoginFailure: async (_id, fields) => {
+        cleared++;
+        stored = {
+          ...stored,
+          last_login_failure_at:
+            (fields.last_login_failure_at as Date | null) ?? null,
+          last_login_failure_reason:
+            (fields.last_login_failure_reason as string | null) ?? null,
+        };
+      },
+    };
+    await module.credentialReplaced(7);
+    expect(cleared).toBe(1);
+    // The block lifted: the failure record is cleared.
+    expect(
+      await module.isSignInCoolingDown(7, {
+        siteId: 42,
+        now: new Date("2026-11-14T12:00:00Z"),
+      })
+    ).toBe(false);
+    // A NON-marker failure is NOT lifted by a replacement.
+    stored = {
+      last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
+      last_login_failure_site: 42,
+      last_login_failure_reason: "form_not_submitted",
+    };
+    await module.credentialReplaced(7);
+    expect(cleared).toBe(1);
+  });
+
   it("same account, different site: no cooldown", async () => {
     const module = new SocialAccountModule();
     const fixed = new Date("2026-11-14T12:00:00Z");
