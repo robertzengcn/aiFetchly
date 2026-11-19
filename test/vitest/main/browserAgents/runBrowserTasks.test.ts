@@ -762,6 +762,49 @@ describe("runBrowserTasks busy-account queue (W09)", () => {
     setDefaultManagedBrowserLeaseServiceForTest(null);
   });
 
+  it("propagates child output receipts and dedupes them ACROSS sibling rows (R07/T15b)", async () => {
+    const sharedReceipt = "out_shared_1";
+    const runtime = {
+      runSync: vi.fn(async (input: { prompt?: string }) => {
+        // The batch id is generated inside runBrowserTasks — distinguish
+        // the rows by their prompt (built from each task's goal).
+        const first = JSON.stringify(input).includes("row a");
+        return {
+          status: "completed",
+          // The child terminal's result carries its externalized receipts
+          // (parent access granted in AgentRuntime).
+          outputIds: first
+            ? [sharedReceipt, "out_a_2", sharedReceipt]
+            : [sharedReceipt, "out_b_1"],
+          output: {
+            status: "completed",
+            summary: first ? "row a" : "row b",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+          },
+        };
+      }),
+    };
+    const outcome = await runBrowserTasks(
+      [
+        { goal: "row a" } as BrowserBatchTaskInput,
+        { goal: "row b" } as BrowserBatchTaskInput,
+      ],
+      2,
+      "conv-r07rec",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    // Within-row dedupe: row a listed the shared receipt twice.
+    expect(outcome.results[0]?.output_ids).toEqual([
+      sharedReceipt,
+      "out_a_2",
+    ]);
+    // Cross-row dedupe: row b drops the receipt row a already surfaced.
+    expect(outcome.results[1]?.output_ids).toEqual(["out_b_1"]);
+  });
+
   it("a child crash with a known agent-task id releases its OWN sessions", async () => {
     stopAllForAgentTaskMock.mockClear();
     stopAllForConversationMock.mockClear();

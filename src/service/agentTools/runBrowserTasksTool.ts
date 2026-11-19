@@ -37,6 +37,13 @@ export interface BrowserBatchTaskResult {
     readonly duration_ms: number | null;
   }>;
   readonly session_id?: string;
+  /**
+   * R07/T15b: externalized output receipts the child produced WITH parent
+   * access already granted (AgentRuntime terminal). Deduplicated ACROSS
+   * sibling rows at aggregation — the same receipt never surfaces twice
+   * to the parent.
+   */
+  readonly output_ids?: readonly string[];
 }
 
 export const MAX_BATCH_TASKS = 5;
@@ -1179,6 +1186,24 @@ export async function runBrowserTasks(
           ...(task.keep_open
             ? { session_id: transferredSessionId }
             : {}),
+          // R07: the child's externalized output receipts ride the row —
+          // parent access was granted by the child terminal; the receipts
+          // are deduplicated WITHIN the row here and ACROSS rows below.
+          ...((() => {
+            const raw = (result as { outputIds?: unknown }).outputIds;
+            if (!Array.isArray(raw)) {
+              return {};
+            }
+            const seen = new Set<string>();
+            const receipts = raw.filter((item): item is string => {
+              if (typeof item !== "string" || item.length === 0 || seen.has(item)) {
+                return false;
+              }
+              seen.add(item);
+              return true;
+            });
+            return receipts.length > 0 ? { output_ids: receipts } : {};
+          })()),
         };
       } catch (error) {
         // F17: classify by the abort source that actually fired.
@@ -1261,7 +1286,31 @@ export async function runBrowserTasks(
   const { getDefaultManagedBrowserModule } = await import(
     "@/modules/ManagedBrowserModule"
   );
-  for (const result of results) {
+  // R07/T15b: receipts are deduplicated ACROSS sibling rows — two lanes
+  // that externalized the same artifact (a shared tool output) surface it
+  // to the parent exactly once. The deduped rows feed BOTH the final
+  // events and the returned result.
+  const surfacedReceipts = new Set<string>();
+  const deduped: BrowserBatchTaskResult[] = results.map((result) => {
+    const withUniqueExtracted =
+      result.extracted.length > 1
+        ? { ...result, extracted: dedupeExtractedRows(result.extracted) }
+        : result;
+    if (!withUniqueExtracted.output_ids || withUniqueExtracted.output_ids.length === 0) {
+      return withUniqueExtracted;
+    }
+    const unique = withUniqueExtracted.output_ids.filter(
+      (receipt) => !surfacedReceipts.has(receipt)
+    );
+    for (const receipt of unique) {
+      surfacedReceipts.add(receipt);
+    }
+    if (unique.length === withUniqueExtracted.output_ids.length) {
+      return withUniqueExtracted;
+    }
+    return { ...withUniqueExtracted, output_ids: unique };
+  });
+  for (const result of deduped) {
     const rowTaskId = `${batchId}:${result.task_index}`;
     const recordState = control.getState(rowTaskId);
     emitBatchEvent({
@@ -1280,6 +1329,10 @@ export async function runBrowserTasks(
         result.session_id ??
         getDefaultManagedBrowserModule().findSessionIdForAgentTask(rowTaskId) ??
         undefined,
+      // R07/T15b: the row's receipts are already cross-row deduplicated.
+      ...(result.output_ids && result.output_ids.length > 0
+        ? { output_ids: result.output_ids }
+        : {}),
     });
   }
   if (parentWaitWatchdog !== null) {
@@ -1294,15 +1347,9 @@ export async function runBrowserTasks(
     }
   }
   emitBatchEvent({ batchId, conversationId, phase: "finished" });
-  // M-FR-11: the PARENT dedupes extracted rows before returning them to
-  // the caller (the parent owns any save) — siblings scraping overlapping
-  // pages produce identical rows, and the consumer's dedupe-before-save
-  // expectation is honored HERE, at the batch boundary.
-  const deduped: BrowserBatchTaskResult[] = results.map((result) =>
-    result.extracted.length > 1
-      ? { ...result, extracted: dedupeExtractedRows(result.extracted) }
-      : result
-  );
+  // M-FR-11: the returned rows already carry the per-row extracted dedupe
+  // and the cross-row output-receipt dedupe (computed above, feeding both
+  // the final events and this result).
   return { batchId, results: deduped };
 }
 
