@@ -334,7 +334,7 @@
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
             {{
-              status === "streaming"
+              effectiveStatus === "streaming"
                 ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
                 : t("aiChatV2.reasoning_title") || "Reasoning"
             }}
@@ -517,9 +517,9 @@
           message.role === 'assistant' &&
           message.messageType !== MessageType.TOOL_CALL &&
           message.messageType !== MessageType.TOOL_RESULT &&
-          status !== 'idle'
+          effectiveStatus !== 'idle'
         "
-        :status="status"
+        :status="effectiveStatus"
         :error-message="effectiveErrorMessage"
       />
       <div
@@ -739,7 +739,7 @@ const isReportableAssistant = computed(() => {
   if (props.message.role !== "assistant") return false;
   if (props.message.messageType === MessageType.TOOL_CALL) return false;
   if (props.message.messageType === MessageType.TOOL_RESULT) return false;
-  if (status.value !== "idle") return false;
+  if (effectiveStatus.value !== "idle") return false;
   const hasText =
     typeof props.message.content === "string" && props.message.content.trim().length > 0;
   const hasImages =
@@ -842,7 +842,7 @@ const persistedErrorText = computed<string | undefined>(() => {
   return localizeWorkspaceError(raw, (key) => t(key)).text;
 });
 
-const status = computed<Status>(() => {
+const effectiveStatus = computed<Status>(() => {
   if (props.status && props.status !== "idle") {
     return props.status;
   }
