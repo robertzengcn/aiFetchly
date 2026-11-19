@@ -1445,6 +1445,54 @@ describe("BrowserTaskRunner R01 epoch carry-through and capability 3-state", () 
   });
 });
 
+describe("BrowserTaskRunner R04 control-id adoption", () => {
+  it("adopts the caller's control id — the outer record IS the runner's record (R04/M-FR-07)", async () => {
+    const deps = makeRunnerDeps([doneEntry()]);
+    const control = deps.control;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04adopt",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "batch_r04:0",
+      },
+      deps
+    );
+    // The runner no longer mints a nested id.
+    expect(runner.taskId).toBe("batch_r04:0");
+    await runner.run();
+    // The ADOPTED record carries the runner's terminal state — pause/
+    // stop on the outer id gate this runner directly.
+    expect(control.getState("batch_r04:0")).toBe("completed");
+  });
+
+  it("an invalid adoptable id falls back to the generated nested id (R04)", async () => {
+    const deps = makeRunnerDeps([doneEntry()]);
+    const empty = new BrowserTaskRunner(
+      { sessionId: "mb_r04bad1", conversationId: "conv-1", goal: "g", taskId: "" },
+      deps
+    );
+    expect(empty.taskId).toMatch(/^task_/);
+    const oversized = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04bad2",
+        conversationId: "conv-1",
+        goal: "g",
+        taskId: "x".repeat(65),
+      },
+      deps
+    );
+    expect(oversized.taskId).toMatch(/^task_/);
+    // No id provided at all: generated, unchanged behavior.
+    const none = new BrowserTaskRunner(
+      { sessionId: "mb_r04none", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    expect(none.taskId).toMatch(/^task_/);
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

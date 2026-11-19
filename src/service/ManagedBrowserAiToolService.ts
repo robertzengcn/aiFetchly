@@ -1832,6 +1832,13 @@ export class ManagedBrowserAiToolService {
         constraints: parsed.data.constraints ?? [],
         completionCriteria: (parsed.data.completion_criteria ?? []) as CompletionCriterion[],
         budget: parsed.data.budget,
+        // R04/M-FR-07: the runner ADOPTS the caller's control id (the
+        // batch row id / the child agent task id) — ONE authoritative
+        // owner/control mapping: pause/take-control/stop on the outer id
+        // gate this runner directly, and the journal/admission/terminal
+        // all record the same identity. A direct chat runner (no
+        // ownerAgentId) keeps the generated nested id.
+        ...(context.ownerAgentId ? { taskId: context.ownerAgentId } : {}),
       },
       {
         observe: async (sessionId) => {

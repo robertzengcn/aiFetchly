@@ -50,6 +50,17 @@ export interface BrowserTaskInput {
   readonly constraints?: readonly string[];
   readonly completionCriteria?: readonly CompletionCriterion[];
   readonly budget?: Partial<MutableTaskBudget>;
+  /**
+   * R04/M-FR-07: ADOPTABLE control id — when the caller already owns a
+   * control record for this task (the batch row id / the child agent
+   * task id), the runner uses THAT id instead of minting a nested one.
+   * ONE authoritative owner/control mapping across outer agent and
+   * nested runner: pause/take-control/stop on the row id gate THIS
+   * runner directly, and the paired IPC resolver ambiguity disappears.
+   * Must be a bounded opaque id (1-64 chars); invalid values fall back
+   * to the generated id.
+   */
+  readonly taskId?: string;
 }
 
 export type BrowserTaskTerminalStatus =
@@ -286,7 +297,7 @@ export interface RunnerExecutionResult {
 export class BrowserTaskRunner {
   private readonly deps: RunnerDeps;
   private readonly budget: MutableTaskBudget;
-  private readonly _taskId = `task_${randomUUID().slice(0, 12)}`;
+  private readonly _taskId: string;
 
   /** R03: the runner's task id — the single identity for all persistence. */
   public get taskId(): string {
@@ -361,6 +372,14 @@ export class BrowserTaskRunner {
     this.maxEquivalentFailures =
       limitsForRoute(deps.route).consecutiveEquivalentFailures;
     this.budget = buildTaskBudget(deps.route, input.budget);
+    // R04/M-FR-07: adopt the caller's control id when one was provided
+    // (bounded opaque id); otherwise mint the nested id as before.
+    this._taskId =
+      typeof input.taskId === "string" &&
+      input.taskId.length >= 1 &&
+      input.taskId.length <= 64
+        ? input.taskId
+        : `task_${randomUUID().slice(0, 12)}`;
   }
 
   public async run(): Promise<BrowserTaskResult> {
