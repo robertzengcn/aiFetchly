@@ -29,6 +29,7 @@ import {
   MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
   MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
   MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+  MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
   MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
   MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
   BROWSER_TASK_PAUSE,
@@ -464,6 +465,27 @@ export function onManagedBrowserBatchConfirmRequest(
   window.api.receive(MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, handler);
   return () => {
     window.api.removeListener(MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, handler);
+  };
+}
+
+export interface BrowserBatchConfirmCancelledEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+}
+
+/** R07: a pending batch card retired WITHOUT a user decision. */
+export function onManagedBrowserBatchConfirmCancelled(
+  callback: (event: BrowserBatchConfirmCancelledEvent) => void
+): () => void {
+  const handler = (event: unknown): void => {
+    callback(event as BrowserBatchConfirmCancelledEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED, handler);
+  return () => {
+    window.api.removeListener(
+      MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
+      handler
+    );
   };
 }
 

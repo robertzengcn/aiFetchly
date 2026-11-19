@@ -14,6 +14,7 @@ const credentialListeners = new Set<(request: unknown) => void>();
 const pickerListeners = new Set<(request: unknown) => void>();
 const siteConfirmListeners = new Set<(request: unknown) => void>();
 const batchConfirmListeners = new Set<(request: unknown) => void>();
+const batchConfirmCancelledListeners = new Set<(event: unknown) => void>();
 
 vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/views/api/managedBrowser")>();
@@ -38,6 +39,10 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
     onManagedBrowserBatchConfirmRequest: (cb: (request: unknown) => void) => {
       batchConfirmListeners.add(cb);
       return () => batchConfirmListeners.delete(cb);
+    },
+    onManagedBrowserBatchConfirmCancelled: (cb: (event: unknown) => void) => {
+      batchConfirmCancelledListeners.add(cb);
+      return () => batchConfirmCancelledListeners.delete(cb);
     },
     submitBrowserBatchConfirm: (input: unknown) => {
       invokeMock("MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM", input);
@@ -157,12 +162,19 @@ function emitBatchConfirm(request: unknown): void {
   }
 }
 
+function emitBatchConfirmCancelled(event: unknown): void {
+  for (const listener of batchConfirmCancelledListeners) {
+    listener(event);
+  }
+}
+
 beforeEach(() => {
   batchListeners.clear();
   credentialListeners.clear();
   pickerListeners.clear();
   siteConfirmListeners.clear();
   batchConfirmListeners.clear();
+  batchConfirmCancelledListeners.clear();
   invokeMock.mockClear();
 });
 
@@ -780,6 +792,29 @@ describe("BrowserControlCards batch confirm (W08/M-FR-04)", () => {
     expect(
       wrapper.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
     ).toBe(false);
+  });
+
+  it("a main-process dismissal (parent Stop / TTL) retires the card without a submit (R07)", async () => {
+    const wrapper = mountWith("conv-a");
+    emitBatchConfirm(confirmRequest);
+    await flushPromises();
+    expect(
+      wrapper.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
+    ).toBe(true);
+    // The registry retired the request (no user decision).
+    emitBatchConfirmCancelled({
+      requestId: "bconfirm-1",
+      conversationId: "conv-a",
+    });
+    await flushPromises();
+    expect(
+      wrapper.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
+    ).toBe(false);
+    // No stray submit ever fires for the retired request.
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM",
+      expect.objectContaining({ requestId: "bconfirm-1" })
+    );
   });
 
   it("deny submits cancelled and clears the card", async () => {

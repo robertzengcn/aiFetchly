@@ -770,6 +770,11 @@ export const MANAGED_BROWSER_BATCH_CONFIRM_REQUEST =
   "managed-browser:batch-confirm-request";
 export const MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM =
   "managed-browser:submit-batch-confirm";
+// R07/M-FR-04: a pending confirmation card is retired WITHOUT a user
+// decision (parent Stop or TTL expiry) — the card is told so it can
+// remove itself immediately instead of lingering until its local TTL.
+export const MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED =
+  "managed-browser:batch-confirm-cancelled";
 // R01/D-FR-18: the settings connection probe — three separate probes
 // (chat / verified JSON Schema / forced tool) reported independently.
 export const MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES =

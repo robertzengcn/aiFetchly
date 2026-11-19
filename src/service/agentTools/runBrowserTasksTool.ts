@@ -266,6 +266,14 @@ const BATCH_CONFIRM_TTL_MS = 10 * 60_000;
 class BatchConfirmWaitRegistry {
   private readonly pending = new Map<string, PendingBatchConfirmRequest>();
   private sink: ((request: PendingBatchConfirmRequest) => void) | null = null;
+  /**
+   * R07/M-FR-04: fired when a pending card leaves the registry WITHOUT a
+   * user decision (parent Stop or TTL expiry) so the renderer can retire
+   * the card immediately instead of waiting for its local TTL sweep.
+   */
+  private dismissalSink:
+    | ((input: { requestId: string; conversationId: string }) => void)
+    | null = null;
 
   /** Whether a renderer is wired — without one the card cannot be shown. */
   public hasSink(): boolean {
@@ -274,6 +282,14 @@ class BatchConfirmWaitRegistry {
 
   public setSink(sink: ((request: PendingBatchConfirmRequest) => void) | null): void {
     this.sink = sink;
+  }
+
+  public setDismissalSink(
+    sink:
+      | ((input: { requestId: string; conversationId: string }) => void)
+      | null
+  ): void {
+    this.dismissalSink = sink;
   }
 
   public create(input: {
@@ -304,6 +320,11 @@ class BatchConfirmWaitRegistry {
       if (entry) {
         this.pending.delete(requestId);
         entry.resolve({ confirmed: false, cancelled: true });
+        // R07: the TTL expiry retires the CARD too (no user decision).
+        this.dismissalSink?.({
+          requestId,
+          conversationId: entry.conversationId,
+        });
       }
     }, BATCH_CONFIRM_TTL_MS).unref?.();
     return { request, promise };
@@ -334,6 +355,11 @@ class BatchConfirmWaitRegistry {
     }
     this.pending.delete(requestId);
     entry.resolve({ confirmed: false, cancelled: true });
+    // R07: the parent-Stop retirement reaches the CARD as well.
+    this.dismissalSink?.({
+      requestId,
+      conversationId: entry.conversationId,
+    });
     return true;
   }
 }

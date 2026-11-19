@@ -24,6 +24,7 @@ import {
   MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
   MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
   MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+  MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
   MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
   MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
   BROWSER_TASK_PAUSE,
@@ -192,6 +193,11 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       tasks: request.tasks,
       createdAt: request.createdAt,
     })
+  );
+  // R07/M-FR-04: cards retired WITHOUT a user decision (parent Stop,
+  // TTL expiry) are told to the renderer so the card removes itself.
+  getBatchConfirmWaitRegistry().setDismissalSink((input) =>
+    sendToRenderer(win, MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED, input)
   );
 
   // --- Event bridge: module singletons → renderer -----------------------

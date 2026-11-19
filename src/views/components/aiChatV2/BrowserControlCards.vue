@@ -73,6 +73,7 @@ import {
   onManagedBrowserCredentialRequest,
   onManagedBrowserSiteConfirmRequest,
   onManagedBrowserBatchConfirmRequest,
+  onManagedBrowserBatchConfirmCancelled,
   pauseBrowserTask,
   resumeBrowserTask,
   stopBrowserTask,
@@ -384,6 +385,8 @@ let unsubscribeCredential: (() => void) | null = null;
 let unsubscribePicker: (() => void) | null = null;
 let unsubscribeSiteConfirm: (() => void) | null = null;
 let unsubscribeBatchConfirm: (() => void) | null = null;
+// R07/M-FR-04: cards retired WITHOUT a user decision (parent Stop, TTL).
+let unsubscribeBatchConfirmCancelled: (() => void) | null = null;
 let pruneTimer: number | null = null;
 
 onMounted(() => {
@@ -405,6 +408,14 @@ onMounted(() => {
   unsubscribeBatchConfirm = onManagedBrowserBatchConfirmRequest((request) => {
     batchConfirmRequests.value.set(request.requestId, request);
   });
+  unsubscribeBatchConfirmCancelled = onManagedBrowserBatchConfirmCancelled(
+    (event) => {
+      // R07: the main process retired the request (parent Stop / TTL) —
+      // the card disappears immediately instead of a stray submit hitting
+      // an already-consumed request.
+      batchConfirmRequests.value.delete(event.requestId);
+    }
+  );
   pruneTimer = window.setInterval(() => {
     // Finished batches linger 30s for review, then the card disappears.
     for (const [batchId, finishedAt] of finishedBatches) {
@@ -447,6 +458,7 @@ onBeforeUnmount(() => {
   unsubscribePicker?.();
   unsubscribeSiteConfirm?.();
   unsubscribeBatchConfirm?.();
+  unsubscribeBatchConfirmCancelled?.();
   if (pruneTimer !== null) {
     window.clearInterval(pruneTimer);
   }
