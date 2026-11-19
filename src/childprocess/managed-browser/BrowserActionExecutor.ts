@@ -639,6 +639,11 @@ export class BrowserActionExecutor {
     if (options.dispatchFlag) {
       options.dispatchFlag.inputDispatched = true;
     }
+    // R13/D-FR-26: the navigation dispatch fires the SAME per-leaf
+    // progress update as every other mutating command (bumpDispatch
+    // semantics) — a crash after the goto started is classified as
+    // dispatched, never pre-dispatch.
+    options.onLeaf?.({ inputDispatched: true });
     try {
       await options.page.goto(url, {
         timeout:

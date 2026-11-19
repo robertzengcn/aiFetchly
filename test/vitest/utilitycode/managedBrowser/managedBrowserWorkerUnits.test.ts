@@ -490,6 +490,40 @@ describe("BrowserActionExecutor", () => {
     expect(outcome.pageRevision).toBe(2);
   });
 
+  it("a started navigation fires the SAME per-leaf dispatch progress as other mutations (R13/D-FR-26)", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    registry.register({
+      element: new FakeHandle(),
+      role: "button",
+      name: "X",
+    });
+    const leafEvents: Array<{ inputDispatched: boolean }> = [];
+    const dispatchFlag = { inputDispatched: false };
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "navigate", url: "https://www.youtube.com/feed/history" },
+        ],
+      },
+      {
+        page,
+        registry,
+        navigation,
+        shouldCancel: () => false,
+        dispatchFlag,
+        onLeaf: (info: { inputDispatched: boolean }) => {
+          leafEvents.push(info);
+        },
+      }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    // The goto started: the per-leaf progress fires like click/fill —
+    // a crash after this point classifies as dispatched, never
+    // pre-dispatch.
+    expect(leafEvents).toEqual([{ inputDispatched: true }]);
+    expect(dispatchFlag.inputDispatched).toBe(true);
+  });
+
   it("stops immediately when cancelled between actions", async () => {
     const { page, registry, executor, navigation } = setupExecutor();
     const outcome = await executor.executeProgram(
