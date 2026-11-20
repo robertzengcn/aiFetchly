@@ -377,6 +377,17 @@ export class AgentTaskControlService {
     return stored;
   }
 
+  /**
+   * B03/C-FR-07: NON-consuming read for the AGENT TRANSCRIPT. The
+   * transcript entry and the runner's next decision input must BOTH see
+   * the same text — the runner's safe point is the single consumer that
+   * clears it (its decision is the last use; a second resume records
+   * fresh text and the cycle repeats without replaying the old one).
+   */
+  public peekResumeInstructions(taskId: string): string | null {
+    return this.resumeInstructions.get(taskId) ?? null;
+  }
+
   /** Stop: cancels every waiter (the loop fails fast, C-FR-04). */
   public cancel(taskId: string, reason = "user_stop"): void {
     this.setState(taskId, "cancelled", reason);

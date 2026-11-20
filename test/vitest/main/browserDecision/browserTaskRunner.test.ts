@@ -1827,6 +1827,36 @@ describe("BrowserTaskRunner R13 redispatch revalidation", () => {
   });
 });
 
+describe("B03 resume-instruction delivery", () => {
+  it("peek leaves the text for the runner's consume; a second resume replaces it (B03/C-FR-07)", async () => {
+    const control = new AgentTaskControlService();
+    control.recordResumeInstructions("lane_b03:0", "prefer the second result");
+    // The AGENT transcript peeks (non-consuming) — as onPauseWait does.
+    expect(control.peekResumeInstructions("lane_b03:0")).toBe(
+      "prefer the second result"
+    );
+    // Still there for the runner.
+    expect(control.peekResumeInstructions("lane_b03:0")).toBe(
+      "prefer the second result"
+    );
+    // The RUNNER consumes at its safe point.
+    expect(control.consumeResumeInstructions("lane_b03:0")).toBe(
+      "prefer the second result"
+    );
+    // Consumed once — neither a replay nor a second delivery.
+    expect(control.consumeResumeInstructions("lane_b03:0")).toBeNull();
+    expect(control.peekResumeInstructions("lane_b03:0")).toBeNull();
+    // A second resume records FRESH text (no replay of the old one).
+    control.recordResumeInstructions("lane_b03:0", "now focus on pricing");
+    expect(control.peekResumeInstructions("lane_b03:0")).toBe(
+      "now focus on pricing"
+    );
+    expect(control.consumeResumeInstructions("lane_b03:0")).toBe(
+      "now focus on pricing"
+    );
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

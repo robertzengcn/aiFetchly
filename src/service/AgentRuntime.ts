@@ -676,8 +676,13 @@ export class AgentRuntime {
           // instructions ride the transcript entry (and are consumed by
           // the runner through the control record).
           await gate.waitUntilOpen(signal);
+          // B03/C-FR-07: the transcript PEEKS (non-consuming) — the
+          // runner's safe point is the single consumer that clears the
+          // text for its next decision input. Consuming here raced the
+          // runner (executeTask adopts this control id): whichever ran
+          // first kept the text and the other lost it.
           const resumeInstructions =
-            getDefaultAgentTaskControlService().consumeResumeInstructions(
+            getDefaultAgentTaskControlService().peekResumeInstructions(
               controlTaskId
             ) ?? "";
           await transcript.appendSystemText(
