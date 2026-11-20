@@ -2688,6 +2688,9 @@ record.currentUrl = message.observation.policyUrl || message.observation.url || 
     const restoreSnapshot = {
       accountId: accountId > 0 ? accountId : undefined,
       conversation,
+      // B05/M-FR-07: the ROOT conversation — notices/cards publish on it
+      // (the hidden child conversation renders nothing).
+      rootConversationId: record.rootConversationId ?? undefined,
       // Deterministic first: the concrete row the old session used.
       effectiveProxyId: record.effectiveProxyId,
       // Fallback when the row vanished: the original selector.
@@ -2708,6 +2711,11 @@ record.currentUrl = message.observation.policyUrl || message.observation.url || 
           ? { agentTaskId: restoreSnapshot.agentTaskId }
           : {}),
         ...(conversation ? { conversationId: conversation } : {}),
+        // B05/M-FR-07: the replacement session stays visible to the
+        // parent chat (session card, challenge notice, credential card).
+        ...(restoreSnapshot.rootConversationId
+          ? { rootConversationId: restoreSnapshot.rootConversationId }
+          : {}),
         ...(lastUrl && lastUrl !== "about:blank"
           ? { requestedStartUrl: lastUrl }
           : {}),
@@ -2726,33 +2734,60 @@ record.currentUrl = message.observation.policyUrl || message.observation.url || 
       // an auto selector can resolve a DIFFERENT proxy. When the id is
       // unknown, leave the session STOPPED with a structured error
       // instead of guessing.
-      if (restoreSnapshot.effectiveProxyId == null) {
-        throw new ManagedBrowserError(
-          "proxy_switch_restore_failed",
-          "restore_proxy_unknown"
-        );
-      }
+      // B04/P-FR-02: the OLD route is restored — INCLUDING direct. A
+      // direct session has effectiveProxyId null; refusing here left the
+      // browser STOPPED after a failed switch (the audit's direct→bad-
+      // proxy case).
+      const restoreSelection =
+        restoreSnapshot.effectiveProxyId != null
+          ? { kind: "proxy_id" as const, proxyId: restoreSnapshot.effectiveProxyId }
+          : { kind: "direct" as const };
+      let rollbackOutcome: string;
       try {
         await this.start({
           ...(restoreSnapshot.accountId
             ? { accountId: restoreSnapshot.accountId }
             : {}),
           purpose: "proxy_switch_restore",
-          proxy: { kind: "proxy_id", proxyId: restoreSnapshot.effectiveProxyId },
+          proxy: restoreSelection,
           ...(restoreSnapshot.conversation
             ? { conversationId: restoreSnapshot.conversation }
             : {}),
           ...(restoreSnapshot.agentTaskId
             ? { agentTaskId: restoreSnapshot.agentTaskId }
             : {}),
+          // B05: the restored session keeps the root conversation too.
+          ...(restoreSnapshot.rootConversationId
+            ? { rootConversationId: restoreSnapshot.rootConversationId }
+            : {}),
           ...(restoreSnapshot.lastUrl
             ? { requestedStartUrl: restoreSnapshot.lastUrl }
             : {}),
         });
-      } catch {
-        // restoration failed — the original error is surfaced
+        rollbackOutcome =
+          restoreSnapshot.effectiveProxyId != null
+            ? `restored proxied session (proxy ${restoreSnapshot.effectiveProxyId})`
+            : "restored direct session";
+      } catch (restoreError) {
+        // B04/P-AC-01: the rollback outcome is NAMED, never swallowed —
+        // the caller must know the browser is STOPPED and on which route.
+        rollbackOutcome = `restore also failed: ${
+          restoreError instanceof ManagedBrowserError
+            ? restoreError.code
+            : restoreError instanceof Error
+              ? restoreError.message
+              : "unknown"
+        } — the browser is stopped`;
       }
-      throw startError;
+      const startCode =
+        startError instanceof ManagedBrowserError
+          ? startError.code
+          : "proxy_no_usable_proxy";
+      throw new ManagedBrowserError(
+        "proxy_switch_restore_failed",
+        `switch_failed=${startCode}; ${rollbackOutcome}`,
+        startError instanceof Error ? startError.message : String(startError)
+      );
     }
   }
 
