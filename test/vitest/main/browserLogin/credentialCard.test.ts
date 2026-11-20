@@ -4,6 +4,7 @@ import {
   getAccountPickerWaitRegistry,
   BrowserCredentialLoginService,
 } from "@/service/browserLogin/BrowserCredentialLoginService";
+import { displayConversationOf } from "@/service/browserLogin/BrowserCredentialLoginService";
 
 /**
  * PRD A-FR-05/06: the credential card wait registry (single-use,
@@ -141,6 +142,49 @@ describe("credential card wait registry (A-FR-05/06)", () => {
     });
     expect(
       reg.consume({ requestId: request.requestId, conversationId: "conv-OTHER" })
+    ).toBeNull();
+  });
+});
+
+describe("BrowserCredentialLoginService B01 root-routed cards", () => {
+  it("publishes the credential card on the ROOT conversation and binds the submit to it (B01/M-FR-08)", async () => {
+    const reg = getCredentialCardWaitRegistry();
+    // Simulate the service's publish path with BOTH ids present: the
+    // hidden child conversation and the display root.
+    const input = {
+      sessionId: "mb_b01root00001",
+      conversationId: "agent-hidden-child",
+      rootConversationId: "conv-root",
+      siteId: 1,
+      siteDomain: "example.test",
+      mode: "login" as const,
+      prefillUsername: null,
+    };
+    const { request } = reg.create({
+      // The service publishes on the DISPLAY conversation.
+      conversationId: displayConversationOf(input),
+      sessionId: input.sessionId,
+      siteId: input.siteId,
+      siteDomain: input.siteDomain,
+      mode: input.mode,
+      prefillUsername: input.prefillUsername,
+    });
+    // The card is listed under the ROOT — the conversation the parent
+    // chat renders.
+    expect(reg.listForConversation("conv-root")).toHaveLength(1);
+    expect(reg.listForConversation("agent-hidden-child")).toHaveLength(0);
+    // The submit channel is bound to the SAME (root) id: a submit from
+    // the root resolves; a submit from the hidden child is refused.
+    const resolved = reg.consume({
+      requestId: request.requestId,
+      conversationId: "conv-root",
+    });
+    expect(resolved).not.toBeNull();
+    expect(
+      reg.consume({
+        requestId: request.requestId,
+        conversationId: "conv-root",
+      })
     ).toBeNull();
   });
 });

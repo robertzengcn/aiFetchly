@@ -18,6 +18,14 @@ import { SocialAccountModule } from "@/modules/socialAccountModule";
 export interface BrowserSignInInput {
   readonly sessionId: string;
   readonly conversationId: string;
+  /**
+   * B01/M-FR-08: the DISPLAY conversation (the ROOT/parent chat). Every
+   * user-visible card — credential, account picker, site-confirm — is
+   * published on this id and its submit channel is bound to the SAME id;
+   * a child-routed card never renders (the parent chat filters requests
+   * by the open conversation) and the in-job wait sits until TTL.
+   */
+  readonly rootConversationId?: string;
   /** C-FR-09: managed-async job id for the user-wait freeze. */
   readonly jobId?: string;
   /** T16: Stop while the card is open resolves the wait as cancelled. */
@@ -25,6 +33,16 @@ export interface BrowserSignInInput {
   readonly intent: "login" | "register";
   readonly accountId?: number;
   readonly usernameHint?: string;
+}
+
+/**
+ * B01/M-FR-08: the conversation every user-visible card is published on
+ * and submitted from — the ROOT chat when one is wired.
+ */
+export function displayConversationOf(
+  input: Pick<BrowserSignInInput, "conversationId" | "rootConversationId">
+): string {
+  return input.rootConversationId ?? input.conversationId;
 }
 
 export interface BrowserSignInResult {
@@ -102,7 +120,7 @@ class CredentialCardWaitRegistry {
     const requestId = `cred_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     const request: PendingCredentialRequest = {
       requestId,
-      conversationId: input.conversationId,
+      conversationId: displayConversationOf(input),
       sessionId: input.sessionId,
       siteId: input.siteId,
       siteDomain: input.siteDomain,
@@ -133,7 +151,7 @@ class CredentialCardWaitRegistry {
     readonly conversationId: string;
   }): PendingCredentialRequest | null {
     const entry = this.pending.get(input.requestId);
-    if (!entry || entry.conversationId !== input.conversationId) {
+    if (!entry || entry.conversationId !== displayConversationOf(input)) {
       return null;
     }
     this.pending.delete(input.requestId);
@@ -194,7 +212,7 @@ class AccountPickerWaitRegistry {
     const requestId = `pick_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     const request: PendingAccountPickerRequest = {
       requestId,
-      conversationId: input.conversationId,
+      conversationId: displayConversationOf(input),
       sessionId: input.sessionId,
       siteDomain: input.siteDomain,
       candidates: input.candidates,
@@ -219,7 +237,7 @@ class AccountPickerWaitRegistry {
     readonly conversationId: string;
   }): PendingAccountPickerRequest | null {
     const entry = this.pending.get(input.requestId);
-    if (!entry || entry.conversationId !== input.conversationId) {
+    if (!entry || entry.conversationId !== displayConversationOf(input)) {
       return null;
     }
     this.pending.delete(input.requestId);
@@ -291,7 +309,7 @@ class SiteConfirmWaitRegistry {
     const requestId = `site_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
     const request: PendingSiteConfirmRequest = {
       requestId,
-      conversationId: input.conversationId,
+      conversationId: displayConversationOf(input),
       sessionId: input.sessionId,
       siteId: input.siteId,
       registrableDomain: input.registrableDomain,
@@ -318,7 +336,7 @@ class SiteConfirmWaitRegistry {
     readonly conversationId: string;
   }): PendingSiteConfirmRequest | null {
     const entry = this.pending.get(input.requestId);
-    if (!entry || entry.conversationId !== input.conversationId) {
+    if (!entry || entry.conversationId !== displayConversationOf(input)) {
       return null;
     }
     this.pending.delete(input.requestId);
@@ -401,7 +419,7 @@ export class BrowserCredentialLoginService {
     } else if (candidates.length === 0) {
       // A-FR-03/05: post a credential card and wait INSIDE the job.
       const { request, promise } = registry.create({
-        conversationId: input.conversationId,
+        conversationId: displayConversationOf(input),
         sessionId: input.sessionId,
         siteId: site.siteId,
         siteDomain: site.registrableDomain,
@@ -422,7 +440,7 @@ export class BrowserCredentialLoginService {
         getDefaultToolJobRegistry().setUserWait(jobId, true, "credential_card");
       }
       const onAbort = (): void => {
-        registry.consume({ requestId: request.requestId, conversationId: input.conversationId })
+        registry.consume({ requestId: request.requestId, conversationId: displayConversationOf(input) })
           ?.resolve({ username: "", password: "", save: false, cancelled: true });
       };
       input.signal?.addEventListener("abort", onAbort, { once: true });
@@ -482,7 +500,7 @@ export class BrowserCredentialLoginService {
       // the job (like the credential card) instead of returning a
       // picker-required stub the user can never see.
       const { request, promise } = pickerRegistry.create({
-        conversationId: input.conversationId,
+        conversationId: displayConversationOf(input),
         sessionId: input.sessionId,
         siteDomain: site.registrableDomain,
         candidates: candidates.map((c) => ({
@@ -505,7 +523,7 @@ export class BrowserCredentialLoginService {
         pickerRegistry
           .consume({
             requestId: request.requestId,
-            conversationId: input.conversationId,
+            conversationId: displayConversationOf(input),
           })
           ?.resolve({ accountId: null, cancelled: true });
       };
@@ -679,7 +697,7 @@ export class BrowserCredentialLoginService {
       // T16: a username-only account (saved without a password) asks for
       // the password through the card instead of failing.
       const { request, promise: cardPromise } = registry.create({
-        conversationId: input.conversationId,
+        conversationId: displayConversationOf(input),
         sessionId: input.sessionId,
         siteId: site.siteId,
         siteDomain: site.registrableDomain,
@@ -691,7 +709,7 @@ export class BrowserCredentialLoginService {
       void request;
       const onCardAbort = (): void => {
         registry
-          .consume({ requestId: request.requestId, conversationId: input.conversationId })
+          .consume({ requestId: request.requestId, conversationId: displayConversationOf(input) })
           ?.resolve({ username: "", password: "", save: false, cancelled: true });
       };
       input.signal?.addEventListener("abort", onCardAbort, { once: true });
@@ -843,7 +861,7 @@ export class BrowserCredentialLoginService {
       return;
     }
     const { request, promise } = siteConfirmRegistry.create({
-      conversationId: input.conversationId,
+      conversationId: displayConversationOf(input),
       sessionId: input.sessionId,
       siteId: site.siteId,
       registrableDomain: site.registrableDomain,

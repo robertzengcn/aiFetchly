@@ -2326,6 +2326,12 @@ export class ManagedBrowserAiToolService {
     const result = await getDefaultBrowserCredentialLoginService().signIn({
       sessionId: parsed.data.session_id,
       conversationId: context.conversationId,
+      // B01/M-FR-08: the cards publish on the ROOT chat — a sub-agent's
+      // hidden conversation renders nothing, so the wait would sit until
+      // TTL with no way to submit.
+      ...(context.rootConversationId
+        ? { rootConversationId: context.rootConversationId }
+        : {}),
       ...(context.jobId ? { jobId: context.jobId } : {}),
       ...(context.signal ? { signal: context.signal } : {}),
       intent: parsed.data.intent,
