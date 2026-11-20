@@ -80,3 +80,4 @@ One commit per logical unit, all with tests; the audit's local `console.log` mod
 - R11: child-only credential waits still bypass the lane watchdog (needs the credential service to mark the control record); restart reconciliation.
 - Registry: account platform-change semantics + data backfill; the static-precedence launch/bind/refresh points.
 - The six Electron acceptance scenarios (`test.fixme`), the paired held-out evaluation, and packaged-process evidence remain operator/CI scope per AGENTS.md.
+- CI run `44760050567` (fix-pass head `1cd242b79`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright). An intermediate run (`44648453912`) caught a receipt-contract regression in the grant reordering (the top-level observability receipt was dropped); fixed in `1cd242b79` by distinguishing "no grant applicable" from "grant failed".
