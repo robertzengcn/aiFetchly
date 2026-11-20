@@ -571,16 +571,23 @@ export class ManagedBrowserCacheModule
     };
   }
 
-  /** Fires a deferred clear once the scope is released. */
+  /**
+   * Fires a deferred clear once the scope is released. R: the queued
+   * request stays PENDING until the work settles — deleting it first
+   * dropped the request whenever the active-scope guard fired (a session
+   * re-opened between release and the deferred rename) or the clear
+   * threw; the request is retired only on completion and RETAINED for
+   * the next release on failure.
+   */
   private flushPendingClear(scopeToken: string): void {
     if (!this.pendingClears.has(scopeToken)) {
       return;
     }
-    this.pendingClears.delete(scopeToken);
     void (async () => {
       try {
         // A session may have re-opened this scope between release and the
         // deferred rename — never move a live cache out from under Chrome.
+        // The request REMAINS queued; the next release flushes it again.
         if (this.activeScopes.has(scopeToken)) {
           return;
         }
@@ -591,9 +598,16 @@ export class ManagedBrowserCacheModule
         if (derived) {
           await this.clearScopeAtPath(derived.scopePath, scopeToken, "account");
         }
+        // The work settled (the completion notice already published
+        // inside clearScopeAtPath) — only now is the request retired, so
+        // getStatus().pendingClear never flips before the completion
+        // signal.
+        this.pendingClears.delete(scopeToken);
       } catch (error) {
         logCacheError("deferred clear failed", error);
         this.publishNotice("cache_clear_failed", "error");
+        // The failure RETAINS the queued request — the next scope
+        // release retries it instead of the request being lost.
       }
     })();
   }
