@@ -61,7 +61,14 @@ const siteRegistryMock = vi.hoisted(() => ({
       siteId: _siteId,
       name: "Mocked Site",
       registrableDomain: "example.test",
-      allowedDomainSuffixes: ["example.test"],
+      // R08: the REGISTRY is the authoritative cookie-policy source —
+      // this mock carries the fixture domains the cookie-bridge tests
+      // persist (the static manifest is only a seed now).
+      allowedDomainSuffixes: [
+        "example.test",
+        "youtube.com",
+        "accounts.google.com",
+      ],
       requiredDomainSuffixes: [],
       loginUrl: null,
       verificationUrl: null,

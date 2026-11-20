@@ -1782,11 +1782,14 @@ record.currentUrl = message.observation.policyUrl || message.observation.url || 
       if (!parsed.success || parsed.data.length === 0) {
         return; // keep last valid snapshot
       }
-      // F19: derive the cookie policy from the site registry when the
-      // static manifest has no row (high-ID AI-created sites).
+      // F19 + R08/S-FR-05/06: the SITE REGISTRY is the AUTHORITATIVE
+      // cookie-policy source — the static manifest is only a seed for
+      // legacy platform ids the registry does not know. Preferring the
+      // static list persisted cookies for allowed-domains the seeded
+      // site's narrower registry suffixes never consented to.
       const manifest =
-        getPlatformManifest(record.platformId) ??
-        (await this.deriveManifestFromSite(record.platformId));
+        (await this.deriveManifestFromSite(record.platformId)) ??
+        getPlatformManifest(record.platformId);
       if (!manifest) {
         return;
       }
