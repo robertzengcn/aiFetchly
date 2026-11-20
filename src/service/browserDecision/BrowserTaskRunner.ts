@@ -338,6 +338,8 @@ export class BrowserTaskRunner {
   private advertisedMaxCandidates: number | null = null;
   /** R01: the provider epoch the PENDING recovery decision was admitted under. */
   private pendingRecoveryEpoch: string | null = null;
+  /** R13: the observation ID pinned for the PENDING recovery proposal. */
+  private pendingRecoveryObservationId: string | null = null;
   /** A02/D-FR-19: the advertised deadline ceiling (null = no list). */
   private advertisedDeadlineMs: number | null = null;
   private lastFailureKey: string | null = null;
@@ -649,6 +651,20 @@ export class BrowserTaskRunner {
             this.pendingRecovery = null;
             this.pendingRecoveryGeneration = null;
             this.pendingRecoveryEpoch = null;
+            // R13/D-FR-15a: the proposal's pin releases on discard.
+            if (this.pendingRecoveryObservationId !== null) {
+              const droppedPin = this.pendingRecoveryObservationId;
+              this.pendingRecoveryObservationId = null;
+              try {
+                await this.deps.pinObservation?.(
+                  this.input.sessionId,
+                  droppedPin,
+                  false
+                );
+              } catch {
+                // best-effort release
+              }
+            }
             observation = await this.deps.observe(this.input.sessionId);
             if (!observation) {
               return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
@@ -662,6 +678,22 @@ export class BrowserTaskRunner {
           // captured before ITS inference.
           epochAtDecide = this.pendingRecoveryEpoch;
           this.pendingRecoveryEpoch = null;
+          // R13/D-FR-15a: the pin releases at CONSUMPTION — the proposal
+          // is now the executed decision and its refs are attested by
+          // the loop's own observation checks.
+          if (this.pendingRecoveryObservationId !== null) {
+            const consumedPin = this.pendingRecoveryObservationId;
+            this.pendingRecoveryObservationId = null;
+            try {
+              await this.deps.pinObservation?.(
+                this.input.sessionId,
+                consumedPin,
+                false
+              );
+            } catch {
+              // best-effort release
+            }
+          }
           this.decisionRequests++;
           decisionFromRecovery = true;
         } else
@@ -1395,10 +1427,48 @@ export class BrowserTaskRunner {
                   ],
                 };
               }
-              const retryExecution = await this.deps.runActions(
-                this.input.sessionId,
-                { actions: [programAction] }
-              );
+              // R13/D-FR-09: the wait ALSO invalidated Stop/Pause — a
+              // cancelled or resumed task re-dispatches nothing.
+              if (signal.aborted) {
+                return {
+                  effect: "known" as const,
+                  pageRevision: execution.pageRevision,
+                  results: [{ success: false, errorCode: "task_cancelled" }],
+                };
+              }
+              if (
+                control.getResumeGeneration(this.taskId) >
+                generationBeforeDecide
+              ) {
+                return {
+                  effect: "known" as const,
+                  pageRevision: execution.pageRevision,
+                  results: [
+                    {
+                      success: false,
+                      errorCode: "action_discarded_after_resume",
+                    },
+                  ],
+                };
+              }
+              let retryExecution: RunnerExecutionResult;
+              try {
+                retryExecution = await this.deps.runActions(
+                  this.input.sessionId,
+                  { actions: [programAction] }
+                );
+              } catch (retryError) {
+                // R13/D-FR-26: a re-dispatch throw is journaled unknown
+                // exactly like an initial-dispatch throw.
+                await this.deps.persistActionOutcome?.("unknown").catch(
+                  () => undefined
+                );
+                return {
+                  effect: "unknown" as const,
+                  pageRevision: execution.pageRevision,
+                  results: [],
+                };
+              }
               await this.deps.persistActionOutcome?.(
                 this.stepOutcomeOf(retryExecution)
               );
@@ -1661,10 +1731,48 @@ export class BrowserTaskRunner {
                 ],
               };
             }
-            const retryExecution = await this.deps.runActions(
-              this.input.sessionId,
-              { actions: [programAction] }
-            );
+            // R13/D-FR-09: the wait ALSO invalidated Stop/Pause — a
+            // cancelled or resumed task re-dispatches nothing.
+            if (signal.aborted) {
+              return {
+                effect: "known" as const,
+                pageRevision: execution.pageRevision,
+                results: [{ success: false, errorCode: "task_cancelled" }],
+              };
+            }
+            if (
+              control.getResumeGeneration(this.taskId) > generationBeforeDecide
+            ) {
+              return {
+                effect: "known" as const,
+                pageRevision: execution.pageRevision,
+                results: [
+                  {
+                    success: false,
+                    errorCode: "action_discarded_after_resume",
+                  },
+                ],
+              };
+            }
+            let retryExecution: RunnerExecutionResult;
+            try {
+              retryExecution = await this.deps.runActions(
+                this.input.sessionId,
+                { actions: [programAction] }
+              );
+            } catch (retryError) {
+              // R13/D-FR-26: a re-dispatch throw is journaled unknown
+              // exactly like an initial-dispatch throw — the outcome is
+              // never silently skipped.
+              await this.deps.persistActionOutcome?.("unknown").catch(
+                () => undefined
+              );
+              return {
+                effect: "unknown" as const,
+                pageRevision: execution.pageRevision,
+                results: [],
+              };
+            }
             await this.deps.persistActionOutcome?.(
               this.stepOutcomeOf(retryExecution)
             );
@@ -1966,35 +2074,43 @@ export class BrowserTaskRunner {
       } catch {
         // best-effort
       }
+      let proposalStored = false;
       try {
         result = await this.deps.decisionClient.decide(
           recoveryInput,
           attemptController.signal
         );
+        proposalStored =
+          result.status === "decided" &&
+          !attemptController.signal.aborted &&
+          !signal.aborted;
       } finally {
-        try {
-          await this.deps.pinObservation?.(
-            this.input.sessionId,
-            recoveryObservationId,
-            false
-          );
-        } catch {
-          // best-effort release
+        // R13/D-FR-15a: the pin SURVIVES a stored proposal — it is
+        // released when the loop CONSUMES or DISCARDS the proposal, not
+        // here (dropping it before consumption let a concurrent
+        // reobservation evict the refs the proposal is about to use).
+        if (!proposalStored) {
+          try {
+            await this.deps.pinObservation?.(
+              this.input.sessionId,
+              recoveryObservationId,
+              false
+            );
+          } catch {
+            // best-effort release
+          }
         }
         clearTimeout(timer);
         signal.removeEventListener("abort", onOuterAbort);
       }
-      if (
-        result.status === "decided" &&
-        !attemptController.signal.aborted &&
-        !signal.aborted
-      ) {
+      if (proposalStored) {
         // A06/C-FR-06/R05: the proposal carries the resume generation it
         // was produced UNDER (captured before inference) — a Pause→Resume
         // before OR DURING inference discards it.
         this.pendingRecovery = result;
         this.pendingRecoveryGeneration = generationBeforeRecovery;
         this.pendingRecoveryEpoch = epochBeforeRecovery;
+        this.pendingRecoveryObservationId = recoveryObservationId;
         return true;
       }
       return false;

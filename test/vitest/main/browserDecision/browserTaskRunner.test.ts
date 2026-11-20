@@ -1776,6 +1776,57 @@ describe("BrowserTaskRunner R05 decide-across-resume and R01 shortlist bound", (
   });
 });
 
+describe("BrowserTaskRunner R13 redispatch revalidation", () => {
+  it("a Stop landing during the approval wait is honored by the re-dispatch — nothing dispatches (R13/D-FR-09)", async () => {
+    const approvalRequiredStop: RunnerExecutionResult = {
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    };
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const dispatched: RunnerAction[] = [];
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      dispatched.push(...input.actions);
+      if (dispatchCount === 1) {
+        return approvalRequiredStop;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    // The user approves BUT the task is stopped while the dialog is open:
+    // the outer signal aborts right before the wait resolves.
+    const controller = new AbortController();
+    const depsWithSignal = {
+      ...deps,
+      signal: controller.signal,
+      awaitApproval: async (): Promise<"approved" | "denied" | "expired"> => {
+        controller.abort();
+        return "approved";
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r13redis", conversationId: "conv-1", goal: "click" },
+      depsWithSignal
+    );
+    const result = await runner.run();
+    // The re-dispatch was refused by the closure's renewed abort check —
+    // nothing dispatched after the Stop and the task ends cancelled.
+    expect(dispatchCount).toBe(1);
+    expect(dispatched.length).toBe(1);
+    expect(result.status).toBe("cancelled");
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",
