@@ -936,6 +936,14 @@ export class AgentRuntime {
     // batch row / browser control identity), so the grant must present
     // controlTaskId — presenting the generated agent task id refused
     // every grant while the receipts still advertised the outputs.
+    // T15b/R07/M-FR-02: WITHOUT a parent conversation no grant is
+    // intended — the receipts surface unchanged for observability (the
+    // owner conversation can read its own outputs). WITH a parent, only
+    // receipts whose grant actually LANDED surface: the grant presents
+    // the SAME identity the artifacts were STORED under (ownerAgentId =
+    // controlTaskId, matching the loop's tool-result records), so a
+    // failed grant drops the receipt instead of advertising an output
+    // the parent cannot read (OUTPUT_NOT_AVAILABLE).
     const grantedOutputIds: string[] = [];
     if (
       externalizedOutputIds.length > 0 &&
@@ -975,9 +983,9 @@ export class AgentRuntime {
           );
         }
       }
-    }
-    if (grantedOutputIds.length > 0) {
       result.outputIds = grantedOutputIds;
+    } else if (externalizedOutputIds.length > 0) {
+      result.outputIds = externalizedOutputIds;
     }
     await this.taskModule.saveResult(agentTaskId, result);
     await this.taskModule.setStatus(agentTaskId, "completed", {
