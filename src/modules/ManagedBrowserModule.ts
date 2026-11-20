@@ -1134,10 +1134,19 @@ export class ManagedBrowserModule {
     // A07/M-FR-07/R06: the LEASE owner moves TOGETHER with the session —
     // through the module's OWN lease service (the same instance that
     // acquired it, not a global re-read that diverges in tests/embedded
-    // hosts), and the reassignment is VERIFIED before the transfer
-    // reports success. A lease that cannot move fails the transfer: the
-    // caller keeps the child ownership and the lease stays consistent.
+    // hosts). R06: a lease held by a DIFFERENT session on this key means
+    // the ownership cannot move coherently — the transfer is REFUSED
+    // before any mutation (never a session owned by the parent while a
+    // foreign session holds the account lease). The reassignment is
+    // verified afterwards, and a failed verification ROLLS BACK both the
+    // lease and the record so the caller sees the pre-transfer state.
     const lease = this.leaseService.getLease(record.leaseKey);
+    if (lease && lease.sessionId !== sessionId) {
+      throw new ManagedBrowserError(
+        "session_not_owned",
+        "a foreign session holds this lease; transfer refused"
+      );
+    }
     if (lease && lease.sessionId === sessionId) {
       this.leaseService.reassignLeaseOwner(
         record.leaseKey,
@@ -1151,9 +1160,16 @@ export class ManagedBrowserModule {
         moved.ownerConversationId !== parentConversationId ||
         moved.ownerAgentTaskId !== null
       ) {
+        // R06: roll the lease back to the pre-transfer owner so the
+        // caller keeps a CONSISTENT state (child ownership + child lease).
+        this.leaseService.reassignLeaseOwner(
+          record.leaseKey,
+          lease.ownerConversationId ?? "",
+          lease.ownerAgentTaskId
+        );
         throw new ManagedBrowserError(
           "session_not_owned",
-          "lease owner reassignment did not take effect; transfer refused"
+          "lease owner reassignment did not take effect; transfer rolled back"
         );
       }
     }

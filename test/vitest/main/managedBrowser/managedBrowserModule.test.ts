@@ -1302,6 +1302,87 @@ describe("ManagedBrowserModule renderer sinks", () => {
     expect(unpin.observationId).toBe("obs-A");
     expect(unpin.pinned).toBe(false);
   });
+
+  it("transfer REFUSES when a foreign session holds the lease (R06)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    const sid = status.sessionId;
+    // A FOREIGN session holds the lease on this key.
+    (
+      h.lease as unknown as {
+        getLease: (key: string) => unknown;
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).getLease = (key: string) => ({
+      sessionId: "mb_foreign_session",
+      leaseKey: key,
+      leaseToken: "lease-foreign",
+      ownerConversationId: "conv-other",
+      ownerAgentTaskId: "agt_other",
+    });
+    const reassign = vi.fn();
+    (
+      h.lease as unknown as {
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).reassignLeaseOwner = reassign;
+    await expect(
+      h.module.transferSessionToConversation(sid, "conv-parent")
+    ).rejects.toMatchObject({ code: "session_not_owned" });
+    // NO mutation happened: the lease was not touched and the session's
+    // ownership is unchanged (this harness starts without an agent task,
+    // so the owner stays null — the refusal is what matters).
+    expect(reassign).not.toHaveBeenCalled();
+    expect(h.module.getSessionOwnerAgentTaskId(sid)).toBeNull();
+  });
+
+  it("transfer with a MATCHING lease moves the lease and the ownership together (R06)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    const sid = status.sessionId;
+    const reassignCalls: Array<[string, string, string | null]> = [];
+    // A STATEFUL fake: the reassignment actually mutates what getLease
+    // returns, so the module's post-reassignment verification can pass.
+    const leaseState = {
+      sessionId: sid,
+      leaseKey: "account:101",
+      leaseToken: "lease-1",
+      ownerConversationId: "conv-1" as string | null,
+      ownerAgentTaskId: null as string | null,
+    };
+    (
+      h.lease as unknown as {
+        getLease: (key: string) => unknown;
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).getLease = (key: string) =>
+      leaseState.leaseKey === key ? { ...leaseState } : null;
+    (
+      h.lease as unknown as {
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).reassignLeaseOwner = (key: string, c: string, a: string | null) => {
+      reassignCalls.push([key, c, a]);
+      leaseState.ownerConversationId = c;
+      leaseState.ownerAgentTaskId = a;
+    };
+    const moved = await h.module.transferSessionToConversation(
+      sid,
+      "conv-parent"
+    );
+    expect(moved.state).toBe("ready");
+    // BOTH owner fields moved: conversation to the parent, task cleared.
+    expect(reassignCalls).toEqual([["account:101", "conv-parent", null]]);
+    expect(h.module.getSessionOwnerAgentTaskId(sid)).toBeNull();
+  });
 });
 
 describe("handoff-window expiry enforcement (FR-P0-013)", () => {
