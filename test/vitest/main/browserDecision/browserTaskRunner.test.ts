@@ -1667,6 +1667,115 @@ describe("BrowserTaskRunner R04 sequential executions on one control id", () => 
   });
 });
 
+describe("BrowserTaskRunner R05 decide-across-resume and R01 shortlist bound", () => {
+  it("a decision that completes ACROSS a Pause+Resume is discarded, never executed (R05)", async () => {
+    const dispatched: RunnerAction[] = [];
+    let decideCount = 0;
+    let releaseDecide: ((r: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult) => void) | null = null;
+    const heldDecision = new Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult>(
+      (resolve) => {
+        releaseDecide = resolve;
+      }
+    );
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient.decide = async (): Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> => {
+      decideCount++;
+      if (decideCount === 1) {
+        return await heldDecision;
+      }
+      return doneEntry();
+    };
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    let runnerRef: BrowserTaskRunner | null = null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r05decide",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    runnerRef = runner;
+    const runPromise = runner.run();
+    await vi.waitFor(() => expect(decideCount).toBe(1));
+    // The resume lands DURING inference.
+    deps.control.setState(runnerRef.taskId, "paused");
+    deps.control.resume(runnerRef.taskId);
+    releaseDecide!(clickDecision);
+    const result = await runPromise;
+    // The stale proposal never dispatched; the loop re-decided (DONE).
+    expect(dispatched).toEqual([]);
+    expect(result.evidence).toContain("decision_discarded_after_resume");
+    expect(result.status).toBe("completed");
+  });
+
+  it("a route advertising 120 candidates cannot expand the application shortlist of 16 (R01)", async () => {
+    const manyElements = Array.from({ length: 30 }, (_, i) => ({
+      ref: `e_${i}`,
+      role: "button",
+      name: `Button ${i}`,
+    }));
+    const seenCandidates: number[] = [];
+    const deps = makeRunnerDeps([doneEntry()]);
+    deps.observe = async (): Promise<RunnerObservation | null> => ({
+      ...observation({ elements: manyElements }),
+    });
+    (
+      deps.decisionClient as unknown as {
+        decide: (input: { candidates: ReadonlyArray<unknown> }) => Promise<unknown>;
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).decide = async (input: { candidates: ReadonlyArray<unknown> }) => {
+      seenCandidates.push(input.candidates.length);
+      return doneEntry();
+    };
+    (
+      deps.decisionClient as unknown as {
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).getCapabilities = async () => ({
+      advertised: true,
+      operationsReported: false,
+      operations: [],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      // The route ADVERTISES 120 — the application default (16) holds.
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01short",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    await runner.run();
+    expect(seenCandidates.length).toBeGreaterThan(0);
+    for (const count of seenCandidates) {
+      expect(count).toBeLessThanOrEqual(16);
+    }
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

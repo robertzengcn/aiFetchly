@@ -442,9 +442,14 @@ export class BrowserTaskRunner {
         typeof capabilities.maxCandidates === "number" &&
         capabilities.maxCandidates > 0
       ) {
+        // R01: the shortlist bound is the LOWER of the provider's
+        // advertised cap and the APPLICATION default (16) — a route
+        // reporting 120 never expands the shortlist beyond what the
+        // application offers; it can only lower it.
         this.advertisedMaxCandidates = Math.min(
           capabilities.maxCandidates,
-          120
+          120,
+          16
         );
       }
     } catch {
@@ -740,6 +745,20 @@ export class BrowserTaskRunner {
           }
           if (attemptController.signal.aborted) {
             return this.terminal("failed", "decision_deadline_exceeded", evidence, extracted, observation);
+          }
+          // R05/C-FR-06: a Pause→Resume DURING inference invalidates the
+          // decision — held work is discarded on resume, so a proposal
+          // that completed across the resume never executes (the safe
+          // point re-observes before deciding again).
+          if (
+            control.getResumeGeneration(this.taskId) > generationBeforeDecide
+          ) {
+            evidence.push("decision_discarded_after_resume");
+            observation = await this.deps.observe(this.input.sessionId);
+            if (!observation) {
+              return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
+            }
+            continue;
           }
         } catch (error) {
           return this.terminal(
@@ -1051,6 +1070,14 @@ export class BrowserTaskRunner {
           }
           this.signInAttempts++;
           evidence.push(`sign_in:attempt_${this.signInAttempts}`);
+          // R01/D-FR-01: the credential dispatch is a MUTATION boundary —
+          // the epoch is rechecked after the awaited preparation exactly
+          // like an action dispatch; a changed provider never executes a
+          // decision admitted under the old configuration.
+          if (this.providerEpochMoved(epochAtDecide)) {
+            evidence.push("provider_changed_before_sign_in");
+            continue;
+          }
           const signInResult = await this.deps.signIn({
             sessionId: this.input.sessionId,
             // W06/M-FR-08: the credential card is published on the ROOT
