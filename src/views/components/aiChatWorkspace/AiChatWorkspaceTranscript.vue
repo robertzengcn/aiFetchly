@@ -117,6 +117,10 @@
           :message="item.message"
           :show-reasoning="false"
           :status="streamStatusForMessage(item.message)"
+          @grant-permission="
+            (msg, payload) => emit('grant-permission', msg, payload)
+          "
+          @deny-permission="(msg) => emit('deny-permission', msg)"
           @stop-batch="emit('stop-batch')"
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
         />
@@ -385,6 +389,67 @@ const projectedItems = computed<ProjectedItem[]>(() => {
   const emittedGroupKeys = new Set<string>();
   const deferredByAssistantId = new Map<string, ProjectedItem[]>();
 
+  const toolCallIdsWithResults = new Set<string>();
+  for (const m of messages) {
+    if (
+      m.messageType === ("tool_result" as MessageType) &&
+      typeof m.metadata?.toolCallId === "string" &&
+      m.metadata.toolCallId.trim().length > 0
+    ) {
+      toolCallIdsWithResults.add(m.metadata.toolCallId.trim());
+    }
+  }
+
+  function projectInteractiveToolItem(
+    targetMsg: ChatV2MessageView
+  ): ProjectedItem | null {
+    if (isPermissionPrompt(targetMsg)) {
+      return {
+        kind: "permission-prompt",
+        key: `permission-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    const replyId = emailReplyDraftId(targetMsg);
+    if (replyId !== null) {
+      return {
+        kind: "email-reply",
+        key: `email-reply-${targetMsg.id}`,
+        draftId: replyId,
+      };
+    }
+    if (isOutboundBatchResultMessage(targetMsg)) {
+      return {
+        kind: "outbound-batch",
+        key: `outbound-batch-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    if (isSkillInstallResult(targetMsg)) {
+      return {
+        kind: "skill-install",
+        key: `skill-install-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    if (isBatchToolCard(targetMsg)) {
+      const toolCallId = targetMsg.metadata?.toolCallId?.trim();
+      if (
+        targetMsg.messageType === ("tool_call" as MessageType) &&
+        toolCallId &&
+        toolCallIdsWithResults.has(toolCallId)
+      ) {
+        return null;
+      }
+      return {
+        kind: "batch-card",
+        key: `batch-card-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    return null;
+  }
+
   // Walk messages in order; replace tool sequences with groups.
   let i = 0;
   // Whether any plan-bearing message exists (guards the surface selection).
@@ -421,89 +486,14 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             group,
           });
         }
-        // The anchor tool message itself can carry an interactive surface
-        // (a solo batch result owns a legacy group) — check it too.
-        const replyId = emailReplyDraftId(msg);
-        if (replyId !== null) {
-          batchItems.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: replyId });
-        }
-        if (isOutboundBatchResultMessage(msg)) {
-          batchItems.push({
-            kind: "outbound-batch",
-            key: `outbound-batch-${msg.id}`,
-            message: msg,
-          });
-        }
-        // FR-SKL-001: installation results render the shared install card
-        // (approvals, dependencies, credentials) outside the collapsed group.
-        if (isSkillInstallResult(messages[i])) {
-          batchItems.push({
-            kind: "skill-install",
-            key: `skill-install-${messages[i].id}`,
-            message: messages[i],
-          });
-        }
-        // T4/D1 (audit): an ANCHOR message can itself be a permission prompt
-        // (a failed-resume restored row, or a historical prompt whose paired
-        // call sits outside the mounted window) — surface it too, mirroring
-        // the in-loop branch, or the decision card silently disappears.
-        if (isPermissionPrompt(messages[i])) {
-          batchItems.push({
-            kind: "permission-prompt",
-            key: `permission-${messages[i].id}`,
-            message: messages[i],
-          });
-        }
-        // T3/D2 (audit): generated-image batch cards carry live progress,
-        // Stop, and Retry — they must not collapse into a generic receipt.
-        if (isBatchToolCard(messages[i])) {
-          batchItems.push({
-            kind: "batch-card",
-            key: `batch-card-${messages[i].id}`,
-            message: messages[i],
-          });
-        }
-        // Skip all consecutive tool messages.
-        i += 1;
         while (
           i < messages.length &&
           (messages[i].messageType === ("tool_call" as MessageType) ||
             messages[i].messageType === ("tool_result" as MessageType))
         ) {
-          if (isPermissionPrompt(messages[i])) {
-            batchItems.push({
-              kind: "permission-prompt",
-              key: `permission-${messages[i].id}`,
-              message: messages[i],
-            });
-          }
-          // The outbound batch card is the review/approve/send authorization
-          // surface (§18, AD-003) — surface it beside the group, not inside
-          // the collapsed receipt.
-          const replyId = emailReplyDraftId(messages[i]);
-          if (replyId !== null) {
-            batchItems.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
-          }
-          if (isOutboundBatchResultMessage(messages[i])) {
-            batchItems.push({
-              kind: "outbound-batch",
-              key: `outbound-batch-${messages[i].id}`,
-              message: messages[i],
-            });
-          }
-          if (isSkillInstallResult(messages[i])) {
-            batchItems.push({
-              kind: "skill-install",
-              key: `skill-install-${messages[i].id}`,
-              message: messages[i],
-            });
-          }
-          if (isBatchToolCard(messages[i])) {
-            batchItems.push({
-              kind: "batch-card",
-              key: `batch-card-${messages[i].id}`,
-              message: messages[i],
-            });
+          const interactive = projectInteractiveToolItem(messages[i]);
+          if (interactive) {
+            batchItems.push(interactive);
           }
           i += 1;
         }
@@ -526,78 +516,45 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         } else {
           result.push(...batchItems);
         }
-      } else if (isPermissionPrompt(msg)) {
-        // Unpaired gated tool result: the interactive card IS the surface —
-        // a compact receipt would hide the approval decision from the user.
-        result.push({
-          kind: "permission-prompt",
-          key: `permission-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (isSkillInstallResult(msg)) {
-        // FR-SKL-001: unpaired (historical) installation result — the
-        // interactive install card IS the surface, never a collapsed receipt.
-        result.push({
-          kind: "skill-install",
-          key: `skill-install-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (isBatchToolCard(msg)) {
-        // T3/D2: an unpaired (live or historical) batch card — progress,
-        // Stop, and Retry stay interactive, never a collapsed receipt.
-        result.push({
-          kind: "batch-card",
-          key: `batch-card-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (emailReplyDraftId(msg) !== null) {
-        result.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: emailReplyDraftId(msg)! });
-        i += 1;
-      } else if (isOutboundBatchResultMessage(msg)) {
-        // Unpaired outbound batch result: same rule — the review card IS the
-        // authorization surface, never a collapsed receipt.
-        result.push({
-          kind: "outbound-batch",
-          key: `outbound-batch-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (
-        msg.messageType === ("tool_call" as MessageType) &&
-        isPlanModeUiToolName(msg.metadata?.toolName)
-      ) {
-        // Plan-mode UI tool calls (EnterPlanMode, AskUserQuestion,
-        // SubmitPlanForApproval) have no execution receipt — their state
-        // renders through the plan decision/receipt/question surfaces
-        // (FR-052). A legacy receipt here would show a bogus completed row.
-        i += 1;
-        continue;
       } else {
-        // Legacy unpaired receipt.
-        result.push({
-          kind: "legacy-receipt",
-          key: `legacy-${msg.id}`,
-          execution: {
+        const interactive = projectInteractiveToolItem(msg);
+        if (interactive) {
+          result.push(interactive);
+          i += 1;
+        } else if (
+          msg.messageType === ("tool_call" as MessageType) &&
+          isPlanModeUiToolName(msg.metadata?.toolName)
+        ) {
+          // Plan-mode UI tool calls (EnterPlanMode, AskUserQuestion,
+          // SubmitPlanForApproval) have no execution receipt — their state
+          // renders through the plan decision/receipt/question surfaces
+          // (FR-052). A legacy receipt here would show a bogus completed row.
+          i += 1;
+          continue;
+        } else {
+          // Legacy unpaired receipt.
+          result.push({
+            kind: "legacy-receipt",
             key: `legacy-${msg.id}`,
-            assistantMessageId: null,
-            toolCallId: msg.metadata?.toolCallId ?? null,
-            toolName: msg.metadata?.toolName ?? "",
-            status:
-              msg.messageType === ("tool_result" as MessageType)
-                ? msg.metadata?.toolResultStatus === "error"
-                  ? "failed"
-                  : "completed"
-                : "completed",
-            outputKind: "summary",
-            isError: msg.metadata?.toolResultStatus === "error",
-            isLegacyUnpaired: true,
-            summary: msg.metadata?.toolResultSummary ?? msg.content,
-          },
-        });
-        i += 1;
+            execution: {
+              key: `legacy-${msg.id}`,
+              assistantMessageId: null,
+              toolCallId: msg.metadata?.toolCallId ?? null,
+              toolName: msg.metadata?.toolName ?? "",
+              status:
+                msg.messageType === ("tool_result" as MessageType)
+                  ? msg.metadata?.toolResultStatus === "error"
+                    ? "failed"
+                    : "completed"
+                  : "completed",
+              outputKind: "summary",
+              isError: msg.metadata?.toolResultStatus === "error",
+              isLegacyUnpaired: true,
+              summary: msg.metadata?.toolResultSummary ?? msg.content,
+            },
+          });
+          i += 1;
+        }
       }
       continue;
     }
