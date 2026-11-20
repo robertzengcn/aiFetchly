@@ -2039,6 +2039,12 @@ export class ManagedBrowserAiToolService {
             conversationId: signInInput.conversationId,
             signal: signInInput.signal,
             intent: "login",
+            // B02/D-FR-10a: the credential wait freezes the lane's clock
+            // (control intervention) and the parent poll (job user-wait).
+            ...(signInInput.controlTaskId
+              ? { controlTaskId: signInInput.controlTaskId }
+              : {}),
+            ...(context.jobId ? { jobId: context.jobId } : {}),
           });
           return {
             status: result.status,

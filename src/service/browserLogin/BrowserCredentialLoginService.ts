@@ -13,6 +13,8 @@ import {
   type SiteMatch,
 } from "@/modules/BrowserSiteModule";
 import { createHash } from "node:crypto";
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
 import { SocialAccountModule } from "@/modules/socialAccountModule";
 
 export interface BrowserSignInInput {
@@ -26,6 +28,13 @@ export interface BrowserSignInInput {
    * by the open conversation) and the in-job wait sits until TTL.
    */
   readonly rootConversationId?: string;
+  /**
+   * B02/D-FR-10a/C-FR-09: the OWNING control task id — the card waits
+   * begin an intervention on it so the lane's active clock freezes, the
+   * batch watchdog sees the wait, and the parent poll's deadline
+   * extends. Cleared on resolve, cancel and handoff.
+   */
+  readonly controlTaskId?: string;
   /** C-FR-09: managed-async job id for the user-wait freeze. */
   readonly jobId?: string;
   /** T16: Stop while the card is open resolves the wait as cancelled. */
@@ -33,6 +42,40 @@ export interface BrowserSignInInput {
   readonly intent: "login" | "register";
   readonly accountId?: number;
   readonly usernameHint?: string;
+}
+
+/**
+ * B02/D-FR-10a/C-FR-09: the card/picker wait freezes the lane's active
+ * clock (control intervention → waiting_for_user, which the batch
+ * watchdog samples) and the parent poll's deadline (job user-wait).
+ */
+function beginCardUserWait(
+  input: Pick<BrowserSignInInput, "jobId" | "controlTaskId">,
+  reason: string
+): void {
+  const jobId = input.jobId ?? null;
+  if (jobId) {
+    getDefaultToolJobRegistry().setUserWait(jobId, true, reason);
+  }
+  if (input.controlTaskId) {
+    getDefaultAgentTaskControlService().beginIntervention(
+      input.controlTaskId,
+      reason
+    );
+  }
+}
+
+function endCardUserWait(
+  input: Pick<BrowserSignInInput, "jobId" | "controlTaskId">,
+  _reason: string
+): void {
+  const jobId = input.jobId ?? null;
+  if (jobId) {
+    getDefaultToolJobRegistry().setUserWait(jobId, false);
+  }
+  if (input.controlTaskId) {
+    getDefaultAgentTaskControlService().endIntervention(input.controlTaskId);
+  }
 }
 
 /**
@@ -432,13 +475,8 @@ export class BrowserCredentialLoginService {
       // C-FR-09: the job is waiting for the user — freeze the parent's
       // poll deadline for the duration of the card wait. T16: Stop while
       // the card is open resolves the wait immediately as cancelled.
-      const { getDefaultToolJobRegistry } = await import(
-        "@/service/ToolJobRegistry"
-      );
-      const jobId = input.jobId ?? null;
-      if (jobId) {
-        getDefaultToolJobRegistry().setUserWait(jobId, true, "credential_card");
-      }
+      // B02: the wait freezes the lane clock + the parent poll.
+      beginCardUserWait(input, "credential_card");
       const onAbort = (): void => {
         registry.consume({ requestId: request.requestId, conversationId: displayConversationOf(input) })
           ?.resolve({ username: "", password: "", save: false, cancelled: true });
@@ -454,9 +492,8 @@ export class BrowserCredentialLoginService {
         submitted = await promise;
       } finally {
         input.signal?.removeEventListener("abort", onAbort);
-        if (jobId) {
-          getDefaultToolJobRegistry().setUserWait(jobId, false);
-        }
+        // B02: the lane clock and the parent poll resume.
+        endCardUserWait(input, "credential_card");
       }
       if (submitted.cancelled) {
         if (input.signal?.aborted) {
@@ -510,15 +547,8 @@ export class BrowserCredentialLoginService {
         })),
       });
       void request;
-      // C-FR-09: the job is waiting for the user — freeze the parent's
-      // poll deadline for the duration of the picker wait.
-      const { getDefaultToolJobRegistry } = await import(
-        "@/service/ToolJobRegistry"
-      );
-      const jobId = input.jobId ?? null;
-      if (jobId) {
-        getDefaultToolJobRegistry().setUserWait(jobId, true, "account_picker");
-      }
+      // B02: the picker wait freezes the lane clock + the parent poll.
+      beginCardUserWait(input, "account_picker");
       const onAbort = (): void => {
         pickerRegistry
           .consume({
@@ -533,9 +563,7 @@ export class BrowserCredentialLoginService {
         choice = await promise;
       } finally {
         input.signal?.removeEventListener("abort", onAbort);
-        if (jobId) {
-          getDefaultToolJobRegistry().setUserWait(jobId, false);
-        }
+        endCardUserWait(input, "account_picker");
       }
       if (choice.cancelled || choice.accountId === null) {
         if (input.signal?.aborted) {
@@ -713,16 +741,8 @@ export class BrowserCredentialLoginService {
           ?.resolve({ username: "", password: "", save: false, cancelled: true });
       };
       input.signal?.addEventListener("abort", onCardAbort, { once: true });
-      // F06: the username-only card branch is ALSO a user wait — the
-      // parent poll's exclusion must cover it like the no-account
-      // branch does.
-      const { getDefaultToolJobRegistry } = await import(
-        "@/service/ToolJobRegistry"
-      );
-      const cardJobId = input.jobId ?? null;
-      if (cardJobId) {
-        getDefaultToolJobRegistry().setUserWait(cardJobId, true, "credential_card");
-      }
+      // B02: the wait freezes the lane clock + the parent poll.
+      beginCardUserWait(input, "credential_card");
       let submitted: {
         username: string;
         password: string;
@@ -733,9 +753,7 @@ export class BrowserCredentialLoginService {
         submitted = await cardPromise;
       } finally {
         input.signal?.removeEventListener("abort", onCardAbort);
-        if (cardJobId) {
-          getDefaultToolJobRegistry().setUserWait(cardJobId, false);
-        }
+        endCardUserWait(input, "credential_card");
       }
       if (submitted.cancelled) {
         if (input.signal?.aborted) {

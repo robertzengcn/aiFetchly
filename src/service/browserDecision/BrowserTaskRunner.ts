@@ -127,6 +127,12 @@ export interface RunnerDeps {
     readonly sessionId: string;
     readonly conversationId: string;
     readonly signal: AbortSignal;
+    /**
+     * B02/D-FR-10a: the runner's control id — the credential wait begins
+     * an intervention on it so the lane's active clock freezes and the
+     * batch watchdog sees the wait.
+     */
+    readonly controlTaskId: string;
   }) => Promise<{
     readonly status: string;
     readonly reasonCode?: string;
@@ -1117,6 +1123,8 @@ export class BrowserTaskRunner {
             conversationId:
               this.input.rootConversationId ?? this.input.conversationId,
             signal,
+            // B02/D-FR-10a: the credential wait freezes THIS lane's clock.
+            controlTaskId: this.taskId,
           });
           if (signal.aborted) {
             return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
