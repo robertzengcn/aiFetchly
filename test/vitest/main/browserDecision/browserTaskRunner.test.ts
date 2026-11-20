@@ -1569,6 +1569,104 @@ describe("BrowserTaskRunner R12 recovery binding and parity", () => {
   });
 });
 
+describe("BrowserTaskRunner R04 sequential executions on one control id", () => {
+  const doneEntryLocal = (): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+    status: "decided",
+    action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  });
+
+  it("a SECOND execution on the same control id fails the gate as task_completed WITHOUT a reopen (R04)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal()]);
+    const first = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq1",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04:0",
+      },
+      deps
+    );
+    const firstResult = await first.run();
+    expect(firstResult.status).toBe("completed");
+    // A second execution with NO reopen hits the terminal gate.
+    const second = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq2",
+        conversationId: "conv-1",
+        goal: "g again",
+        taskId: "lane_r04:0",
+      },
+      deps
+    );
+    const secondResult = await second.run();
+    expect(secondResult.status).toBe("failed");
+    expect(secondResult.reason).toContain("task_completed");
+  });
+
+  it("reopenForExecution between executions lets the SECOND one complete (R04)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal(), doneEntryLocal()]);
+    const control = deps.control;
+    const first = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq3",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04b:0",
+      },
+      deps
+    );
+    expect((await first.run()).status).toBe("completed");
+    // The admission path reopens the shared lane record for the next
+    // execution (exactly what executeTask does).
+    expect(control.reopenForExecution("lane_r04b:0")).toBe(true);
+    const second = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq4",
+        conversationId: "conv-1",
+        goal: "g again",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04b:0",
+      },
+      deps
+    );
+    const secondResult = await second.run();
+    expect(secondResult.status).toBe("completed");
+    expect(second.taskId).toBe("lane_r04b:0");
+    // The execution id is ALWAYS unique — the journal never collides.
+    expect(second.executionId).not.toBe(first.executionId);
+    expect(second.executionId).toMatch(/^exec_/);
+  });
+
+  it("reopenForExecution refuses a non-terminal record (R04)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal()]);
+    const control = deps.control;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq5",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const runPromise = runner.run();
+    // While the runner is executing (record running), a reopen is refused.
+    await vi.waitFor(() => {
+      expect(control.getState(runner.taskId)).toBe("running");
+    });
+    expect(control.reopenForExecution(runner.taskId)).toBe(false);
+    const result = await runPromise;
+    expect(result.status).toBe("completed");
+    // A terminal record reopens; the record is RUNNING afterwards, so a
+    // second reopen (without a new execution) is refused again.
+    expect(control.reopenForExecution(runner.taskId)).toBe(true);
+    expect(control.reopenForExecution(runner.taskId)).toBe(false);
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

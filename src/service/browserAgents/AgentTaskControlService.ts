@@ -197,6 +197,30 @@ export class AgentTaskControlService {
     }
   }
 
+  /**
+   * R04/M-FR-07: controlled REOPEN for a NEW execution on the SAME
+   * control id. The runner terminalizes the shared lane record at its
+   * terminal; a second execution (a queued lane retry, a re-invoked
+   * agent task) would otherwise fail the gate as task_completed forever.
+   * ONLY a terminal record reopens: state returns to running, the
+   * running clock restarts, and the resume generation bumps so stale
+   * proposals from the PRIOR execution can never be consumed.
+   */
+  public reopenForExecution(taskId: string): boolean {
+    const record = this.tasks.get(taskId);
+    if (!record || !TERMINAL_STATES.has(record.state)) {
+      return false;
+    }
+    record.state = "running";
+    record.reason = null;
+    record.runningSinceEpochMs = this.now();
+    this.resumeGenerations.set(
+      taskId,
+      (this.resumeGenerations.get(taskId) ?? 0) + 1
+    );
+    return true;
+  }
+
   /** Begin a user intervention (waiting_for_user reason, C-FR-12). */
   public beginIntervention(taskId: string, reason: string): void {
     const record = this.tasks.get(taskId);

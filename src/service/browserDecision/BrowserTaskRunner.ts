@@ -303,6 +303,17 @@ export class BrowserTaskRunner {
   public get taskId(): string {
     return this._taskId;
   }
+  /**
+   * R04/M-FR-07: the UNIQUE execution id — the control id above can be
+   * adopted (shared with the enclosing lane across sequential
+   * executions), so the DURABLE journal keys on this per-execution id
+   * instead: a second execution never upserts the first one's admission,
+   * intents or outcomes.
+   */
+  private readonly _executionId = `exec_${randomUUID().slice(0, 16)}`;
+  public get executionId(): string {
+    return this._executionId;
+  }
   private leafSteps = 0;
   private decisionRequests = 0;
   /** N01/D-AC-08: summed provider-reported token usage (chat route). */

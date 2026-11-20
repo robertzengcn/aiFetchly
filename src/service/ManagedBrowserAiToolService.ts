@@ -1812,7 +1812,11 @@ export class ManagedBrowserAiToolService {
         "decision_route_unresolved"
       );
     }
-    const awaitedResultRef: { taskId?: string } = {};
+    // R04/M-FR-07: the DURABLE journal keys on the runner's unique
+    // execution id (the control id can be adopted and shared across
+    // sequential executions — a second execution must never upsert the
+    // first one's journal rows).
+    const awaitedResultRef: { taskId?: string; executionId?: string } = {};
     /** N02/D-FR-05: the plan established by the pre-loop planner call. */
     let runnerPlan: {
       readonly completionCriteria: readonly CompletionCriterion[];
@@ -2176,9 +2180,13 @@ export class ManagedBrowserAiToolService {
         },
       }
     );
-    // R03: durable admission AFTER the runner is constructed — one taskId
-    // from admission through journal to result (no separate admission ID).
+    // R04/M-FR-07: the journal keys the EXECUTION id; the CONTROL record
+    // (runner.taskId — possibly the adopted lane id) is reopened for a
+    // new execution so a sequential retry never fails its own gate as
+    // task_completed.
     awaitedResultRef.taskId = runner.taskId;
+    awaitedResultRef.executionId = runner.executionId;
+    getDefaultAgentTaskControlService().reopenForExecution(runner.taskId);
     // F16: the runner owns the session for its whole lifetime.
     this.runnerOwnedSessions.set(parsed.data.session_id, runner.taskId);
     try {
@@ -2186,7 +2194,8 @@ export class ManagedBrowserAiToolService {
         "@/modules/BrowserTaskModule"
       );
       await getDefaultBrowserTaskModule().recordAdmission({
-        taskId: runner.taskId,
+        // R04: the unique execution id — per-execution journal rows.
+        taskId: runner.executionId,
         sessionId: parsed.data.session_id,
         conversationId: context.conversationId,
         // D-FR-07: the task is traceable to its tool call, job, and the
@@ -2214,7 +2223,11 @@ export class ManagedBrowserAiToolService {
           "@/modules/BrowserTaskModule"
         );
         await getDefaultBrowserTaskModule().recordTerminal({
-          taskId: result.taskId,
+          // R04: the terminal journal lands on the EXECUTION id — the
+          // control id may be shared across sequential executions.
+          taskId: result.taskId
+            ? awaitedResultRef.executionId ?? result.taskId
+            : result.taskId,
           // W02/D-FR-09: partial and interrupted persist AS those phases —
           // handoff expiry/cancel keep interrupted (X4), a verification
           // miss or exhausted budget stays partial, never rewritten failed.
