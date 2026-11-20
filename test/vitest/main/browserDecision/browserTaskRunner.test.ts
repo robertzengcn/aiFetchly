@@ -1493,6 +1493,82 @@ describe("BrowserTaskRunner R04 control-id adoption", () => {
   });
 });
 
+describe("BrowserTaskRunner R12 recovery binding and parity", () => {
+  it("skips recovery when the no-progress reobserve FAILS — no mismatched input/cursor pair (R12)", async () => {
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const script = Array.from({ length: 12 }, () => clickDecision);
+    const deps = makeRunnerDeps(script);
+    let observeCalls = 0;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      observeCalls++;
+      // The reobserve INSIDE the second stall check (after 10 identical
+      // steps) fails: initial observe + 10 post-action observes precede
+      // it.
+      if (observeCalls >= 12) {
+        return null;
+      }
+      return observation();
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12mismatch",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        budget: { recoveryCalls: 2 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The stall is reported honestly and NO recovery decided on a
+    // mismatched pre-action input / post-action cursor pair.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("no_progress");
+    expect(result.counts.recoveryCalls).toBe(0);
+  });
+
+  it("an untargeted operation exhausted of equivalent failures gets the SAME bounded recovery (R12/D-FR-25)", async () => {
+    const scrollDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "SCROLL_DOWN", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([scrollDecision, scrollDecision, scrollDecision, doneEntry(), doneEntry()]);
+    let dispatches = 0;
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatches++;
+      if (dispatches <= 3) {
+        return {
+          effect: "known",
+          pageRevision: 3,
+          results: [{ success: false, errorCode: "scroll_failed" }],
+        };
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12parity",
+        conversationId: "conv-1",
+        goal: "scroll",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        budget: { recoveryCalls: 2 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The third equivalent failure routed to recovery (decide #4 = DONE)
+    // instead of terminating; the loop re-decided (DONE) and completed.
+    expect(result.status).toBe("completed");
+    expect(result.counts.recoveryCalls).toBe(1);
+    expect(result.evidence.some((entry) => entry.includes("three_equivalent"))).toBe(false);
+  });
+});
+
 describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
   const bareFill = {
     operation: "FILL",

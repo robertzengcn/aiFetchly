@@ -1368,6 +1368,44 @@ export class BrowserTaskRunner {
             }
           );
           if (processed.stop) {
+            // R12/D-FR-25: EQUIVALENT-FAILURE PARITY — an untargeted
+            // operation that exhausted its equivalent failures gets the
+            // SAME one bounded recovery as a targeted one (previously it
+            // terminated immediately). Recovery sees FRESH state; a
+            // policy stop never recovers.
+            if (
+              processed.stop.reason.startsWith("three_equivalent_failures")
+            ) {
+              const freshRecoveryObservation = await this.deps.observe(
+                this.input.sessionId
+              );
+              if (freshRecoveryObservation) {
+                const freshRecoveryInput = this.buildDecisionInput(
+                  freshRecoveryObservation,
+                  buildDecisionCandidates({
+                    elements: freshRecoveryObservation.elements,
+                    maxCandidates: this.advertisedMaxCandidates ?? undefined,
+                  })
+                );
+                const recovered = await this.recoverOnce(
+                  freshRecoveryInput,
+                  `three equivalent untargeted failures on ${action.operation}: ${processed.stop.reason}`,
+                  signal,
+                  {
+                    operation: action.operation,
+                    error_code: processed.stop.reason.slice(0, 64),
+                    target_descriptor:
+                      this.recentActions.at(-1)?.target_descriptor ?? null,
+                  }
+                );
+                if (recovered) {
+                  this.consecutiveEquivalentFailures = 0;
+                  this.lastFailureKey = null;
+                  observation = freshRecoveryObservation;
+                  continue;
+                }
+              }
+            }
             return this.terminal(
               processed.stop.status,
               processed.stop.reason,
@@ -1934,7 +1972,10 @@ export class BrowserTaskRunner {
    */
   private async checkProgress(
     observation: RunnerObservation,
-    decisionInput: BrowserDecisionInput,
+    // R12: the caller's decision input is no longer a recovery fallback —
+    // recovery only decides on a FRESH matched snapshot. Kept in the
+    // signature for call-site stability.
+    _decisionInput: BrowserDecisionInput,
     signal: AbortSignal,
     extracted: readonly unknown[]
   ): Promise<{ status: "ok" | "no_progress"; observation: RunnerObservation }> {
@@ -1963,29 +2004,35 @@ export class BrowserTaskRunner {
             .digest("hex")
             .slice(0, 16)
         : "";
-    const criterionProgress = this.verifyCompletion(observation, []).verified;
+    const criterionProgress = this.verifyCompletion(
+      observation,
+      extracted
+    ).verified;
     const digest = `${observation.url}|${observation.visibleText.slice(0, 600)}|${formSignature}|${extractionDigest}`;
     if (this.lastProgressDigest !== null && digest === this.lastProgressDigest) {
       // E14/D-FR-22/R12: recovery decides against the observation it
       // will execute on — re-observe FIRST and return that ONE BOUND
       // snapshot so the outer loop adopts exactly the state the
       // recovery decision was made against (its element ids must be
-      // resolvable). When the reobservation FAILS, the recovery runs
-      // against the still-bound previous input/observation pair —
-      // consistent, never a mixed snapshot.
+      // resolvable). R12: when the reobservation FAILS there is NO
+      // matched input/cursor pair — recovery on the pre-action input
+      // against a post-action cursor produced refs the loop could not
+      // resolve (unknown_target). The stall is reported honestly and
+      // recovery is skipped (report unavailable).
       const freshNoProgressObservation = await this.deps.observe(
         this.input.sessionId
       );
-      const recoveryContext = freshNoProgressObservation
-        ? this.buildDecisionInput(
-            freshNoProgressObservation,
-            buildDecisionCandidates({
-              elements: freshNoProgressObservation.elements,
-              // R01: the advertised shortlist bound (wire-capped at admission).
-              maxCandidates: this.advertisedMaxCandidates ?? undefined,
-            })
-          )
-        : decisionInput;
+      if (!freshNoProgressObservation) {
+        return { status: "no_progress", observation };
+      }
+      const recoveryContext = this.buildDecisionInput(
+        freshNoProgressObservation,
+        buildDecisionCandidates({
+          elements: freshNoProgressObservation.elements,
+          // R01: the advertised shortlist bound (wire-capped at admission).
+          maxCandidates: this.advertisedMaxCandidates ?? undefined,
+        })
+      );
       const recovered = await this.recoverOnce(
         recoveryContext,
         criterionProgress
@@ -2000,11 +2047,10 @@ export class BrowserTaskRunner {
             this.recentActions.at(-1)?.target_descriptor ?? null,
         }
       );
-      const boundObservation = freshNoProgressObservation ?? observation;
       if (recovered) {
-        return { status: "ok", observation: boundObservation };
+        return { status: "ok", observation: freshNoProgressObservation };
       }
-      return { status: "no_progress", observation: boundObservation };
+      return { status: "no_progress", observation: freshNoProgressObservation };
     }
     this.lastProgressDigest = digest;
     return { status: "ok", observation };
