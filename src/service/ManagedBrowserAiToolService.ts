@@ -1252,9 +1252,12 @@ export class ManagedBrowserAiToolService {
     // G01/D-FR-08: an active runner owns this session — the model tool
     // does not fight the runner for the dialog.
     this.assertNoRunnerOwnership(parsed.data.session_id);
-    // N02/M-AC-02: these tools MUTATE the page — a root-conversation
-    // caller needs a completed keep-open transfer (ownership reassigned).
-    this.ensureSession(parsed.data.session_id, context?.conversationId);
+    // N02/M-AC-02/R04: the handoff hands the BROWSER to the user — a
+    // mutating control-plane action that needs a completed keep-open
+    // transfer like every other mutating tool.
+    this.ensureSession(parsed.data.session_id, context?.conversationId, {
+      mutation: true,
+    });
     // B12/E04/C-FR-02/09 (design 18.2): inside an agent turn, the handoff
     // BLOCKS in the tool call until the user resolves, the window expires,
     // or the task is stopped. The wait task id is the OWNING agent task
@@ -2295,7 +2298,12 @@ export class ManagedBrowserAiToolService {
     }
     // F16/D-FR-08: an active runner owns this session — legacy tools wait.
     this.assertNoRunnerOwnership(parsed.data.session_id);
-    this.ensureSession(parsed.data.session_id, context.conversationId);
+    // R04/M-AC-02: sign-in FILLS the page (and can bind the account) — a
+    // root-conversation caller needs a completed keep-open transfer like
+    // every other mutating tool.
+    this.ensureSession(parsed.data.session_id, context.conversationId, {
+      mutation: true,
+    });
     // A-FR-04/N03: the hint reaches the card and encrypted storage only
     // when it is NOT secret-shaped — reject before anything is shown or
     // stored.
@@ -2432,7 +2440,14 @@ export class ManagedBrowserAiToolService {
     // G01/D-FR-08: an active runner owns this session — no cache clear
     // under it.
     this.assertNoRunnerOwnership(parsed.data.session_id);
-    const status = this.ensureSession(parsed.data.session_id, context?.conversationId);
+    // R04/M-AC-02: clearing the account cache is a mutating maintenance
+    // action — a root-conversation caller needs a completed keep-open
+    // transfer like every other mutating tool.
+    const status = this.ensureSession(
+      parsed.data.session_id,
+      context?.conversationId,
+      { mutation: true }
+    );
     if (status.accountId === 0) return { cleared: false, reasonCode: "ephemeral_public_browser" };
     try {
       const result = await this.cacheModule.clearCache({
