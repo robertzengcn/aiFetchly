@@ -367,7 +367,20 @@ function applyEvent(event: BrowserBatchEvent): void {
       summary: event.summary,
     };
     if (existing) {
-      Object.assign(existing, row);
+      // R04/M-FR-08: a SPARSE update (a wait-state transition, a queued
+      // retry) carries only the changed fields — assigning the whole row
+      // cleared the live session and the real label on every partial
+      // event that omitted them.
+      if (event.sessionId !== undefined) {
+        existing.sessionId = event.sessionId;
+      }
+      if (event.label !== undefined) {
+        existing.label = row.label;
+      }
+      existing.state = row.state;
+      if (event.summary !== undefined) {
+        existing.summary = event.summary;
+      }
     } else {
       tasks.push(row);
     }
@@ -464,18 +477,45 @@ onBeforeUnmount(() => {
   }
 });
 
+/**
+ * R04/M-FR-07: a FAILED control IPC is never silently swallowed — the
+ * row's summary carries the refusal so the user sees the control did
+ * NOT happen (previously `{ ok: false }` resolved to nothing visible).
+ */
+function noteControlFailure(taskId: string | undefined, reason: string): void {
+  if (!taskId) {
+    return;
+  }
+  for (const batch of batches.value.values()) {
+    const row = batch.tasks.find((task) => task.taskId === taskId);
+    if (row) {
+      row.summary = `${reason} (control refused)`;
+      return;
+    }
+  }
+}
+
 async function onReturnNow(batchId: string): Promise<void> {
-  await browserBatchReturnNow({ batchId });
+  const result = await browserBatchReturnNow({ batchId });
+  if (!result.ok) {
+    console.warn("[browser-cards] return-now refused:", result);
+  }
 }
 
 async function onPause(payload: { taskId: string; sessionId?: string }): Promise<void> {
-  await pauseBrowserTask(payload);
+  const result = await pauseBrowserTask(payload);
+  if (!result.ok) {
+    noteControlFailure(payload.taskId, result.reason ?? "pause failed");
+  }
 }
 
 // B13/C-FR-04: Take control routes through the SAME pause-or-take-control
 // handler (both layers: session user-control + loop control gate).
 async function onTakeControl(payload: { taskId: string; sessionId?: string }): Promise<void> {
-  await pauseBrowserTask(payload);
+  const result = await pauseBrowserTask(payload);
+  if (!result.ok) {
+    noteControlFailure(payload.taskId, result.reason ?? "take control failed");
+  }
 }
 
 async function onResume(payload: {
@@ -483,10 +523,16 @@ async function onResume(payload: {
   sessionId?: string;
   instructions?: string;
 }): Promise<void> {
-  await resumeBrowserTask(payload);
+  const result = await resumeBrowserTask(payload);
+  if (!result.ok) {
+    noteControlFailure(payload.taskId, result.reason ?? "resume failed");
+  }
 }
 
 async function onStop(payload: { taskId: string; sessionId?: string }): Promise<void> {
-  await stopBrowserTask(payload);
+  const result = await stopBrowserTask(payload);
+  if (!result.ok) {
+    noteControlFailure(payload.taskId, result.reason ?? "stop failed");
+  }
 }
 </script>

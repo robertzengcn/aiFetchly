@@ -312,7 +312,7 @@ export function onManagedBrowserBatchEvent(
 export async function pauseBrowserTask(input: {
   taskId: string;
   sessionId?: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; reason?: string }> {
   return await windowInvoke(BROWSER_TASK_PAUSE, input);
 }
 
@@ -320,7 +320,7 @@ export async function resumeBrowserTask(input: {
   taskId: string;
   sessionId?: string;
   instructions?: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; reason?: string }> {
   return await windowInvoke(BROWSER_TASK_RESUME, input);
 }
 
@@ -339,13 +339,13 @@ export async function focusBrowserWindow(input: {
 export async function stopBrowserTask(input: {
   taskId: string;
   sessionId?: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; reason?: string }> {
   return await windowInvoke(BROWSER_TASK_STOP, input);
 }
 
 export async function browserBatchReturnNow(input: {
   batchId: string;
-}): Promise<{ ok: boolean }> {
+}): Promise<{ ok: boolean; reason?: string }> {
   return await windowInvoke(BROWSER_BATCH_RETURN_NOW, input);
 }
 

@@ -14,6 +14,8 @@ const credentialListeners = new Set<(request: unknown) => void>();
 const pickerListeners = new Set<(request: unknown) => void>();
 const siteConfirmListeners = new Set<(request: unknown) => void>();
 const batchConfirmListeners = new Set<(request: unknown) => void>();
+/** R04: controllable control-IPC refusals (shifted per call). */
+const pauseResults: Array<{ ok: boolean; reason?: string }> = [];
 const batchConfirmCancelledListeners = new Set<(event: unknown) => void>();
 
 vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
@@ -62,7 +64,10 @@ vi.mock("@/views/api/managedBrowser", async (importOriginal) => {
     },
     pauseBrowserTask: (input: { taskId: string }) => {
       invokeMock("BROWSER_TASK_PAUSE", input);
-      return Promise.resolve({ ok: true });
+      // R04: controllable refusals — a queued result is consumed if
+      // present, otherwise the control succeeds.
+      const queued = pauseResults.shift();
+      return Promise.resolve(queued ?? { ok: true });
     },
     resumeBrowserTask: (input: { taskId: string }) => {
       invokeMock("BROWSER_TASK_RESUME", input);
@@ -175,6 +180,7 @@ beforeEach(() => {
   siteConfirmListeners.clear();
   batchConfirmListeners.clear();
   batchConfirmCancelledListeners.clear();
+  pauseResults.length = 0;
   invokeMock.mockClear();
 });
 
@@ -792,6 +798,65 @@ describe("BrowserControlCards batch confirm (W08/M-FR-04)", () => {
     expect(
       wrapper.findComponent({ name: "BrowserBatchConfirmCard" }).exists()
     ).toBe(false);
+  });
+
+  it("a SPARSE task event never clears the live session or the real label (R04)", async () => {
+    const wrapper = mountWith("conv-a");
+    emit({ batchId: "batch_sparse", conversationId: "conv-a", phase: "started" });
+    // The full initial event carries label + session.
+    emit({
+      batchId: "batch_sparse",
+      conversationId: "conv-a",
+      phase: "task",
+      taskId: "batch_sparse:0",
+      label: "My real task label",
+      state: "running",
+      sessionId: "mb_live_session",
+      summary: "working",
+    });
+    await flushPromises();
+    // A sparse wait-state event omits both.
+    emit({
+      batchId: "batch_sparse",
+      conversationId: "conv-a",
+      phase: "task",
+      taskId: "batch_sparse:0",
+      state: "waiting_for_user",
+    });
+    await flushPromises();
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    expect(card.exists()).toBe(true);
+    const row = (card.props("tasks") as Array<Record<string, unknown>>).find(
+      (task) => task.taskId === "batch_sparse:0"
+    );
+    expect(row?.sessionId).toBe("mb_live_session");
+    expect(row?.label).toBe("My real task label");
+    expect(row?.state).toBe("waiting_for_user");
+  });
+
+  it("a FAILED control IPC surfaces on the row instead of resolving silently (R04)", async () => {
+    const wrapper = mountWith("conv-a");
+    emit({ batchId: "batch_ctrl", conversationId: "conv-a", phase: "started" });
+    emit({
+      batchId: "batch_ctrl",
+      conversationId: "conv-a",
+      phase: "task",
+      taskId: "batch_ctrl:0",
+      label: "Controllable task",
+      state: "running",
+      summary: "working",
+    });
+    await flushPromises();
+    // The next pause IPC returns a refusal.
+    pauseResults.push({ ok: false, reason: "session_pause_failed" });
+    const card = wrapper.findComponent({ name: "BrowserTaskBatchCard" });
+    card.vm.$emit("pause", { taskId: "batch_ctrl:0" });
+    await flushPromises();
+    const row = (card.props("tasks") as Array<Record<string, unknown>>).find(
+      (task) => task.taskId === "batch_ctrl:0"
+    );
+    expect(row?.summary).toContain("session_pause_failed");
+    expect(row?.summary).toContain("control refused");
   });
 
   it("a main-process dismissal (parent Stop / TTL) retires the card without a submit (R07)", async () => {
