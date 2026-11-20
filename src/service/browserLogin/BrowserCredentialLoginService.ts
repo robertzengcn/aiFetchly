@@ -12,6 +12,7 @@ import {
   getDefaultBrowserSiteModule,
   type SiteMatch,
 } from "@/modules/BrowserSiteModule";
+import { createHash } from "node:crypto";
 import { SocialAccountModule } from "@/modules/socialAccountModule";
 
 export interface BrowserSignInInput {
@@ -622,7 +623,11 @@ export class BrowserCredentialLoginService {
     }
     this.inFlightAccounts.add(sessionKey);
     try {
-      return await this.fillAndAssess(input, site, credential);
+      // R08: the saved path fills the STORED credential.
+      return await this.fillAndAssess(input, site, {
+        ...credential,
+        fromStoredCredential: true,
+      });
     } finally {
       this.inFlightAccounts.delete(sessionKey);
     }
@@ -786,6 +791,9 @@ export class BrowserCredentialLoginService {
             username: submitted.username,
             password: submitted.password,
             accountId: chosen.id,
+            // R08: the card value was just SAVED as the stored credential
+            // (updatePasswordForAccount above) — its rejection marks it.
+            fromStoredCredential: true,
           });
         } finally {
           this.inFlightAccounts.delete(editedKey);
@@ -805,12 +813,16 @@ export class BrowserCredentialLoginService {
         username: submitted.username,
         password: submitted.password,
         accountId: chosen.id,
+        // R08: the card value was just SAVED as the stored credential.
+        fromStoredCredential: true,
       });
     }
     return this.fillAndAssess(input, site, {
       username: credentialResult.username,
       password: credentialResult.password,
       accountId: chosen.id,
+      // R08: the decrypted saved credential — rejections mark its ledger.
+      fromStoredCredential: true,
     });
   }
 
@@ -861,6 +873,13 @@ export class BrowserCredentialLoginService {
       readonly username: string;
       readonly password: string;
       readonly accountId: number | null;
+      /**
+       * R08/A-FR-10: TRUE only when the typed password IS the account's
+       * STORED credential (the decrypted saved password or a card
+       * submission that was just saved). A rejection of a one-time value
+       * must never mark the stored credential's rejection ledger.
+       */
+      readonly fromStoredCredential?: boolean;
     }
   ): Promise<BrowserSignInResult> {
     const browserModule = getDefaultManagedBrowserModule();
@@ -987,19 +1006,38 @@ export class BrowserCredentialLoginService {
       const startsCooldown =
         result.outcome !== "challenge" && !SKIP_COOLDOWN_REASONS.has(failureReason);
       if (credential.accountId !== null && startsCooldown) {
-        // R08/A-FR-10: a REJECTED SAVED credential records the dedicated
-        // marker — the block does not expire with the window; it lifts
-        // only when the credential is replaced (updatePasswordForAccount).
+        // R08/A-FR-10: a REJECTED STORED credential records the dedicated
+        // marker bound to the EXACT rejected value's digest — a later
+        // result for a PRIOR value can never mark a newer credential,
+        // and a credential replacement automatically unblocks (the
+        // digest no longer matches). A one-time (non-stored) value's
+        // rejection marks NOTHING: the stored credential is innocent.
         const isRejectedSavedCredential =
+          credential.fromStoredCredential === true &&
+          (result.outcome === "wrong_credential" ||
+            result.reasonCode === "wrong_password");
+        if (isRejectedSavedCredential) {
+          const rejectedDigest = createHash("sha256")
+            .update(credential.password)
+            .digest("hex")
+            .slice(0, 16);
+          await accountModule.recordLoginFailure(
+            credential.accountId,
+            `${SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON}:${rejectedDigest}`,
+            { siteId: site.siteId }
+          );
+        } else if (
           result.outcome === "wrong_credential" ||
-          result.reasonCode === "wrong_password";
-        await accountModule.recordLoginFailure(
-          credential.accountId,
-          isRejectedSavedCredential
-            ? SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON
-            : failureReason,
-          { siteId: site.siteId }
-        );
+          result.reasonCode === "wrong_password"
+        ) {
+          // A one-time value was rejected — no ledger entry at all.
+        } else {
+          await accountModule.recordLoginFailure(
+            credential.accountId,
+            failureReason,
+            { siteId: site.siteId }
+          );
+        }
       }
       // A-FR-16: safety failures in the password-field family NEVER
       // return as a plain `failed` — the user takes over via handoff.

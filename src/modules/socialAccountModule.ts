@@ -2,6 +2,7 @@ import { SocialAccountModel } from "@/model/SocialAccount.model";
 import { log } from "@/modules/Logger";
 import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
 import { ProxyEntity } from "@/entity/Proxy.entity";
+import { createHash } from "node:crypto";
 import { BaseModule } from "@/modules/baseModule";
 import {
   SocialAccountResponse,
@@ -596,16 +597,31 @@ export class SocialAccountModule extends BaseModule {
     if (!account?.last_login_failure_at) {
       return false;
     }
-    // R08/A-FR-10: a REJECTED SAVED credential blocks until the
-    // credential is REPLACED — the time window does not lift it (the
-    // same saved password would be typed again and rejected again). The
-    // block is account-wide: the saved credential is an account-level
-    // secret, so its rejection is not site-scoped.
-    if (
-      account.last_login_failure_reason ===
-      SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON
-    ) {
-      return true;
+    // R08/A-FR-10: a REJECTED SAVED credential blocks while the STORED
+    // credential is still the exact rejected value — the marker carries
+    // the rejected value's digest, so a credential replacement
+    // automatically unblocks (a late rejection of a PRIOR value can
+    // never mark a newer credential). The block is account-wide: the
+    // saved credential is an account-level secret.
+    const failureReason = account.last_login_failure_reason ?? "";
+    if (failureReason.startsWith(SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON)) {
+      const markerDigest = failureReason.slice(
+        SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON.length + 1
+      );
+      const currentPassword = await this.decryptPass(
+        account.pass,
+        accountId
+      );
+      if (currentPassword === null || currentPassword === "") {
+        // No stored credential to compare — the block has nothing to
+        // bind to and does not persist.
+        return false;
+      }
+      const currentDigest = createHash("sha256")
+        .update(currentPassword)
+        .digest("hex")
+        .slice(0, 16);
+      return markerDigest === currentDigest;
     }
     // A-FR-10: the window is per account AND SITE — a failure on site B
     // never cools down attempts on site A.

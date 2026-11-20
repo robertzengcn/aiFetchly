@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { SocialAccountModule } from "@/modules/socialAccountModule";
 
 /**
@@ -8,44 +9,60 @@ import { SocialAccountModule } from "@/modules/socialAccountModule";
  */
 
 describe("sign-in cooldown scope (A-FR-10)", () => {
-  it("a REJECTED SAVED credential blocks until replacement, account-wide, regardless of elapsed time (R08)", async () => {
+  it("a REJECTED SAVED credential blocks account-wide until the stored value CHANGES (R08 digest binding)", async () => {
     const module = new SocialAccountModule();
     (
       module as unknown as {
         ensureConnection: () => Promise<void>;
       }
     ).ensureConnection = async () => undefined;
+    const rejectedValue = "rejected-secret-v1";
+    const rejectedDigest = createHash("sha256")
+      .update(rejectedValue)
+      .digest("hex")
+      .slice(0, 16);
+    const now = new Date("2026-11-14T12:00:00Z");
+    const makeFixture = (
+      storedPass: string | null
+    ): {
+      last_login_failure_at: Date;
+      last_login_failure_site: number | null;
+      last_login_failure_reason: string;
+      pass: string | null;
+    } => ({
+      last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
+      last_login_failure_site: null,
+      last_login_failure_reason: `${SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON}:${rejectedDigest}`,
+      pass: storedPass,
+    });
+    let fixture = makeFixture(rejectedValue);
     (
       module as unknown as {
         socialAccountModel: { findRowById: (id: number) => Promise<unknown> };
       }
-    ).socialAccountModel.findRowById = async () => ({
-      // The rejection marker was recorded DAYS ago — the time window
-      // does not lift this block.
-      last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
-      last_login_failure_site: null,
-      last_login_failure_reason:
-        SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON,
-    });
-    const now = new Date("2026-11-14T12:00:00Z");
-    // Blocked on the failure site…
+    ).socialAccountModel.findRowById = async () => fixture;
+    // The stored credential IS the rejected value — blocked account-wide
+    // no matter how long ago the rejection landed.
     expect(
       await module.isSignInCoolingDown(7, { siteId: 42, now })
     ).toBe(true);
-    // …and account-wide (the saved credential is an account secret).
     expect(
       await module.isSignInCoolingDown(7, { siteId: 43, now })
     ).toBe(true);
+    // The credential was REPLACED — the digest no longer matches and the
+    // block lifts automatically (a late rejection of the prior value
+    // cannot mark the newer credential).
+    fixture = makeFixture("new-secret-v2");
+    expect(
+      await module.isSignInCoolingDown(7, { siteId: 42, now })
+    ).toBe(false);
     // A regular (non-marker) failure older than the window is NOT blocked.
-    (
-      module as unknown as {
-        socialAccountModel: { findRowById: (id: number) => Promise<unknown> };
-      }
-    ).socialAccountModel.findRowById = async () => ({
+    fixture = {
       last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
       last_login_failure_site: 42,
       last_login_failure_reason: "form_not_submitted",
-    });
+      pass: rejectedValue,
+    };
     expect(
       await module.isSignInCoolingDown(7, { siteId: 42, now })
     ).toBe(false);
