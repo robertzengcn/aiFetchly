@@ -50,3 +50,33 @@ The update makes real progress: normal confirmation dismissal reaches the card, 
 - Focused main-process sweep, including `tsc --noEmit`: **736 passed, 1 failed across 58 files**. The only failure was deferred cache clear completion; immediate standalone rerun: **25/25 passed**. The locally modified `executeTask` test was included in the sweep and was not changed by this audit.
 - Managed-browser worker sweep, including TypeScript precheck: **165 passed across 7 files**. Full component sweep with six workers: **1,629 passed across 184 files**.
 - Three isolated behavior probes confirmed the shared terminal state, multi-select replacement and failed-refresh recovery cases. Other findings are from source and existing test inspection. This pass did not run live Electron or local Forge package/make.
+
+---
+
+## Fix pass — November 20, 2026 (implementable items closed)
+
+One commit per logical unit, all with tests; the audit's local `console.log` modification was reverted first (`e11892c59` test file restored).
+
+- **R02** (`fff4654cd`) — multi-select commit is REPLACE (exactly the requested options; the ADDS behavior kept earlier selections), and a disabled option / disabled optgroup refuses BEFORE any mutation as a proven no-effect (`element_disabled`).
+- **R12** (`a9246409f`) — the no-progress recovery no longer decides on a mismatched pre-action input / post-action cursor: a failed reobserve reports the stall honestly (no recovery, `recoveryCalls 0`); the stall's criterion call receives the accumulated extraction; untargeted equivalent-failure exhaustion gets the SAME bounded recovery as targeted failures.
+- **R09** (`ebd363647`) — the proxy list no longer presents the row's `updatedAt` (an EDIT timestamp) as `checktime`; real check records arrive via the controller enrichment.
+- **R11/R04** (`ebd363647`) — `setUserWait` preserves the ORIGINAL wait start on repeated sets (the watchdog no longer slides the parent freeze window forever); lane wait-state events carry the row's live session.
+- **R04 execution identity** (`befa8f3ef`) — `reopenForExecution` is the controlled reopen for a second execution on the same control id (terminal → running, generation bumped); executeTask reopens before every run (the audit's `task_completed` second-execution failure is fixed); the durable journal keys on a unique per-execution id (`exec_<uuid>`) so a second execution never upserts the first one's rows.
+- **R05** (`922699323`) — a decision that completes ACROSS a Pause→Resume is discarded at the decide boundary (`decision_discarded_after_resume`); the safe point re-observes.
+- **R01** (`922699323`) — SIGN_IN rechecks the provider epoch at its mutation boundary; the shortlist bound is `min(advertised, 120, 16)` — a route advertising 120 cannot expand the application shortlist.
+- **R13** (`1145105af`) — the recovery pin SURVIVES the pending proposal and is released at consumption/discard; the approval re-dispatch revalidates Stop and Pause/generation and journals a re-dispatch throw as unknown.
+- **R08** (`1cee0a8bc`) — the rejection marker carries the rejected value's SHA-256 digest: the block holds only while the STORED credential matches, a replacement unblocks automatically, and a late rejection of a prior value can never mark a newer credential; the marker records ONLY when the typed value IS the stored credential (one-time rejections mark nothing).
+- **R07** (`55ec2a241`) — handoff grants present `ownerAgentId = controlTaskId` (the identity the artifacts were stored under — the generated agent id was refused); receipts surface only GRANTED outputs and grants run before the result is persisted.
+- **R03** (`95e35801e`) — `safeUrl` (every ACTION_RESULT's urlAfter) applies the observation-path containment (trusted redaction + report scrubbing); the observation carries a trusted `policyUrl` (credential redacted, query preserved) so policy reads (proxy-switch reopen) use the full URL while display stays scrubbed.
+- **R06** (`b66f825b3`) — a transfer with a FOREIGN lease on the key is refused before any mutation; a failed lease reassignment ROLLS BACK to the pre-transfer owners.
+- **Cache clear** (`d7b2a6fa1`) — a deferred clear stays queued until it settles: retired only after completion, retained through the active-scope guard and on failure (never silently dropped); `pendingClear` no longer flips before the completion signal.
+- **R04 guards/card** (`2674b1f90`+`3867418ba`) — sign-in, handoff and cache-clear pass the parent mutation gate; sparse batch events merge only carried fields (no more cleared session/label); refused control IPCs surface on the row's summary.
+
+**Still open (design/qualification scope)**
+
+- R04: sign-in/picker/approval prompts published on the CHILD route (needs the parent-conversation routing redesign); the scoped routine-action grant (A08 redesign); queue/focus test coverage.
+- R05: resume-instruction delivery into the active outer query (transcript-only today).
+- R10: probe-one-captured-snapshot and overlapping-probe serialization; version/model echo contract on the hosted wire.
+- R11: child-only credential waits still bypass the lane watchdog (needs the credential service to mark the control record); restart reconciliation.
+- Registry: account platform-change semantics + data backfill; the static-precedence launch/bind/refresh points.
+- The six Electron acceptance scenarios (`test.fixme`), the paired held-out evaluation, and packaged-process evidence remain operator/CI scope per AGENTS.md.
