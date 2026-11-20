@@ -443,10 +443,22 @@ export class ToolJobRegistry {
   setUserWait(jobId: string, waiting: boolean, reason?: string | null): void {
     const job = this.jobs.get(jobId);
     if (!job) return;
+    // R11/C-FR-09: a REPEATED set (the batch watchdog polls every second)
+    // must not reset the wait start — the parent poll's freeze window
+    // would otherwise keep sliding and never expire.
+    const existingWait = job.userWait;
+    const unchangedWait =
+      waiting === true &&
+      existingWait?.waiting === true &&
+      (existingWait.reason ?? null) === (reason ?? null);
     job.userWait = {
       waiting,
       reason: waiting ? (reason ?? null) : null,
-      since: waiting ? Date.now() : null,
+      since: unchangedWait
+        ? (existingWait?.since ?? Date.now())
+        : waiting
+          ? Date.now()
+          : null,
     };
     job.updatedAt = Date.now();
   }

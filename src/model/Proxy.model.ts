@@ -69,7 +69,11 @@ export class ProxyModel extends BaseDb {
         protocol: proxy.protocol,
         country_code: proxy.country_code,
         addtime: proxy.addtime || "",
-        checktime: proxy.updatedAt?.toISOString(),
+        // R09/P-FR: the row's updatedAt is an EDIT timestamp, not check
+        // evidence — presenting it as checktime let an unchecked row look
+        // checked (the AI projection requires a checktime for "pass").
+        // The controller enriches rows that have REAL check records.
+        checktime: undefined,
         // R09/P-FR: an unchecked row inherits NO passing result from the
         // defaults — statusName stays "Unchecked" until the controller
         // enrichment confirms a real check record (the AI projection's

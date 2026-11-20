@@ -555,6 +555,8 @@ export async function runBrowserTasks(
   const laneWaitState = new Map<string, string>();
   if (parentJobId) {
     const registry = getDefaultToolJobRegistry();
+    const { getDefaultManagedBrowserModule: getModuleForWatchdog } =
+      await import("@/modules/ManagedBrowserModule");
     parentWaitWatchdog = setInterval(() => {
       try {
         let waiting = false;
@@ -583,6 +585,11 @@ export async function runBrowserTasks(
               phase: "task",
               taskId: rowTaskId,
               state: waitState as BrowserBatchEvent["state"],
+              // R04/M-FR-08: the wait-state event carries the LIVE
+              // session so the row's browser controls stay addressable.
+              sessionId:
+                getModuleForWatchdog().findSessionIdForAgentTask(rowTaskId) ??
+                undefined,
               summary:
                 waitState === "paused"
                   ? "paused by user (browser under your control)"
