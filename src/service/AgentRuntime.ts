@@ -925,41 +925,45 @@ export class AgentRuntime {
       ...(outputFilePaths ? { outputFilePaths } : {}),
       ...(outputImages ? { outputImages } : {}),
       ...(storageWarning ? { storageWarning } : {}),
-      ...(externalizedOutputIds.length > 0
-        ? { outputIds: externalizedOutputIds }
-        : {}),
     };
-    await this.taskModule.saveResult(agentTaskId, result);
-    await this.taskModule.setStatus(agentTaskId, "completed", {
-      finishedAt: new Date(),
-    });
 
-    // T15b: issue inter-agent handoff grants so the parent conversation can
-    // read the child's externalized outputs instead of re-running the tool.
-    // Best-effort: a grant failure is logged and swallowed because the
-    // parent's retrieval path will surface `OUTPUT_NOT_AVAILABLE` cleanly,
-    // and the child's own result is already durable. Only grant when the
-    // child actually externalized AND a parent conversation is wired.
+    // T15b/R07/M-FR-02: issue inter-agent handoff grants BEFORE the
+    // result is persisted, and surface ONLY the receipts whose grant
+    // actually landed — a receipt without access is OUTPUT_NOT_AVAILABLE
+    // for the parent, so it is dropped here instead of advertised. The
+    // grant presents the SAME identity the artifacts were STORED under:
+    // the loop's tool results record ownerAgentId = controlTaskId (the
+    // batch row / browser control identity), so the grant must present
+    // controlTaskId — presenting the generated agent task id refused
+    // every grant while the receipts still advertised the outputs.
+    const grantedOutputIds: string[] = [];
     if (
       externalizedOutputIds.length > 0 &&
       request.parentConversationId &&
       toolResultModule
     ) {
+      const seen = new Set<string>();
       for (const outputId of externalizedOutputIds) {
+        if (seen.has(outputId)) {
+          continue;
+        }
+        seen.add(outputId);
         try {
           const grant = await toolResultModule.grantAccess({
             outputId,
             ownerProfileId: "default",
             ownerConversationId: agentConversationId,
-            // M-FR-02: the outputs are OWNED by the agent TASK id (the
-            // preserve path above) — the grant must present the same
-            // identity, or authorizeAccess refuses it.
-            ownerAgentId: agentTaskId,
+            // M-FR-02: the artifacts are STORED under controlTaskId —
+            // authorizeAccess compares this presented identity against
+            // the stored owner.
+            ownerAgentId: controlTaskId,
             granteeConversationId: request.parentConversationId,
             granteeAgentId: request.parentAgentId ?? "",
             grantReason: "child-agent-handoff",
           });
-          if (!grant.granted) {
+          if (grant.granted) {
+            grantedOutputIds.push(outputId);
+          } else {
             console.warn(
               `[agent-runtime] handoff grant failed for ${outputId}: ${grant.code ?? "unknown"}`
             );
@@ -972,6 +976,13 @@ export class AgentRuntime {
         }
       }
     }
+    if (grantedOutputIds.length > 0) {
+      result.outputIds = grantedOutputIds;
+    }
+    await this.taskModule.saveResult(agentTaskId, result);
+    await this.taskModule.setStatus(agentTaskId, "completed", {
+      finishedAt: new Date(),
+    });
     const snap = await this.taskModule.getSnapshot(agentTaskId);
     result.toolCallsCount = snap?.toolCallsCount ?? 0;
     if (deps?.autoDreamService) {
