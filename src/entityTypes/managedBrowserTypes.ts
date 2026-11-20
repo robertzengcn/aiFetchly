@@ -426,6 +426,12 @@ export interface BrowserObservation {
   readonly pageRevision: number;
   /** Sanitized URL: credentials stripped; query/fragment redacted. */
   readonly url: string;
+  /**
+   * R03: the TRUSTED policy URL — the exact filled credential is
+   * redacted but the query/fragment is PRESERVED. Main-process internal
+   * use only (policy decisions, exact reopen); never rendered.
+   */
+  readonly policyUrl?: string;
   readonly origin: string;
   readonly title: string;
   readonly state: "ready" | "loading" | "dialog" | "handoff";

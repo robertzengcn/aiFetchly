@@ -1409,7 +1409,9 @@ export class ManagedBrowserModule {
     // approval fingerprint's site component (D-FR-27).
     record.currentOrigin = message.observation.origin || record.currentOrigin;
 this.recordVisitedDomain(record, record.currentOrigin);
-record.currentUrl = message.observation.url || record.currentUrl;
+// R03: POLICY reads the trusted URL (query preserved); the display url
+// stays scrubbed. The proxy-switch reopen (P-FR-02) needs the FULL url.
+record.currentUrl = message.observation.policyUrl || message.observation.url || record.currentUrl;
     // Cache the sanitized observation so risk classification can resolve
     // element refs to their role/name descriptors (GAP-01).
     record.lastObservation = message.observation;
@@ -1456,7 +1458,8 @@ record.currentUrl = message.observation.url || record.currentUrl;
         record.lastObservation = message.observation;
         record.currentOrigin = message.observation.origin || record.currentOrigin;
 this.recordVisitedDomain(record, record.currentOrigin);
-record.currentUrl = message.observation.url || record.currentUrl;
+// R03: POLICY reads the trusted URL (query preserved).
+record.currentUrl = message.observation.policyUrl || message.observation.url || record.currentUrl;
       }
     }
     return message;

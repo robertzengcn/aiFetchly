@@ -706,6 +706,9 @@ const observationSchema = z.strictObject({
   observationId: z.string().min(1).max(64),
   pageRevision: z.number().int().positive(),
   url: z.string().max(2048),
+  // R03: the trusted policy URL (credential redacted, query preserved) —
+  // main-process internal use only.
+  policyUrl: z.string().max(2048).optional(),
   origin: z.string().max(512),
   title: z.string().max(300),
   state: z.enum(["ready", "loading", "dialog", "handoff"]),

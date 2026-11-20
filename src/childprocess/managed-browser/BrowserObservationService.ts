@@ -554,6 +554,10 @@ async function buildObservationBody(
   // bound — redaction replacement can expand a field past the cap and
   // the schema would reject the whole observation.
   const url = redactTrustedSecrets(sanitizeUrlForReport(input.page.url())).slice(0, 2048);
+  // R03: the trusted POLICY url — credential redacted, query PRESERVED —
+  // rides the main-process observation for exact reopen and policy
+  // decisions; the display `url` stays fully scrubbed.
+  const policyUrl = redactTrustedSecrets(input.page.url()).slice(0, 2048);
   const visibleSensitive = records.some(
     (r) => r.inputType != null && isSensitiveInputType(r.inputType)
   );
@@ -579,6 +583,7 @@ async function buildObservationBody(
     observationId,
     pageRevision: input.registry.currentRevision,
     url,
+    policyUrl,
     origin: (extractOrigin(url) ?? url).slice(0, 512),
     title: truncateText(safeTitle, 300).text,
     state: input.state,

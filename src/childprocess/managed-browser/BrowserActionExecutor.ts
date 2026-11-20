@@ -21,7 +21,9 @@ import {
 import {
   isSensitiveInputType,
   redactSecrets,
+  redactTrustedSecrets,
 } from "@/childprocess/managed-browser/ResultSanitizer";
+import { sanitizeUrlForReport } from "@/childprocess/managed-browser/NavigationPolicy";
 import {
   readElementDescriptor,
   type LiveElementDescriptor,
@@ -902,7 +904,11 @@ export class BrowserActionExecutor {
 
 function safeUrl(page: ExecutorPageLike): string {
   try {
-    return page.url();
+    // R03/A04: the ACTION-RESULT URL path applies the SAME containment
+    // as the observation path — a credential echoed into a navigated
+    // URL (exact trusted value first, then report-safe query scrubbing)
+    // never leaves the worker through an action result.
+    return redactTrustedSecrets(sanitizeUrlForReport(page.url())).slice(0, 2048);
   } catch {
     return "";
   }
