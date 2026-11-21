@@ -131,3 +131,4 @@ One commit per logical unit, all with tests where the path is unit-testable.
 **Still open (operator/qualification scope, unchanged)**
 
 - R07 (public-suffix library) and E01–E05 (the six Electron scenarios, held-out qualification, Chromium qualification, hosted gateway confirmation, packaged evidence) — operator/CI per AGENTS.md. R07's suffix set is currently a curated subset; swapping in `tldts` is a dependency + packaging decision.
+- CI run `44869528804` (fix-pass head `e2cbcb281`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright). An intermediate run (`44863329175`) had the Linux package build CANCELLED mid-build by the runner (an infra timeout — the same head's lint+unit and Electron E2E both passed); the retriggered run completed the packaging cleanly.
