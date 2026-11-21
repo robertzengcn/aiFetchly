@@ -773,7 +773,13 @@ export async function runBrowserTasks(
             await import("@/service/ManagedBrowserLeaseService");
           const leaseService = getDefaultManagedBrowserLeaseService();
           const leaseKey = accountLeaseKey(task.account_id!);
-          const queueDeadline = Date.now() + (deps.busyQueueWaitMs ?? 8_000);
+          // R02/M-FR-06: the queue WAITS for the account, it does not
+          // race one short retry — the bound is the batch horizon (10
+          // minutes; deps.busyQueueWaitMs overrides for tests), and the
+          // task starts the moment the holder releases. The child's own
+          // active budget has not begun (the lane has not started), so
+          // the queue is bounded by the batch, not by runtime.
+          const queueDeadline = Date.now() + (deps.busyQueueWaitMs ?? 10 * 60_000);
           let leaseFree = false;
           while (Date.now() < queueDeadline) {
             if (
