@@ -107,7 +107,9 @@ export class ManagedBrowserCacheMaintenanceScheduler {
     } catch (error) {
       log.warn(
         `[ManagedBrowserCache] maintenance pass failed: ${
-          error instanceof Error ? error.name : "unknown"
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error)
         }`
       );
     } finally {

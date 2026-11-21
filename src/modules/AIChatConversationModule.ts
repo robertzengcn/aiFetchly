@@ -447,16 +447,16 @@ export class AIChatConversationModule extends BaseModule {
           pending = { turnId, typedText: typed };
         }
       } else if (message.role === "assistant") {
-        const content = message.content?.trim() ?? "";
-        // An empty assistant row is not a completed exchange — the turn may
-        // still produce its real answer.
-        if (content.length === 0) continue;
         // B02/F02: a cancelled or failed assistant ENDS its exchange; its
         // user row may never pair with anyone else.
         if (meta.cancelled || meta.error) {
           pending = null;
           continue;
         }
+        const content = message.content?.trim() ?? "";
+        // An empty assistant row is not a completed exchange — the turn may
+        // still produce its real answer.
+        if (content.length === 0) continue;
         if (message.messageId === trustedAssistantMessageId) {
           trustedSeen = true;
         }

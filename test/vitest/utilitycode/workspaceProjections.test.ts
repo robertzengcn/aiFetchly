@@ -287,6 +287,45 @@ describe("buildToolExecutionGroups (FR-042..050)", () => {
     const row = buildToolExecutionGroups(messages).flatMap((g) => g.executions)[0];
     expect(row?.status).toBe("failed");
   });
+
+  it("pairs tool executions with their turn's assistant message in persisted history order across multiple turns", () => {
+    const u1 = view(MessageType.MESSAGE, { source: "chat-v2" }, "user", "q1");
+    const tc1 = view(MessageType.TOOL_CALL, {
+      source: "chat-v2",
+      toolCallId: "tc-turn-1",
+      toolName: "web_search",
+    });
+    const tr1 = view(MessageType.TOOL_RESULT, {
+      source: "chat-v2",
+      toolCallId: "tc-turn-1",
+      toolName: "web_search",
+      toolResult: { success: true, summary: "r1" },
+      toolResultSummary: "r1",
+    });
+    const a1 = view(MessageType.MESSAGE, { source: "chat-v2" }, "assistant", "a1");
+
+    const u2 = view(MessageType.MESSAGE, { source: "chat-v2" }, "user", "q2");
+    const tc2 = view(MessageType.TOOL_CALL, {
+      source: "chat-v2",
+      toolCallId: "tc-turn-2",
+      toolName: "read_file",
+    });
+    const tr2 = view(MessageType.TOOL_RESULT, {
+      source: "chat-v2",
+      toolCallId: "tc-turn-2",
+      toolName: "read_file",
+      toolResult: { success: true, summary: "r2" },
+      toolResultSummary: "r2",
+    });
+    const a2 = view(MessageType.MESSAGE, { source: "chat-v2" }, "assistant", "a2");
+
+    const groups = buildToolExecutionGroups([u1, tc1, tr1, a1, u2, tc2, tr2, a2]);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].assistantMessageId).toBe(a1.id);
+    expect(groups[0].executions.map((e) => e.toolCallId)).toEqual(["tc-turn-1"]);
+    expect(groups[1].assistantMessageId).toBe(a2.id);
+    expect(groups[1].executions.map((e) => e.toolCallId)).toEqual(["tc-turn-2"]);
+  });
 });
 
 function planState(overrides: Partial<AIChatPlanStateView>): AIChatPlanStateView {

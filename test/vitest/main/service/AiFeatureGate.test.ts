@@ -12,7 +12,24 @@ vi.mock('@/modules/token', () => ({
   },
 }));
 
-import { isAiEnabled } from '@/service/AiFeatureGate';
+let mockResolution: { canUse: boolean; reason?: string; message?: string } | null = null;
+vi.mock('@/service/aiProvider/AIProviderResolver', () => ({
+  AIProviderResolver: class {
+    resolveForChat() {
+      if (mockResolution) return mockResolution;
+      return {
+        canUse: tokenStore['user_ai_enabled'] === 'true',
+        reason: tokenStore['user_ai_enabled'] === 'true' ? undefined : 'hosted_subscription_required',
+      };
+    }
+  },
+}));
+
+import {
+  isAiEnabled,
+  isAiOrProviderEnabled,
+  ensureAiOrProviderEnabled,
+} from '@/service/AiFeatureGate';
 import { USER_AI_ENABLED } from '@/config/usersetting';
 
 describe('isAiEnabled', () => {
@@ -56,5 +73,32 @@ describe('isAiEnabled fail-closed behavior', () => {
   test('returns false (not throw) when Token service throws', async () => {
     const { isAiEnabled: fresh } = await import('@/service/AiFeatureGate');
     expect(fresh()).toBe(false);
+  });
+});
+
+describe('isAiOrProviderEnabled and ensureAiOrProviderEnabled', () => {
+  beforeEach(() => {
+    for (const k of Object.keys(tokenStore)) delete tokenStore[k];
+    mockResolution = null;
+  });
+
+  test('returns true when hosted AI is enabled', async () => {
+    tokenStore[USER_AI_ENABLED] = 'true';
+    expect(isAiOrProviderEnabled()).toBe(true);
+    expect(await ensureAiOrProviderEnabled()).toBe(true);
+  });
+
+  test('returns false when neither hosted AI nor local provider is enabled', async () => {
+    tokenStore[USER_AI_ENABLED] = 'false';
+    mockResolution = { canUse: false, reason: 'hosted_subscription_required' };
+    expect(isAiOrProviderEnabled()).toBe(false);
+    expect(await ensureAiOrProviderEnabled()).toBe(false);
+  });
+
+  test('returns true when hosted AI is off but a local/custom provider is configured', async () => {
+    tokenStore[USER_AI_ENABLED] = 'false';
+    mockResolution = { canUse: true };
+    expect(isAiOrProviderEnabled()).toBe(true);
+    expect(await ensureAiOrProviderEnabled()).toBe(true);
   });
 });

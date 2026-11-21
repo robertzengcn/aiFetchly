@@ -19,6 +19,7 @@
 import { Token } from "@/modules/token";
 import { USER_AI_ENABLED } from "@/config/usersetting";
 import { SubscriptionEntitlementService } from "@/service/SubscriptionEntitlementService";
+import { AIProviderResolver } from "@/service/aiProvider/AIProviderResolver";
 
 export function isAiEnabled(): boolean {
   try {
@@ -26,6 +27,61 @@ export function isAiEnabled(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Checks whether AI features are available either via a hosted subscription
+ * (`USER_AI_ENABLED === "true"`) OR via a configured local/custom AI provider.
+ *
+ * Used by Chat and Tool execution paths (such as Browser Use / Managed Browser)
+ * so users who configure their own custom/local AI provider can use AI automation
+ * without being blocked by hosted subscription checks.
+ */
+export function isAiOrProviderEnabled(): boolean {
+  try {
+    const resolver = new AIProviderResolver();
+    const resolution = resolver.resolveForChat();
+    if (resolution.canUse) {
+      return true;
+    }
+  } catch {
+    // Fall back to Token check
+  }
+  return isAiEnabled();
+}
+
+/**
+ * Provider-aware lazy reconciliation gate.
+ *
+ * Returns true immediately if a local AI provider is configured and enabled,
+ * or if hosted AI is enabled. Otherwise, runs one lazy reconciliation pass
+ * before failing closed.
+ */
+export async function ensureAiOrProviderEnabled(): Promise<boolean> {
+  try {
+    const resolver = new AIProviderResolver();
+    const resolution = resolver.resolveForChat();
+    if (resolution.canUse) {
+      return true;
+    }
+    // Only attempt lazy reconcile if hosted subscription is required
+    if (
+      "reason" in resolution &&
+      resolution.reason === "hosted_subscription_required"
+    ) {
+      try {
+        await SubscriptionEntitlementService.getInstance().reconcile(
+          "gated_feature"
+        );
+      } catch {
+        // Reconcile failures keep the cache; fail closed below.
+      }
+      return resolver.resolveForChat().canUse;
+    }
+  } catch {
+    // Fall back to hosted check
+  }
+  return ensureHostedAiEnabled();
 }
 
 /**

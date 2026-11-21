@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { log } from "@/modules/Logger";
-import { isAiEnabled } from "@/service/AiFeatureGate";
+import { isAiOrProviderEnabled } from "@/service/AiFeatureGate";
 import { isWriteCapableScriptSource } from "@/childprocess/managed-browser/ResultSanitizer";
 import {
   getDefaultManagedBrowserModule,
@@ -202,14 +202,14 @@ export class ManagedBrowserAiToolService {
       deps.classifier ?? getDefaultBrowserActionRiskClassifier();
     this.cacheModule =
       deps.cacheModule ?? getDefaultManagedBrowserCacheModule();
-    this.aiEnabled = deps.isAiEnabled ?? isAiEnabled;
+    this.aiEnabled = deps.isAiEnabled ?? isAiOrProviderEnabled;
   }
 
   // -----------------------------------------------------------------------
   // Gates
   // -----------------------------------------------------------------------
 
-  /** MANDATORY first gate: USER_AI_ENABLED before any work (FR-P0-012). */
+  /** MANDATORY first gate: AI entitlement or configured local provider before any work (FR-P0-012). */
   private ensureAiEnabled(): void {
     if (!this.aiEnabled()) {
       throw new ManagedBrowserAiToolError("ai_disabled");

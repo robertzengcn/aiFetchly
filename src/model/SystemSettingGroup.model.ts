@@ -12,8 +12,10 @@ export class SystemSettingGroupModel extends BaseDb {
     private _repository: Repository<SystemSettingGroupEntity> | null = null;
     private systemSettingModel:SystemSettingModel
     private systemSettingOptionModel:SystemSettingOptionModel
+    private filepath: string;
     constructor(filepath: string) {
         super(filepath)
+        this.filepath = filepath;
         this.systemSettingModel = new SystemSettingModel(filepath)
         this.systemSettingOptionModel = new SystemSettingOptionModel(filepath)
     }
@@ -53,10 +55,30 @@ export class SystemSettingGroupModel extends BaseDb {
         }
         return this._repository;
     }
-    public async tableInit() {
-        await this.initSystemSetting()
+    private static inFlightInitByPath = new Map<string, Promise<void>>();
+
+    public async tableInit(): Promise<void> {
+        await this.initSystemSetting();
     }
-    public async initSystemSetting(){
+
+    public async initSystemSetting(): Promise<void> {
+        const key = this.filepath || "default";
+        const existing = SystemSettingGroupModel.inFlightInitByPath.get(key);
+        if (existing) {
+            return existing;
+        }
+        const promise = (async () => {
+            try {
+                await this._doInitSystemSetting();
+            } finally {
+                SystemSettingGroupModel.inFlightInitByPath.delete(key);
+            }
+        })();
+        SystemSettingGroupModel.inFlightInitByPath.set(key, promise);
+        return promise;
+    }
+
+    private async _doInitSystemSetting(): Promise<void> {
         const repository = await this.getRepository();
 
         // Remove deprecated groups and their settings.
@@ -83,7 +105,13 @@ export class SystemSettingGroupModel extends BaseDb {
                     const systemSettingGroupEntity = new SystemSettingGroupEntity();
                     systemSettingGroupEntity.name = sgelement.name;
                     systemSettingGroupEntity.description = sgelement.description? sgelement.description:'';
-                    settargroup = await repository.save(systemSettingGroupEntity)
+                    try {
+                        settargroup = await repository.save(systemSettingGroupEntity);
+                    } catch {
+                        settargroup = await repository.findOne({
+                            where: { name: sgelement.name },
+                        });
+                    }
                 }
                 // Ensure settargroup is not null before using it
                 if (!settargroup) {
@@ -100,10 +128,25 @@ export class SystemSettingGroupModel extends BaseDb {
                             systemSettingEntity.value = settingelement.value;
                             systemSettingEntity.description = settingelement.description? settingelement.description:'';
                             systemSettingEntity.type = settingelement.type;
-                           const savedSetting = await this.systemSettingModel.insert(systemSettingEntity)
+                            let savedSetting: SystemSettingEntity | null = null;
+                            try {
+                                savedSetting = await this.systemSettingModel.insert(systemSettingEntity);
+                            } catch (err: unknown) {
+                                const errorMsg = err instanceof Error ? err.message : String(err);
+                                if (
+                                    errorMsg.includes('UNIQUE constraint failed') ||
+                                    errorMsg.includes('SQLITE_CONSTRAINT') ||
+                                    errorMsg.includes('constraint failed')
+                                ) {
+                                    log.warn(`[system-setting] Setting already exists for key "${settingelement.key}", using existing.`);
+                                    savedSetting = await this.systemSettingModel.getSettingItem(settingelement.key);
+                                } else {
+                                    throw err;
+                                }
+                            }
                            
                            // Initialize language options if this is the language preference setting
-                           if (isLanguageKey) {
+                           if (isLanguageKey && savedSetting) {
                                await this.systemSettingOptionModel.initLanguageOptions(savedSetting);
                            }
                        }else{

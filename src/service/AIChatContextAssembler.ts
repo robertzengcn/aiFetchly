@@ -763,18 +763,23 @@ export class AIChatContextAssembler {
     // around augmented content.
     // The spread drops TypeORM instance methods; interleaveReplayWithText only
     // reads the data fields, so cast the plain augmented rows back.
-    const augmentedRecent = trimmedRecent.map(
-      (r) =>
-        ({
-          ...r,
-          content: augmentContentWithGeneratedImages(
-            r.content,
-            r.role,
-            r.metadata,
-            r.messageId
-          ),
-        }) as unknown as AIChatMessageEntity
-    );
+    const augmentedRecent = trimmedRecent
+      .map(
+        (r) =>
+          ({
+            ...r,
+            content: augmentContentWithGeneratedImages(
+              r.content,
+              r.role,
+              r.metadata,
+              r.messageId
+            ),
+          }) as unknown as AIChatMessageEntity
+      )
+      .filter(
+        (r) =>
+          !(r.role === "assistant" && (!r.content || r.content.length === 0))
+      );
     const historyMessages = interleaveReplayWithText({
       textRows: augmentedRecent,
       replayPairs: selectReplayPairs(toolPairs),
