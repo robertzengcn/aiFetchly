@@ -13,7 +13,10 @@ import { randomUUID } from "node:crypto";
 import { AgentRuntimeRegistry, getDefaultAgentRuntimeDeps } from "@/service/AgentRuntimeRegistry";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
-import { getDefaultManagedBrowserModule } from "@/modules/ManagedBrowserModule";
+
+// B03: the managed-browser module is imported dynamically at every use
+// site (the static binding can be uninitialized in mocked/circular
+// module graphs — the fast-runner stop path died on exactly that).
 
 export interface BrowserBatchTaskInput {
   readonly goal: string;
@@ -821,6 +824,10 @@ export async function runBrowserTasks(
             "@/service/ManagedBrowserAiToolService"
           );
           const service = getDefaultManagedBrowserAiToolService();
+          // B03/M-FR-02/07/09: the adapter is typed end to end against the
+          // shapes the service actually returns — the start status carries
+          // `sessionId` (a `session_id` read silently launched a session
+          // the task never received).
           const started = (await service.startSession(
             {
               ...(typeof task.account_id === "number" && task.account_id > 0
@@ -828,15 +835,35 @@ export async function runBrowserTasks(
                 : {}),
               purpose: prompt.slice(0, 300),
               ...(task.start_url ? { requested_start_url: task.start_url } : {}),
+              // B03/M-FR-09: the requested proxy rides the START — dropping
+              // it silently changed the lane's network route.
+              ...(typeof task.proxy_id === "number" && task.proxy_id > 0
+                ? { proxy: { proxy_id: task.proxy_id } }
+                : {}),
             },
             {
               conversationId,
               toolCallId: `batch-fast-${taskId}`,
               ownerAgentId: childAgentTaskId,
               skipPermissionCheck: true,
+              // B03/M-FR-08: Stop DURING the launch aborts the start — the
+              // lane signal rides start, not only the task execution.
+              signal: childAbort.signal,
             }
-          )) as { session_id: string };
-          const sessionId = started.session_id;
+          )) as { sessionId?: string; session_id?: string };
+          const sessionId = started.sessionId ?? started.session_id;
+          if (!sessionId) {
+            return {
+              status: "failed",
+              output: {
+                status: "failed",
+                summary: "fast_runner start returned no session",
+                extracted: [],
+                final_url: null,
+                evidence: [],
+              },
+            };
+          }
           try {
             const executed = (await service.executeTask(
               {
@@ -850,24 +877,45 @@ export async function runBrowserTasks(
                 signal: childAbort.signal,
                 skipPermissionCheck: true,
               }
-            )) as { status?: string; extracted?: unknown[]; evidence?: string[]; finalObservation?: { url?: string | null } | null };
-            const status =
-              executed.status === "completed"
+            )) as {
+              status?: string;
+              reason?: string;
+              extracted?: unknown[];
+              evidence?: string[];
+              finalObservation?: { url?: string | null } | null;
+            };
+            // B03: the collector validates output.status strictly against
+            // completed | failed | needs_user. interrupted = partial
+            // results (no automatic resume) renders as terminal partial;
+            // the REAL terminal status and reason ride the summary so
+            // nothing is lost in the mapping. The ENVELOPE status is the
+            // RUN status (completed = the run finished; the task outcome
+            // lives in output.status) — exactly the AgentRuntime.runSync
+            // envelope the llm_agent path returns.
+            const terminalStatus = executed.status ?? "unknown";
+            const terminalReason =
+              typeof executed.reason === "string" ? executed.reason.slice(0, 200) : "";
+            const taskStatus =
+              terminalStatus === "completed"
                 ? "completed"
-                : executed.status === "partial"
+                : terminalStatus === "partial" || terminalStatus === "interrupted"
                   ? "needs_user"
                   : "failed";
             return {
-              status,
+              status: "completed",
               output: {
-                status,
+                status: taskStatus,
                 summary:
-                  status === "completed"
+                  taskStatus === "completed"
                     ? task.goal
-                    : `fast_runner ended ${status}`,
+                    : `fast_runner ended ${terminalStatus}${terminalReason ? `: ${terminalReason}` : ""}`.slice(0, 1000),
                 extracted: executed.extracted ?? [],
                 final_url: executed.finalObservation?.url ?? null,
                 evidence: executed.evidence ?? [],
+                // B03/M-FR-07: the retained session id rides the output —
+                // the keep-open transfer reads it; a missing id released
+                // the browser even on a COMPLETED keep-open task.
+                ...(task.keep_open ? { session_id: sessionId } : {}),
               },
             };
           } catch (error) {
@@ -886,6 +934,13 @@ export async function runBrowserTasks(
             };
           } finally {
             if (!task.keep_open) {
+              // B03: dynamic import like the other cleanup sites — the
+              // module-level static binding can be uninitialized in
+              // mocked/circular graphs (the old fast path ALWAYS died
+              // here with a TDZ before its finally could stop anything).
+              const { getDefaultManagedBrowserModule } = await import(
+                "@/modules/ManagedBrowserModule"
+              );
               await getDefaultManagedBrowserModule()
                 .stop(sessionId, "cancelled")
                 .catch(() => undefined);

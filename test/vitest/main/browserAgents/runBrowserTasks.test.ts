@@ -69,6 +69,47 @@ vi.mock("@/modules/ManagedBrowserModule", () => ({
 }));
 const transferCalls: Array<{ sessionId: string; parentConversationId: string }> = [];
 
+/**
+ * B03: the fast-runner adapter drives the REAL service contract — the
+ * mock records the start/execute calls so the tests assert the start
+ * contract (session id, proxy, signal) and the result mapping.
+ */
+const fastServiceCalls = vi.hoisted(() => ({
+  startArgs: [] as Array<{ args: Record<string, unknown>; context: Record<string, unknown> }>,
+  execArgs: [] as Array<{ args: Record<string, unknown>; context: Record<string, unknown> }>,
+  startImpl: null as null | ((args: Record<string, unknown>, context: Record<string, unknown>) => Promise<Record<string, unknown>>),
+  execImpl: null as null | ((args: Record<string, unknown>, context: Record<string, unknown>) => Promise<Record<string, unknown>>),
+}));
+vi.mock("@/service/ManagedBrowserAiToolService", () => ({
+  ManagedBrowserAiToolService: class {},
+  getDefaultManagedBrowserAiToolService: () => ({
+    startSession: async (args: Record<string, unknown>, context: Record<string, unknown>) => {
+      fastServiceCalls.startArgs.push({ args, context });
+      if (fastServiceCalls.startImpl) {
+        return await fastServiceCalls.startImpl(args, context);
+      }
+      return { sessionId: "mb_fast_default", notice: null };
+    },
+    executeTask: async (args: Record<string, unknown>, context: Record<string, unknown>) => {
+      fastServiceCalls.execArgs.push({ args, context });
+      if (fastServiceCalls.execImpl) {
+        return await fastServiceCalls.execImpl(args, context);
+      }
+      return {
+        taskId: "task_x",
+        sessionId: args.session_id,
+        status: "completed",
+        reason: "verified",
+        evidence: [],
+        extracted: [],
+        finalObservation: null,
+        counts: { leafSteps: 0, decisionRequests: 0, recoveryCalls: 0 },
+        userInterventions: [],
+      };
+    },
+  }),
+}));
+
 /** PRD M-FR-03/05/09: bounded parallelism, isolation, strict results. */
 
 describe("runWithConcurrency", () => {
@@ -1287,5 +1328,128 @@ describe("runBrowserTasks full output validation (A09)", () => {
     expect(Array.isArray(results[0]?.extracted)).toBe(true);
     expect(results[0]?.needs_user).toBeNull();
     expect(results[0]?.final_url).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B03/M-FR-02/07/08/09/12: the fast-runner adapter contract — start carries
+// the session id, proxy and lane signal; results map onto the collector's
+// validated envelope; keep-open surfaces the retained session.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks fast_runner executor (B03)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+    fastServiceCalls.startArgs.length = 0;
+    fastServiceCalls.execArgs.length = 0;
+    fastServiceCalls.startImpl = null;
+    fastServiceCalls.execImpl = null;
+    ownerBySession.clear();
+    transferCalls.length = 0;
+    stopMock.mockClear();
+    stopAllForAgentTaskMock.mockClear();
+  });
+  afterAll(() => {
+    getBatchConfirmWaitRegistry().setSink(null);
+  });
+
+  it("receives the launched session, passes the requested proxy and the lane signal, and stops when not keep_open", async () => {
+    const control = new AgentTaskControlService();
+    const { results } = await runBrowserTasks(
+      [{ goal: "fast task one", proxy_id: 42 }],
+      1,
+      "conv-fast1",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner" }
+    );
+    // START contract: the launched session reached executeTask, the
+    // requested proxy rode the start, and the lane signal was wired.
+    expect(fastServiceCalls.startArgs).toHaveLength(1);
+    const startArgs = fastServiceCalls.startArgs[0]!;
+    expect(startArgs.args.proxy).toEqual({ proxy_id: 42 });
+    expect(startArgs.context.signal).toBeInstanceOf(AbortSignal);
+    const execArgs = fastServiceCalls.execArgs[0]!;
+    expect(execArgs.args.session_id).toBe("mb_fast_default");
+    expect(execArgs.context.signal).toBeInstanceOf(AbortSignal);
+    expect(fastServiceCalls.execArgs).toHaveLength(1);
+    // Terminal mapping: completed stays completed.
+    expect(results[0]!.status).toBe("completed");
+    // Not keep_open → the session was stopped by the lane.
+    expect(stopMock).toHaveBeenCalledWith("mb_fast_default", "cancelled");
+  });
+
+  it("maps a partial ending onto needs_user and keeps the real terminal status in the summary", async () => {
+    const control = new AgentTaskControlService();
+    fastServiceCalls.execImpl = async () => ({
+      taskId: "task_x",
+      sessionId: "mb_fast_default",
+      status: "partial",
+      reason: "verification_failed_budget_exhausted",
+      evidence: ["e1"],
+      extracted: ["row"],
+      finalObservation: { url: "https://example.test/partial" },
+      counts: { leafSteps: 2, decisionRequests: 2, recoveryCalls: 0 },
+      userInterventions: [],
+    });
+    const { results } = await runBrowserTasks(
+      [{ goal: "fast partial" }],
+      1,
+      "conv-fast2",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner" }
+    );
+    // partial renders as the collector's terminal-partial envelope.
+    expect(results[0]!.status).toBe("partial");
+    // The REAL terminal status + reason survive the mapping.
+    expect(results[0]!.summary).toContain("partial");
+    expect(results[0]!.summary).toContain("verification_failed_budget_exhausted");
+    expect(results[0]!.extracted).toEqual(["row"]);
+    expect(results[0]!.final_url).toBe("https://example.test/partial");
+  });
+
+  it("keep_open transfers the retained session id on a completed result", async () => {
+    const control = new AgentTaskControlService();
+    fastServiceCalls.startImpl = async () => ({
+      sessionId: "mb_fast_keep",
+      notice: null,
+    });
+    fastServiceCalls.execImpl = async (
+      _args: Record<string, unknown>,
+      context: Record<string, unknown>
+    ) => {
+      // The session is owned by THIS lane (the service recorded the
+      // start ownership under the ownerAgentId).
+      ownerBySession.set("mb_fast_keep", String(context.ownerAgentId));
+      return {
+        taskId: "task_x",
+        sessionId: "mb_fast_keep",
+        status: "completed",
+        reason: "verified",
+        evidence: [],
+        extracted: [],
+        finalObservation: { url: "https://example.test/done" },
+        counts: { leafSteps: 1, decisionRequests: 1, recoveryCalls: 0 },
+        userInterventions: [],
+      };
+    };
+    const { results } = await runBrowserTasks(
+      [{ goal: "fast keep open", keep_open: true }],
+      1,
+      "conv-fast3",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner" }
+    );
+    // The transfer happened to the PARENT conversation and the row
+    // surfaces the retained session id.
+    expect(transferCalls).toHaveLength(1);
+    expect(transferCalls[0]!.parentConversationId).toBe("conv-fast3");
+    expect(results[0]!.session_id).toBe("mb_fast_keep");
+    // keep_open → the lane did NOT stop the session.
+    expect(stopMock).not.toHaveBeenCalled();
   });
 });

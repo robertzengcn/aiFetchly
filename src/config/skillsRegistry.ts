@@ -5369,6 +5369,15 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             },
           },
           concurrency: { type: "number", description: "1-3 parallel browsers." },
+          // R04/M-FR-12: the executor switch — the parser forwards it, so
+          // the advertised schema must offer it (B03).
+          executor: {
+            type: "string",
+            enum: ["llm_agent", "fast_runner"],
+            description:
+              "llm_agent (default) runs the browser-operator sub-agent per task; " +
+              "fast_runner drives the decision runner directly without an LLM loop.",
+          },
         },
         required: ["tasks"],
       },
