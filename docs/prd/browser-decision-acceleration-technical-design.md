@@ -670,7 +670,7 @@ FILL_LOGIN_FORM {
 
 ### 13.7 Registration
 
-`intent: "register"` requires `signInEnabled` and a separate registration switch, an explicit confirmation through the approval path, and the card's “Create account” wording. Verification steps (email/phone/CAPTCHA) hand off. A generated or user-entered password is stored through the same encrypted path. Never register with an existing account's data without the user confirming in the card.
+**Deferred (D01, revised PRD Q-02/A-FR-12).** `intent: "register"` is NOT implemented in this release: the credential service returns `registration_disabled` and opens no handoff. The design above (a separate registration switch, approval-path confirmation, "Create account" card wording, verification handoff, the shared encrypted password path) describes the INTENDED shape when registration is enabled in a later release — it is not current behavior. Never register with an existing account's data without the user confirming in the card.
 
 ## 14. Password-field safety
 
