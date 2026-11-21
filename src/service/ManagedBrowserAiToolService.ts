@@ -2257,6 +2257,12 @@ export class ManagedBrowserAiToolService {
                       ? "partial"
                       : "failed",
           reason: result.reason,
+          // R12/D-FR-10: the partial evidence lands durably — restart
+          // reconciliation shows what LANDED without replaying anything.
+          partial:
+            result.extracted.length > 0 || result.evidence.length > 0
+              ? { extracted: result.extracted, evidence: result.evidence }
+              : undefined,
         });
       } catch {
         // best-effort terminal persistence

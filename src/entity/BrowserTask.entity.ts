@@ -86,6 +86,15 @@ export class BrowserTaskEntity extends AuditableEntity {
   @Column({ type: "varchar", length: 128, nullable: true })
   terminalReason!: string | null;
 
+  /**
+   * R12/D-FR-10/C-FR-14: the PARTIAL evidence bundle for an interrupted /
+   * partial ending (bounded extracted rows + evidence strings, JSON) —
+   * restart reconciliation shows what LANDED without replaying a
+   * mutation.
+   */
+  @Column({ type: "text", nullable: true })
+  interruptedPartial!: string | null;
+
   @Column({ type: "integer", nullable: true })
   userInterventionCount!: number | null;
   /** N01/D-AC-08: provider-reported token usage summed over decisions. */

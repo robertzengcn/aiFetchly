@@ -141,12 +141,49 @@ export class BrowserTaskModule extends BaseModule {
       // W02/D-FR-09: a partial ending persists as partial.
       | "partial";
     readonly reason: string;
+    /** R12/D-FR-10: the bounded partial evidence bundle (extracted + evidence). */
+    readonly partial?: {
+      readonly extracted?: readonly unknown[];
+      readonly evidence?: readonly string[];
+    };
   }): Promise<void> {
     const model = await this.getModel();
     const entity = new BrowserTaskEntity();
     entity.taskId = input.taskId;
     entity.phase = input.phase;
     entity.terminalReason = input.reason.slice(0, 128);
+    if (input.partial) {
+      // R12: the partial bundle is BOUNDED — 50 extracted rows and 20
+      // evidence strings, each string capped, total JSON under 256 KB.
+      const bounded = {
+        extracted: (input.partial.extracted ?? [])
+          .slice(0, 50)
+          .map((item) =>
+            typeof item === "string"
+              ? item.slice(0, 2000)
+              : item !== null && typeof item === "object"
+                ? (() => {
+                    try {
+                      const s = JSON.stringify(item);
+                      return s.length > 2000
+                        ? { truncated: true, bytes: s.length }
+                        : item;
+                    } catch {
+                      return { truncated: true, bytes: 0 };
+                    }
+                  })()
+                : null,
+          ),
+        evidence: (input.partial.evidence ?? [])
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.slice(0, 300))
+          .slice(0, 20),
+      };
+      const serialized = JSON.stringify(bounded);
+      if (serialized.length <= 256 * 1024) {
+        entity.interruptedPartial = serialized;
+      }
+    }
     await model.upsertByTaskId(entity);
   }
 
