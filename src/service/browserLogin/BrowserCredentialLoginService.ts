@@ -74,7 +74,13 @@ function endCardUserWait(
     getDefaultToolJobRegistry().setUserWait(jobId, false);
   }
   if (input.controlTaskId) {
-    getDefaultAgentTaskControlService().endIntervention(input.controlTaskId);
+    const control = getDefaultAgentTaskControlService();
+    control.endIntervention(input.controlTaskId);
+    // B02/D-FR-10a: a credential/picker reply is a NORMAL wait release —
+    // the accelerated runner's gate reopens WITHOUT the resume-generation
+    // bump (only an actual user takeover invalidates pre-wait proposals).
+    // An explicit user pause stays paused; terminal states are untouched.
+    control.releaseWaitForUser(input.controlTaskId);
   }
 }
 

@@ -275,7 +275,13 @@ export class AgentTaskControlService {
     this.pauseCapSweepTimer = timer;
   }
 
-  /** End the open intervention (user acted or the window lapsed). */
+  /**
+   * End the open intervention (user acted or the window lapsed). B02: this
+   * ends the SPAN only — the caller decides the state transition. A normal
+   * wait release (approval/credential/picker reply) calls
+   * `releaseWaitForUser`; an expiry maps to interrupted; a user takeover
+   * keeps its pause until resume().
+   */
   public endIntervention(taskId: string): void {
     const record = this.tasks.get(taskId);
     if (!record?.openIntervention) {
@@ -287,6 +293,25 @@ export class AgentTaskControlService {
       durationMs: this.now() - record.openIntervention.startedAtEpochMs,
     });
     record.openIntervention = null;
+  }
+
+  /**
+   * B02/D-FR-10a/C-FR-06: the EXPLICIT normal wait release — a resolved
+   * approval/credential/picker reply reopens the gate and returns the
+   * record to running. Unlike `resume` (a USER takeover release), the
+   * resume generation is NOT bumped: a pending action that predates the
+   * wait is re-dispatched, never discarded as stale. Only a
+   * waiting_for_user record releases; paused stays paused and terminal
+   * states are untouched.
+   */
+  public releaseWaitForUser(taskId: string): boolean {
+    const record = this.tasks.get(taskId);
+    if (!record || record.state !== "waiting_for_user") {
+      return false;
+    }
+    this.setState(taskId, "running");
+    this.resolveAllWaiters(taskId);
+    return true;
   }
 
   /**

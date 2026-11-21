@@ -1164,6 +1164,140 @@ describe("awaitRunnerApproval (F06)", () => {
     });
     expect(resolution).toBe("expired");
   });
+
+  // B02/D-FR-10a: a NORMAL approval resolution releases the wait WITHOUT
+  // the resume-generation bump — the approved pending action re-dispatches.
+  // Only an actual user takeover (pause → resume) bumps the generation.
+  it("approval resolution releases the gate WITHOUT bumping the resume generation (B02)", async () => {
+    const service = makeApprovalService({
+      peek: () => "approve",
+      consume: () => "approve",
+    });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-b02gen", {
+      programDigest: "digest-b02",
+      pageRevision: 3,
+      sessionId: "mb_b02gen",
+    });
+    const control = getDefaultAgentTaskControlService();
+    control.register("b02-gen", "conv-1");
+    const before = control.getResumeGeneration("b02-gen");
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_b02gen",
+      requestId: "req-b02gen",
+      taskId: "b02-gen",
+      pollIntervalMs: 1,
+      waitWindowMs: 2_000,
+    });
+    expect(resolution).toBe("approved");
+    expect(control.getState("b02-gen")).toBe("running");
+    expect(control.getResumeGeneration("b02-gen")).toBe(before);
+    // The contrast: a real USER takeover release still bumps.
+    control.beginIntervention("b02-gen", "user_paused");
+    control.resume("b02-gen");
+    expect(control.getResumeGeneration("b02-gen")).toBe(before + 1);
+  });
+
+  // B02 (benign in-memory probe promoted to a regression test): the
+  // accelerated runner wired to the REAL card wait re-dispatches the
+  // pending step after an approval — before the fix the resume-based
+  // release bumped the generation and the redispatch guard discarded
+  // every approved action (zero actual redispatches).
+  it("the runner re-dispatches the pending step after a REAL card approval (B02)", async () => {
+    const { BrowserTaskRunner } = await import(
+      "@/service/browserDecision/BrowserTaskRunner"
+    );
+    const service = makeApprovalService({
+      peek: () => "approve",
+      consume: () => "approve",
+    });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-b02probe", {
+      programDigest: "digest-probe",
+      pageRevision: 3,
+      sessionId: "mb_b02probe",
+    });
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const doneEntryLike = (): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+      status: "decided",
+      action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    });
+    const dispatches: number[] = [];
+    let dispatchCount = 0;
+    const control = getDefaultAgentTaskControlService();
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b02probe",
+        conversationId: "conv-b02",
+        goal: "click go",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        observe: async () => ({
+          sessionId: "mb_b02probe",
+          observationId: "obs-b02",
+          pageRevision: 3,
+          url: "https://example.test/search",
+          origin: "https://example.test",
+          title: "Example",
+          elements: [
+            { ref: "e_aaa", role: "textbox", name: "Query" },
+            { ref: "e_bbb", role: "button", name: "Go" },
+          ],
+          visibleText: "Example Market",
+        }),
+        runActions: async () => {
+          dispatchCount++;
+          dispatches.push(dispatchCount);
+          if (dispatchCount === 1) {
+            return {
+              effect: "known" as const,
+              pageRevision: 3,
+              results: [],
+              stopCode: "approval_required" as const,
+            };
+          }
+          return {
+            effect: "known" as const,
+            pageRevision: 3,
+            results: [{ success: true, errorCode: null }],
+          };
+        },
+        decisionClient: {
+          getCapabilities: async () => ({}) as never,
+          decide: async () =>
+            dispatches.length === 0 ? clickDecision : doneEntryLike(),
+        },
+        route: "chat" as const,
+        control,
+        awaitApproval: (input: { taskId: string }) =>
+          service.awaitRunnerApproval({
+            sessionId: "mb_b02probe",
+            requestId: "req-b02probe",
+            taskId: input.taskId,
+            pollIntervalMs: 1,
+            waitWindowMs: 2_000,
+          }),
+      }
+    );
+    const result = await runner.run();
+    // The approval produced ONE actual redispatch (2 dispatches total)
+    // and the task completed — not a discarded stale action.
+    expect(dispatches).toEqual([1, 2]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("CLICK:Go:approval_granted");
+  });
 });
 
 // ---------------------------------------------------------------------------

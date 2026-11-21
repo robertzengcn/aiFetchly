@@ -186,3 +186,73 @@ describe("AgentTaskControlService W02 partial terminal state", () => {
     expect(service.activeTimeMs("w02-clock")).toBe(4_000);
   });
 });
+
+// B02/D-FR-10a/C-FR-06: a NORMAL wait release (approval/credential/picker
+// reply) reopens the gate WITHOUT the resume-generation bump — only an
+// actual user takeover (resume) invalidates pre-wait proposals.
+describe("AgentTaskControlService explicit wait release (B02)", () => {
+  it("releaseWaitForUser returns a waiting record to running without a generation bump", () => {
+    const service = new AgentTaskControlService();
+    service.register("b02-release", "conv-1");
+    service.beginIntervention("b02-release", "approval_required");
+    expect(service.getState("b02-release")).toBe("waiting_for_user");
+    const before = service.getResumeGeneration("b02-release");
+    expect(service.releaseWaitForUser("b02-release")).toBe(true);
+    expect(service.getState("b02-release")).toBe("running");
+    expect(service.getResumeGeneration("b02-release")).toBe(before);
+    // Idempotent: a running record does not release again.
+    expect(service.releaseWaitForUser("b02-release")).toBe(false);
+  });
+
+  it("a credential/picker reply ends the span AND releases the wait (endCardUserWait flow, no bump)", () => {
+    const service = new AgentTaskControlService();
+    service.register("b02-cred", "conv-1");
+    service.beginIntervention("b02-cred", "credential_card");
+    expect(service.getState("b02-cred")).toBe("waiting_for_user");
+    // endCardUserWait: endIntervention (span) + releaseWaitForUser (gate).
+    service.endIntervention("b02-cred");
+    expect(service.get("b02-cred")?.openIntervention).toBeNull();
+    expect(service.get("b02-cred")?.interventions).toHaveLength(1);
+    // The span alone does NOT reopen the gate — the caller releases.
+    expect(service.getState("b02-cred")).toBe("waiting_for_user");
+    expect(service.releaseWaitForUser("b02-cred")).toBe(true);
+    expect(service.getState("b02-cred")).toBe("running");
+    expect(service.getResumeGeneration("b02-cred")).toBe(0);
+  });
+
+  it("an explicit user pause survives endIntervention and needs resume", () => {
+    const service = new AgentTaskControlService();
+    service.register("b02-paused", "conv-1");
+    service.setState("b02-paused", "paused", "user_paused");
+    service.beginIntervention("b02-paused", "credential_card");
+    // X4: the intervention must not downgrade the explicit pause.
+    expect(service.getState("b02-paused")).toBe("paused");
+    service.endIntervention("b02-paused");
+    // The card resolved, but the USER pause stands until resume().
+    expect(service.getState("b02-paused")).toBe("paused");
+    expect(service.resume("b02-paused")).toBe(true);
+    expect(service.getState("b02-paused")).toBe("running");
+    expect(service.getResumeGeneration("b02-paused")).toBe(1);
+  });
+
+  it("a terminal record never releases and never reopens its gate", () => {
+    const service = new AgentTaskControlService();
+    service.register("b02-terminal", "conv-1");
+    service.beginIntervention("b02-terminal", "approval_required");
+    service.cancel("b02-terminal", "user_stop");
+    expect(service.releaseWaitForUser("b02-terminal")).toBe(false);
+    expect(service.getState("b02-terminal")).toBe("cancelled");
+  });
+
+  it("releaseWaitForUser resolves blocked gate waiters", async () => {
+    const service = new AgentTaskControlService();
+    service.register("b02-gate", "conv-1");
+    service.beginIntervention("b02-gate", "credential_card");
+    const gate = service.getGate("b02-gate");
+    const waited = gate.waitUntilOpen(new AbortController().signal);
+    // endCardUserWait flow: span + explicit release.
+    service.endIntervention("b02-gate");
+    service.releaseWaitForUser("b02-gate");
+    await expect(waited).resolves.toBeUndefined();
+  });
+});

@@ -126,6 +126,15 @@ export interface BrowserToolExecutionContext {
    * (TODO-MSB-002) — no consent flag bypasses the approval gate.
    */
   readonly skipPermissionCheck?: boolean;
+  /**
+   * B02/D-FR-26: TRUE for calls made through the accelerated runner's
+   * authorized seam (`runAuthorizedForRunner`). A consequential action in
+   * that seam goes through the normal approval publish + `approval_required`
+   * throw so the runner's in-job F06 wait can block on the card and
+   * re-dispatch — instead of the headless-child structured `needs_user`
+   * result, which the runner seam would flatten into a known/empty step.
+   */
+  readonly viaRunnerSeam?: boolean;
   /** Abort signal from the query loop / ToolJobRegistry (GAP-14). */
   readonly signal?: AbortSignal;
   /** Rate-limited progress sink wired by the query loop. */
@@ -799,7 +808,10 @@ export class ManagedBrowserAiToolService {
       // structured needs_user proposal and returns it on ITS task only
       // (siblings keep running); the parent batch card surfaces it.
       // Chat callers keep the interactive approval flow below.
-      if (context.ownerAgentId) {
+      // B02/D-FR-26: the RUNNER seam is NOT the headless-child tool path —
+      // its in-job F06 wait answers the card, so it takes the normal
+      // publish + approval_required flow (never a flattened proposal).
+      if (context.ownerAgentId && !context.viaRunnerSeam) {
         return {
           status: "needs_user",
           needs_user: {
@@ -1193,11 +1205,14 @@ export class ManagedBrowserAiToolService {
         getDefaultToolJobRegistry().setUserWait(input.jobId, false);
       }
       control.endIntervention(input.taskId);
-      // F06: never leave the runner's control gate closed — if the
-      // resolution path did not resume the task, reopen it here.
+      // F06/B02: never leave the runner's control gate closed. The release
+      // is the EXPLICIT normal-wait transition — the resume generation is
+      // NOT bumped, so the approved pending action re-dispatches instead
+      // of being discarded as stale (only a real user takeover via
+      // pause/resume invalidates pre-pause proposals, C-FR-06).
       const record = control.get(input.taskId);
       if (record?.state === "waiting_for_user") {
-        control.resume(input.taskId);
+        control.releaseWaitForUser(input.taskId);
       }
     }
   }
@@ -1414,13 +1429,16 @@ export class ManagedBrowserAiToolService {
     };
     try {
       // P0-1: the runner calls the UNGUARDED core — it owns the session.
+      // B02/D-FR-26: the seam context is marked so a consequential action
+      // follows the approval-card flow (F06 in-job wait) instead of the
+      // headless-child structured needs_user result.
       const message = (await this.runActionsCore(
         {
           session_id: sessionId,
           program: program as never,
           page_revision: status.pageRevision,
         },
-        context
+        { ...context, viaRunnerSeam: true }
       )) as {
         type?: string;
         effect?: string;
@@ -1435,6 +1453,21 @@ export class ManagedBrowserAiToolService {
           kind: "stop",
           stopCode: "handoff_required",
           reasonCode: message.handoffReason ?? undefined,
+        };
+      }
+      // B02/D-FR-26: a structured headless-child proposal reaching the
+      // seam is NEVER flattened into a known/empty step (the old behavior
+      // let the runner declare clean progress on an action that never
+      // dispatched). It maps to the approval stop so the in-job F06 wait
+      // resolves it; without a published card binding the wait expires
+      // honestly (approval_expired), never a fabricated success.
+      if ((message as { status?: string }).status === "needs_user") {
+        return {
+          kind: "stop",
+          stopCode: "approval_required",
+          reasonCode:
+            (message as { needs_user?: { reason_code?: string } }).needs_user
+              ?.reason_code ?? undefined,
         };
       }
       return {
@@ -2355,6 +2388,12 @@ export class ManagedBrowserAiToolService {
       // TTL with no way to submit.
       ...(context.rootConversationId
         ? { rootConversationId: context.rootConversationId }
+        : {}),
+      // B02/D-FR-10a: a child-agent sign-in freezes ITS control record
+      // during the card/picker wait (lane clock + parent poll), exactly
+      // like the accelerated runner's SIGN_IN path.
+      ...(context.ownerAgentId
+        ? { controlTaskId: context.ownerAgentId }
         : {}),
       ...(context.jobId ? { jobId: context.jobId } : {}),
       ...(context.signal ? { signal: context.signal } : {}),
