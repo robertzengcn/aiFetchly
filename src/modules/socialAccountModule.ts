@@ -251,6 +251,32 @@ export class SocialAccountModule extends BaseModule {
       // }
       if (socialAccountData.social_type_id) {
         socialAccount.social_type_id = socialAccountData.social_type_id;
+        // B06/S-FR-06/A-FR-07: an EDIT that changes the platform is an
+        // explicit REBIND — the stale site_id used to survive the save,
+        // so sign-in matching (site_id OR social_type_id) matched the
+        // OLD site AND the new platform at once, and a password decrypt
+        // could trust the stale site. The site_id rebinds to the new
+        // platform's registry site, or to null when the registry has no
+        // site for it (the credential lookup's legacy fallback then
+        // resolves via social_type_id — which now matches the NEW
+        // platform).
+        if (socialAccountData.id) {
+          const existing = await this.socialAccountModel.findRowById(
+            socialAccountData.id
+          );
+          if (
+            existing &&
+            existing.social_type_id !== socialAccountData.social_type_id
+          ) {
+            const siteModule = (
+              await import("@/modules/BrowserSiteModule")
+            ).getDefaultBrowserSiteModule();
+            const newSite = await siteModule.getSite(
+              socialAccountData.social_type_id
+            );
+            socialAccount.site_id = newSite ? newSite.siteId : null;
+          }
+        }
       }
       // if (socialAccountData.social_type_url) {
       //     socialAccount.social_type_url = socialAccountData.social_type_url;
