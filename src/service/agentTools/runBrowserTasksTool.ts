@@ -177,6 +177,47 @@ export interface RunBrowserTasksDeps {
 
 /** T13: live batch abort trees — renderer Stop/Return-now abort children. */
 const liveBatches = new Map<string, AbortController>();
+
+/**
+ * R01/M-FR-04: the batch-scoped ROUTINE-ACTION grant. A confirmed batch
+ * grants observe/navigate/click/fill/select to ITS agent tasks for the
+ * batch lifetime — consequential actions (the ALWAYS-CONFIRM bar) can
+ * never use it (M-FR-05 stays a separate needs_user). The grant is
+ * recorded at confirmation and released when the batch settles; routine
+ * ops are currently auto-approved globally, so enforcement is invisible
+ * until policy tightens them — this registry is the grant source.
+ */
+interface BatchRoutineGrant {
+  readonly batchId: string;
+  readonly taskIds: ReadonlyArray<string>;
+  readonly grantedAtEpochMs: number;
+}
+const batchRoutineGrants = new Map<string, BatchRoutineGrant>();
+
+/** True when the agent task belongs to a live confirmed batch grant. */
+export function hasRoutineGrantForAgentTask(agentTaskId: string): boolean {
+  for (const grant of batchRoutineGrants.values()) {
+    if (grant.taskIds.includes(agentTaskId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function registerBatchRoutineGrant(
+  batchId: string,
+  taskCount: number
+): void {
+  batchRoutineGrants.set(batchId, {
+    batchId,
+    taskIds: Array.from({ length: taskCount }, (_, index) => `${batchId}:${index}`),
+    grantedAtEpochMs: Date.now(),
+  });
+}
+
+function releaseBatchRoutineGrant(batchId: string): void {
+  batchRoutineGrants.delete(batchId);
+}
 /**
  * F17: per-child abort trees — stopping ONE batch child task must
  * never cancel its siblings.
@@ -426,8 +467,12 @@ async function requestBatchConfirmation(
   tasks: readonly BrowserBatchTaskInput[],
   signal: AbortSignal
 ): Promise<boolean> {
+  // R01/M-FR-04: the confirmation is REQUIRED — the old fail-open (no
+  // renderer sink → auto-approve) started a consequential batch with
+  // zero user consent. Product runs (the desktop app) always wire the
+  // sink; a missing one refuses the batch and the model reports it.
   if (!batchConfirmRegistry.hasSink()) {
-    return true;
+    return false;
   }
   // B07/M-FR-04: the preview prepopulates sites for ACCOUNT-ONLY tasks —
   // the account's site registrable domain comes from the site registry,
@@ -543,6 +588,9 @@ export async function runBrowserTasks(
       confirmed: false,
     };
   }
+  // R01/M-FR-04: the confirmed batch's scoped routine grant lives for
+  // exactly the batch lifetime.
+  registerBatchRoutineGrant(batchId, tasks.length);
   // F21: the batch card lives from the first lane start.
   emitBatchEvent({ batchId, conversationId, phase: "started" });
   // R11/C-FR-09: freeze the PARENT poll's deadline for the full active
@@ -1277,6 +1325,8 @@ export async function runBrowserTasks(
     // R07/M-FR-09: clean the live batch registration and listeners.
     liveBatches.delete(batchId);
     signal.removeEventListener("abort", onOuterAbort);
+    // R01/M-FR-04: the scoped routine grant dies with the batch.
+    releaseBatchRoutineGrant(batchId);
   }
   // F21: the card shows final per-task states.
   // W02: the event carries the CONTROL RECORD state — partial and

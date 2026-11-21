@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   abortTask,
   abortBatch,
@@ -14,7 +14,25 @@ import {
   setDefaultManagedBrowserLeaseServiceForTest,
   ManagedBrowserLeaseService,
 } from "@/service/ManagedBrowserLeaseService";
-import { setBrowserBatchEventSink } from "@/service/agentTools/runBrowserTasksTool";
+import {
+  getBatchConfirmWaitRegistry,
+  setBrowserBatchEventSink,
+} from "@/service/agentTools/runBrowserTasksTool";
+
+/**
+ * R01/M-FR-04: the test harness wires a confirmation sink that
+ * auto-confirms — product runs require the sink, so tests exercise the
+ * confirmed path through it instead of the old fail-open.
+ */
+function autoConfirmSink(): void {
+  getBatchConfirmWaitRegistry().setSink((request) => {
+    const entry = getBatchConfirmWaitRegistry().consume({
+      requestId: request.requestId,
+      conversationId: request.conversationId,
+    });
+    entry?.resolve({ confirmed: true, cancelled: false });
+  });
+}
 
 /** W09/B01: cleanup observability — task-scoped stop + owner lookups. */
 const stopAllForConversationMock = vi.fn(async (): Promise<void> => undefined);
@@ -70,6 +88,12 @@ describe("runWithConcurrency", () => {
 });
 
 describe("runBrowserTasks (M-FR-03/05/09)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
+  afterAll(() => {
+    getBatchConfirmWaitRegistry().setSink(null);
+  });
   it("runs tasks with a pluggable executor and returns strict results", async () => {
     const control = new AgentTaskControlService();
     const fakeRunAgent = () => ({
@@ -256,6 +280,9 @@ function okOutput(summary: string) {
 }
 
 describe("runBrowserTasks F17 semantics", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
   it("stopping ONE batch child cancels only that child", async () => {
     const control = new CapturingControl();
     const fakeRunAgent = () => ({
@@ -443,6 +470,9 @@ describe("runBrowserTasksForTool F20 admission", () => {
 // ---------------------------------------------------------------------------
 
 describe("runBrowserTasks busy-account queueing (M-FR-06)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
   it("retries once when the first attempt reports account_in_use", async () => {
       let attempts = 0;
       const runtime = {
@@ -600,14 +630,17 @@ describe("runBrowserTasks batch confirmation gate (W08/M-FR-04)", () => {
         },
       }),
     }) as never;
-    const { results } = await runBrowserTasks(
+    // R01/M-FR-04: without a confirmation sink the batch REFUSES — the
+    // old fail-open started a consequential batch with zero consent.
+    const outcome = await runBrowserTasks(
       [{ goal: "no-renderer run" }],
       1,
       "conv-headless",
       new AbortController().signal,
       { runAgent: fakeRunAgent }
     );
-    expect(results[0]?.status).toBe("completed");
+    expect(outcome.confirmed).toBe(false);
+    expect(outcome.results).toHaveLength(0);
   });
 });
 
@@ -617,6 +650,9 @@ describe("runBrowserTasks batch confirmation gate (W08/M-FR-04)", () => {
 // them), and the parent job's user-wait flag follows the same signal.
 // ---------------------------------------------------------------------------
 describe("runBrowserTasks waiting/paused lane events (R04)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
   it("emits waiting_for_user on transition and running again afterwards", async () => {
     type WaitEvent = { taskId?: string; state?: string };
     const events: WaitEvent[] = [];
@@ -1064,6 +1100,9 @@ describe("runBrowserTasks confirmation cancellation (B07)", () => {
 // rechecks aborts immediately after obtaining the reservation.
 // ---------------------------------------------------------------------------
 describe("runBrowserTasks strict child output (R01)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
   it("an unrecognized child output status is FAILED, never completed", async () => {
     const runtime = {
       runSync: vi.fn(async () => ({
@@ -1125,6 +1164,9 @@ describe("runBrowserTasks strict child output (R01)", () => {
 // malformed containers never throw or change task ownership.
 // ---------------------------------------------------------------------------
 describe("runBrowserTasks full output validation (A09)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
   it("malformed evidence/needs_user/extracted never throw and stay bounded", async () => {
     const runtime = {
       runSync: vi.fn(async () => ({
