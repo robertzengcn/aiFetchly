@@ -179,6 +179,85 @@ export interface RunBrowserTasksDeps {
 const liveBatches = new Map<string, AbortController>();
 
 /**
+ * R03/M-FR-10: the SHARED provider gate — parallel lanes serialize on a
+ * per-provider in-flight cap and a batch token/cost ceiling. The gate is
+ * process-wide (all lanes in all batches share one provider endpoint).
+ */
+const PROVIDER_CONCURRENCY_LIMIT = 2;
+const BATCH_TOKEN_BUDGET = 400_000;
+
+const providerInFlight = { count: 0 };
+const providerWaiters: Array<() => void> = [];
+
+/** Acquire a provider slot (resolves when under the concurrency cap). */
+async function acquireProviderSlot(signal: AbortSignal): Promise<void> {
+  while (
+    providerInFlight.count >= PROVIDER_CONCURRENCY_LIMIT &&
+    !signal.aborted
+  ) {
+    await new Promise<void>((resolve) => providerWaiters.push(resolve));
+  }
+  if (signal.aborted) {
+    return;
+  }
+  providerInFlight.count++;
+}
+
+function releaseProviderSlot(): void {
+  providerInFlight.count = Math.max(0, providerInFlight.count - 1);
+  const next = providerWaiters.shift();
+  if (next) {
+    next();
+  }
+}
+
+/**
+ * R03/M-FR-10: the batch token budget — true while the remaining lanes
+ * may still call the provider; a lane that would exceed the budget ends
+ * the batch with a truthful partial instead of stampeding the endpoint.
+ */
+interface BatchTokenBudget {
+  batchId: string;
+  remainingTokens: number;
+  exceeded: boolean;
+}
+const batchTokenBudgets = new Map<string, BatchTokenBudget>();
+
+function registerBatchTokenBudget(batchId: string, budgetTokens: number): void {
+  batchTokenBudgets.set(batchId, {
+    batchId,
+    remainingTokens: budgetTokens,
+    exceeded: false,
+  });
+}
+
+/**
+ * Charge a lane's reported usage against its batch budget. Returns false
+ * when the charge EXCEEDED the budget (the caller stops the lane).
+ */
+function chargeBatchTokens(batchId: string, usedTokens: number): boolean {
+  const budget = batchTokenBudgets.get(batchId);
+  if (!budget) {
+    return true;
+  }
+  budget.remainingTokens -= usedTokens;
+  if (budget.remainingTokens < 0) {
+    budget.exceeded = true;
+    return false;
+  }
+  return true;
+}
+
+/** True while the batch's token budget has not been exceeded. */
+function batchBudgetAlive(batchId: string): boolean {
+  return batchTokenBudgets.get(batchId)?.exceeded !== true;
+}
+
+function releaseBatchTokenBudget(batchId: string): void {
+  batchTokenBudgets.delete(batchId);
+}
+
+/**
  * R01/M-FR-04: the batch-scoped ROUTINE-ACTION grant. A confirmed batch
  * grants observe/navigate/click/fill/select to ITS agent tasks for the
  * batch lifetime — consequential actions (the ALWAYS-CONFIRM bar) can
@@ -591,6 +670,8 @@ export async function runBrowserTasks(
   // R01/M-FR-04: the confirmed batch's scoped routine grant lives for
   // exactly the batch lifetime.
   registerBatchRoutineGrant(batchId, tasks.length);
+  // R03/M-FR-10: the batch token budget (per batch, all lanes share).
+  registerBatchTokenBudget(batchId, BATCH_TOKEN_BUDGET);
   // F21: the batch card lives from the first lane start.
   emitBatchEvent({ batchId, conversationId, phase: "started" });
   // R11/C-FR-09: freeze the PARENT poll's deadline for the full active
@@ -666,13 +747,17 @@ export async function runBrowserTasks(
       const taskId = `${batchId}:${index}`;
       // R07/M-FR-09: refuse already-aborted lanes before starting.
       if (signal.aborted || batchAbort.signal.aborted) {
+        // R03/M-FR-10: a budget-killed batch reports the TRUE reason.
+        const budgetKilled = !batchBudgetAlive(batchId);
         return {
           task_index: index,
           status: "cancelled",
-          summary: "skipped (batch already aborted)",
+          summary: budgetKilled
+            ? "batch token budget exceeded — lane not run"
+            : "skipped (batch already aborted)",
           extracted: [],
           final_url: null,
-          evidence: [],
+          evidence: budgetKilled ? ["batch_token_budget_exceeded"] : [],
           needs_user: null,
           user_interventions: [],
         };
@@ -743,7 +828,44 @@ export async function runBrowserTasks(
                 ),
             }
           );
-        let result = await runOnce();
+        // R03/M-FR-10: the lane's provider calls run under the shared
+        // per-provider concurrency gate; a lane whose batch already blew
+        // the token budget ends with a truthful partial instead of
+        // stampeding the endpoint.
+        if (!batchBudgetAlive(batchId)) {
+          control.setState(taskId, "partial", "batch_token_budget_exceeded");
+          return {
+            task_index: index,
+            status: "partial",
+            summary: "batch token budget exceeded — this lane did not run",
+            extracted: [],
+            final_url: null,
+            evidence: ["batch_token_budget_exceeded"],
+            needs_user: null,
+            user_interventions: mapInterventions(
+              control.get(taskId)?.interventions ?? []
+            ),
+          };
+        }
+        await acquireProviderSlot(childAbort.signal);
+        let result: Awaited<ReturnType<typeof runOnce>>;
+        try {
+          result = await runOnce();
+        } finally {
+          releaseProviderSlot();
+        }
+        // R03: charge the lane's reported usage against the budget.
+        const laneUsage = (
+          result as { tokensUsed?: number; output?: { tokensUsed?: number } }
+        )?.tokensUsed;
+        if (
+          typeof laneUsage === "number" &&
+          laneUsage > 0 &&
+          !chargeBatchTokens(batchId, laneUsage)
+        ) {
+          // The batch aborts the REMAINING lanes (truthful partial).
+          batchAbort.abort();
+        }
         const resultFailedCode = (
           result.output as { reason?: string } | null
         )?.reason;
@@ -827,7 +949,12 @@ export async function runBrowserTasks(
                   summary: "queued task retrying",
                   sessionId: liveSessionId(),
                 });
-                result = await runOnce();
+                await acquireProviderSlot(childAbort.signal);
+                try {
+                  result = await runOnce();
+                } finally {
+                  releaseProviderSlot();
+                }
               } finally {
                 releaseReservation();
               }
@@ -1333,6 +1460,8 @@ export async function runBrowserTasks(
     signal.removeEventListener("abort", onOuterAbort);
     // R01/M-FR-04: the scoped routine grant dies with the batch.
     releaseBatchRoutineGrant(batchId);
+    // R03/M-FR-10: the token budget dies with the batch.
+    releaseBatchTokenBudget(batchId);
   }
   // F21: the card shows final per-task states.
   // W02: the event carries the CONTROL RECORD state — partial and

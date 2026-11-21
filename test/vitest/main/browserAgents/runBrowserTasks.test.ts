@@ -649,6 +649,90 @@ describe("runBrowserTasks batch confirmation gate (W08/M-FR-04)", () => {
 // TRANSITION event (the card labels both, but no producer ever emitted
 // them), and the parent job's user-wait flag follows the same signal.
 // ---------------------------------------------------------------------------
+describe("runBrowserTasks provider concurrency + token budget (R03/M-FR-10)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+  });
+  it("serializes lanes on the shared provider gate (max 2 in flight)", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const runtime = {
+      runSync: vi.fn(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        inFlight--;
+        return {
+          status: "completed",
+          output: {
+            status: "completed",
+            summary: "done",
+            extracted: [],
+            final_url: null,
+            evidence: [],
+          },
+        };
+      }),
+    };
+    const outcome = await runBrowserTasks(
+      [
+        { goal: "t1" } as BrowserBatchTaskInput,
+        { goal: "t2" } as BrowserBatchTaskInput,
+        { goal: "t3" } as BrowserBatchTaskInput,
+        { goal: "t4" } as BrowserBatchTaskInput,
+      ],
+      4,
+      "conv-r03a",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    expect(outcome.results.every((r) => r.status === "completed")).toBe(true);
+    // The shared provider gate capped the CONCURRENT provider work even
+    // though the batch ran 4 lanes.
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+  });
+
+  it("a batch whose token budget is exceeded stops remaining lanes with a truthful partial (R03)", async () => {
+    let calls = 0;
+    const runtime = {
+      runSync: vi.fn(async () => {
+        calls++;
+        return {
+          status: "completed",
+          tokensUsed: 250_000,
+          output: {
+            status: "completed",
+            summary: `lane ${calls}`,
+            extracted: [],
+            final_url: null,
+            evidence: [],
+          },
+        };
+      }),
+    };
+    const outcome = await runBrowserTasks(
+      [
+        { goal: "t1" } as BrowserBatchTaskInput,
+        { goal: "t2" } as BrowserBatchTaskInput,
+        { goal: "t3" } as BrowserBatchTaskInput,
+      ],
+      1,
+      "conv-r03b",
+      new AbortController().signal,
+      { runAgent: () => runtime as never }
+    );
+    // Lane 1 charged 250k (under 400k), lane 2 pushed the total over —
+    // the batch aborts; lane 3 never ran.
+    expect(calls).toBe(2);
+    const exceeded = outcome.results.find(
+      (r) =>
+        r.evidence?.includes("batch_token_budget_exceeded") ||
+        r.summary?.includes("token budget")
+    );
+    expect(exceeded).toBeDefined();
+  });
+});
+
 describe("runBrowserTasks waiting/paused lane events (R04)", () => {
   beforeEach(() => {
     autoConfirmSink();
