@@ -44,15 +44,28 @@ function getElectronTargetVersion() {
   }
 }
 
+function isLinuxMusl() {
+  if (process.platform !== "linux") return false;
+  try {
+    return fs.readFileSync("/usr/bin/ldd", "utf8").includes("musl");
+  } catch {
+    return false;
+  }
+}
+
 function betterSqliteNodePath() {
-  return path.join(
-    PROJECT_ROOT,
-    "node_modules",
-    "better-sqlite3",
-    "build",
-    "Release",
-    "better_sqlite3.node"
-  );
+  const bsqlDir = path.join(PROJECT_ROOT, "node_modules", "better-sqlite3");
+  const releasePath = path.join(bsqlDir, "build", "Release", "better_sqlite3.node");
+  if (fs.existsSync(releasePath)) return releasePath;
+
+  const debugPath = path.join(bsqlDir, "build", "Debug", "better_sqlite3.node");
+  if (fs.existsSync(debugPath)) return debugPath;
+
+  const target = `${isLinuxMusl() ? "linuxmusl" : process.platform}-${process.arch}`;
+  const prebuildPath = path.join(bsqlDir, "prebuilds", `${target}.node`);
+  if (fs.existsSync(prebuildPath)) return prebuildPath;
+
+  return releasePath;
 }
 
 function electronCliPath() {

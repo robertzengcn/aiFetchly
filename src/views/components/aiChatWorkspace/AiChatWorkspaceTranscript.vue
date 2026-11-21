@@ -29,6 +29,9 @@
           @use-generated-image="(ref) => emit('use-generated-image', ref)"
           @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
           @save-generated-image="(ref) => emit('save-generated-image', ref)"
+          @save-all-generated-images="
+            (refs) => emit('save-all-generated-images', refs)
+          "
           @stop-batch="emit('stop-batch')"
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
         />
@@ -44,6 +47,9 @@
           @use-generated-image="(ref) => emit('use-generated-image', ref)"
           @edit-generated-image="(ref) => emit('edit-generated-image', ref)"
           @save-generated-image="(ref) => emit('save-generated-image', ref)"
+          @save-all-generated-images="
+            (refs) => emit('save-all-generated-images', refs)
+          "
           @stop-batch="emit('stop-batch')"
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
           @report="(d) => emit('report', d)"
@@ -81,6 +87,16 @@
           v-else-if="item.kind === 'email-reply'"
           :draft-id="item.draftId"
         />
+
+        <!-- Outbound-email batch (§18): the review/approve/send card IS the
+             authorization surface (AD-003) — interactive, never a collapsed
+             execution receipt. -->
+        <div
+          v-else-if="item.kind === 'email-organization'"
+          :key="item.key"
+        >
+          <EmailOrganizationOperationCard :operation-id="item.operationId" />
+        </div>
 
         <!-- Outbound-email batch (§18): the review/approve/send card IS the
              authorization surface (AD-003) — interactive, never a collapsed
@@ -140,6 +156,24 @@
           @submit="onPlanAnswer"
         />
       </template>
+      <div
+        v-if="isWorking"
+        class="workspace-transcript__working"
+        data-testid="workspace-transcript-working"
+        role="status"
+        :aria-label="t('aiChatV2.ai_working') || 'Working…'"
+      >
+        <v-progress-circular
+          indeterminate
+          size="14"
+          width="2"
+          color="primary"
+          class="mr-2"
+        />
+        <span class="workspace-transcript__working-text">
+          {{ t("aiChatV2.ai_working") || "Working…" }}
+        </span>
+      </div>
       <AiChatV2StreamStatus
         v-if="streamStatus === 'error' && errorMessage"
         status="error"
@@ -195,17 +229,42 @@ import type {
   PlanPresentationView,
 } from "@/views/components/aiChatWorkspace/planPresentationProjection";
 import type { AIChatPlanQuestionView } from "@/entityTypes/aiChatPlanTypes";
-import type { MessageType } from "@/entityTypes/commonType";
+import { MessageType } from "@/entityTypes/commonType";
 import AiChatEmailReplyReviewCard from "./AiChatEmailReplyReviewCard.vue";
 import { emailReplyDraftId } from "./emailReplyCardModel";
 import { isOutboundBatchResultMessage } from "@/views/components/outboundEmail/outboundBatchCardModel";
+import EmailOrganizationOperationCard from "@/views/components/emailOrganization/EmailOrganizationOperationCard.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
+
+/** R12: extracts an organization operation id from a tool-result message. */
+function organizationOperationIdFromMessage(message: ChatV2MessageView): string | null {
+  if (message.messageType !== MessageType.TOOL_RESULT) return null;
+  const toolName = String(message.metadata?.toolName || "");
+  if (
+    toolName !== "send_email_forward" &&
+    toolName !== "move_email_to_trash" &&
+    toolName !== "restore_email"
+  ) {
+    return null;
+  }
+  const payload = message.metadata?.toolResult as
+    | { result?: { operationId?: unknown }; operationId?: unknown }
+    | undefined;
+  const operationId =
+    payload?.result?.operationId ?? payload?.operationId ?? null;
+  return typeof operationId === "string" && operationId.length >= 8
+    ? operationId
+    : null;
+}
+
 
 const props = defineProps<{
   messages: readonly ChatV2MessageView[];
   activeAssistantMessageId: string | null;
   streamStatus: "idle" | "streaming" | "cancelled" | "error";
   errorMessage?: string;
+  /** Explicit remote working state (running turn, tool rounds, stream active). */
+  isRemoteWorking?: boolean;
   showReasoning?: boolean;
   /** FR-059: submission error for the active plan-question flow. */
   planSubmitError?: string | null;
@@ -255,6 +314,11 @@ const emit = defineEmits<{
     e: "save-generated-image",
     reference: ChatV2GeneratedImageReference
   ): void;
+  /** Save every rendered image from one message in a single action. */
+  (
+    e: "save-all-generated-images",
+    references: ChatV2GeneratedImageReference[]
+  ): void;
   /** FR-IMG-012: stop a running generated-image batch. */
   (e: "stop-batch"): void;
   /** FR-IMG-011: retry only the eligible failed batch references. */
@@ -267,6 +331,10 @@ const emit = defineEmits<{
   ): void;
 }>();
 
+const isWorking = computed(
+  () => props.isRemoteWorking ?? (props.streamStatus === "streaming")
+);
+
 type ProjectedItem =
   | { kind: "user-message"; key: string; message: ChatV2MessageView }
   | { kind: "assistant-message"; key: string; message: ChatV2MessageView }
@@ -278,6 +346,7 @@ type ProjectedItem =
   | { kind: "permission-prompt"; key: string; message: ChatV2MessageView }
   | { kind: "email-reply"; key: string; draftId: number }
   | { kind: "outbound-batch"; key: string; message: ChatV2MessageView }
+  | { kind: "email-organization"; key: string; operationId: string }
   | { kind: "skill-install"; key: string; message: ChatV2MessageView }
   | { kind: "batch-card"; key: string; message: ChatV2MessageView };
 
@@ -354,6 +423,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
             message: msg,
           });
         }
+        // R12: organization mutation results render the shared operation
+        // card (progress, recipient outcomes, Undo/Restore).
+        const orgOperationId = organizationOperationIdFromMessage(msg);
+        if (orgOperationId !== null) {
+          result.push({
+            kind: "email-organization",
+            key: `email-organization-${msg.id}`,
+            operationId: orgOperationId,
+          });
+        }
         // FR-SKL-001: installation results render the shared install card
         // (approvals, dependencies, credentials) outside the collapsed group.
         if (isSkillInstallResult(messages[i])) {
@@ -403,6 +482,16 @@ const projectedItems = computed<ProjectedItem[]>(() => {
           const replyId = emailReplyDraftId(messages[i]);
           if (replyId !== null) {
             result.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
+          }
+          // T14: organization cards surface in the skip loop too — the common
+          // call/result sequence must not lose the progress/Undo card.
+          const orgId = organizationOperationIdFromMessage(messages[i]);
+          if (orgId !== null) {
+            result.push({
+              kind: "email-organization",
+              key: `email-organization-${messages[i].id}`,
+              operationId: orgId,
+            });
           }
           if (isOutboundBatchResultMessage(messages[i])) {
             result.push({
@@ -519,7 +608,29 @@ const projectedItems = computed<ProjectedItem[]>(() => {
     if (msg.role === "user") {
       result.push({ kind: "user-message", key: msg.id, message: msg });
     } else {
-      result.push({ kind: "assistant-message", key: msg.id, message: msg });
+      const hasContent = Boolean(msg.content && msg.content.length > 0);
+      const hasReasoning = Boolean(
+        props.showReasoning &&
+          msg.metadata?.reasoning?.content &&
+          msg.metadata.reasoning.content.length > 0
+      );
+      const hasActionableMetadata = Boolean(
+        msg.metadata?.error ||
+          msg.metadata?.cancelled ||
+          msg.metadata?.artifact ||
+          msg.metadata?.toolResult ||
+          msg.metadata?.toolCallId ||
+          (Array.isArray(msg.metadata?.generatedImages) &&
+            msg.metadata.generatedImages.length > 0) ||
+          (Array.isArray(msg.metadata?.generatedImageReferences) &&
+            msg.metadata.generatedImageReferences.length > 0) ||
+          (Array.isArray(msg.metadata?.attachments) &&
+            msg.metadata.attachments.length > 0) ||
+          msg.metadata?.planStateView
+      );
+      if (hasContent || hasReasoning || hasActionableMetadata) {
+        result.push({ kind: "assistant-message", key: msg.id, message: msg });
+      }
     }
     i += 1;
   }
@@ -671,7 +782,7 @@ watch(
 watch(
   () => {
     const last = props.messages[props.messages.length - 1];
-    return `${props.messages.length}:${last ? last.content.length : 0}`;
+    return `${props.messages.length}:${last ? last.content.length : 0}:${isWorking.value ? 1 : 0}`;
   },
   () => {
     void nextTick().then(onScroll);
@@ -699,6 +810,20 @@ onMounted(onScroll);
 }
 .workspace-transcript > :deep(*) {
   flex-shrink: 0;
+}
+.workspace-transcript__working {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 6px 12px;
+  margin-top: 4px;
+  background: rgba(var(--v-theme-on-surface), 0.05);
+  border-radius: 16px;
+  font-size: 13px;
+  color: rgba(var(--v-theme-on-surface), 0.7);
+}
+.workspace-transcript__working-text {
+  line-height: 1;
 }
 .workspace-transcript__scroll-down {
   position: absolute;

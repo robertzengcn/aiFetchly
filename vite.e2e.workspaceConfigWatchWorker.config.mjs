@@ -18,7 +18,6 @@
 //
 
 import { defineConfig, mergeConfig } from "vite";
-// eslint-disable-next-line import/default
 import aifetchlyConfigWorkerConfig from "./vite.aifetchlyConfigWorker.config.mjs";
 
 const devWorkerConfig =

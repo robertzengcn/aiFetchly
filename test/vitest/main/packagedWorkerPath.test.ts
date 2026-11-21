@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildPackagedWorkerEnv,
+  buildWorkerLoginUrlEnv,
   getPackagedWorkerNodePath,
   getPackagedWorkerPathCandidates,
   mirrorAppAsarUnpackedPath,
@@ -212,5 +213,29 @@ describe("buildPackagedWorkerEnv", () => {
     });
     expect(env.ELECTRON_APP_NAME).toBe("custom-app");
     expect(env.ELECTRON_USER_DATA_PATH).toBe("/custom/userData");
+  });
+});
+
+describe("buildWorkerLoginUrlEnv", () => {
+  it("forwards the resolved build-time login URL so runtime-env readers get it", () => {
+    // Regression: the contact-extraction worker bundle reads
+    // process.env.VITE_LOGIN_URL at runtime, but the packaged main process
+    // only carries the value as a build-time-inlined literal, so the spawned
+    // worker inherited nothing and every AI extraction fell back to
+    // http://localhost:3000 (ECONNREFUSED — "AI extraction error: {}").
+    const fragment = buildWorkerLoginUrlEnv(() => "https://test.tecnatel.com");
+    expect(fragment).toEqual({ VITE_LOGIN_URL: "https://test.tecnatel.com" });
+  });
+
+  it("trims surrounding whitespace in the resolved value", () => {
+    expect(buildWorkerLoginUrlEnv(() => "  https://example.com  ")).toEqual({
+      VITE_LOGIN_URL: "https://example.com",
+    });
+  });
+
+  it("yields an empty fragment when no URL is configured", () => {
+    expect(buildWorkerLoginUrlEnv(() => undefined)).toEqual({});
+    expect(buildWorkerLoginUrlEnv(() => "")).toEqual({});
+    expect(buildWorkerLoginUrlEnv(() => "   ")).toEqual({});
   });
 });

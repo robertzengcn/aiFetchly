@@ -37,6 +37,12 @@ export const SCHEDULED_LOOP_MAX_CONSECUTIVE_FAILURES = 3;
 /** How long a scheduled turn waits on a busy conversation before coalescing. */
 export const SCHEDULED_LOOP_CONVERSATION_LOCK_WAIT_MS = 30_000;
 
+/**
+ * Maximum retry attempts after an occurrence enters `waiting_for_conversation`
+ * before the waiting run is retired as coalesced.
+ */
+export const SCHEDULED_LOOP_MAX_WAIT_ATTEMPTS = 2;
+
 /** A running occurrence older than this is treated as stale after restart. */
 export const SCHEDULED_LOOP_STALE_RUN_MS = 10 * 60 * 1000;
 

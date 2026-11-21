@@ -6,6 +6,7 @@ import {
   cookieMigrationSummarySchema,
   storedCookieSourceSchema,
   persistSnapshotInputSchema,
+  safeCookieRejectCountsSchema,
 } from "@/schemas/accountCookies";
 
 describe("normalizedCookieSchema", () => {
@@ -159,5 +160,23 @@ describe("misc schemas", () => {
       alreadyEncrypted: 5,
     });
     expect(r.migrated).toBe(8);
+  });
+});
+
+// Pins the zod v4 partialRecord migration (was z.record(<enum>, V) in v3):
+// partial tallies stay valid, exhaustive-record semantics must NOT return.
+describe("safeCookieRejectCountsSchema (partialRecord migration)", () => {
+  it("accepts a partial tally (absent reason = 0 contract)", () => {
+    expect(() => safeCookieRejectCountsSchema.parse({ expired: 1 })).not.toThrow();
+    expect(() => safeCookieRejectCountsSchema.parse({})).not.toThrow();
+  });
+
+  it("rejects negative and non-integer counts", () => {
+    expect(safeCookieRejectCountsSchema.safeParse({ expired: -1 }).success).toBe(false);
+    expect(safeCookieRejectCountsSchema.safeParse({ expired: 1.5 }).success).toBe(false);
+  });
+
+  it("rejects unknown reject-reason keys", () => {
+    expect(safeCookieRejectCountsSchema.safeParse({ bogus_reason: 1 }).success).toBe(false);
   });
 });

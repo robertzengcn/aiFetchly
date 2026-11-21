@@ -220,6 +220,23 @@ describe("AIChatPendingMessageModel", () => {
     expect(rightToken).toBe(true);
     const restored = await model.getByPendingMessageId("pm-r");
     expect(restored?.status).toBe("queued");
+    expect(restored?.claimToken).toBeFalsy();
+    expect(restored?.targetAssistantMessageId).toBeFalsy();
+  });
+
+  it("releaseDispatchClaim releases dispatch claim back to queued without claimToken", async () => {
+    const model = new AIChatPendingMessageModel(tmpDir);
+    await SqliteDb.ensureInitialized();
+    await model.create(makeRow({ pendingMessageId: "pm-rel", clientRequestId: "crel" }));
+    const claimed = await model.claimOldestForDispatch("v2-conv-1");
+    expect(claimed.ok).toBe(true);
+    if (!claimed.ok) return;
+
+    const released = await model.releaseDispatchClaim("pm-rel", claimed.row.claimToken!);
+    expect(released).toBe(true);
+    const row = await model.getByPendingMessageId("pm-rel");
+    expect(row?.status).toBe("queued");
+    expect(row?.claimToken).toBeFalsy();
   });
 
   it("promoteDispatchToUserMessage inserts the user row and marks sent atomically", async () => {
@@ -295,6 +312,7 @@ describe("AIChatPendingMessageModel", () => {
 
     const rows = await model.listByConversation("v2-conv-1");
     expect(rows.every((r) => r.status === "queued")).toBe(true);
+    expect(rows.every((r) => !r.recoveryReason)).toBe(true);
   });
 
   it("cancelQueued only cancels queued/paused rows", async () => {

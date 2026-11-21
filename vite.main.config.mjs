@@ -1,7 +1,6 @@
 /// <reference types="vitest" />
 import { defineConfig, loadEnv } from 'vite';
 import alias from "@rollup/plugin-alias";
-import * as path from 'path';
 import ClosePlugin from './vite-plugin-close'
 import checker from 'vite-plugin-checker'
 import { optionalChecker } from './vite-checker-toggle.mjs';
@@ -50,6 +49,9 @@ export default ({ mode }) => {
             // process.env is used instead of import.meta.env).
             'process.env.VITE_PLUGIN_HUB_URL': JSON.stringify(
                 process.env.VITE_PLUGIN_HUB_URL || ''
+            ),
+            'process.env.AIFETCHLY_ALLOW_HTTP_HUB': JSON.stringify(
+                process.env.AIFETCHLY_ALLOW_HTTP_HUB || ''
             ),
             // Bake the crash-upload mainLogTail rollout flag for PRODUCTION
             // builds only: packaged apps launched from Finder/Start Menu have

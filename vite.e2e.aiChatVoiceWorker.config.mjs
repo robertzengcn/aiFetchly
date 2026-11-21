@@ -18,7 +18,6 @@
 //
 
 import { defineConfig, mergeConfig } from "vite";
-// eslint-disable-next-line import/default
 import aiChatVoiceWorkerConfig from "./vite.aiChatVoiceWorker.config.mjs";
 
 const devWorkerConfig =

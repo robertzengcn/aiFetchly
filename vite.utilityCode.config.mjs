@@ -12,7 +12,6 @@ import { optionalChecker } from './vite-checker-toggle.mjs';
 import commonjs from '@rollup/plugin-commonjs';
 import copy from 'rollup-plugin-copy'
 import { nodeResolve } from '@rollup/plugin-node-resolve';
-import typescript from 'rollup-plugin-typescript2'
 import sourcemaps from 'rollup-plugin-sourcemaps';
 
 export default ({ mode }) => {
@@ -54,7 +53,6 @@ export default ({ mode }) => {
                 // Must be absolute: a relative alias replacement resolves against
                 // the importing module's directory (src/modules/node_modules/...),
                 // which breaks vitest collection with ERR_MODULE_NOT_FOUND.
-                "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
                 "ws": path.resolve(__dirname, "./node_modules/ws/index.js"),
                 "bufferutil": path.resolve(__dirname, "./node_modules/bufferutil"),
                 "utf-8-validate": path.resolve(__dirname, "./node_modules/utf-8-validate"),

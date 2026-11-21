@@ -9,11 +9,10 @@ import { z } from "zod";
  * `NormalizedCookie` shape below BEFORE it ever reaches encryption. Only this
  * normalized array is encrypted and persisted.
  *
- * Note on zod version: the codebase and `registerValidatedHandler` are typed
- * against zod v3 (`from "zod"`). v3 has every capability this feature needs
- * (strictObject, enum, nullable, finite). Mixing v3/v4 ZodType across the
- * validated-handler boundary causes TS friction, so v3 is used consistently.
- * See docs/prd/secure-browser-profile-import-IMPLEMENTATION-PLAN.md §2.
+ * Note on zod version: the codebase is typed against zod v4 (`from "zod"`),
+ * which has every capability this feature needs (strictObject, enum,
+ * nullable, partialRecord). See docs/prd/secure-browser-profile-import-
+ * IMPLEMENTATION-PLAN.md §2 for the original v3-era design notes.
  */
 
 /** Shared size limits for cookie name/value (referenced by the normalizer too). */
@@ -142,8 +141,12 @@ export type AccountSessionMetadata = z.infer<
  * Result of a cookie import / capture operation. Success variants carry a
  * count + safe reject breakdown + a verification URL. Failure variants carry
  * only a state code and counts. No cookie values, names, or paths anywhere.
+ *
+ * zod v4: z.record(<enum>, V) became an exhaustive map (every enum key
+ * required). The wire contract here is a partial tally (absent reason = 0),
+ * so use z.partialRecord — the v4 equivalent of the v3 enum-key record.
  */
-export const safeCookieRejectCountsSchema = z.record(
+export const safeCookieRejectCountsSchema = z.partialRecord(
   safeCookieRejectReasonSchema,
   z.number().int().nonnegative()
 );

@@ -148,6 +148,15 @@ Current automatic schema synchronization cannot be trusted to backfill identity.
 
 Previously overwritten records caused by account/UID collisions cannot be reconstructed reliably from local data. Do not claim migration can recover them. Back up before upgrade; rollback means restoring the backup with a compatible binary, not blindly downgrading a live database. Remote actions already performed are not reversed by database rollback.
 
+**Shipped decision (2026-11-11, R6-06):** the full §5.3 upgrade — recoverable backup, sync quiesce, schema-version marker, and a controlled table migration — is **deferred and recorded as open design work**. The shipping substitute is narrower and safe under the constraints that matter for identity:
+
+- A process-wide readiness gate (`emailOrganizationReadiness`) flips open ONLY after the idempotent `legacy_unverified` location backfill completes successfully in the current process. Until it opens, every mutating organization path fails closed with `ORGANIZATION_BACKFILL_PENDING` — the six mutating IPC channels and all mutating AI tools check the gate BEFORE any payload parsing.
+- The backfill writes additive rows only (never overwrites); `legacy_unverified` locations stay ineligible for remote mutation until a live re-fetch verifies them (step 4's identity property, AC-21).
+- A failed backfill leaves the gate closed for the whole process; the next startup retries from scratch (no stale flag outlives a crash).
+- The gate is in-memory by design: no schema-version marker is needed because no destructive schema change ships — the feature's tables are additive and SQLite's `synchronize` handles their creation; the risk §5.3's backup/quiesce addressed (overwriting live identity rows during an upgrade) does not exist on this path.
+
+Consequences: a database restored from a backup of a DIFFERENT app version re-runs the idempotent backfill on first launch (safe — additive, verify-before-mutate). If a future change introduces destructive schema work, §5.3 steps 1–3 and 5–6 become mandatory again and this decision must be revisited.
+
 ## 6. Persistence model for actions
 
 ### 6.1 Forward drafts and revisions

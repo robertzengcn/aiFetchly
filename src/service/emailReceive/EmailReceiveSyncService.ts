@@ -31,6 +31,10 @@ import {
   normalizeStoredMessageId,
   normalizedIdsMatch,
 } from "@/service/emailReceive/EmailReplyIdentity";
+import { EmailMessageLocationModule } from "@/modules/EmailMessageLocationModule";
+import { EmailOrganizationOperationModule } from "@/modules/EmailOrganizationOperationModule";
+import { runWithAccountLock } from "@/service/emailOrganization/accountMutex";
+import type { UpsertLocationInput } from "@/model/EmailMessageLocation.model";
 
 /** Result of a manual or AI-triggered sync. */
 export interface EmailReceiveSyncResult {
@@ -38,6 +42,8 @@ export interface EmailReceiveSyncResult {
   readonly fetched: number;
   readonly stored: number;
   readonly messageIds: number[];
+  /** The folder the fetch actually ran against (configured or explicit). */
+  readonly folder: string;
 }
 
 /** Hard cap on messages per sync regardless of caller limit. */
@@ -57,6 +63,8 @@ export class EmailReceiveSyncService {
   private messageModule: EmailReceivedMessageModule;
   private auditModule: EmailReplyAuditLogModule;
   private conversationModule: EmailConversationModule;
+  private operationModule: EmailOrganizationOperationModule;
+  private locationModule: EmailMessageLocationModule;
   private readonly clientFactory: (
     protocol: EmailReceiveProtocol
   ) => EmailReceiveClient;
@@ -69,6 +77,8 @@ export class EmailReceiveSyncService {
     this.messageModule = new EmailReceivedMessageModule();
     this.conversationModule = new EmailConversationModule();
     this.auditModule = new EmailReplyAuditLogModule();
+    this.locationModule = new EmailMessageLocationModule();
+    this.operationModule = new EmailOrganizationOperationModule();
     this.clientFactory =
       options?.clientFactory ??
       ((protocol: EmailReceiveProtocol) =>
@@ -153,7 +163,13 @@ export class EmailReceiveSyncService {
    */
   async syncUnread(
     emailServiceId: number,
-    options: { limit?: number; unreadOnly?: boolean; since?: Date }
+    options: {
+      limit?: number;
+      unreadOnly?: boolean;
+      since?: Date;
+      /** Explicit folder scope override; the configured folder is the default. */
+      folder?: string;
+    }
   ): Promise<EmailReceiveSyncResult> {
     const fetchOptions: EmailReceiveFetchOptions = {
       limit: Math.max(1, Math.min(options.limit ?? 10, SYNC_LIMIT_CAP)),
@@ -168,7 +184,14 @@ export class EmailReceiveSyncService {
       throw new Error("Receive is not configured or enabled for this service.");
     }
 
-    const normalizedConfig = normalizeReceiveConnectionConfig(config);
+    // Folder override (BUG-01): an explicitly requested folder is honored on
+    // the wire, never silently substituted with the configured folder. The
+    // result reports the folder that was actually read.
+    const requestedFolder = options.folder?.trim();
+    const normalizedConfig =
+      requestedFolder !== undefined && requestedFolder !== ""
+        ? { ...normalizeReceiveConnectionConfig(config), folder: requestedFolder }
+        : normalizeReceiveConnectionConfig(config);
     const validationError = validateReceiveEndpointConfig(normalizedConfig);
     if (validationError) {
       throw new Error(validationError);
@@ -196,8 +219,13 @@ export class EmailReceiveSyncService {
 
     const messageIds: number[] = [];
     for (const p of parsed) {
-      const saved = await this.storeFetchedMessage(emailServiceId, p);
+      // R4-05: persistence runs under the shared account lock so a delayed
+      // old-source observation cannot interleave with a MOVE/adoption.
+      const saved = await runWithAccountLock(emailServiceId, async () =>
+        this.storeFetchedMessage(emailServiceId, p)
+      );
       messageIds.push(saved.id);
+      await this.recordMessageLocation(saved.id, emailServiceId, p);
       await this.normalizeAndAssociate(emailServiceId, p, saved.id);
       await this.writeAudit(
         emailServiceId,
@@ -219,6 +247,7 @@ export class EmailReceiveSyncService {
       fetched: parsed.length,
       stored: messageIds.length,
       messageIds,
+      folder: normalizedConfig.folder,
     };
   }
 
@@ -242,6 +271,48 @@ export class EmailReceiveSyncService {
     p: ParsedInboundEmail
   ): Promise<EmailReceivedMessageEntity> {
     const entity = this.toEntity(emailServiceId, p);
+
+    // R05: MOVE changes the location table, not the received row's
+    // folder-scoped uid. If this fetch matches a verified location tuple
+    // owned by a DIFFERENT application message, it IS that occurrence:
+    // refresh its provider fields instead of inserting a duplicate identity.
+    if (p.providerFolder !== null && p.providerUidValidity !== null) {
+      const namespaced = parseNamespacedProviderUid(p.providerUid);
+      if (namespaced) {
+        const adopted = await this.locationModule.adoptVerifiedOccurrence({
+          emailServiceId,
+          folderPath: p.providerFolder,
+          uidValidity: p.providerUidValidity,
+          providerUid: namespaced.uid,
+          entity,
+        });
+        if (adopted !== null) {
+          return adopted;
+        }
+      }
+    }
+
+    // R4-05: exact occurrence lineage replaces the Message-ID heuristic —
+    // if an operation MOVED AWAY from the observed position, this stale
+    // observation is suppressed; a legitimate copy in an unrelated folder
+    // (no matching operation lineage) inserts normally.
+    const namespaced = parseNamespacedProviderUid(p.providerUid);
+    if (p.providerFolder !== null && namespaced !== null) {
+      const movedAway = await this.operationModule.findMovedAwayOccurrence({
+        emailServiceId,
+        folderPath: p.providerFolder,
+        uidValidity: namespaced.uidValidity,
+        providerUid: namespaced.uid,
+      });
+      if (movedAway !== null) {
+        log.info(
+          `[EmailReceiveSync] stale source observation for message ${movedAway.messageId} ` +
+            `(operation ${movedAway.operationId} moved away from ${p.providerFolder}); skipped duplicate insertion`
+        );
+        const original = await this.messageModule.read(movedAway.messageId);
+        if (original !== null) return original;
+      }
+    }
 
     if (isNamespacedProviderUid(p.providerUid)) {
       const namespaced = parseNamespacedProviderUid(p.providerUid);
@@ -291,6 +362,55 @@ export class EmailReceiveSyncService {
       legacyRow.normalizedMessageId ??
       normalizeStoredMessageId(legacyRow.messageId);
     return normalizedIdsMatch(fetchedNormalized, legacyNormalized);
+  }
+
+  /**
+   * Record the folder-aware location observed by this sync (design §5.2).
+   *
+   * A fetched message from a folder with observable UIDVALIDITY becomes a
+   * `verified` location (mutation-eligible). Legacy bare UIDs (UIDVALIDITY
+   * unobservable) and POP3 rows stay `legacy_unverified` — readable but
+   * never eligible for remote actions. Best-effort: a location failure is
+   * logged and never aborts the sync.
+   */
+  private async recordMessageLocation(
+    messageId: number,
+    emailServiceId: number,
+    p: ParsedInboundEmail
+  ): Promise<void> {
+    try {
+      const protocol: UpsertLocationInput["protocol"] =
+        p.providerUid.startsWith("pop3:")
+          ? "pop3"
+          : "imap";
+      // R05 fence: an operation-authored verified location is never reverted
+      // by a stale sync observation of the old folder.
+      const authority: "sync" | "operation" = "sync";
+      const namespaced = parseNamespacedProviderUid(p.providerUid);
+      const verified = namespaced !== null && protocol === "imap";
+      const input: UpsertLocationInput = {
+        messageId,
+        emailServiceId,
+        protocol,
+        folderPath: p.providerFolder,
+        uidValidity: namespaced ? namespaced.uidValidity : p.providerUidValidity,
+        providerUid: namespaced ? namespaced.uid : p.providerUid,
+        state: verified ? "verified" : "legacy_unverified",
+      };
+      const result = await this.locationModule.upsertLocation({ ...input, authority });
+      if (result.status === "conflict") {
+        log.warn(
+          `[EmailReceiveSync] location tuple conflict for message ${messageId} ` +
+            `(account=${emailServiceId}, folder=${String(p.providerFolder)}); ` +
+            `treating as an independent occurrence and leaving the existing row`
+        );
+      }
+    } catch (error) {
+      log.warn(
+        `[EmailReceiveSync] failed to record location for message ${messageId}:`,
+        error
+      );
+    }
   }
 
   private toEntity(

@@ -15,7 +15,7 @@ describe("zodToJsonSchema", () => {
     expect(json.type).toBe("object");
     expect(json.properties).toBeDefined();
     expect(json.properties!.name).toEqual({ type: "string" });
-    // zod-to-json-schema maps .int() to JSON Schema "integer"
+    // zod v4 maps .int() to JSON Schema "integer"
     expect(["integer", "number"]).toContain(json.properties!.age.type);
   });
 
@@ -48,5 +48,30 @@ describe("zodToJsonSchema", () => {
     const json = zodToJsonSchema(s());
     expect(json.type).toBe("array");
     expect(json.items).toEqual({ type: "string" });
+  });
+
+  // Pins zod v4 native converter behaviors that differ from the removed
+  // zod-to-json-schema package.
+  it("degrades unrepresentable types to {} under unrepresentable:any", () => {
+    const s = lazySchema(() => z.strictObject({ when: z.date() }));
+    const json = zodToJsonSchema(s());
+    expect(json.properties!.when).toEqual({});
+  });
+
+  it("emits OpenAPI-3.0 nullable (not type-array) for nullable fields", () => {
+    const s = lazySchema(() => z.strictObject({ memo: z.string().nullable() }));
+    const json = zodToJsonSchema(s());
+    expect(json.properties!.memo).toMatchObject({ type: "string", nullable: true });
+  });
+
+  it("keeps defaulted fields out of required (io:input, v3-parity)", () => {
+    const s = lazySchema(() =>
+      z.strictObject({ page: z.number().default(0), q: z.string() })
+    );
+    const json = zodToJsonSchema(s());
+    expect(json.required).toEqual(["q"]);
+    expect(json.properties!.page).toMatchObject({ default: 0 });
+    // strictObject keeps its v3 .strict() parity: unknown keys rejected.
+    expect(json.additionalProperties).toBe(false);
   });
 });

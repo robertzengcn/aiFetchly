@@ -20,6 +20,12 @@ export const useChatModelsStore = defineStore("chatModels", () => {
   const modelContextWindows = ref<Map<string, number>>(new Map());
   /** Model id the percent denominator resolves against. */
   const selectedModelId = ref<string | undefined>(undefined);
+  /** Monotonic sequence bumped when a consumer requests a catalog refresh (e.g. New chat). */
+  const refreshSeq = ref(0);
+
+  function requestRefresh(): void {
+    refreshSeq.value += 1;
+  }
 
   /**
    * Publish the loaded catalog. `selectedModel` wins over `defaultModel`
@@ -42,6 +48,8 @@ export const useChatModelsStore = defineStore("chatModels", () => {
   return {
     modelContextWindows,
     selectedModelId,
+    refreshSeq,
+    requestRefresh,
     publishModelCatalog,
     setSelectedModelId,
   };

@@ -39,6 +39,8 @@ const i18n = createI18n({
           useAsReference: "Use as reference",
           edit: "Edit",
           saveToWorkspace: "Save to workspace",
+          saveAll: "Save all",
+          saveAllToWorkspace: "Save all images to workspace",
           stopBatch: "Stop batch",
           retryFailed: "Retry failed items ({count})",
           progressSummary:
@@ -86,10 +88,25 @@ function mountWith(message: ChatV2MessageView) {
         AiChatV2StreamStatus: true,
         AiChatV2PlanApprovalCard: true,
         VIcon: true,
+        VTooltip: {
+          props: {
+            text: { type: String, default: "" },
+            contentClass: { type: String, default: "" },
+          },
+          template:
+            '<span class="v-tooltip-stub" :data-content-class="contentClass">{{ text }}</span>',
+        },
         VProgressLinear: true,
       },
     },
   });
+}
+
+/** Button label a user sees, excluding the hover-tip stub. */
+function visibleLabel(button: { element: Element }): string {
+  const clone = button.element.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll(".v-tooltip-stub").forEach((node) => node.remove());
+  return (clone.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
 function emittedRefs(
@@ -101,16 +118,44 @@ function emittedRefs(
 }
 
 describe("AiChatV2Message generated image actions", () => {
-  it("renders an action row with translated labels for every generated image", async () => {
+  it("renders icon actions with hover tips instead of text labels", async () => {
     const wrapper = mountWith(makeTwoImageMessage());
     await flushPromises();
 
     const rows = wrapper.findAll(".v2-message__image-actions");
     expect(rows.length).toBe(2);
-    expect(wrapper.findAll(".v2-message__use-reference-btn").length).toBe(2);
-    expect(wrapper.findAll(".v2-message__edit-image-btn").length).toBe(2);
-    expect(wrapper.text()).toContain("Use as reference");
-    expect(wrapper.text()).toContain("Edit");
+    const useButtons = wrapper.findAll(".v2-message__use-reference-btn");
+    const editButtons = wrapper.findAll(".v2-message__edit-image-btn");
+    const saveButtons = wrapper.findAll(".v2-message__save-image-btn");
+    expect(useButtons).toHaveLength(2);
+    expect(editButtons).toHaveLength(2);
+    expect(saveButtons).toHaveLength(2);
+
+    expect(useButtons[0].attributes("aria-label")).toBe("Use as reference");
+    expect(useButtons[0].find(".v-tooltip-stub").text()).toBe("Use as reference");
+    expect(useButtons[0].find(".v-tooltip-stub").attributes("data-content-class")).toBe(
+      "v2-message__image-tip"
+    );
+    expect(visibleLabel(useButtons[0])).toBe("");
+    expect(useButtons[0].find("v-icon-stub").attributes("icon")).toBe(
+      "mdi-image-plus-outline"
+    );
+
+    expect(editButtons[0].attributes("aria-label")).toBe("Edit");
+    expect(editButtons[0].find(".v-tooltip-stub").text()).toBe("Edit");
+    expect(visibleLabel(editButtons[0])).toBe("");
+    expect(editButtons[0].find("v-icon-stub").attributes("icon")).toBe(
+      "mdi-image-edit-outline"
+    );
+
+    expect(saveButtons[0].attributes("aria-label")).toBe("Save to workspace");
+    expect(saveButtons[0].find(".v-tooltip-stub").text()).toBe(
+      "Save to workspace"
+    );
+    expect(visibleLabel(saveButtons[0])).toBe("");
+    expect(saveButtons[0].find("v-icon-stub").attributes("icon")).toBe(
+      "mdi-content-save-outline"
+    );
   });
 
   it("shows a visible order badge of imageIndex + 1", async () => {
@@ -169,15 +214,22 @@ describe("AiChatV2Message generated image actions", () => {
     expect(saveButtons.length).toBe(2);
     for (const btn of saveButtons) {
       expect(btn.attributes("aria-label")).toBe("Save to workspace");
-      expect(btn.text()).toBe("Save to workspace");
+      expect(btn.find(".v-tooltip-stub").text()).toBe("Save to workspace");
+      expect(visibleLabel(btn)).toBe("");
     }
 
     // Ordering: Save comes after Edit within each action row.
     const rows = wrapper.findAll(".v2-message__image-actions");
     for (const row of rows) {
-      const classes = row.findAll("button").map((b) => b.classes()[0]);
-      expect(classes.indexOf("v2-message__save-image-btn")).toBeGreaterThan(
-        classes.indexOf("v2-message__edit-image-btn")
+      const classLists = row.findAll("button").map((b) => b.classes());
+      expect(
+        classLists.findIndex((classes) =>
+          classes.includes("v2-message__save-image-btn")
+        )
+      ).toBeGreaterThan(
+        classLists.findIndex((classes) =>
+          classes.includes("v2-message__edit-image-btn")
+        )
       );
     }
   });
@@ -221,6 +273,52 @@ describe("AiChatV2Message generated image actions", () => {
     expect(emittedRefs(wrapper, "use-generated-image")).toEqual([
       { messageId: "msg-gen-1", imageIndex: 1 },
     ]);
+  });
+
+  it("offers one save-all action when several images are shown", async () => {
+    const wrapper = mountWith(makeTwoImageMessage());
+    await flushPromises();
+
+    const saveAll = wrapper.get('[data-testid="generated-image-save-all"]');
+    expect(saveAll.attributes("aria-label")).toBe(
+      "Save all images to workspace"
+    );
+    expect(visibleLabel(saveAll)).toBe("Save all");
+    expect(saveAll.find(".v-tooltip-stub").text()).toBe(
+      "Save all images to workspace"
+    );
+    expect(saveAll.find("v-icon-stub").attributes("icon")).toBe(
+      "mdi-content-save-all-outline"
+    );
+
+    await saveAll.trigger("click");
+    const events = wrapper.emitted("save-all-generated-images") ?? [];
+    expect(events).toHaveLength(1);
+    const references = events[0][0] as ChatV2GeneratedImageReference[];
+    expect(references).toEqual([
+      { messageId: "msg-gen-1", imageIndex: 0 },
+      { messageId: "msg-gen-1", imageIndex: 1 },
+    ]);
+    for (const ref of references) {
+      expect(Object.keys(ref).sort()).toEqual(["imageIndex", "messageId"]);
+      expect(ref).not.toHaveProperty("localPath");
+      expect(ref).not.toHaveProperty("url");
+    }
+  });
+
+  it("hides save-all when only one image is shown", async () => {
+    const message = makeTwoImageMessage();
+    message.metadata = {
+      ...message.metadata,
+      generatedImages: [{ url: "https://example.com/only.png" }],
+    } as ChatV2MessageView["metadata"];
+    const wrapper = mountWith(message);
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="generated-image-save-all"]').exists()).toBe(
+      false
+    );
+    expect(wrapper.findAll(".v2-message__save-image-btn")).toHaveLength(1);
   });
 
   it("exposes translated accessible names on both action buttons", async () => {

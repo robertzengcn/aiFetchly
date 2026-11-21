@@ -33,8 +33,11 @@ describe("toolResultConfig", () => {
     expect(TOOL_RESULT_CONFIG.conversationQuotaBytes).toBe(1024 * 1024 * 1024);
     expect(TOOL_RESULT_CONFIG.profileQuotaBytes).toBe(5 * 1024 * 1024 * 1024);
     expect(TOOL_RESULT_CONFIG.minimumFreeDiskBytes).toBe(128 * 1024 * 1024);
-    expect(TOOL_RESULT_CONFIG.retrievalMaxCalls).toBe(32);
-    expect(TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn).toBe(32_000);
+    expect(TOOL_RESULT_CONFIG.inlineMaxTokens).toBe(10 * 1024);
+    expect(TOOL_RESULT_CONFIG.previewMaxTokens).toBe(2 * 1024);
+    expect(TOOL_RESULT_CONFIG.readMaxTokens).toBe(6 * 1024);
+    expect(TOOL_RESULT_CONFIG.retrievalMaxCalls).toBe(64);
+    expect(TOOL_RESULT_CONFIG.retrievalMaxTokensPerTurn).toBe(256 * 1024);
     expect(TOOL_RESULT_CONFIG.uiReadMaxBytes).toBe(32 * 1024);
     expect(TOOL_RESULT_CONFIG.orphanGraceHours).toBe(24);
   });

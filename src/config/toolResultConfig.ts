@@ -21,14 +21,14 @@ export const TOOL_RESULT_POLICY_VERSION = "tool-result-policy-v1";
 export const TOOL_RESULT_DEFAULTS = {
   /** Largest inline text/JSON body before it becomes a saved result. */
   inlineMaxBytes: 16 * 1024,
-  inlineMaxTokens: 2000,
+  inlineMaxTokens: 10 * 1024,
 
   /** Whole saved receipt, including descriptors, control, and preview. */
   receiptMaxBytes: 4 * 1024,
 
   /** Preview is the last thing allocated space, so it shrinks first. */
   previewMaxBytes: 2 * 1024,
-  previewMaxTokens: 512,
+  previewMaxTokens: 2 * 1024,
 
   /**
    * Preview budget for batch aggregate receipts (`BATCH_PREVIEW_TOOL_NAMES`).
@@ -40,7 +40,7 @@ export const TOOL_RESULT_DEFAULTS = {
 
   /** One read/search response, envelope included. */
   readMaxBytes: 8 * 1024,
-  readMaxTokens: 2000,
+  readMaxTokens: 6 * 1024,
 
   /** Validated control payload ceiling inside a receipt. */
   controlMaxBytes: 1024,
@@ -62,8 +62,8 @@ export const TOOL_RESULT_DEFAULTS = {
   captureConcurrency: 2,
 
   /** Cumulative retrieval work per assistant turn, shared by read + search. */
-  retrievalMaxCalls: 32,
-  retrievalMaxTokensPerTurn: 32_000,
+  retrievalMaxCalls: 64,
+  retrievalMaxTokensPerTurn: 256 * 1024,
 
   searchMaxScanBytes: 8 * 1024 * 1024,
   searchMaxMs: 100,

@@ -406,7 +406,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
     const result = await resultPromise;
 
     // Now the runner finalized: engine unregistered, run completed.
-    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv", 42);
     expect(result.status).toBe("completed");
   });
 
@@ -440,7 +440,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
     const result = await resultPromise;
 
     expect(mockDeny).toHaveBeenCalled();
-    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv", 42);
     expect(result.status).toBe("failed");
   });
 
@@ -504,7 +504,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
     const result = await resultPromise;
 
     // The runner finalized: engine unregistered, run completed.
-    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv", 42);
     expect(result.status).toBe("completed");
   });
 
@@ -568,7 +568,7 @@ describe("ScheduledAiMessageRunner permission pause", () => {
 
     // Resume timeout fired: stopActiveTurn was called and the run finalized.
     expect(mockStopActiveTurn).toHaveBeenCalledWith("v2-conv");
-    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv");
+    expect(mockUnregisterEngine).toHaveBeenCalledWith("v2-conv", 42);
     expect(result.status).toBe("failed");
     // The 1h backstop never fired (resume timeout is shorter).
     expect(mockDeny).not.toHaveBeenCalled();

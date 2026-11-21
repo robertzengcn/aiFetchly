@@ -17,6 +17,7 @@ import { validateGeneratedTitle } from "@/service/aiChatTitle/AIChatTitleValidat
 import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
 import { currentTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
+import { log } from "@/modules/Logger";
 
 /** Provider snapshot pinned for one dispatch (titles design §8.3). */
 export type ResolvedTitleProvider =
@@ -329,7 +330,8 @@ export class AIChatTitleService {
       // B11: a background metadata failure never escapes its feature
       // boundary — record bounded metadata and keep draining the queue.
       this.recordFailure("error");
-      void err; // no content logging (PRD §8)
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`[ai-chat-title] process error conv=${entry.conversationId}: ${message}`);
     } finally {
       this.running = false;
       this.activeAbort = null;
@@ -727,6 +729,10 @@ export class AIChatTitleService {
       if (!attemptOutcomeRecorded) {
         this.recordFailure(code);
       }
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `[ai-chat-title] title generation failed conv=${conversationId} code=${code}: ${message}`
+      );
     } finally {
       // B24: bounded duration sample (last 50 dispatches).
       this.diagnostics.dispatchDurationsMs.push(Date.now() - dispatchedAt);

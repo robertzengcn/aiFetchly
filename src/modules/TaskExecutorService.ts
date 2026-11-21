@@ -41,6 +41,7 @@ export interface TaskExecutorServiceDeps {
   googleMapsModule: GoogleMapsModule;
   yandexMapsModule: YandexMapsModule;
   aiMessageTaskModule: AiMessageTaskModule;
+  createScheduledAiMessageRunner?: () => Pick<ScheduledAiMessageRunner, "run">;
 }
 
 export class TaskExecutorService {
@@ -53,6 +54,10 @@ export class TaskExecutorService {
   private googleMapsModule: GoogleMapsModule;
   private yandexMapsModule: YandexMapsModule;
   private aiMessageTaskModule: AiMessageTaskModule;
+  private createScheduledAiMessageRunner: () => Pick<
+    ScheduledAiMessageRunner,
+    "run"
+  >;
   //private socialTaskModel: SocialTaskModel;
 
   /**
@@ -75,6 +80,9 @@ export class TaskExecutorService {
     this.yandexMapsModule = deps?.yandexMapsModule ?? new YandexMapsModule();
     this.aiMessageTaskModule =
       deps?.aiMessageTaskModule ?? new AiMessageTaskModule();
+    this.createScheduledAiMessageRunner =
+      deps?.createScheduledAiMessageRunner ??
+      (() => new ScheduledAiMessageRunner());
 
     //this.socialTaskModel = new SocialTaskModel(filepath);
   }
@@ -316,12 +324,21 @@ export class TaskExecutorService {
     try {
       log.info(`Executing AI message task ${taskId}`);
 
-      const runner = new ScheduledAiMessageRunner();
+      const runner = this.createScheduledAiMessageRunner();
       const result = await runner.run(taskId, scheduleId);
 
       log.info(
         `AI message task ${taskId} run completed with status: ${result.status}, run ID: ${result.runId}`
       );
+
+      if (result.status !== "completed") {
+        const detail = result.errorMessage
+          ? `${result.status}: ${result.errorMessage}`
+          : result.status;
+        throw new Error(
+          `AI message task ${taskId} did not complete (${detail})`
+        );
+      }
 
       return result.runId || taskId;
     } catch (error) {

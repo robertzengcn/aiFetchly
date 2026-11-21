@@ -68,8 +68,18 @@ export class ScheduledLoopEngineRegistry {
     this.engines.set(entry.conversationId, entry);
   }
 
-  /** Unregister when the occurrence terminates. Idempotent. */
-  unregister(conversationId: string): void {
+  /**
+   * Unregister when the occurrence terminates. Idempotent.
+   * When `runId` is supplied, only removes the entry if its `runId` matches so an
+   * overlapping run that exits before registering cannot evict a live run.
+   */
+  unregister(conversationId: string, runId?: number): void {
+    if (runId !== undefined) {
+      const existing = this.engines.get(conversationId);
+      if (!existing || existing.runId !== runId) {
+        return;
+      }
+    }
     this.engines.delete(conversationId);
     this.pending.delete(conversationId);
   }

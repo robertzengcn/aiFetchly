@@ -18,6 +18,7 @@ import { getToolResultContext } from "@/service/agentTools/toolResultContext";
 import {
   TOOL_RESULT_CURSOR_RECOVERY,
   TOOL_RESULT_DENIAL_RECOVERY,
+  toolResultBudgetExhaustedResult,
   toolResultReadFailure,
 } from "@/service/agentTools/toolResultDenialRecovery";
 import { TOOL_RESULT_CONFIG } from "@/config/toolResultConfig";
@@ -87,67 +88,74 @@ export async function handleToolResultRead(
     toolResultMetrics.record("retrieval.budget_exhausted");
     return {
       success: false,
-      result: {
-        error: work.code,
-        // Be explicit that review is incomplete rather than letting the model
-        // infer it read everything.
-        analysis_complete: false,
-      },
+      result: toolResultBudgetExhaustedResult({
+        outputId: target.target.outputId,
+        cursor: parsed.data.cursor,
+      }),
     };
   }
 
-  const service: ToolResultRetrievalService = trusted.retrieval;
-  // First-page p95 is an NFR-04 target (≤200 ms); measure the retrieval work
-  // (resolution already happened above) so the metric reflects the read cost
-  // the model actually pays. `detail: "model"` distinguishes this path from
-  // the UI IPC read path that serves the renderer (T17).
-  const readStartedAt = performance.now();
-  const outcome = await service.read({
-    target: target.target,
-    cursor: parsed.data.cursor,
-    // Always take the model page budget. Omitting max_tokens used to select
-    // the 32 KiB UI page, which then got saved as another output.
-    maxTokens: parsed.data.max_tokens ?? TOOL_RESULT_CONFIG.readMaxTokens,
-  });
-  toolResultMetrics.recordLatency(
-    "retrieval.latency_ms",
-    performance.now() - readStartedAt,
-    "model"
-  );
+  let settled = false;
+  try {
+    const service: ToolResultRetrievalService = trusted.retrieval;
+    // First-page p95 is an NFR-04 target (≤200 ms); measure the retrieval work
+    // (resolution already happened above) so the metric reflects the read cost
+    // the model actually pays. `detail: "model"` distinguishes this path from
+    // the UI IPC read path that serves the renderer (T17).
+    const readStartedAt = performance.now();
+    const outcome = await service.read({
+      target: target.target,
+      cursor: parsed.data.cursor,
+      // Always take the model page budget. Omitting max_tokens used to select
+      // the 32 KiB UI page, which then got saved as another output.
+      maxTokens: parsed.data.max_tokens ?? TOOL_RESULT_CONFIG.readMaxTokens,
+    });
+    toolResultMetrics.recordLatency(
+      "retrieval.latency_ms",
+      performance.now() - readStartedAt,
+      "model"
+    );
 
-  if (!outcome.ok) {
-    await trusted.settleWork(0);
-    // An exhausted allowance is reported, never silently treated as empty.
-    return { success: false, result: toolResultReadFailure(outcome.code) };
+    if (!outcome.ok) {
+      await trusted.settleWork(0);
+      settled = true;
+      // An exhausted allowance is reported, never silently treated as empty.
+      return { success: false, result: toolResultReadFailure(outcome.code) };
+    }
+
+    const page = outcome.page;
+    const fitted = fitWrappedRetrievalResult({
+      output_id: page.outputId,
+      revision: target.target.revision,
+      // Cursor before the page text so a tail truncation cannot drop it.
+      next_cursor: page.nextCursor,
+      complete: page.complete,
+      start_byte: page.startByte,
+      end_byte: page.endByte,
+      total_bytes: page.totalBytes,
+      text: page.text,
+      source_completeness: target.target.sourceCompleteness,
+    });
+    const envelope =
+      fitted !== null && typeof fitted === "object"
+        ? (fitted as Record<string, unknown>)
+        : {
+            success: false,
+            error: "RETRIEVAL_PAGE_TOO_LARGE",
+            analysis_complete: false,
+            output_id: page.outputId,
+          };
+    // Settle the tokens actually returned, so a caller asking for a smaller page
+    // spends proportionally less of the turn's allowance.
+    await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
+    settled = true;
+    toolResultMetrics.record("retrieval.read");
+    return { success: true, result: envelope };
+  } finally {
+    if (!settled) {
+      await trusted.settleWork(0).catch(() => undefined);
+    }
   }
-
-  const page = outcome.page;
-  const fitted = fitWrappedRetrievalResult({
-    output_id: page.outputId,
-    revision: target.target.revision,
-    // Cursor before the page text so a tail truncation cannot drop it.
-    next_cursor: page.nextCursor,
-    complete: page.complete,
-    start_byte: page.startByte,
-    end_byte: page.endByte,
-    total_bytes: page.totalBytes,
-    text: page.text,
-    source_completeness: target.target.sourceCompleteness,
-  });
-  const envelope =
-    fitted !== null && typeof fitted === "object"
-      ? (fitted as Record<string, unknown>)
-      : {
-          success: false,
-          error: "RETRIEVAL_PAGE_TOO_LARGE",
-          analysis_complete: false,
-          output_id: page.outputId,
-        };
-  // Settle the tokens actually returned, so a caller asking for a smaller page
-  // spends proportionally less of the turn's allowance.
-  await trusted.settleWork(countTextTokens(JSON.stringify(envelope)));
-  toolResultMetrics.record("retrieval.read");
-  return { success: true, result: envelope };
 }
 
 export type { StoredToolOutputRef };

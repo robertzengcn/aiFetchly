@@ -283,6 +283,9 @@ const i18n = createI18n({
         },
         artifactExport: {
           savedToWorkspace: "Saved {fileName} to your workspace.",
+          savedAllToWorkspace: "Saved {count} images to your workspace.",
+          savedSomeToWorkspace:
+            "Saved {saved} of {total} images to your workspace.",
           saveFailed: "Could not save to workspace.",
         },
         imageTool: {
@@ -1875,6 +1878,34 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
       expect(notice.text()).toContain("image-1.png");
+    });
+
+    it("saves every generated image from one save-all action", async () => {
+      exportGeneratedImageMock.mockResolvedValue({
+        status: "exported",
+        fileName: "image-1.png",
+      });
+      const wrapper = await mountWithSelection();
+      const transcript = wrapper.findComponent({
+        name: "AiChatWorkspaceTranscript",
+      });
+      transcript.vm.$emit("save-all-generated-images", [
+        { messageId: "m1", imageIndex: 0 },
+        { messageId: "m1", imageIndex: 1 },
+      ]);
+      await flushPromises();
+
+      expect(exportGeneratedImageMock).toHaveBeenCalledTimes(2);
+      expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(1, "conv-1", {
+        messageId: "m1",
+        imageIndex: 0,
+      });
+      expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(2, "conv-1", {
+        messageId: "m1",
+        imageIndex: 1,
+      });
+      const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
+      expect(notice.text()).toContain("Saved 2 images to your workspace.");
     });
 
     it("routes a workspace_required save into the workspace setup flow (FR-INT-002)", async () => {

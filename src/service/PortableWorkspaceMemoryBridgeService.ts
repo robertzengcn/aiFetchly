@@ -127,10 +127,9 @@ export class PortableWorkspaceMemoryBridgeService {
 
     if (startIdx >= 0) {
       const afterEnd = endIdx + BRIDGE_END.length;
-      const next =
-        existing.slice(0, startIdx) +
-        block +
-        existing.slice(afterEnd).replace(/^\n/, "\n");
+      const afterSuffix = existing.slice(afterEnd);
+      const suffix = afterSuffix.startsWith("\n") ? afterSuffix : `\n${afterSuffix}`;
+      const next = existing.slice(0, startIdx) + block + suffix;
       if (next === existing) {
         return {
           target,
@@ -208,10 +207,9 @@ export class PortableWorkspaceMemoryBridgeService {
       if (startIdx >= 0) {
         const endIdx = existing.indexOf(BRIDGE_END);
         const afterEnd = endIdx + BRIDGE_END.length;
-        next =
-          existing.slice(0, startIdx) +
-          block +
-          existing.slice(afterEnd).replace(/^\n/, "\n");
+        const afterSuffix = existing.slice(afterEnd);
+        const suffix = afterSuffix.startsWith("\n") ? afterSuffix : `\n${afterSuffix}`;
+        next = existing.slice(0, startIdx) + block + suffix;
       } else {
         next = `${existing.replace(/\n+$/, "")}\n\n${block}\n`;
       }

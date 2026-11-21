@@ -80,7 +80,7 @@ export function isQuotaError(err: unknown): boolean {
  * streaming HTTP client's own retry layer.
  */
 const TRANSIENT_ERROR_PATTERN =
-  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|HTTP\s+5\d{2}|AI server error code=5\d\d|database connection is not open/i;
+  /finish_reason=error|empty response|no finish reason|transient server|rate limit|timeout|\b502\b|HTTP\s+5\d{2}|AI server error|openai streaming api error|database connection is not open/i;
 
 /**
  * Returns true when the error represents a transient, retryable AI-server
@@ -169,28 +169,49 @@ export function isContentLevelTransientError(err: unknown): boolean {
  */
 
 const AUTH_EXPIRED_MESSAGE_PATTERN =
-  /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|Forbidden/i;
+  /401|403|Authentication failed|Please login again|RefreshTokenInvalidError|refresh token rejected|invalid or expired refresh token|refresh token not found|refresh token has expired|refresh token is invalid|failed to refresh (access )?token|token refresh failed|Forbidden/i;
+
+/**
+ * Server/stream patterns that indicate an AI backend or upstream LLM provider
+ * failure, NOT a client session auth expiration. Under no circumstances should
+ * an AI server envelope error or upstream provider 401 trigger an app sign-out.
+ */
+const AI_SERVER_OR_PROVIDER_ERROR_PATTERN =
+  /ai server error|openai streaming api error|tool_loop_failed/i;
 
 /**
  * True when the failure means the hosted app session is no longer valid
- * (AI server 401/403, refresh-token rejection, or classified auth recovery
- * error). Local provider API-key failures ({@link AIProviderError}) are
- * excluded — those should not force an app re-login.
+ * (marketing server 401/403, refresh-token rejection, or classified auth recovery
+ * error). Local provider API-key failures ({@link AIProviderError}) and AI server
+ * stream/provider envelope errors are excluded — those should never force an app
+ * re-login or clear local user credentials.
  */
 export function isAuthExpiredError(err: unknown): boolean {
   if (err instanceof AIProviderError) {
     return false;
   }
-  if (isAIChatRecoverableError(err) && err.reason === "auth") {
+  if (isAIChatRecoverableError(err)) {
+    if (err.reason !== "auth") {
+      return false;
+    }
+    if (AI_SERVER_OR_PROVIDER_ERROR_PATTERN.test(err.message || "")) {
+      return false;
+    }
     return true;
   }
   if (err instanceof Error) {
     if (err.name === "RefreshTokenInvalidError") {
       return true;
     }
+    if (AI_SERVER_OR_PROVIDER_ERROR_PATTERN.test(err.message || "")) {
+      return false;
+    }
     return AUTH_EXPIRED_MESSAGE_PATTERN.test(err.message || "");
   }
   if (typeof err === "string") {
+    if (AI_SERVER_OR_PROVIDER_ERROR_PATTERN.test(err)) {
+      return false;
+    }
     return AUTH_EXPIRED_MESSAGE_PATTERN.test(err);
   }
   return false;

@@ -1,6 +1,7 @@
 import { inject, type InjectionKey } from "vue";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
+import { useChatModelsStore } from "@/views/store/chatModels";
 import { createWorkspaceConversationId } from "@/views/api/aiChatWorkspace";
 
 /**
@@ -33,6 +34,9 @@ export function useChatWorkspaceSelection(): ChatWorkspaceSelectionApi | null {
 export async function createAndSelectWorkspaceChat(): Promise<string> {
   const workspaceStore = useChatWorkspaceStore();
   const selectedStore = useSelectedConversationStore();
+  // Refresh the model list so newly-added server-side models appear in the
+  // selector when starting a new conversation (AiChatV2 parity).
+  useChatModelsStore().requestRefresh();
   const id = createWorkspaceConversationId();
   workspaceStore.upsertLocalConversation({
     conversationId: id,

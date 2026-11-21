@@ -155,6 +155,7 @@ vi.mock("@/service/AiMessageTaskWorkspace", () => ({
 }));
 
 import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
+import { ScheduledLoopEngineRegistry } from "@/service/ScheduledLoopEngineRegistry";
 
 const TASK = {
   id: 1,
@@ -380,6 +381,29 @@ describe("ScheduledAiMessageRunner.runChatScheduledLoop", () => {
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 
+  it("does not unregister an active run's engine or pending permission when acquire fails with CONVERSATION_BUSY", async () => {
+    const registry = ScheduledLoopEngineRegistry.getInstance();
+    registry.clear();
+    const liveEngine = { submitMessage: mockSubmit, runTurn: mockRunTurn } as never;
+    registry.register({
+      conversationId: "v2-conv",
+      engine: liveEngine,
+      runId: 100,
+      scheduleId: 2,
+    });
+    registry.setPendingPermission("v2-conv", { toolId: "tool-live" });
+
+    try {
+      mockAcquire.mockRejectedValue(new Error("CONVERSATION_BUSY"));
+      const r = await call();
+      expect(r.status).toBe("blocked_by_policy");
+      expect(registry.getByConversation("v2-conv")?.runId).toBe(100);
+      expect(registry.hasPendingPermission("v2-conv", "tool-live")).toBe(true);
+    } finally {
+      registry.clear();
+    }
+  });
+
   it("maps a completed engine outcome to run status completed + broadcasts", async () => {
     engineOutcome.value = { type: "complete", content: "all good" };
     const r = await call();
@@ -539,5 +563,32 @@ describe("ScheduledAiMessageRunner.run (schedule-page cron)", () => {
     // The task entity passed into bindTaskWorkspace was NOT mutated — its
     // workspace_path still holds the original stored value.
     expect(taskWithWorkspace.workspace_path).toBe(storedPath);
+  });
+
+  it("run() does not unregister an active run's engine when acquire fails with CONVERSATION_BUSY", async () => {
+    const registry = ScheduledLoopEngineRegistry.getInstance();
+    registry.clear();
+    const liveEngine = { submitMessage: mockSubmit, runTurn: mockRunTurn } as never;
+    registry.register({
+      conversationId: "v2-schedule-conv",
+      engine: liveEngine,
+      runId: 200,
+      scheduleId: 2,
+    });
+    registry.setPendingPermission("v2-schedule-conv", {
+      toolId: "tool-cron-live",
+    });
+
+    try {
+      mockAcquire.mockRejectedValue(new Error("CONVERSATION_BUSY"));
+      const r = await new ScheduledAiMessageRunner().run(1, 2);
+      expect(r.status).toBe("blocked_by_policy");
+      expect(registry.getByConversation("v2-schedule-conv")?.runId).toBe(200);
+      expect(
+        registry.hasPendingPermission("v2-schedule-conv", "tool-cron-live")
+      ).toBe(true);
+    } finally {
+      registry.clear();
+    }
   });
 });

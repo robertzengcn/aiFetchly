@@ -22,7 +22,6 @@ import { fileURLToPath } from "url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
-// eslint-disable-next-line import/default
 import managedBrowserWorkerConfig from "./vite.managedBrowserWorker.config.mjs";
 
 const devWorkerConfig =

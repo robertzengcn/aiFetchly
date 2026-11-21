@@ -27,6 +27,14 @@ export interface ReceivedMessageListInput {
   classification?: EmailMessageClassification;
 }
 
+/**
+ * Escapes SQL LIKE metacharacters so `where` text matches literally
+ * (PRD §7 literal subject semantics). Use with `LIKE :search ESCAPE '\\'`.
+ */
+export function escapeLikePattern(text: string): string {
+  return text.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 export class EmailReceivedMessageModel extends BaseDb {
   /**
    * Resolved per access: BaseDb rebinds `this.sqliteDb` to the live
@@ -501,6 +509,190 @@ export class EmailReceivedMessageModel extends BaseDb {
     return await qb.getMany();
   }
 
+  /**
+   * R05: refreshes provider-owned fields on an EXISTING message row during
+   * occurrence adoption — the same targeted provider patch upsertByProviderUid
+   * uses, but addressed by the stable id instead of the old uid key.
+   */
+  async updateProviderFieldsForSync(
+    messageId: number,
+    entity: EmailReceivedMessageEntity
+  ): Promise<EmailReceivedMessageEntity | null> {
+    const existing = await this.repository.findOne({ where: { id: messageId } });
+    if (!existing) return null;
+    const providerPatch: Partial<EmailReceivedMessageEntity> = {
+      messageId: entity.messageId,
+      threadKey: entity.threadKey,
+      inReplyTo: entity.inReplyTo,
+      referencesHeader: entity.referencesHeader,
+      fromAddress: entity.fromAddress,
+      fromName: entity.fromName,
+      replyToAddress: entity.replyToAddress,
+      toAddressesJson: entity.toAddressesJson,
+      ccAddressesJson: entity.ccAddressesJson,
+      subject: entity.subject,
+      bodyText: entity.bodyText,
+      bodyHtmlSanitized: entity.bodyHtmlSanitized,
+      snippet: entity.snippet,
+      receivedAt: entity.receivedAt,
+      isUnread: entity.isUnread,
+      isAnswered: entity.isAnswered,
+      answeredFlagCheckedAt: entity.answeredFlagCheckedAt,
+      providerFolder: entity.providerFolder,
+      providerUidValidity: entity.providerUidValidity,
+      providerUid: entity.providerUid,
+    };
+    await this.repository.update({ id: messageId }, providerPatch);
+    return await this.repository.findOne({ where: { id: messageId } });
+  }
+
+  /** Loads stored messages by exact ids, preserving the requested order. */
+  /**
+   * Organization search over stored rows (PRD FR-17 local mode). Literal
+   * subject semantics (escapeLikePattern); caller decides folder coverage.
+   * Returns matched rows plus honest total/truncation information.
+   */
+  /**
+   * R7-01: how many stored messages exist from ONE sender on ONE account.
+   * The chat direct-send gate uses this to refuse Trash when several
+   * messages match the sender the sentence named — "delete the email from
+   * bob@example.com" with two bob messages must ask, not guess.
+   */
+  async countBySender(emailServiceId: number, fromAddress: string): Promise<number> {
+    // R8-01: the sentence comparison lowercases, so the count must too —
+    // SQLite `=` is case-sensitive and would treat Bob@x.com and bob@x.com
+    // as two people, letting direct Trash move one and leave the other.
+    return await this.repository
+      .createQueryBuilder("msg")
+      .where("msg.emailServiceId = :emailServiceId", { emailServiceId })
+      .andWhere("LOWER(msg.fromAddress) = LOWER(:fromAddress)", { fromAddress })
+      .getCount();
+  }
+
+  async searchForOrganization(input: {
+    emailServiceId: number;
+    folderPaths?: readonly string[];
+    /** Excluded folder (e.g. the account's Trash for unscoped searches). */
+    excludeFolderPath?: string;
+    fromAddress?: string;
+    subject?: string;
+    /** Inclusive UTC lower bound on receivedAt. */
+    receivedFrom?: Date;
+    /** Exclusive UTC upper bound on receivedAt. */
+    receivedTo?: Date;
+    unreadOnly?: boolean;
+    hasAttachments?: boolean;
+    /** R4-09: keyset continuation — rows strictly after this position. */
+    keysetBefore?: { receivedAt: Date; id: number };
+    limit: number;
+  }): Promise<{ rows: EmailReceivedMessageEntity[]; totalMatched: number; truncated: boolean }> {
+    const limit = Math.max(1, Math.min(input.limit, 100));
+    let qb = this.repository
+      .createQueryBuilder("msg")
+      .where("msg.emailServiceId = :emailServiceId", {
+        emailServiceId: input.emailServiceId,
+      });
+    if (input.keysetBefore) {
+      qb = qb.andWhere(
+        "(msg.receivedAt < :ksAt OR (msg.receivedAt = :ksAt AND msg.id < :ksId))",
+        {
+          ksAt: input.keysetBefore.receivedAt,
+          ksId: input.keysetBefore.id,
+        }
+      );
+    }
+    if (input.folderPaths && input.folderPaths.length > 0) {
+      qb = qb.andWhere(
+        "EXISTS (SELECT 1 FROM email_message_location loc WHERE loc.messageId = msg.id AND loc.emailServiceId = :emailServiceId AND loc.state = 'verified' AND loc.folderPath IN (:...folderPaths))",
+        { emailServiceId: input.emailServiceId, folderPaths: [...input.folderPaths] }
+      );
+    }
+    if (input.excludeFolderPath) {
+      qb = qb.andWhere(
+        "NOT EXISTS (SELECT 1 FROM email_message_location locx WHERE locx.messageId = msg.id AND locx.emailServiceId = :emailServiceId AND locx.state = 'verified' AND locx.folderPath = :excludeFolderPath)",
+        { emailServiceId: input.emailServiceId, excludeFolderPath: input.excludeFolderPath }
+      );
+    }
+    if (input.fromAddress && input.fromAddress.trim() !== "") {
+      qb = qb.andWhere("msg.fromAddress LIKE :fromAddress ESCAPE '\\'", {
+        fromAddress: `%${escapeLikePattern(input.fromAddress.trim())}%`,
+      });
+    }
+    if (input.subject && input.subject.trim() !== "") {
+      qb = qb.andWhere("msg.subject LIKE :subject ESCAPE '\\'", {
+        subject: `%${escapeLikePattern(input.subject.trim())}%`,
+      });
+    }
+    if (input.receivedFrom) {
+      qb = qb.andWhere("msg.receivedAt >= :receivedFrom", {
+        receivedFrom: input.receivedFrom,
+      });
+    }
+    if (input.receivedTo) {
+      qb = qb.andWhere("msg.receivedAt < :receivedTo", { receivedTo: input.receivedTo });
+    }
+    if (input.unreadOnly) {
+      qb = qb.andWhere("msg.isUnread = 1");
+    }
+    if (input.hasAttachments !== undefined) {
+      qb = qb.andWhere("msg.hasAttachments = :hasAttachments", {
+        hasAttachments: input.hasAttachments ? 1 : 0,
+      });
+    }
+    const totalMatched = await qb.getCount();
+    const rows = await qb
+      .orderBy("msg.receivedAt", "DESC")
+      .take(limit)
+      .getMany();
+    return { rows, totalMatched, truncated: totalMatched > rows.length };
+  }
+
+  async readByIds(ids: readonly number[]): Promise<EmailReceivedMessageEntity[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.repository
+      .createQueryBuilder("msg")
+      .where("msg.id IN (:...ids)", { ids: [...ids] })
+      .getMany();
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is EmailReceivedMessageEntity => row !== undefined);
+  }
+
+  /**
+   * Cursor batch (ids strictly greater than afterId) carrying only the
+   * provider-identity columns, used by the message-location backfill.
+   */
+  async listForLocationBackfill(
+    afterId: number,
+    limit: number
+  ): Promise<
+    Array<
+      Pick<
+        EmailReceivedMessageEntity,
+        | "id"
+        | "emailServiceId"
+        | "providerUid"
+        | "providerFolder"
+        | "providerUidValidity"
+      >
+    >
+  > {
+    return await this.repository
+      .createQueryBuilder("msg")
+      .select([
+        "msg.id",
+        "msg.emailServiceId",
+        "msg.providerUid",
+        "msg.providerFolder",
+        "msg.providerUidValidity",
+      ])
+      .where("msg.id > :afterId", { afterId })
+      .orderBy("msg.id", "ASC")
+      .take(limit)
+      .getMany();
+  }
+
   /** Bulk-set normalization + conversation fields at sync time (P1/P2). */
   async updateNormalization(
     messageId: number,
@@ -633,8 +825,8 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
     if (input.where) {
       qb = qb.andWhere(
-        "(msg.subject LIKE :search OR msg.fromAddress LIKE :search OR msg.fromName LIKE :search)",
-        { search: `%${input.where}%` }
+        "(msg.subject LIKE :search ESCAPE '\\' OR msg.fromAddress LIKE :search ESCAPE '\\' OR msg.fromName LIKE :search ESCAPE '\\')",
+        { search: `%${escapeLikePattern(input.where)}%` }
       );
     }
 
@@ -685,8 +877,8 @@ export class EmailReceivedMessageModel extends BaseDb {
     }
     if (input.where) {
       qb = qb.andWhere(
-        "(msg.subject LIKE :search OR msg.fromAddress LIKE :search OR msg.fromName LIKE :search)",
-        { search: `%${input.where}%` }
+        "(msg.subject LIKE :search ESCAPE '\\' OR msg.fromAddress LIKE :search ESCAPE '\\' OR msg.fromName LIKE :search ESCAPE '\\')",
+        { search: `%${escapeLikePattern(input.where)}%` }
       );
     }
     return await qb.getCount();

@@ -53,6 +53,12 @@ Production builds require:
 - `APPLE_APP_SPECIFIC_PASSWORD`
 - `APPLE_TEAM_ID`
 
+Optional secrets / variables:
+
+- `VITE_PLUGIN_HUB_URL_PROD` (or `VITE_PLUGIN_HUB_URL`): Plugin Hub base URL for production builds
+- `VITE_PLUGIN_HUB_URL_TEST`: Plugin Hub base URL for test builds
+- `AIFETCHLY_ALLOW_HTTP_HUB`: Set to `1` to allow insecure HTTP plugin hubs in production (auto-set when hub URL begins with `http://`)
+
 Windows code signing is currently **optional and disabled** — no
 `WINDOWS_CERTIFICATE_BASE64` / `WINDOWS_CERTIFICATE_PASSWORD` secrets are set.
 `forge.config.js` signs automatically whenever `cert.pfx` and

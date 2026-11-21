@@ -22,7 +22,15 @@ import { SqliteDb } from "@/config/SqliteDb";
 import { SearchController } from "@/controller/SearchController";
 import { AiMessageTaskRunModel } from "@/model/AiMessageTaskRun.model";
 import { ScheduledAiMessageRunner } from "@/service/ScheduledAiMessageRunner";
-import { SCHEDULED_LOOP_STALE_RUN_MS } from "@/config/aiChatScheduledLoopConfig";
+import { AIChatConversationTurnCoordinator } from "@/service/AIChatConversationTurnCoordinator";
+import {
+  SCHEDULED_LOOP_MAX_WAIT_ATTEMPTS,
+  SCHEDULED_LOOP_STALE_RUN_MS,
+} from "@/config/aiChatScheduledLoopConfig";
+import {
+  ExecutionLease,
+  ScheduleExecutionGuard,
+} from "@/modules/ScheduleExecutionGuard";
 
 export interface SchedulerStatus {
   isRunning: boolean;
@@ -80,8 +88,12 @@ export class BackgroundScheduler extends BaseDb {
 
   private isInitialized = false;
   private isRunning = false;
+  private isProcessingIntervalTasks = false;
+  private isProcessingExecutionQueue = false;
   private executionQueue: ExecutionQueueItem[] = [];
   private runningExecutions: Set<number> = new Set();
+  private activeExecutionReleases: Map<number, () => void> = new Map();
+  private readonly executionGuard = ScheduleExecutionGuard.getInstance();
   private maxConcurrentExecutions = 5;
   private maxRetries = 3;
   private retryDelayMs = 60000; // 1 minute
@@ -351,6 +363,10 @@ export class BackgroundScheduler extends BaseDb {
         log.warn(
           `Force stopping ${this.runningExecutions.size} remaining executions`
         );
+        for (const release of Array.from(this.activeExecutionReleases.values())) {
+          release();
+        }
+        this.activeExecutionReleases.clear();
         this.runningExecutions.clear();
       }
 
@@ -479,7 +495,8 @@ export class BackgroundScheduler extends BaseDb {
    * every clean shutdown).
    */
   private async processIntervalTasks(): Promise<void> {
-    if (!this.isRunning) return;
+    if (!this.isRunning || this.isProcessingIntervalTasks) return;
+    this.isProcessingIntervalTasks = true;
     try {
       const now = new Date();
       const due =
@@ -488,14 +505,124 @@ export class BackgroundScheduler extends BaseDb {
         if (!this.isRunning) break;
         await this.processIntervalSchedule(schedule);
       }
+      if (this.isRunning) {
+        await this.processWaitingIntervalRuns(now);
+      }
     } catch (error) {
       console.error("Error processing interval scheduled tasks:", error);
+    } finally {
+      this.isProcessingIntervalTasks = false;
+    }
+  }
+
+  /**
+   * Retry or retire interval runs currently in `waiting_for_conversation` once
+   * the conversation turn lease is free (or retire when inactive / superseded /
+   * wait attempts exhausted).
+   */
+  private async processWaitingIntervalRuns(now: Date): Promise<void> {
+    const runModel = this.getIntervalRunModel();
+    const waitingRuns = await runModel.findWaitingIntervalRuns?.(50);
+    if (!waitingRuns || waitingRuns.length === 0) return;
+
+    const scheduleModel = this.getIntervalScheduleModel();
+    const coordinator = AIChatConversationTurnCoordinator.getInstance();
+    const maxTotalAttempts = 1 + SCHEDULED_LOOP_MAX_WAIT_ATTEMPTS;
+
+    for (const run of waitingRuns) {
+      if (!this.isRunning) break;
+      if (run.schedule_id == null || run.occurrence == null) continue;
+
+      const schedule = await scheduleModel.getScheduleById?.(run.schedule_id);
+      if (
+        !schedule ||
+        !schedule.is_active ||
+        schedule.status !== ScheduleStatus.ACTIVE
+      ) {
+        await runModel.retireWaitingRun?.(run.id, "SCHEDULE_INACTIVE", now);
+        continue;
+      }
+
+      if (
+        schedule.next_run_time &&
+        schedule.next_run_time.getTime() <= now.getTime()
+      ) {
+        await runModel.retireWaitingRun?.(run.id, "WAITING_RUN_EXPIRED", now);
+        continue;
+      }
+
+      if (run.attempt >= maxTotalAttempts) {
+        await runModel.retireWaitingRun?.(
+          run.id,
+          "WAITING_MAX_ATTEMPTS",
+          now
+        );
+        continue;
+      }
+
+      if (run.conversation_id && coordinator.isBusy(run.conversation_id)) {
+        continue;
+      }
+
+      const claimed = await runModel.claimWaitingRunForRetry?.(
+        run.id,
+        now,
+        maxTotalAttempts
+      );
+      if (!claimed) continue;
+
+      const scheduleLease = this.executionGuard.tryAcquireSchedule(
+        run.schedule_id
+      );
+      if (!scheduleLease) continue;
+      const taskLease =
+        run.task_id != null
+          ? this.executionGuard.tryAcquireTask(
+              schedule.task_type ?? TaskType.AI_MESSAGE,
+              run.task_id
+            )
+          : null;
+      if (run.task_id != null && !taskLease) {
+        scheduleLease.release();
+        continue;
+      }
+
+      try {
+        const runner = new ScheduledAiMessageRunner();
+        await runner.runChatScheduledLoop({
+          taskId: run.task_id,
+          scheduleId: run.schedule_id,
+          runId: run.id,
+          occurrence: run.occurrence,
+          catchUp: Boolean(run.catch_up),
+          scheduledFor: run.scheduled_for ?? now,
+          idempotencyKey:
+            run.idempotency_key ??
+            `scheduled-loop:${run.schedule_id}:${run.occurrence}`,
+        });
+      } finally {
+        taskLease?.release();
+        scheduleLease.release();
+      }
     }
   }
 
   private async processIntervalSchedule(
     schedule: ScheduleTaskEntity
   ): Promise<void> {
+    const scheduleLease = this.executionGuard.tryAcquireSchedule(schedule.id);
+    if (!scheduleLease) return;
+    const taskLease = Number.isFinite(schedule.task_id)
+      ? this.executionGuard.tryAcquireTask(
+          schedule.task_type ?? TaskType.AI_MESSAGE,
+          schedule.task_id
+        )
+      : null;
+    if (Number.isFinite(schedule.task_id) && !taskLease) {
+      scheduleLease.release();
+      return;
+    }
+
     try {
       const claim =
         await this.getIntervalScheduleModel().claimIntervalOccurrence({
@@ -522,6 +649,9 @@ export class BackgroundScheduler extends BaseDb {
       });
     } catch (error) {
       console.error(`Error executing interval schedule ${schedule.id}:`, error);
+    } finally {
+      taskLease?.release();
+      scheduleLease.release();
     }
   }
 
@@ -641,51 +771,103 @@ export class BackgroundScheduler extends BaseDb {
     if (
       !this.isRunning ||
       !this.isGlobalSchedulerRunning() ||
+      this.isProcessingExecutionQueue ||
       this.runningExecutions.size >= this.maxConcurrentExecutions
     ) {
       return;
     }
 
-    // Sort queue by priority and scheduled time
-    this.executionQueue.sort((a, b) => {
-      if (a.priority !== b.priority) {
-        return b.priority - a.priority; // Higher priority first
-      }
-      return a.scheduledTime.getTime() - b.scheduledTime.getTime();
-    });
-
-    while (
-      this.executionQueue.length > 0 &&
-      this.runningExecutions.size < this.maxConcurrentExecutions
-    ) {
-      const queueItem = this.executionQueue.shift();
-      if (!queueItem) break;
-
-      // Stop draining automatic items once the global scheduler is stopped.
-      // Re-queue the item so it can run after the next Start. Manual Run Now
-      // bypasses this queue via ScheduleManager.executeSchedule.
-      if (!this.isRunning || !this.isGlobalSchedulerRunning()) {
-        this.executionQueue.unshift(queueItem);
-        return;
-      }
-
-      // Check if schedule is still active
-      const schedule = await this.scheduleTaskModel.getScheduleById(
-        queueItem.scheduleId
-      );
-      if (
-        !schedule ||
-        !schedule.is_active ||
-        schedule.status !== ScheduleStatus.ACTIVE
-      ) {
-        continue;
-      }
-
-      // Execute the schedule
-      this.runningExecutions.add(queueItem.scheduleId);
-      this.executeScheduleWithRetry(queueItem).finally(() => {
-        this.runningExecutions.delete(queueItem.scheduleId);
+    this.isProcessingExecutionQueue = true;
+    const deferredItems: ExecutionQueueItem[] = [];
+    try {
+      // Sort queue by priority and scheduled time
+      this.executionQueue.sort((a, b) => {
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority; // Higher priority first
+        }
+        return a.scheduledTime.getTime() - b.scheduledTime.getTime();
       });
+
+      while (
+        this.executionQueue.length > 0 &&
+        this.runningExecutions.size < this.maxConcurrentExecutions
+      ) {
+        const queueItem = this.executionQueue.shift();
+        if (!queueItem) break;
+
+        // Stop draining automatic items once the global scheduler is stopped.
+        // Re-queue the item so it can run after the next Start. Manual Run Now
+        // bypasses this queue via ScheduleManager.executeSchedule.
+        if (!this.isRunning || !this.isGlobalSchedulerRunning()) {
+          this.executionQueue.unshift(queueItem);
+          return;
+        }
+
+        if (this.runningExecutions.has(queueItem.scheduleId)) {
+          continue;
+        }
+
+        const scheduleLease = this.executionGuard.tryAcquireSchedule(
+          queueItem.scheduleId
+        );
+        if (!scheduleLease) {
+          continue;
+        }
+
+        let taskLease: ExecutionLease | null = null;
+        let preloadedSchedule: ScheduleTaskEntity;
+        try {
+          // Check if schedule is still active
+          const schedule = await this.scheduleTaskModel.getScheduleById(
+            queueItem.scheduleId
+          );
+          if (
+            !schedule ||
+            !schedule.is_active ||
+            schedule.status !== ScheduleStatus.ACTIVE
+          ) {
+            scheduleLease.release();
+            continue;
+          }
+
+          if (schedule.task_type != null && Number.isFinite(schedule.task_id)) {
+            taskLease = this.executionGuard.tryAcquireTask(
+              schedule.task_type,
+              schedule.task_id
+            );
+            if (!taskLease) {
+              // Another schedule targeting the same task is running; defer
+              // until it finishes rather than colliding into CONVERSATION_BUSY.
+              scheduleLease.release();
+              deferredItems.push(queueItem);
+              continue;
+            }
+          }
+          preloadedSchedule = schedule;
+        } catch (error) {
+          taskLease?.release();
+          scheduleLease.release();
+          throw error;
+        }
+
+        const releaseAll = (): void => {
+          this.activeExecutionReleases.delete(queueItem.scheduleId);
+          this.runningExecutions.delete(queueItem.scheduleId);
+          taskLease?.release();
+          scheduleLease.release();
+        };
+
+        this.activeExecutionReleases.set(queueItem.scheduleId, releaseAll);
+        this.runningExecutions.add(queueItem.scheduleId);
+        this.executeScheduleWithRetry(queueItem, preloadedSchedule).finally(
+          releaseAll
+        );
+      }
+    } finally {
+      for (const deferred of deferredItems) {
+        this.addToExecutionQueue(deferred);
+      }
+      this.isProcessingExecutionQueue = false;
     }
   }
 
@@ -693,8 +875,10 @@ export class BackgroundScheduler extends BaseDb {
    * Execute a schedule with retry logic
    */
   private async executeScheduleWithRetry(
-    queueItem: ExecutionQueueItem
+    queueItem: ExecutionQueueItem,
+    preloadedSchedule?: ScheduleTaskEntity
   ): Promise<void> {
+    let resolvedSchedule: ScheduleTaskEntity | null = preloadedSchedule ?? null;
     try {
       this.lastExecutionTime = new Date();
       this.totalExecutions++;
@@ -719,12 +903,13 @@ export class BackgroundScheduler extends BaseDb {
 
       try {
         // Execute the task
-        const schedule = await this.scheduleTaskModel.getScheduleById(
-          queueItem.scheduleId
-        );
+        const schedule =
+          resolvedSchedule ??
+          (await this.scheduleTaskModel.getScheduleById(queueItem.scheduleId));
         if (!schedule) {
           throw new Error("Schedule not found");
         }
+        resolvedSchedule = schedule;
 
         await this.taskExecutorService.executeScheduledTask(
           schedule,
@@ -796,6 +981,31 @@ export class BackgroundScheduler extends BaseDb {
           errorMessage
         );
 
+        if (!resolvedSchedule) {
+          resolvedSchedule = await this.scheduleTaskModel
+            .getScheduleById(queueItem.scheduleId)
+            .catch(() => null);
+        }
+        if (
+          resolvedSchedule?.trigger_type === TriggerType.CRON &&
+          resolvedSchedule.cron_expression
+        ) {
+          try {
+            const nextRunTime = this.scheduleManager.calculateNextRunTime(
+              resolvedSchedule.cron_expression
+            );
+            await this.scheduleTaskModel.updateNextRunTime(
+              queueItem.scheduleId,
+              nextRunTime
+            );
+          } catch (nextRunError: unknown) {
+            log.error(
+              `Failed to advance next run time after failure for schedule ${queueItem.scheduleId}:`,
+              nextRunError
+            );
+          }
+        }
+
         this.failedExecutions++;
         log.error(
           `Schedule ${queueItem.scheduleId} execution failed:`,
@@ -809,6 +1019,7 @@ export class BackgroundScheduler extends BaseDb {
           );
 
           setTimeout(() => {
+            if (!this.isRunning) return;
             this.addToExecutionQueue({
               ...queueItem,
               retryCount: queueItem.retryCount + 1,
@@ -866,6 +1077,13 @@ export class BackgroundScheduler extends BaseDb {
    * Add item to execution queue
    */
   private addToExecutionQueue(queueItem: ExecutionQueueItem): void {
+    if (
+      this.runningExecutions.has(queueItem.scheduleId) ||
+      this.executionGuard.isScheduleRunning(queueItem.scheduleId)
+    ) {
+      return;
+    }
+
     // Check if already in queue
     const existingIndex = this.executionQueue.findIndex(
       (item) => item.scheduleId === queueItem.scheduleId

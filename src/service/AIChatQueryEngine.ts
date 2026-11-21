@@ -3191,6 +3191,8 @@ export class AIChatQueryEngine {
       input.assistantMessageId ??
       `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    const turnId = `turn-${savedUser.messageId}`;
+
     return await this.runPersistedTurn({
       historySelectionAcceptedIds,
       historySelectionChangedIds,
@@ -3206,6 +3208,7 @@ export class AIChatQueryEngine {
       scheduledContext: undefined,
       sourceUserMessageId: savedUser.messageId,
       intentDecisionId: queuedIntentDecisionId,
+      turnId,
     });
   }
 
