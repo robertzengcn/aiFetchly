@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { browserProxySelectionSchema } from "@/schemas/aiTools/browserProxy";
 import { lazySchema } from "@/utils/lazySchema";
 import { MANAGED_BROWSER_CACHE_DEFAULTS } from "@/config/managedBrowser";
 
@@ -35,6 +36,10 @@ export const managedBrowserStartInputSchema = lazySchema(() =>
     purpose: z.string().min(1).max(300),
     requestedStartUrl: z.string().url().max(2048).optional(),
     conversationId: z.string().min(1).max(96).optional(),
+    // R10/P-FR-01/09: the RENDERER can choose the session's proxy route —
+    // ids only (never host/port/credentials), the SAME wire shape the
+    // model tool accepts.
+    proxy: browserProxySelectionSchema().optional(),
   })
 );
 

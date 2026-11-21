@@ -591,7 +591,33 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
   registerValidatedHandler(
     MANAGED_BROWSER_START,
     managedBrowserStartInputSchema,
-    async (input) => browserModule.start(input, { aiEntryPoint: true })
+    async (input) => {
+      // R10/P-FR-01/09: the renderer's proxy choice maps through the SAME
+      // discriminated selection the model tool uses (ids only — never
+      // host/port/credentials); an account-linked default still requires
+      // its confirmation inside start.
+      const { proxy, ...rest } = input;
+      const mappedProxy =
+        proxy === undefined
+          ? undefined
+          : proxy === "direct"
+            ? { kind: "direct" as const }
+            : "proxy_id" in proxy
+              ? { kind: "proxy_id" as const, proxyId: proxy.proxy_id }
+              : {
+                  kind: "auto" as const,
+                  ...(proxy.country_code
+                    ? { countryCode: proxy.country_code }
+                    : {}),
+                };
+      return browserModule.start(
+        {
+          ...rest,
+          ...(mappedProxy !== undefined ? { proxy: mappedProxy } : {}),
+        },
+        { aiEntryPoint: true }
+      );
+    }
   );
 
   registerValidatedHandler(

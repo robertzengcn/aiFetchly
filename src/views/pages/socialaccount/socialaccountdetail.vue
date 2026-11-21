@@ -207,6 +207,22 @@
           >
             {{ t('socialaccount.upload_cookies_button') }}
           </v-btn>
+          <!-- R10/P-FR-01: the session's proxy route — ids only. -->
+          <v-select
+            v-if="socialaccountId > 0"
+            v-model="sessionProxyChoice"
+            :items="[
+              { title: 'Account default', value: 'default' },
+              { title: 'Direct (no proxy)', value: 'direct' },
+              ...savedProxies.map((p) => ({ title: p.label, value: String(p.id) })),
+            ]"
+            item-title="title"
+            item-value="value"
+            density="compact"
+            hide-details
+            style="max-width: 220px"
+            data-testid="session-proxy-choice"
+          ></v-select>
           <v-btn
             v-if="socialaccountId > 0"
             color="secondary"
@@ -310,6 +326,24 @@ const email = ref("");
 // const proxy = ref(0);
 const socialaccountId = ref(0);
 const openingManagedBrowser = ref(false);
+// R10/P-FR-01: the user's proxy choice for THIS session — "default" uses
+// the account's linked proxy, "direct" forces no proxy, an explicit id
+// selects a saved proxy. Ids only — never host/port/credentials.
+const sessionProxyChoice = ref<string>("default");
+const savedProxies = ref<Array<{ id: number; label: string }>>([]);
+
+async function loadSavedProxies(): Promise<void> {
+  try {
+    const { getProxyList } = await import('@/views/api/proxy');
+    const result = await getProxyList({ page: 1, limit: 50 } as never);
+    savedProxies.value = (result.data ?? []).map((row) => ({
+      id: row.id,
+      label: `${row.host}:${row.port}`,
+    }));
+  } catch {
+    savedProxies.value = [];
+  }
+}
 
 /** TODO-MSB-003: Tool Account entry point — start the managed browser for
  * THIS account from its detail page; the AI chat session card takes over. */
@@ -318,9 +352,16 @@ async function openManagedBrowser(): Promise<void> {
   openingManagedBrowser.value = true;
   try {
     const { startManagedBrowser } = await import('@/views/api/managedBrowser');
+    const proxyArg =
+      sessionProxyChoice.value === "default"
+        ? undefined
+        : sessionProxyChoice.value === "direct"
+          ? ("direct" as const)
+          : { proxy_id: parseInt(sessionProxyChoice.value, 10) };
     await startManagedBrowser({
       accountId: socialaccountId.value,
       purpose: 'account-page',
+      ...(proxyArg !== undefined ? { proxy: proxyArg } : {}),
     });
     await router.push('/aiworkspace');
   } catch (error) {
@@ -486,6 +527,8 @@ const initialize = async () => {
   if ($route.params.id) {
     socialaccountId.value = parseInt($route.params.id.toString());
   }
+  // R10/P-FR-01: the session-proxy choices load with the page.
+  void loadSavedProxies();
 
   if (socialaccountId.value > 0) {
     //edit

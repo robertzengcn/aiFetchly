@@ -76,6 +76,11 @@ export async function startManagedBrowser(input: {
   purpose: string;
   requestedStartUrl?: string;
   conversationId?: string;
+  /** R10/P-FR-01: proxy_id | auto(+country) | "direct" — ids only. */
+  proxy?:
+    | { proxy_id: number }
+    | { auto: true; country_code?: string }
+    | "direct";
 }): Promise<SafeManagedBrowserStatus> {
   return await windowInvoke(MANAGED_BROWSER_START, input);
 }
