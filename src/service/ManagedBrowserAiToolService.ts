@@ -2060,8 +2060,15 @@ export class ManagedBrowserAiToolService {
           const { getDefaultBrowserTaskModule } = await import(
             "@/modules/BrowserTaskModule"
           );
+          // B01/M-FR-07: every durable write keys the EXECUTION id — the
+          // control id may be adopted and shared across sequential
+          // executions, so a cursor keyed on it would upsert ANOTHER
+          // execution's journal row.
           await getDefaultBrowserTaskModule()
-            .recordCursor({ taskId: awaitedResultRef.taskId ?? "", ...cursor })
+            .recordCursor({
+              taskId: awaitedResultRef.executionId ?? awaitedResultRef.taskId ?? "",
+              ...cursor,
+            })
             .catch(() => undefined);
         },
         // R01/D-FR-24: the OPTIONAL provider verifier — ONE bounded call
@@ -2112,13 +2119,16 @@ export class ManagedBrowserAiToolService {
           const { getDefaultBrowserTaskModule } = await import(
             "@/modules/BrowserTaskModule"
           );
-          if (awaitedResultRef.taskId) {
+          const journalTaskId =
+            awaitedResultRef.executionId ?? awaitedResultRef.taskId;
+          if (journalTaskId) {
             // P0/D-FR-09: a swallowed storage failure would let the
             // runner dispatch a mutation WITHOUT its durable intent —
             // the rejection MUST propagate and the runner must fail
-            // before dispatch.
+            // before dispatch. B01: the intent lands on THIS execution's
+            // admitted row, never the shared control id.
             await getDefaultBrowserTaskModule().recordActionIntent({
-              taskId: awaitedResultRef.taskId,
+              taskId: journalTaskId,
               actionType,
             });
           }
@@ -2127,9 +2137,11 @@ export class ManagedBrowserAiToolService {
           const { getDefaultBrowserTaskModule } = await import(
             "@/modules/BrowserTaskModule"
           );
-          if (awaitedResultRef.taskId) {
+          const journalTaskId =
+            awaitedResultRef.executionId ?? awaitedResultRef.taskId;
+          if (journalTaskId) {
             await getDefaultBrowserTaskModule()
-              .recordActionOutcome({ taskId: awaitedResultRef.taskId, outcome })
+              .recordActionOutcome({ taskId: journalTaskId, outcome })
               .catch(() => undefined);
           }
         },
@@ -2189,10 +2201,12 @@ export class ManagedBrowserAiToolService {
         },
       }
     );
-    // R04/M-FR-07: the journal keys the EXECUTION id; the CONTROL record
-    // (runner.taskId — possibly the adopted lane id) is reopened for a
-    // new execution so a sequential retry never fails its own gate as
-    // task_completed.
+    // R04/M-FR-07 + B01: the journal keys the EXECUTION id. The CONTROL
+    // record is only reopened when a PRIOR execution on the same id left
+    // it runner-terminalized (completed/failed/partial) — a user-canceled
+    // (cancelled) or startup-swept (interrupted) record is NEVER
+    // resurrected; with the runner no longer terminalizing adopted lane
+    // records this is a defensive no-op in the normal sequential flow.
     awaitedResultRef.taskId = runner.taskId;
     awaitedResultRef.executionId = runner.executionId;
     getDefaultAgentTaskControlService().reopenForExecution(runner.taskId);
@@ -2232,11 +2246,9 @@ export class ManagedBrowserAiToolService {
           "@/modules/BrowserTaskModule"
         );
         await getDefaultBrowserTaskModule().recordTerminal({
-          // R04: the terminal journal lands on the EXECUTION id — the
+          // R04/B01: the terminal journal lands on the EXECUTION id — the
           // control id may be shared across sequential executions.
-          taskId: result.taskId
-            ? awaitedResultRef.executionId ?? result.taskId
-            : result.taskId,
+          taskId: awaitedResultRef.executionId ?? result.taskId ?? "",
           // W02/D-FR-09: partial and interrupted persist AS those phases —
           // handoff expiry/cancel keep interrupted (X4), a verification
           // miss or exhausted budget stays partial, never rewritten failed.

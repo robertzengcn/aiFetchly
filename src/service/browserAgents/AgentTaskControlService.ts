@@ -211,6 +211,13 @@ export class AgentTaskControlService {
     if (!record || !TERMINAL_STATES.has(record.state)) {
       return false;
     }
+    // B01: a USER stop and a startup interrupted sweep are irreversible —
+    // a later execution on the same control id must never resurrect
+    // them. Only a runner-completed terminal state (completed/failed/
+    // partial) may reopen for a sequential execution.
+    if (record.state === "cancelled" || record.state === "interrupted") {
+      return false;
+    }
     record.state = "running";
     record.reason = null;
     record.runningSinceEpochMs = this.now();

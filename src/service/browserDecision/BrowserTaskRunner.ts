@@ -304,6 +304,16 @@ export class BrowserTaskRunner {
   private readonly deps: RunnerDeps;
   private readonly budget: MutableTaskBudget;
   private readonly _taskId: string;
+  /**
+   * B01: TRUE when the control id was minted by THIS runner (direct-chat
+   * execution) — the runner owns the record and terminalizes it. FALSE
+   * when the id was ADOPTED from the caller (batch lane / child agent
+   * task): the OUTER owner (batch collector) terminalizes the lane, so
+   * the runner never flips the shared record to a terminal state between
+   * sequential executions of the same lane, and never resurrects a
+   * canceled lane through the reopen path.
+   */
+  private readonly ownsControlRecord: boolean;
 
   /** R03: the runner's task id — the single identity for all persistence. */
   public get taskId(): string {
@@ -393,12 +403,14 @@ export class BrowserTaskRunner {
     this.budget = buildTaskBudget(deps.route, input.budget);
     // R04/M-FR-07: adopt the caller's control id when one was provided
     // (bounded opaque id); otherwise mint the nested id as before.
-    this._taskId =
+    this.ownsControlRecord = !(
       typeof input.taskId === "string" &&
       input.taskId.length >= 1 &&
       input.taskId.length <= 64
-        ? input.taskId
-        : `task_${randomUUID().slice(0, 12)}`;
+    );
+    this._taskId = this.ownsControlRecord
+      ? `task_${randomUUID().slice(0, 12)}`
+      : (input.taskId as string);
   }
 
   public async run(): Promise<BrowserTaskResult> {
@@ -1902,7 +1914,9 @@ export class BrowserTaskRunner {
         observation
       );
     } finally {
-      if (control.getState(this.taskId) === "running") {
+      // B01: the completed safety net applies only to a record this
+      // runner OWNS — an adopted lane record is the outer owner's.
+      if (this.ownsControlRecord && control.getState(this.taskId) === "running") {
         control.setState(this.taskId, "completed");
       }
     }
@@ -2495,7 +2509,13 @@ export class BrowserTaskRunner {
     // W02/D-FR-09/C-FR-11/12: the control record carries the REAL terminal
     // status — partial and interrupted are their own states (the returned
     // tool result and the record must agree), never rewritten failed.
-    control.setState(this.taskId, status, reason);
+    // B01: only a record this runner OWNS (minted id) is terminalized
+    // here. An ADOPTED record (batch lane / child agent task) belongs to
+    // the OUTER owner — terminalizing it would close the enclosing lane
+    // between sequential executions and force the reopen path.
+    if (this.ownsControlRecord) {
+      control.setState(this.taskId, status, reason);
+    }
     // T19/F07: the TERMINAL cursor carries the real counters and the
     // frozen active time. Best-effort: persistence never blocks the
     // result.

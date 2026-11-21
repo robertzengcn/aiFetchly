@@ -1462,9 +1462,11 @@ describe("BrowserTaskRunner R04 control-id adoption", () => {
     // The runner no longer mints a nested id.
     expect(runner.taskId).toBe("batch_r04:0");
     await runner.run();
-    // The ADOPTED record carries the runner's terminal state — pause/
-    // stop on the outer id gate this runner directly.
-    expect(control.getState("batch_r04:0")).toBe("completed");
+    // B01: the ADOPTED record stays OPEN after the runner ends — the
+    // OUTER owner (batch collector) terminalizes the lane, so nested
+    // termination never closes it between sequential executions. Pause/
+    // stop on the outer id still gates this runner directly.
+    expect(control.getState("batch_r04:0")).toBe("running");
   });
 
   it("an invalid adoptable id falls back to the generated nested id (R04)", async () => {
@@ -1576,8 +1578,8 @@ describe("BrowserTaskRunner R04 sequential executions on one control id", () => 
     uncertainty: { source: "unavailable", confidence: null },
   });
 
-  it("a SECOND execution on the same control id fails the gate as task_completed WITHOUT a reopen (R04)", async () => {
-    const deps = makeRunnerDeps([doneEntryLocal()]);
+  it("the runner does NOT terminalize an ADOPTED control record — a second execution on the same lane id completes (B01)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal(), doneEntryLocal()]);
     const first = new BrowserTaskRunner(
       {
         sessionId: "mb_r04seq1",
@@ -1590,22 +1592,28 @@ describe("BrowserTaskRunner R04 sequential executions on one control id", () => 
     );
     const firstResult = await first.run();
     expect(firstResult.status).toBe("completed");
-    // A second execution with NO reopen hits the terminal gate.
+    // B01: the adopted lane record stays OPEN between sequential
+    // executions — the OUTER owner (batch collector) terminalizes it,
+    // never the nested runner.
+    expect(deps.control.getState("lane_r04:0")).toBe("running");
+    // A second execution on the same lane id proceeds without a reopen —
+    // the gate never sees a task_completed terminal.
     const second = new BrowserTaskRunner(
       {
         sessionId: "mb_r04seq2",
         conversationId: "conv-1",
         goal: "g again",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
         taskId: "lane_r04:0",
       },
       deps
     );
     const secondResult = await second.run();
-    expect(secondResult.status).toBe("failed");
-    expect(secondResult.reason).toContain("task_completed");
+    expect(secondResult.status).toBe("completed");
+    expect(deps.control.getState("lane_r04:0")).toBe("running");
   });
 
-  it("reopenForExecution between executions lets the SECOND one complete (R04)", async () => {
+  it("an OUTER owner terminalizes the lane; reopenForExecution cannot resurrect a canceled lane (B01)", async () => {
     const deps = makeRunnerDeps([doneEntryLocal(), doneEntryLocal()]);
     const control = deps.control;
     const first = new BrowserTaskRunner(
@@ -1619,8 +1627,14 @@ describe("BrowserTaskRunner R04 sequential executions on one control id", () => 
       deps
     );
     expect((await first.run()).status).toBe("completed");
-    // The admission path reopens the shared lane record for the next
-    // execution (exactly what executeTask does).
+    // The runner left the adopted record open (B01) — a reopen on a
+    // non-terminal record is refused.
+    expect(control.reopenForExecution("lane_r04b:0")).toBe(false);
+    // The OUTER owner terminalizes the lane the way the batch collector
+    // does after the child result lands.
+    control.setState("lane_r04b:0", "completed", "outer_owner_terminal");
+    // executeTask reopens a runner-completed record for the sequential
+    // execution (R04) — completed reopens; cancelled/interrupted do not.
     expect(control.reopenForExecution("lane_r04b:0")).toBe(true);
     const second = new BrowserTaskRunner(
       {
@@ -1638,6 +1652,11 @@ describe("BrowserTaskRunner R04 sequential executions on one control id", () => 
     // The execution id is ALWAYS unique — the journal never collides.
     expect(second.executionId).not.toBe(first.executionId);
     expect(second.executionId).toMatch(/^exec_/);
+    // B01: a user stop between executions is NEVER resurrected by the
+    // admission-path reopen.
+    control.cancel("lane_r04b:0", "user_stop");
+    expect(control.reopenForExecution("lane_r04b:0")).toBe(false);
+    expect(control.getState("lane_r04b:0")).toBe("cancelled");
   });
 
   it("reopenForExecution refuses a non-terminal record (R04)", async () => {

@@ -69,10 +69,16 @@ export class BrowserTaskModule extends BaseModule {
     readonly verifierCalls?: number;
   }): Promise<void> {
     const model = await this.getModel();
-    // F07: MERGE with the existing cursor — counters a caller omits keep
-    // their persisted values instead of being reset to zero.
+    // F07/B01: MERGE with the existing cursor — counters a caller omits
+    // keep their persisted values instead of being reset to zero. A
+    // missing row means admission never landed for THIS id; a cursor
+    // cannot be inserted without the admission's required identity
+    // columns, so the caller's best-effort catch sees a clear failure.
     const existing = await model.findByTaskId(input.taskId);
-    const entity = existing ?? new BrowserTaskEntity();
+    if (!existing) {
+      throw new Error("task_cursor_missing_for_update");
+    }
+    const entity = existing;
     entity.taskId = input.taskId;
     entity.phase = input.phase;
     if (input.leafSteps !== undefined) {
@@ -106,17 +112,25 @@ export class BrowserTaskModule extends BaseModule {
    * Mutation journal (design §6.2): write the intent BEFORE dispatch; write
    * the outcome AFTER. A pending intent with no outcome is interrupted with
    * unknown effect on recovery — never replayed.
+   *
+   * B01: the journal merges into the row created by `recordAdmission` —
+   * the entity requires sessionId/conversationId/providerMode, so a
+   * blind insert of an intent-only row is impossible. A missing row
+   * means admission never landed for THIS execution id; the caller
+   * (intent) MUST fail the mutation rather than dispatch unjournaled.
    */
   public async recordActionIntent(input: {
     readonly taskId: string;
     readonly actionType: string;
   }): Promise<void> {
     const model = await this.getModel();
-    const entity = new BrowserTaskEntity();
-    entity.taskId = input.taskId;
-    entity.pendingActionIntent = input.actionType.slice(0, 16);
-    entity.pendingActionOutcome = null;
-    await model.upsertByTaskId(entity);
+    const existing = await model.findByTaskId(input.taskId);
+    if (!existing) {
+      throw new Error("task_cursor_missing_for_intent");
+    }
+    existing.pendingActionIntent = input.actionType.slice(0, 16);
+    existing.pendingActionOutcome = null;
+    await model.upsertByTaskId(existing);
   }
 
   public async recordActionOutcome(input: {
@@ -124,10 +138,14 @@ export class BrowserTaskModule extends BaseModule {
     readonly outcome: "confirmed" | "no_effect" | "unknown";
   }): Promise<void> {
     const model = await this.getModel();
-    const entity = new BrowserTaskEntity();
-    entity.taskId = input.taskId;
-    entity.pendingActionOutcome = input.outcome;
-    await model.upsertByTaskId(entity);
+    const existing = await model.findByTaskId(input.taskId);
+    if (!existing) {
+      // Best-effort at the call sites; a missing row keeps the pending
+      // intent unresolved → interrupted-with-unknown on recovery (safe).
+      throw new Error("task_cursor_missing_for_outcome");
+    }
+    existing.pendingActionOutcome = input.outcome;
+    await model.upsertByTaskId(existing);
   }
 
   /** Terminal phase. */

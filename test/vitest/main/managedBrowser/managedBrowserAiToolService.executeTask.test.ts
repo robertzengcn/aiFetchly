@@ -124,29 +124,44 @@ vi.mock("@/api/aiChatApi", () => ({
 vi.mock("@/modules/BrowserTaskModule", () => {
   const calls = {
     admissions: 0,
+    admissionTaskIds: [] as string[],
     intents: [] as string[],
+    intentTaskIds: [] as string[],
     outcomes: [] as string[],
+    outcomeTaskIds: [] as string[],
+    cursorTaskIds: [] as string[],
     terminals: [] as string[],
+    terminalTaskIds: [] as string[],
   };
   return {
     BrowserTaskModule: class {
-      public async recordAdmission(): Promise<void> {
-        console.log("[p0-1] MOCK recordAdmission");
+      public async recordAdmission(input: { taskId: string }): Promise<void> {
         calls.admissions++;
+        calls.admissionTaskIds.push(input.taskId);
       }
-      public async recordCursor(): Promise<void> {}
+      public async recordCursor(input: { taskId: string }): Promise<void> {
+        calls.cursorTaskIds.push(input.taskId);
+      }
       public async recordActionIntent(input: {
+        taskId: string;
         actionType: string;
       }): Promise<void> {
         calls.intents.push(input.actionType);
+        calls.intentTaskIds.push(input.taskId);
       }
       public async recordActionOutcome(input: {
+        taskId: string;
         outcome: string;
       }): Promise<void> {
         calls.outcomes.push(input.outcome);
+        calls.outcomeTaskIds.push(input.taskId);
       }
-      public async recordTerminal(input: { phase: string }): Promise<void> {
+      public async recordTerminal(input: {
+        taskId: string;
+        phase: string;
+      }): Promise<void> {
         calls.terminals.push(input.phase);
+        calls.terminalTaskIds.push(input.taskId);
       }
       public async markUnfinishedInterrupted(): Promise<number> {
         return 0;
@@ -156,23 +171,33 @@ vi.mock("@/modules/BrowserTaskModule", () => {
       }
     },
     getDefaultBrowserTaskModule: () => new (class {
-      public async recordAdmission(): Promise<void> {
+      public async recordAdmission(input: { taskId: string }): Promise<void> {
         calls.admissions++;
+        calls.admissionTaskIds.push(input.taskId);
       }
-      public async recordCursor(): Promise<void> {}
+      public async recordCursor(input: { taskId: string }): Promise<void> {
+        calls.cursorTaskIds.push(input.taskId);
+      }
       public async recordActionIntent(input: {
+        taskId: string;
         actionType: string;
       }): Promise<void> {
         calls.intents.push(input.actionType);
+        calls.intentTaskIds.push(input.taskId);
       }
       public async recordActionOutcome(input: {
+        taskId: string;
         outcome: string;
       }): Promise<void> {
         calls.outcomes.push(input.outcome);
+        calls.outcomeTaskIds.push(input.taskId);
       }
-      public async recordTerminal(input: { phase: string }): Promise<void> {
-        console.log("[p0-1] MOCK getDefault recordTerminal", input.phase);
+      public async recordTerminal(input: {
+        taskId: string;
+        phase: string;
+      }): Promise<void> {
         calls.terminals.push(input.phase);
+        calls.terminalTaskIds.push(input.taskId);
       }
       public async markUnfinishedInterrupted(): Promise<number> {
         return 0;
@@ -297,11 +322,23 @@ function makeService(browserModule: ReturnType<typeof makeModule>) {
 }
 
 describe("executeTask integration (P0-1 acceptance)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     scriptedDecisions.length = 0;
     EXECUTE_TASK_DECISION_ROUTE = null;
     dispatchedPrograms.length = 0;
     observeUrl = "https://www.youtube.com/watch?v=abc";
+    // B01: reset the shared journal capture between tests.
+    const browserTaskModule = await import("@/modules/BrowserTaskModule");
+    const calls = (
+      browserTaskModule as unknown as {
+        __calls: Record<string, unknown[] | number>;
+      }
+    ).__calls;
+    for (const key of Object.keys(calls)) {
+      if (Array.isArray(calls[key])) {
+        (calls[key] as unknown[]).length = 0;
+      }
+    }
   });
 
   it("executes one CLICK through the unguarded core and completes verified", async () => {
@@ -333,6 +370,69 @@ describe("executeTask integration (P0-1 acceptance)", () => {
     // NOTE: journal capture is covered by the runner + module suites
     // (the BrowserTaskModule mock scope is import-site dependent under
     // vitest — the recordTerminal site reaches the real module).
+  });
+
+  // B01/M-FR-07: every durable journal write keys the unique EXECUTION
+  // id — even when the runner ADOPTS the caller's control id (batch
+  // lane). The adopted control record is terminalized by the OUTER
+  // owner only, so it stays open after the execution ends.
+  it("journals admission/intent/outcome/terminal under the execution id, never the adopted control id", async () => {
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const browserTaskModule = await import("@/modules/BrowserTaskModule");
+    const calls = (
+      browserTaskModule as unknown as {
+        __calls: {
+          admissionTaskIds: string[];
+          intentTaskIds: string[];
+          outcomeTaskIds: string[];
+          cursorTaskIds: string[];
+          terminalTaskIds: string[];
+          intents: string[];
+        };
+      }
+    ).__calls;
+    const module = makeModule();
+    const service = makeService(module);
+    const result = await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "open the results page",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      { ...CTX, ownerAgentId: "lane_b01:0" }
+    );
+    expect(result.status).toBe("completed");
+    // ONE admission under the unique execution id.
+    expect(calls.admissionTaskIds).toHaveLength(1);
+    const executionId = calls.admissionTaskIds[0]!;
+    expect(executionId).toMatch(/^exec_/);
+    expect(executionId).not.toBe("lane_b01:0");
+    // Intent, outcome and cursor writes ride the SAME execution row —
+    // never the adopted control id.
+    expect(calls.intents.length).toBeGreaterThan(0);
+    for (const id of calls.intentTaskIds) {
+      expect(id).toBe(executionId);
+    }
+    for (const id of calls.outcomeTaskIds) {
+      expect(id).toBe(executionId);
+    }
+    for (const id of calls.cursorTaskIds) {
+      expect(id).toBe(executionId);
+    }
+    // The terminal write keys the execution id too. NOTE: under vitest
+    // the recordTerminal site in this service can resolve to the REAL
+    // module for this import graph (the documented P0-1 mock-scope quirk
+    // above) — when the mock IS the resolved module, assert the key.
+    if (calls.terminalTaskIds.length > 0) {
+      expect(calls.terminalTaskIds).toEqual([executionId]);
+    }
+    // The adopted control record stays OPEN — the outer owner (batch
+    // collector) terminalizes the lane, never the nested runner.
+    expect(getDefaultAgentTaskControlService().getState("lane_b01:0")).toBe(
+      "running"
+    );
   });
 });
 
