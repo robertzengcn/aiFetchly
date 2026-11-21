@@ -114,3 +114,4 @@ One commit per logical unit, all with tests where the path is unit-testable.
 - R10: renderer start-proxy selection — schema + IPC + card work.
 - R12: durable restart reconciliation (interrupted partials, lease sweep) — persistence redesign.
 - E01–E05: the six Electron scenarios, held-out qualification, Chromium qualification, hosted gateway confirmation, packaged evidence — operator/CI per AGENTS.md.
+- CI run `44842628562` (fix-pass head `6d6e9b3ec`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright).
