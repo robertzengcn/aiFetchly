@@ -16,6 +16,7 @@ import { managedBrowserStartInputSchema } from "@/schemas/ipc/managedBrowser";
 
 import {
   ManagedBrowserModule,
+  publicObservationOf,
   type ManagedBrowserModuleDeps,
 } from "@/modules/ManagedBrowserModule";
 import type { ManagedBrowserCacheCoordinator } from "@/modules/ManagedBrowserCacheModule";
@@ -2174,5 +2175,103 @@ describe("proposeExtraDomainsFromSession (P1/S-FR-04)", () => {
     // never appear because only visited origins are recorded.
     expect(domains).not.toContain("evil.example");
     void h;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04/D-FR-12: the trusted `policyUrl` is MAIN-PROCESS-ONLY route data —
+// every observation leaving the module (direct observe, nested action
+// results) is the PUBLIC projection and never carries it. Synthetic
+// query token only.
+// ---------------------------------------------------------------------------
+describe("observation trusted-boundary projection (B04)", () => {
+  const POLICY_URL =
+    "https://www.youtube.com/watch?v=SYNTHETIC_QUERY_TOKEN&list=x";
+  const FAKE_SID = "mb_b04fake00001";
+
+  function policyObservationScript(): Record<string, ReplyFn> {
+    return {
+      OBSERVE: (env) =>
+        ({
+          ...replyBase((env as unknown as { sessionId: string }).sessionId ?? FAKE_SID),
+          type: "OBSERVATION_RESULT",
+          observation: {
+            sessionId: FAKE_SID,
+            pageRevision: 1,
+            url: "https://www.youtube.com/",
+            policyUrl: POLICY_URL,
+            origin: "https://www.youtube.com",
+            title: "YouTube",
+            state: "ready",
+            elements: [],
+            visibleText: "",
+            notices: [],
+            truncated: false,
+          },
+        } as unknown as ManagedBrowserOutboundMessage),
+      RUN_ACTIONS: (env) =>
+        ({
+          ...replyBase((env as unknown as { sessionId: string }).sessionId ?? FAKE_SID),
+          type: "ACTION_RESULT",
+          effect: "known",
+          pageRevision: 2,
+          results: [],
+          observation: {
+            sessionId: FAKE_SID,
+            pageRevision: 2,
+            url: "https://www.youtube.com/results",
+            policyUrl: POLICY_URL,
+            origin: "https://www.youtube.com",
+            title: "Results",
+            state: "ready",
+            elements: [],
+            visibleText: "",
+            notices: [],
+            truncated: false,
+          },
+        } as unknown as ManagedBrowserOutboundMessage),
+    };
+  }
+
+  it("observe() returns the public projection — no policyUrl on the model/renderer field", async () => {
+    const h = makeHarness({ startScript: policyObservationScript() });
+    await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    const sid = (h.clients[0] as unknown as { deps: { sessionId: string } }).deps.sessionId;
+    const observation = await h.module.observe(sid);
+    expect("policyUrl" in observation).toBe(false);
+    // The display URL field stays the sanitized one.
+    expect(observation.url).toBe("https://www.youtube.com/");
+    // The cached last observation is the SAME public projection.
+    expect("policyUrl" in (h.module.getLastObservation(sid) ?? {})).toBe(false);
+  });
+
+  it("runActions() returns a nested final observation without the trusted URL", async () => {
+    const h = makeHarness({ startScript: policyObservationScript() });
+    await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    const sid = (h.clients[0] as unknown as { deps: { sessionId: string } }).deps.sessionId;
+    const message = await h.module.runActions(sid, {
+      intent: "browser_run_actions",
+      actions: [{ type: "click", ref: "e_1" }],
+    } as never);
+    if (message.type !== "ACTION_RESULT") {
+      throw new Error("expected ACTION_RESULT");
+    }
+    expect(message.observation).not.toBeNull();
+    expect("policyUrl" in (message.observation as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it("publicObservationOf is an identity when no trusted URL is present", () => {
+    const observation: { url: string; title: string; policyUrl?: string } = {
+      url: "https://x.test/",
+      title: "t",
+    };
+    const projected = publicObservationOf(observation);
+    expect(projected).toBe(observation);
   });
 });

@@ -209,6 +209,19 @@ export function truncateText(
   return { text: text.slice(0, max), truncated: true };
 }
 
+/**
+ * B04/A-FR-08/15: scrubbing for page/runtime-authored FREE-FORM text on
+ * OUTBOUND paths that are not observations — worker error messages and
+ * field-history stamps. Page content (a URL echoed by a navigation error,
+ * a planted field name) is untrusted input: the trusted pass (exact
+ * filled credential) applies FIRST, then the shape heuristics, and the
+ * length cap is re-enforced LAST (redaction replacement can expand the
+ * text past the cap).
+ */
+export function sanitizeWorkerText(text: string, maxChars: number): string {
+  return truncateText(redactSecretsInText(redactTrustedSecrets(text)), maxChars).text;
+}
+
 /** Sensitive input types whose values must never be echoed. */
 const SENSITIVE_INPUT_TYPES: ReadonlySet<string> = new Set([
   "password",

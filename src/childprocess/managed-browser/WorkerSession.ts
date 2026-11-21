@@ -59,6 +59,7 @@ import {
   redactSecrets,
   registerTrustedSecret,
   sanitizeScriptResult,
+  sanitizeWorkerText,
   toSafeErrorMessage,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -905,7 +906,13 @@ export class WorkerSession {
         type: "LOGIN_FORM_RESULT",
         outcome: result.outcome,
         reasonCode: result.reasonCode ?? null,
-        filledFieldStamps: [...result.filledFieldStamps],
+        // B04/A-FR-15: field-history stamps carry PAGE-AUTHORED field
+        // names/ids — the same outbound scrubbing invariant (a planted
+        // name never survives as-is); the 128-char wire cap is
+        // re-enforced after redaction.
+        filledFieldStamps: result.filledFieldStamps
+          .map((stamp) => sanitizeWorkerText(stamp, 128))
+          .slice(0, 16),
         // R03: recipe metadata (form action, field fingerprints) is
         // page-authored and rides the standard deep redaction before
         // emission — the same invariant as every other outbound field.

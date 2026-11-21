@@ -11,6 +11,7 @@ import {
   MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import { WorkerSession } from "@/childprocess/managed-browser/WorkerSession";
+import { sanitizeWorkerText } from "@/childprocess/managed-browser/ResultSanitizer";
 
 /**
  * Managed-browser worker entry (technical design §4/§8).
@@ -93,7 +94,11 @@ function sendWorkerError(
       ...baseMessage(requestId),
       type: "WORKER_ERROR",
       code,
-      message: message.slice(0, 300),
+      // B04/A-FR-08: error text is runtime/page-authored free-form — the
+      // same scrubbing invariant as every other outbound field (a
+      // navigation error can echo a URL that embeds a filled credential;
+      // redaction applies BEFORE the length cap).
+      message: sanitizeWorkerText(message, 300),
     })
   );
 }

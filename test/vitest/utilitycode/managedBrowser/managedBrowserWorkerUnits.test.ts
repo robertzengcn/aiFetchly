@@ -18,6 +18,11 @@ import {
   type ExecutorPageLike,
 } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { MANAGED_BROWSER_ACTION_LIMITS } from "@/config/managedBrowser";
+import {
+  clearTrustedSecretsForTest,
+  registerTrustedSecret,
+  sanitizeWorkerText,
+} from "@/childprocess/managed-browser/ResultSanitizer";
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -1121,5 +1126,52 @@ describe("BrowserActionExecutor select token resolution (P1)", () => {
     );
     expect(outcome.results[0].success).toBe(true);
     expect(handle.lastSelectedValues).toEqual(["fr"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04/D-FR-12/A-FR-08/15: outbound free-form text outside observations —
+// worker error messages and field-history stamps — obeys the same
+// scrubbing invariant (trusted pass first, cap re-enforced last). All
+// data below is SYNTHETIC.
+// ---------------------------------------------------------------------------
+describe("B04 worker outbound text scrubbing", () => {
+  it("redacts the exact filled credential from a worker error message before the cap", () => {
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("SYNTHETIC-FILLED-VALUE-0001");
+    const message = sanitizeWorkerText(
+      "navigation failed: net::ERR at https://example.test/next?q=SYNTHETIC-FILLED-VALUE-0001 and more text " +
+        "x".repeat(400),
+      300
+    );
+    expect(message.includes("SYNTHETIC-FILLED-VALUE-0001")).toBe(false);
+    expect(message.includes("[redacted]")).toBe(true);
+    // The cap is re-enforced AFTER redaction (replacement can expand).
+    expect(message.length).toBeLessThanOrEqual(300);
+    clearTrustedSecretsForTest();
+  });
+
+  it("redacts secret-shaped tokens and key=value pairs in worker error text", () => {
+    clearTrustedSecretsForTest();
+    const message = sanitizeWorkerText(
+      "selector error near token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12 marker",
+      300
+    );
+    expect(message.includes("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12")).toBe(false);
+    expect(message).toContain("token=[redacted]");
+    clearTrustedSecretsForTest();
+  });
+
+  it("keeps ordinary field names intact and caps field-history stamps", () => {
+    clearTrustedSecretsForTest();
+    const stamp = sanitizeWorkerText("email", 128);
+    expect(stamp).toBe("email");
+    const planted = sanitizeWorkerText(
+      "sk-ABCDEFGHIJKLMNOP1234567890 " + "y".repeat(200),
+      128
+    );
+    expect(planted.includes("sk-ABCDEFGHIJKLMNOP1234567890")).toBe(false);
+    expect(planted.length).toBeLessThanOrEqual(128);
+    clearTrustedSecretsForTest();
   });
 });

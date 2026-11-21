@@ -114,6 +114,25 @@ export class ManagedBrowserError extends Error {
   }
 }
 
+/**
+ * B04/D-FR-12/A-FR-06/08/15: the PUBLIC observation projection. The
+ * worker's `policyUrl` (credential-redacted, query PRESERVED) is trusted
+ * route data for exact reopen and policy decisions — it deliberately
+ * bypasses display-URL sanitization, so it must never become a model or
+ * renderer field. The module consumes it into the session record
+ * (`currentUrl`) and strips it from every observation that leaves this
+ * boundary; the display `url` stays the fully scrubbed field.
+ */
+export function publicObservationOf<T extends { policyUrl?: string }>(
+  observation: T
+): Omit<T, "policyUrl"> {
+  if (observation.policyUrl === undefined) {
+    return observation;
+  }
+  const { policyUrl: _trusted, ...rest } = observation;
+  return rest;
+}
+
 export interface StartManagedBrowserInput {
   readonly accountId?: number;
   readonly purpose: string;
@@ -1443,11 +1462,18 @@ export class ManagedBrowserModule {
 this.recordVisitedDomain(record, record.currentOrigin);
 // R03: POLICY reads the trusted URL (query preserved); the display url
 // stays scrubbed. The proxy-switch reopen (P-FR-02) needs the FULL url.
+// B04/D-FR-12: the trusted URL is consumed HERE, into the main-process
+// session record only — the PUBLIC observation below never carries it.
 record.currentUrl = message.observation.policyUrl || message.observation.url || record.currentUrl;
+    // B04/D-FR-12: explicit public projection — the worker's trusted
+    // `policyUrl` is route data for reopen/policy decisions and must not
+    // become a model or renderer field (it bypasses display URL
+    // sanitization by design; it stays on the internal interface).
+    const publicObservation = publicObservationOf(message.observation);
     // Cache the sanitized observation so risk classification can resolve
     // element refs to their role/name descriptors (GAP-01).
-    record.lastObservation = message.observation;
-    return message.observation;
+    record.lastObservation = publicObservation;
+    return publicObservation;
   }
 
   /**
@@ -1484,17 +1510,26 @@ record.currentUrl = message.observation.policyUrl || message.observation.url || 
     // BEFORE the caller classifies the next action, so ref resolution and
     // risk classification use the live page state. A failed/older
     // snapshot can never replace a newer one.
-    if (message.type === "ACTION_RESULT" && message.observation) {
-      if (message.observation.pageRevision >= record.pageRevision) {
-        record.pageRevision = message.observation.pageRevision;
-        record.lastObservation = message.observation;
-        record.currentOrigin = message.observation.origin || record.currentOrigin;
+    let outbound = message;
+    if (outbound.type === "ACTION_RESULT" && outbound.observation) {
+      if (outbound.observation.pageRevision >= record.pageRevision) {
+        record.pageRevision = outbound.observation.pageRevision;
+        record.currentOrigin = outbound.observation.origin || record.currentOrigin;
 this.recordVisitedDomain(record, record.currentOrigin);
-// R03: POLICY reads the trusted URL (query preserved).
-record.currentUrl = message.observation.policyUrl || message.observation.url || record.currentUrl;
+// R03: POLICY reads the trusted URL (query preserved). B04/D-FR-12: it is
+// consumed into the session record only — never a model/renderer field.
+record.currentUrl = outbound.observation.policyUrl || outbound.observation.url || record.currentUrl;
+        record.lastObservation = publicObservationOf(outbound.observation);
       }
+      // B04/D-FR-12: the returned observation is ALWAYS the public
+      // projection — stale or fresh, the trusted policy URL never leaves
+      // the module boundary.
+      outbound = {
+        ...outbound,
+        observation: publicObservationOf(outbound.observation),
+      } as typeof outbound;
     }
-    return message;
+    return outbound;
   }
 
   /**
