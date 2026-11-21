@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
+import { resetHandoffDialogQueueForTest } from "@/views/components/aiChatV2/handoffDialogQueue";
 import { defineComponent, nextTick, type Component } from "vue";
 import ManagedBrowserSessionCard from "@/views/components/aiChatV2/ManagedBrowserSessionCard.vue";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
@@ -154,6 +155,8 @@ function capturedStatusCallback(): (s: SafeManagedBrowserStatus) => void {
 beforeEach(() => {
   vi.clearAllMocks();
   apiMocks.listActiveSessions.mockImplementation(async () => []);
+  // R06: the app-wide dialog queue resets between tests.
+  resetHandoffDialogQueueForTest();
 });
 
 describe("ManagedBrowserSessionCard", () => {

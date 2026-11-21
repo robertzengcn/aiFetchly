@@ -4253,6 +4253,7 @@ export default {
     controls: {
       take_over: "Tomar el control",
       open_browser: "Abrir navegador",
+      handoff_queue_badge: "{count} tarea(s) te necesitan",
       pause_ai: "Pausar IA",
       verify_login: "Ya he iniciado sesión",
       resume: "Continuar tarea",

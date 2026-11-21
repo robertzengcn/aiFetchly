@@ -4156,6 +4156,7 @@ export default {
     controls: {
       take_over: "引き継ぐ",
       open_browser: "ブラウザを開く",
+      handoff_queue_badge: "{count} 件のタスクが待機中です",
       pause_ai: "AIを一時停止",
       verify_login: "ログインしました",
       resume: "タスクを続行",

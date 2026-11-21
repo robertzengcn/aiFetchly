@@ -113,6 +113,20 @@
         >
           {{ t("managedBrowser.controls.open_browser") || "Open browser" }}
         </v-btn>
+        <!-- R06/C-FR-10: a queued handoff badge — this card's dialog is
+             waiting while another task's dialog is up. -->
+        <v-chip
+          v-if="stateIsHandoffLike && !handoffDialogOpen && waitingCount > 0"
+          size="small"
+          color="warning"
+          variant="tonal"
+          data-testid="mb-handoff-queue-badge"
+        >
+          {{
+            t("managedBrowser.controls.handoff_queue_badge") ||
+            `${waitingCount} task(s) need you`
+          }}
+        </v-chip>
         <v-btn
           size="small"
           variant="tonal"
@@ -249,6 +263,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useHandoffDialogQueue } from "@/views/components/aiChatV2/handoffDialogQueue";
 import ManagedBrowserHandoffDialog from "@/views/components/aiChatV2/ManagedBrowserHandoffDialog.vue";
 import {
   approveBrowserAction,
@@ -290,6 +305,11 @@ const { t } = useI18n();
 const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
+// R06/C-FR-10: ONE handoff dialog across ALL cards — the others badge.
+const { claim: claimHandoffDialog, release: releaseHandoffDialog, waitingCount } =
+  useHandoffDialogQueue();
+/** R06: the session THIS card holds the dialog slot for (precise release). */
+const claimedSessionId = ref<string | null>(null);
 /**
  * Sticky dismiss (FR-HANDOFF-CLOSE): when the user closes the handoff dialog
  * while the session stays in a handoff/login state, the periodic handoff
@@ -416,6 +436,13 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!next || TERMINAL_STATES.has(next.state)) {
     if (next?.sessionId) {
       stoppedSessionIds.add(next.sessionId);
+      // R06/C-FR-10: the terminal status releases the handoff dialog slot
+      // (a dismissed-but-still-claimed session must not block the next
+      // task's dialog).
+      if (claimedSessionId.value !== null) {
+        releaseHandoffDialog(claimedSessionId.value);
+        claimedSessionId.value = null;
+      }
     }
     status.value = null;
     handoffDialogOpen.value = false;
@@ -442,8 +469,18 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!stateIsHandoffLike.value) {
     handoffDismissed.value = false;
     handoffDialogOpen.value = false;
+    // R06: the slot frees for the next waiting session.
+    if (claimedSessionId.value !== null) {
+      releaseHandoffDialog(claimedSessionId.value);
+      claimedSessionId.value = null;
+    }
   } else {
-    handoffDialogOpen.value = !handoffDismissed.value;
+    // R06/C-FR-10: only ONE dialog app-wide — a card that cannot claim
+    // the slot keeps its receipt controls and shows the waiting badge.
+    const canOpen =
+      !handoffDismissed.value && claimHandoffDialog(next.sessionId);
+    claimedSessionId.value = canOpen ? next.sessionId : claimedSessionId.value;
+    handoffDialogOpen.value = canOpen;
     // Nothing identifiable stays visible while the user handles a login
     // or challenge — the thumbnail is cleared entering sensitive states.
     clearScreenshot();
@@ -528,6 +565,11 @@ function onHandoffDialogVisibility(value: boolean): void {
   handoffDialogOpen.value = value;
   if (!value && stateIsHandoffLike.value) {
     handoffDismissed.value = true;
+    // R06: a dismissed dialog frees the slot for the next waiting task.
+    if (claimedSessionId.value !== null) {
+      releaseHandoffDialog(claimedSessionId.value);
+      claimedSessionId.value = null;
+    }
   }
 }
 
@@ -704,6 +746,13 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  // R06/C-FR-10: an unmounted card never holds the handoff dialog slot
+  // (the module-scope queue is shared app-wide; a leaked claim would
+  // block every future dialog).
+  if (claimedSessionId.value !== null) {
+    releaseHandoffDialog(claimedSessionId.value);
+    claimedSessionId.value = null;
+  }
   unsubscribeStatus?.();
   unsubscribeStatus = null;
   unsubscribeNotices?.();

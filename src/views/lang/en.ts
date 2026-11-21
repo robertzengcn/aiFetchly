@@ -4234,6 +4234,7 @@ export default {
     controls: {
       take_over: "Take over",
       open_browser: "Open browser",
+      handoff_queue_badge: "{count} task(s) need you",
       pause_ai: "Pause AI",
       verify_login: "I've finished logging in",
       resume: "Continue task",

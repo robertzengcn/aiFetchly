@@ -4254,6 +4254,7 @@ export default {
     controls: {
       take_over: "Übernehmen",
       open_browser: "Browser öffnen",
+      handoff_queue_badge: "{count} Aufgabe(n) warten auf Sie",
       pause_ai: "KI pausieren",
       verify_login: "Ich habe mich angemeldet",
       resume: "Aufgabe fortsetzen",
