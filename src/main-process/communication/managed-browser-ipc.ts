@@ -709,21 +709,44 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           forcedToolError: availability.reasonCode ?? "ai_disabled",
         };
       }
-      const { probeChatDecisionCapabilities } = await import(
-        "@/service/browserDecision/ChatCapabilityProbe"
-      );
-      const { AiChatApi } = await import("@/api/aiChatApi");
-      const api = new AiChatApi();
-      // N04: the revision is captured BEFORE probing — the probes run
-      // under THIS epoch, and the capabilities-only save (below) does not
-      // bump it, so the stored revision matches the probed route. The
-      // configured decision-model override is honored in the probes.
-      const { providerConfigKey } = await import(
-        "@/service/aiProvider/AIProviderConfigVersion"
-      );
-      const probedRevision = providerConfigKey();
-      const effectiveBeforeProbe = await new ManagedBrowserSettingsModule()
-        .getEffectiveSettings();
+      // R11/D-AC-08: overlapping probes serialize on ONE chain — each
+      // probe captures its provider revision when it actually STARTS,
+      // and the persisted flags are last-verified-wins instead of two
+      // in-flight probes racing the same settings slot.
+      if (probeInFlight !== null) {
+        await probeInFlight.catch(() => undefined);
+      }
+      let releaseProbeChain = (): void => undefined;
+      probeInFlight = new Promise<void>((resolve) => {
+        releaseProbeChain = resolve;
+      });
+      try {
+        return await runCapabilityProbe();
+      } finally {
+        releaseProbeChain();
+        probeInFlight = null;
+      }
+    }
+  );
+
+  /** R11: the in-flight capability probe (serialized). */
+  let probeInFlight: Promise<void> | null = null;
+  const runCapabilityProbe = async (): Promise<unknown> => {
+    const { probeChatDecisionCapabilities } = await import(
+      "@/service/browserDecision/ChatCapabilityProbe"
+    );
+    const { AiChatApi } = await import("@/api/aiChatApi");
+    const api = new AiChatApi();
+    // N04: the revision is captured BEFORE probing — the probes run
+    // under THIS epoch, and the capabilities-only save (below) does not
+    // bump it, so the stored revision matches the probed route. The
+    // configured decision-model override is honored in the probes.
+    const { providerConfigKey } = await import(
+      "@/service/aiProvider/AIProviderConfigVersion"
+    );
+    const probedRevision = providerConfigKey();
+    const effectiveBeforeProbe = await new ManagedBrowserSettingsModule()
+      .getEffectiveSettings();
       const probedModel = effectiveBeforeProbe.decisionRoute.chatDecisionModel ?? undefined;
       let result;
       try {
@@ -801,15 +824,14 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
           forcedToolError: "probe_invalidated_by_concurrent_change",
         };
       }
-      return {
-        ...result,
-        providerRevision: probedRevision,
-        ...(effective.decisionRoute.chatDecisionModel
-          ? { probedModel: effective.decisionRoute.chatDecisionModel }
-          : {}),
-      };
-    }
-  );
+    return {
+      ...result,
+      providerRevision: probedRevision,
+      ...(effective.decisionRoute.chatDecisionModel
+        ? { probedModel: effective.decisionRoute.chatDecisionModel }
+        : {}),
+    };
+  };
 
   registerValidatedHandler(
     MANAGED_BROWSER_GET_CACHE_STATUS,
