@@ -123,6 +123,11 @@ export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE =
 // Secure session metadata (renderer-safe: no cookie values).
 export const SOCIAL_ACCOUNT_SESSION_METADATA = "socialaccount:session:metadata";
 // Q-01/R02: per-account AI opt-in editing (read + toggle).
+// R09/Q-01: the ONE-TIME existing-account opt-in prompt (list + submit).
+export const SOCIAL_ACCOUNT_AI_OPTIN_PENDING =
+  "social-account:ai-optin-pending";
+export const SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT =
+  "social-account:ai-optin-submit";
 export const SOCIAL_ACCOUNT_GET_AI_USE_ENABLED =
   "socialaccount:get-ai-use-enabled";
 export const SOCIAL_ACCOUNT_SET_AI_USE_ENABLED =

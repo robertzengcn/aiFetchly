@@ -4254,6 +4254,10 @@ export default {
     controls: {
       take_over: "Übernehmen",
       open_browser: "Browser öffnen",
+      ai_optin_prompt_title: "KI-Nutzung für gespeicherte Konten",
+      ai_optin_prompt_body: "Wählen Sie, welche gespeicherten Konten die KI für die automatische Anmeldung verwenden darf. Nicht markierte Konte bleiben ausgeschaltet.",
+      ai_optin_decline: "Alle ausgeschaltet lassen",
+      ai_optin_confirm: "Auswahl autorisieren",
       handoff_queue_badge: "{count} Aufgabe(n) warten auf Sie",
       pause_ai: "KI pausieren",
       verify_login: "Ich habe mich angemeldet",

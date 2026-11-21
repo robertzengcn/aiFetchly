@@ -4234,6 +4234,10 @@ export default {
     controls: {
       take_over: "Take over",
       open_browser: "Open browser",
+      ai_optin_prompt_title: "AI use for saved accounts",
+      ai_optin_prompt_body: "Choose which saved accounts the AI may use for automated browser sign-in. Accounts left unchecked stay off until you opt in.",
+      ai_optin_decline: "Keep all off",
+      ai_optin_confirm: "Opt in selected",
       handoff_queue_badge: "{count} task(s) need you",
       pause_ai: "Pause AI",
       verify_login: "I've finished logging in",

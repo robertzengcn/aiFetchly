@@ -50,6 +50,14 @@ export class SocialAccountEntity extends AuditableEntity {
   @Column({ type: "boolean", default: false })
   ai_use_enabled!: boolean;
 
+  /**
+   * R09/Q-01: the ONE-TIME existing-account opt-in prompt — true once the
+   * user was ASKED (declining leaves ai_use_enabled false and sign-in
+   * refuses with account_not_eligible until a detail-page toggle).
+   */
+  @Column({ type: "boolean", default: false })
+  ai_use_prompted!: boolean;
+
   /** A-FR-10: automated sign-in cooldown bookkeeping. */
   @Column({ type: "datetime", nullable: true })
   last_login_failure_at!: Date | null;

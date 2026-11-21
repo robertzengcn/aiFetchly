@@ -4236,6 +4236,10 @@ export default {
     controls: {
       take_over: "Prendre la main",
       open_browser: "Ouvrir le navigateur",
+      ai_optin_prompt_title: "Utilisation de l’IA pour les comptes enregistrés",
+      ai_optin_prompt_body: "Choisissez les comptes enregistrés que l’IA peut utiliser pour la connexion automatique. Les comptes non cochés restent désactivés.",
+      ai_optin_decline: "Tout garder désactivé",
+      ai_optin_confirm: "Autoriser la sélection",
       handoff_queue_badge: "{count} tâche(s) vous attendent",
       pause_ai: "Suspendre l'IA",
       verify_login: "Je me suis connecté",

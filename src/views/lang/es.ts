@@ -4253,6 +4253,10 @@ export default {
     controls: {
       take_over: "Tomar el control",
       open_browser: "Abrir navegador",
+      ai_optin_prompt_title: "Uso de IA para cuentas guardadas",
+      ai_optin_prompt_body: "Elige qué cuentas guardadas puede usar la IA para iniciar sesión automáticamente. Las cuentas sin marcar quedan desactivadas.",
+      ai_optin_decline: "Mantener todo apagado",
+      ai_optin_confirm: "Autorizar seleccionadas",
       handoff_queue_badge: "{count} tarea(s) te necesitan",
       pause_ai: "Pausar IA",
       verify_login: "Ya he iniciado sesión",

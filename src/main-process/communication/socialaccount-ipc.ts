@@ -12,6 +12,8 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+  SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
   SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
   SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
   BROWSER_SITE_LIST,
@@ -31,6 +33,7 @@ import {
   socialAccountListInputSchema,
   socialAccountByIdInputSchema,
   socialAccountAiOptInInputSchema,
+  socialAccountAiOptInBulkSchema,
   socialPlatformListInputSchema,
   socialAccountSaveInputSchema,
 } from "@/schemas/ipc/socialAccount";
@@ -136,6 +139,36 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
   );
 
   // Q-01/R02: per-account AI opt-in — read (enabled omitted) or set.
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+    noInputSchema,
+    async () => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const pending = await new SocialAccountModule().listAccountsMissingOptIn();
+      return { pending };
+    }
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
+    socialAccountAiOptInBulkSchema,
+    async (input) => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const module = new SocialAccountModule();
+      for (const decision of input.decisions) {
+        await module.setAiUseEnabled(decision.id, decision.enabled);
+      }
+      // Marking happens AFTER the value write so a declined account
+      // keeps ai_use_enabled false but is never asked again.
+      await module.markAiUsePrompted(input.decisions.map((d) => d.id));
+      return { ok: true };
+    }
+  );
+
   registerValidatedHandler(
     SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
     socialAccountByIdInputSchema,

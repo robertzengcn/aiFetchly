@@ -20,6 +20,8 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+  SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
   SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
   SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
   BROWSER_SITE_LIST,
@@ -90,6 +92,28 @@ export async function getSocialaccountinfo(
   }
 
   return resp;
+}
+
+// R09/Q-01: the ONE-TIME existing-account opt-in prompt.
+export interface AiOptInPendingAccount {
+  readonly id: number;
+  readonly user: string;
+  readonly name: string | null;
+}
+
+export async function getAiOptInPendingAccounts(): Promise<
+  ReadonlyArray<AiOptInPendingAccount>
+> {
+  const resp = (await windowInvoke(SOCIAL_ACCOUNT_AI_OPTIN_PENDING, {})) as {
+    pending: ReadonlyArray<AiOptInPendingAccount>;
+  } | null;
+  return resp?.pending ?? [];
+}
+
+export async function submitAiOptInDecisions(
+  decisions: ReadonlyArray<{ id: number; enabled: boolean }>
+): Promise<void> {
+  await windowInvoke(SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT, { decisions });
 }
 
 // Q-01/R02: the per-account AI opt-in (read + toggle).

@@ -4156,6 +4156,10 @@ export default {
     controls: {
       take_over: "引き継ぐ",
       open_browser: "ブラウザを開く",
+      ai_optin_prompt_title: "保存済みアカウントのAI利用",
+      ai_optin_prompt_body: "AIが自動ログインに使用できる保存済みアカウントを選択してください。未選択のアカウントはオフのままになります。",
+      ai_optin_decline: "すべてオフのまま",
+      ai_optin_confirm: "選択を許可",
       handoff_queue_badge: "{count} 件のタスクが待機中です",
       pause_ai: "AIを一時停止",
       verify_login: "ログインしました",

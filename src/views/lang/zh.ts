@@ -4010,6 +4010,10 @@ export default {
     controls: {
       take_over: "接管",
       open_browser: "打开浏览器",
+      ai_optin_prompt_title: "已保存账户的AI使用授权",
+      ai_optin_prompt_body: "选择哪些已保存账户允许AI自动登录浏览器。未勾选的账户保持关闭，直到你在此或账户页开启。",
+      ai_optin_decline: "全部保持关闭",
+      ai_optin_confirm: "授权所选",
       handoff_queue_badge: "{count} 个任务需要你处理",
       pause_ai: "暂停 AI",
       verify_login: "我已完成登录",

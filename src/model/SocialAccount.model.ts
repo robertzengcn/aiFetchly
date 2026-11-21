@@ -158,6 +158,19 @@ export class SocialAccountModel extends BaseDb {
     return await this.repository.findOne({ where: { id: accountId } });
   }
 
+  /**
+   * R09/Q-01: ALL raw rows (no decrypt) — the one-time opt-in prompt
+   * scans for accounts the prompt has not asked yet.
+   */
+  async listAllRaw(): Promise<SocialAccountEntity[]> {
+    return await this.repository.find();
+  }
+
+  /** R09/Q-01: mark ONE account as asked (the opt-in value stays). */
+  async markAiUsePromptedRow(accountId: number): Promise<void> {
+    await this.repository.update(accountId, { ai_use_prompted: true });
+  }
+
   /** T27 (A-FR-10): record/clear a failed automated sign-in. */
   async updateLoginFailure(
     accountId: number,

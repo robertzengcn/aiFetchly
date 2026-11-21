@@ -586,6 +586,36 @@ export class SocialAccountModule extends BaseModule {
     });
   }
 
+  /**
+   * R09/Q-01: the accounts the ONE-TIME opt-in prompt still owes a
+   * question — pre-feature rows created before the prompt existed.
+   */
+  public async listAccountsMissingOptIn(): Promise<
+    ReadonlyArray<{ id: number; user: string; name: string | null }>
+  > {
+    await this.ensureConnection();
+    const rows = await this.socialAccountModel.listAllRaw();
+    return rows
+      .filter((row) => row.ai_use_prompted !== true)
+      .map((row) => ({ id: row.id, user: row.user, name: row.name ?? null }));
+  }
+
+  /**
+   * R09/Q-01: mark the accounts ASKED. Declining leaves ai_use_enabled
+   * false — sign-in refuses with account_not_eligible until a
+   * detail-page toggle opts the account in.
+   */
+  public async markAiUsePrompted(ids: readonly number[]): Promise<void> {
+    await this.ensureConnection();
+    for (const id of ids) {
+      const row = await this.socialAccountModel.findRowById(id);
+      if (!row || row.ai_use_prompted === true) {
+        continue;
+      }
+      await this.socialAccountModel.markAiUsePromptedRow(id);
+    }
+  }
+
   /** A-FR-10: clear a prior failure after a successful sign-in. */
   public async recordLoginFailureClear(accountId: number): Promise<void> {
     await this.ensureConnection();

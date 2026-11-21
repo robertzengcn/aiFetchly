@@ -24,6 +24,21 @@ export const socialAccountByIdInputSchema = lazySchema(() =>
 )
 
 /** Q-01/R02: the per-account AI opt-in toggle (read + set). */
+// R09/Q-01: the one-time opt-in submit — a map of accountId → enabled.
+export const socialAccountAiOptInBulkSchema = lazySchema(() =>
+  z.strictObject({
+    decisions: z
+      .array(
+        z.strictObject({
+          id: z.number().int().positive(),
+          enabled: z.boolean(),
+        })
+      )
+      .min(1)
+      .max(200),
+  })
+);
+
 export const socialAccountAiOptInInputSchema = lazySchema(() =>
   z.strictObject({
     id: z.number().int().positive('id is required'),
