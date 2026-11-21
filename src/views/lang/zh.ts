@@ -4078,6 +4078,7 @@ export default {
       decision_route_native: "原生配置（高级）",
       decision_route_model_override: "决策模型覆盖",
       decision_route_model_hint: "可选的真实模型 id",
+      batch_sub_agent_model: "子代理模型（批量通道）",
       decision_probe_btn: "测试决策能力",
       decision_probe_hint: "分别探测聊天、验证的 JSON Schema 和强制工具调用输出。",
       decision_probe_chat: "聊天",

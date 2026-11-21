@@ -5,6 +5,7 @@ const DEFAULT_DECISION_ROUTE = {
   version: 1 as const,
   mode: "follow_chat" as const,
   chatDecisionModel: null,
+  batchSubAgentModel: null,
   nativeProfile: null,
   requestTimeoutMs: null,
     chatCapabilities: null,

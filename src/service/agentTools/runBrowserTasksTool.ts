@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { AgentRuntimeRegistry, getDefaultAgentRuntimeDeps } from "@/service/AgentRuntimeRegistry";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { getDefaultManagedBrowserModule } from "@/modules/ManagedBrowserModule";
 
 export interface BrowserBatchTaskInput {
   readonly goal: string;
@@ -89,6 +90,10 @@ export const browserBatchArgsSchema = z
       .min(1)
       .max(MAX_BATCH_TASKS),
     concurrency: z.number().int().min(1).max(MAX_BATCH_CONCURRENCY).optional(),
+    // R04/M-FR-12: the executor — "llm_agent" (default) runs the LLM
+    // operator; "fast_runner" drives the decision runner DIRECTLY (no
+    // LLM loop) on a session started per task.
+    executor: z.enum(["llm_agent", "fast_runner"]).optional(),
   })
   .superRefine((value, ctx) => {
     const uniqueGoals = new Set(value.tasks.map((t) => t.goal));
@@ -112,7 +117,12 @@ export async function runBrowserTasksForTool(
   signal: AbortSignal,
   deps: RunBrowserTasksDeps = {},
   /** R11: the calling tool's registry job id (parent poll freeze). */
-  parentJobId?: string
+  parentJobId?: string,
+  /** R04/M-FR-12: the executor switch + the sub-agent model override. */
+  options?: {
+    executor?: "llm_agent" | "fast_runner";
+    subAgentModel?: string | null;
+  }
 ): Promise<{
   batchId: string;
   results: BrowserBatchTaskResult[];
@@ -144,7 +154,8 @@ export async function runBrowserTasksForTool(
     conversationId,
     signal,
     deps,
-    parentJobId
+    parentJobId,
+    options
   );
 }
 
@@ -638,7 +649,12 @@ export async function runBrowserTasks(
   deps: RunBrowserTasksDeps = {},
   /** R11/C-FR-09: the PARENT registry job — its user-wait clock freezes
    * while any lane's child sits in a user wait. */
-  parentJobId?: string
+  parentJobId?: string,
+  /** R04/M-FR-12: the executor switch + the sub-agent model override. */
+  options?: {
+    executor?: "llm_agent" | "fast_runner";
+    subAgentModel?: string | null;
+  }
 ): Promise<{
   batchId: string;
   results: BrowserBatchTaskResult[];
@@ -791,12 +807,105 @@ export async function runBrowserTasks(
         // M-FR-06: an account-backed task whose account is BUSY is queued
         // once (bounded wait) instead of failing account_in_use — the
         // sibling holding the account typically finishes within seconds.
+        // R04/M-FR-12: "fast_runner" drives the decision runner DIRECTLY
+        // (no LLM loop) — start a session for the task, execute the goal
+        // through browser_execute_task, stop unless keep_open. "llm_agent"
+        // (default) runs the LLM operator, optionally on the configured
+        // sub-agent model.
+        const runFastRunner = async (): Promise<{
+          status: string;
+          output: Record<string, unknown>;
+          errorMessage?: string;
+        }> => {
+          const { getDefaultManagedBrowserAiToolService } = await import(
+            "@/service/ManagedBrowserAiToolService"
+          );
+          const service = getDefaultManagedBrowserAiToolService();
+          const started = (await service.startSession(
+            {
+              ...(typeof task.account_id === "number" && task.account_id > 0
+                ? { account_id: task.account_id }
+                : {}),
+              purpose: prompt.slice(0, 300),
+              ...(task.start_url ? { requested_start_url: task.start_url } : {}),
+            },
+            {
+              conversationId,
+              toolCallId: `batch-fast-${taskId}`,
+              ownerAgentId: childAgentTaskId,
+              skipPermissionCheck: true,
+            }
+          )) as { session_id: string };
+          const sessionId = started.session_id;
+          try {
+            const executed = (await service.executeTask(
+              {
+                session_id: sessionId,
+                goal: task.goal,
+              },
+              {
+                conversationId,
+                toolCallId: `batch-fast-exec-${taskId}`,
+                ownerAgentId: childAgentTaskId,
+                signal: childAbort.signal,
+                skipPermissionCheck: true,
+              }
+            )) as { status?: string; extracted?: unknown[]; evidence?: string[]; finalObservation?: { url?: string | null } | null };
+            const status =
+              executed.status === "completed"
+                ? "completed"
+                : executed.status === "partial"
+                  ? "needs_user"
+                  : "failed";
+            return {
+              status,
+              output: {
+                status,
+                summary:
+                  status === "completed"
+                    ? task.goal
+                    : `fast_runner ended ${status}`,
+                extracted: executed.extracted ?? [],
+                final_url: executed.finalObservation?.url ?? null,
+                evidence: executed.evidence ?? [],
+              },
+            };
+          } catch (error) {
+            return {
+              status: "failed",
+              output: {
+                status: "failed",
+                summary:
+                  error instanceof Error
+                    ? error.message.slice(0, 1000)
+                    : "fast_runner error",
+                extracted: [],
+                final_url: null,
+                evidence: [],
+              },
+            };
+          } finally {
+            if (!task.keep_open) {
+              await getDefaultManagedBrowserModule()
+                .stop(sessionId, "cancelled")
+                .catch(() => undefined);
+            }
+          }
+        };
         const runOnce = async (): Promise<
           Awaited<ReturnType<typeof runtime.runSync>>
-        > =>
-          runtime.runSync(
+        > => {
+          if (options?.executor === "fast_runner") {
+            return (await runFastRunner()) as Awaited<
+              ReturnType<typeof runtime.runSync>
+            >;
+          }
+          return runtime.runSync(
             {
               agentId: "agent-browser-operator",
+              ...(options?.subAgentModel
+                ? { model: options.subAgentModel }
+                : {}),
               prompt,
               taskPacket: {
                 userGoal: prompt,
@@ -828,6 +937,7 @@ export async function runBrowserTasks(
                 ),
             }
           );
+        };
         // R03/M-FR-10: the lane's provider calls run under the shared
         // per-provider concurrency gate; a lane whose batch already blew
         // the token budget ends with a truthful partial instead of

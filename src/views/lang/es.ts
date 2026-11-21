@@ -4326,6 +4326,7 @@ export default {
       decision_route_native: "Perfil nativo (avanzado)",
       decision_route_model_override: "Anulación del modelo de decisión",
       decision_route_model_hint: "id de modelo real opcional",
+      batch_sub_agent_model: "Modelo del subagente (carriles por lotes)",
       decision_probe_btn: "Probar capacidades de decisión",
       decision_probe_hint: "Sondea chat, JSON Schema verificado y salida forzada de herramientas por separado.",
       decision_probe_chat: "Chat",

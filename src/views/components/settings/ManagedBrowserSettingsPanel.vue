@@ -155,6 +155,20 @@
           :aria-label="t('managedBrowser.settings.decision_route_model_override')"
           @change="onDecisionRouteChange"
         />
+        <!-- R04/M-FR-12: the sub-agent model for batch lanes. -->
+        <div class="d-flex align-center ga-3 flex-wrap mt-2">
+          <span class="text-body-2">
+            {{ t("managedBrowser.settings.batch_sub_agent_model") }}
+          </span>
+          <input
+            v-model="batchSubAgentModel"
+            type="text"
+            class="managed-browser-settings__account-select"
+            data-testid="mb-batch-sub-agent-model"
+            :aria-label="t('managedBrowser.settings.batch_sub_agent_model')"
+            @change="onDecisionRouteChange"
+          />
+        </div>
       </div>
       <template v-if="decisionRouteMode === 'native_profile'">
         <div class="d-flex align-center ga-3 flex-wrap mt-2">
@@ -524,6 +538,8 @@ async function onProbeCapabilities(): Promise<void> {
   }
 }
 const chatDecisionModel = ref("");
+// R04/M-FR-12: the sub-agent model for batch lanes.
+const batchSubAgentModel = ref("");
 const nativeBaseUrl = ref("");
 const nativeModel = ref("");
 const nativeApiKeyRef = ref<"none" | "chat">("none");
@@ -615,6 +631,8 @@ async function reload(): Promise<void> {
     // N09/design 5.3: load the decision route.
     decisionRouteMode.value = effective.decisionRoute.mode;
     chatDecisionModel.value = effective.decisionRoute.chatDecisionModel ?? "";
+    batchSubAgentModel.value =
+      effective.decisionRoute.batchSubAgentModel ?? "";
     nativeBaseUrl.value = effective.decisionRoute.nativeProfile?.baseUrl ?? "";
     nativeModel.value = effective.decisionRoute.nativeProfile?.model ?? "";
     nativeApiKeyRef.value =
@@ -784,6 +802,7 @@ async function onDisableDecision(
       decisionRoute: {
         mode: decisionRouteMode.value,
         chatDecisionModel: chatDecisionModel.value.trim() || null,
+        batchSubAgentModel: batchSubAgentModel.value.trim() || null,
         ...(decisionRouteMode.value === "native_profile" && complete
           ? {
               nativeProfile: {

@@ -32,6 +32,7 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
     version: 1,
     mode: "follow_chat",
     chatDecisionModel: null,
+    batchSubAgentModel: null,
     nativeProfile: null,
     requestTimeoutMs: null,
     chatCapabilities: null,
@@ -55,6 +56,14 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
       record.chatDecisionModel.trim().length > 0 &&
       record.chatDecisionModel.length <= 200
         ? record.chatDecisionModel.trim()
+        : null;
+    // R04/M-FR-12: the sub-agent model for batch lanes (a custom provider
+    // must own this model; null runs the definition's default).
+    const batchSubAgentModel =
+      typeof record.batchSubAgentModel === "string" &&
+      record.batchSubAgentModel.trim().length > 0 &&
+      record.batchSubAgentModel.length <= 200
+        ? record.batchSubAgentModel.trim()
         : null;
     // The native profile is honored ONLY in native mode with a complete,
     // explicitly-configured record — native support is never inferred.
@@ -125,6 +134,7 @@ function parseDecisionRouteRaw(raw: string | null): EffectiveManagedBrowserSetti
       version: 1,
       mode,
       chatDecisionModel,
+      batchSubAgentModel,
       nativeProfile: mode === "native_profile" ? nativeProfile : null,
       requestTimeoutMs,
       chatCapabilities,

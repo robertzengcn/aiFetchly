@@ -166,6 +166,7 @@ export const managedBrowserUpdateSettingsInputSchema = lazySchema(() =>
         .strictObject({
           mode: z.enum(["follow_chat", "native_profile"]).optional(),
           chatDecisionModel: z.string().max(200).nullable().optional(),
+          batchSubAgentModel: z.string().max(200).nullable().optional(),
           nativeProfile: z
             .strictObject({
               displayName: z.string().min(1).max(100),

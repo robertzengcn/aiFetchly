@@ -4306,6 +4306,7 @@ export default {
       decision_route_native: "Native profile (advanced)",
       decision_route_model_override: "Decision model override",
       decision_route_model_hint: "optional real model id",
+      batch_sub_agent_model: "Sub-agent model (batch lanes)",
       decision_probe_btn: "Test decision capabilities",
       decision_probe_hint: "Probes chat, verified JSON Schema, and forced tool output separately.",
       decision_probe_chat: "Chat",

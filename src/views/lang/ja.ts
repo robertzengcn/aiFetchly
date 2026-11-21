@@ -4228,6 +4228,7 @@ export default {
       decision_route_native: "ネイティブプロファイル（上級）",
       decision_route_model_override: "決定モデルの上書き",
       decision_route_model_hint: "任意の実際のモデル id",
+      batch_sub_agent_model: "サブエージェントモデル（バッチレーン）",
       decision_probe_btn: "決定機能をテスト",
       decision_probe_hint: "チャット、検証済み JSON Schema、強制ツール呼び出しを個別にプローブします。",
       decision_probe_chat: "チャット",

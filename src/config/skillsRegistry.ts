@@ -5401,7 +5401,17 @@ function managedBrowserToolEntries(): SkillDefinition[] {
           {},
           // R11/C-FR-09: the parent job id — the turn's poll deadline
           // freezes while any batch lane sits in a user wait.
-          context.jobId
+          context.jobId,
+          // R04/M-FR-12: the executor switch; the sub-agent model comes
+          // from the settings (a custom provider must own the model).
+          {
+            executor: parsed.data.executor,
+            subAgentModel:
+              (await new (await import("@/modules/ManagedBrowserSettingsModule"))
+                .ManagedBrowserSettingsModule()
+                .getEffectiveSettings()).decisionRoute.batchSubAgentModel ??
+              null,
+          }
         );
         // R07/M-FR-04: a DECLINED (or cancelled) confirmation card means
         // NOTHING ran — reporting success with an empty result set would

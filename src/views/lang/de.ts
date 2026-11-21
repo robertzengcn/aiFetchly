@@ -4330,6 +4330,7 @@ export default {
       decision_route_native: "Natives Profil (erweitert)",
       decision_route_model_override: "Entscheidungsmodell überschreiben",
       decision_route_model_hint: "optionale echte Modell-ID",
+      batch_sub_agent_model: "Sub-Agent-Modell (Stapel-Lanes)",
       decision_probe_btn: "Entscheidungsfähigkeiten testen",
       decision_probe_hint: "Prüft Chat, verifiziertes JSON Schema und erzwungenen Tool-Aufruf separat.",
       decision_probe_chat: "Chat",

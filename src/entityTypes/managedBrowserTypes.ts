@@ -341,6 +341,11 @@ export interface EffectiveManagedBrowserSettings {
     readonly mode: "follow_chat" | "native_profile";
     /** Optional real model id at the user's chat endpoint. */
     readonly chatDecisionModel: string | null;
+    /**
+     * R04/M-FR-12: the sub-agent model for batch lanes (a custom provider
+     * must own this model); null runs the definition's default model.
+     */
+    readonly batchSubAgentModel: string | null;
     readonly nativeProfile: {
       readonly displayName: string;
       readonly baseUrl: string;
