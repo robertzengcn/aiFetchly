@@ -88,6 +88,13 @@ export interface BrowserTaskResult {
     readonly decisionRequests: number;
     readonly recoveryCalls: number;
   };
+  /**
+   * C01/N01/D-AC-08: provider-reported token usage summed over the task's
+   * decisions (chat route) — the batch collector charges the BATCH budget
+   * with the ACTUAL usage, including retries, instead of a mock-shaped
+   * field nobody produced.
+   */
+  readonly tokensUsed?: number;
   readonly userInterventions: ReadonlyArray<{
     readonly reason: string;
     readonly startedAtEpochMs: number;
@@ -2555,6 +2562,9 @@ export class BrowserTaskRunner {
         decisionRequests: this.decisionRequests,
         recoveryCalls: this.recoveryCalls,
       },
+      // C01/N01/D-AC-08: actual usage rides the result for batch budget
+      // charging (0 for routes that report none).
+      tokensUsed: this.tokenUsage,
       userInterventions: control.get(this.taskId)?.interventions ?? [],
     };
   }

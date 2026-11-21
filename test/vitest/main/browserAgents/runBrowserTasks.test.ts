@@ -1453,3 +1453,130 @@ describe("runBrowserTasks fast_runner executor (B03)", () => {
     expect(stopMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// C01/M-FR-06/10/12: the provider gate enforces limits where inference
+// actually runs — cancelable acquisition (a Stop while queued grants
+// NOTHING and releases nothing), a per-provider scope, and ACTUAL usage
+// charged on every run (initial dispatch and queued retry).
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks provider gate (C01)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+    fastServiceCalls.startArgs.length = 0;
+    fastServiceCalls.execArgs.length = 0;
+    fastServiceCalls.startImpl = null;
+    fastServiceCalls.execImpl = null;
+    ownerBySession.clear();
+    transferCalls.length = 0;
+    stopMock.mockClear();
+    stopAllForAgentTaskMock.mockClear();
+  });
+  afterAll(() => {
+    getBatchConfirmWaitRegistry().setSink(null);
+  });
+
+  it("a Stop while queued for a provider slot runs NOTHING and releases no slot (C01)", async () => {
+    const control = new AgentTaskControlService();
+    const scope = "c01-slot-scope";
+    // Hold BOTH slots of the scope with a first batch's slow lanes.
+    const resolvers: Array<() => void> = [];
+    fastServiceCalls.execImpl = async () => {
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+      });
+      return {
+        status: "completed",
+        reason: "verified",
+        evidence: [],
+        extracted: [],
+        finalObservation: null,
+      };
+    };
+    const batchA = runBrowserTasks(
+      [{ goal: "slow lane 1" }, { goal: "slow lane 2" }],
+      2,
+      "conv-c01a",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner", providerScope: scope }
+    );
+    // Both slots are now held; wait until both exec calls started.
+    while (fastServiceCalls.execArgs.length < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // The second batch's lane must QUEUE on the same scope.
+    const stopper = new AbortController();
+    const batchB = runBrowserTasks(
+      [{ goal: "queued lane" }],
+      1,
+      "conv-c01b",
+      stopper.signal,
+      { control },
+      undefined,
+      { executor: "fast_runner", providerScope: scope }
+    );
+    // Give the queued lane time to reach the (abortable) wait.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const before = fastServiceCalls.execArgs.length;
+    stopper.abort();
+    const resultsB = (await batchB).results;
+    // The queued lane ran NOTHING — cancelled at the gate.
+    expect(fastServiceCalls.execArgs.length).toBe(before);
+    expect(resultsB[0]!.status).toBe("cancelled");
+    expect(resultsB[0]!.evidence).toContain("provider_slot_cancelled");
+    // Release the holders; batch A completes.
+    for (const resolve of resolvers) {
+      resolve();
+    }
+    const resultsA = (await batchA).results;
+    expect(resultsA.map((r) => r.status)).toEqual(["completed", "completed"]);
+    // Slots are intact (no negative release): a follow-up batch completes.
+    fastServiceCalls.execImpl = async () => ({
+      status: "completed",
+      reason: "verified",
+      evidence: [],
+      extracted: [],
+      finalObservation: null,
+    });
+    const batchC = await runBrowserTasks(
+      [{ goal: "after stop" }],
+      1,
+      "conv-c01c",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner", providerScope: scope }
+    );
+    expect(batchC.results[0]!.status).toBe("completed");
+  });
+
+  it("charges the lane's actual reported usage against the batch budget (C01)", async () => {
+    const control = new AgentTaskControlService();
+    fastServiceCalls.execImpl = async () => ({
+      status: "completed",
+      reason: "verified",
+      evidence: [],
+      extracted: [],
+      finalObservation: null,
+      tokensUsed: 500_000,
+    });
+    const { results } = await runBrowserTasks(
+      [{ goal: "token hog" }, { goal: "small task" }],
+      1,
+      "conv-c01budget",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner" }
+    );
+    // The hog's 500k usage blew the 400k batch budget: the REMAINING lane
+    // is refused with the truthful budget evidence (the pre-start gate
+    // reports cancelled with the reason; a mid-run lane reports partial).
+    expect(results[0]!.status).toBe("completed");
+    expect(results[1]!.status).toBe("cancelled");
+    expect(results[1]!.evidence).toContain("batch_token_budget_exceeded");
+    expect(results[1]!.summary).toContain("budget");
+  });
+});

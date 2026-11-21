@@ -149,8 +149,18 @@ export async function runBrowserTasksForTool(
     );
   }
   if (!effective.parallelAgentsEnabled) {
-    throw new Error("managed_browser_disabled:parallel_agents_disabled");
+    throw Error(
+      "managed_browser_disabled:parallel_agents_disabled"
+    );
   }
+  // C01/M-FR-10: the provider gate is scoped by the batch's PROVIDER
+  // identity — the fast_runner uses the decision route (mode + model or
+  // native endpoint), the llm_agent uses the sub-agent model. Two
+  // unrelated routes never serialize against each other's slots.
+  const providerScope =
+    options?.executor === "fast_runner"
+      ? `decision:${effective.decisionRoute.mode}:${effective.decisionRoute.chatDecisionModel ?? ""}:${effective.decisionRoute.nativeProfile?.baseUrl ?? ""}`
+      : `agent:${options?.subAgentModel ?? ""}`;
   return runBrowserTasks(
     tasks,
     concurrency,
@@ -158,7 +168,7 @@ export async function runBrowserTasksForTool(
     signal,
     deps,
     parentJobId,
-    options
+    { ...options, providerScope }
   );
 }
 
@@ -193,35 +203,91 @@ export interface RunBrowserTasksDeps {
 const liveBatches = new Map<string, AbortController>();
 
 /**
- * R03/M-FR-10: the SHARED provider gate — parallel lanes serialize on a
- * per-provider in-flight cap and a batch token/cost ceiling. The gate is
- * process-wide (all lanes in all batches share one provider endpoint).
+ * R03/M-FR-10 + C01/M-FR-06/10/12: the SHARED provider gate — parallel
+ * lanes serialize on a per-PROVIDER in-flight cap and a batch token/cost
+ * ceiling. The cap is scoped by provider identity (two unrelated routes
+ * never serialize against each other), acquisition is CANCELABLE (a Stop
+ * while queued wakes the waiter and grants NOTHING), and one release
+ * corresponds to exactly one granted slot.
  */
 const PROVIDER_CONCURRENCY_LIMIT = 2;
 const BATCH_TOKEN_BUDGET = 400_000;
 
-const providerInFlight = { count: 0 };
-const providerWaiters: Array<() => void> = [];
+const providerInFlightByScope = new Map<string, number>();
+interface ProviderSlotWaiter {
+  readonly scope: string;
+  readonly resolve: () => void;
+  readonly signal: AbortSignal;
+  readonly onAbort: () => void;
+}
+const providerWaiters: ProviderSlotWaiter[] = [];
 
-/** Acquire a provider slot (resolves when under the concurrency cap). */
-async function acquireProviderSlot(signal: AbortSignal): Promise<void> {
-  while (
-    providerInFlight.count >= PROVIDER_CONCURRENCY_LIMIT &&
-    !signal.aborted
-  ) {
-    await new Promise<void>((resolve) => providerWaiters.push(resolve));
-  }
-  if (signal.aborted) {
-    return;
-  }
-  providerInFlight.count++;
+function providerUsage(scope: string): number {
+  return providerInFlightByScope.get(scope) ?? 0;
 }
 
-function releaseProviderSlot(): void {
-  providerInFlight.count = Math.max(0, providerInFlight.count - 1);
-  const next = providerWaiters.shift();
-  if (next) {
-    next();
+/**
+ * Acquire a provider slot for the given scope. Returns TRUE when a slot
+ * was GRANTED (the caller MUST release exactly once); FALSE when the
+ * signal aborted before a grant (the caller MUST NOT run provider work
+ * and MUST NOT release — the old fall-through decremented a slot it
+ * never held).
+ */
+async function acquireProviderSlot(
+  scope: string,
+  signal: AbortSignal
+): Promise<boolean> {
+  if (signal.aborted) {
+    return false;
+  }
+  while (providerUsage(scope) >= PROVIDER_CONCURRENCY_LIMIT) {
+    if (signal.aborted) {
+      return false;
+    }
+    // C01: the wait is abortable — a Stop while queued resolves the
+    // waiter (which then returns false) instead of hanging until some
+    // unrelated lane releases.
+    await new Promise<void>((resolve) => {
+      const onAbort = (): void => {
+        const idx = providerWaiters.indexOf(waiter);
+        if (idx >= 0) {
+          providerWaiters.splice(idx, 1);
+        }
+        resolve();
+      };
+      const waiter: ProviderSlotWaiter = { scope, resolve, signal, onAbort };
+      signal.addEventListener("abort", onAbort, { once: true });
+      providerWaiters.push(waiter);
+    });
+  }
+  if (signal.aborted) {
+    return false;
+  }
+  providerInFlightByScope.set(scope, providerUsage(scope) + 1);
+  return true;
+}
+
+function releaseProviderSlot(scope: string): void {
+  providerInFlightByScope.set(scope, Math.max(0, providerUsage(scope) - 1));
+  // C01: wake exactly ONE non-aborted waiter holding THIS scope for the
+  // freed slot. Aborted waiters are dropped (their acquire returned
+  // false); waiters for OTHER scopes keep their independent accounting.
+  const deferred: ProviderSlotWaiter[] = [];
+  let woke = false;
+  for (let waiter = providerWaiters.shift(); waiter; waiter = providerWaiters.shift()) {
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    if (waiter.signal.aborted) {
+      continue;
+    }
+    if (!woke && waiter.scope === scope) {
+      waiter.resolve();
+      woke = true;
+      continue;
+    }
+    deferred.push(waiter);
+  }
+  if (deferred.length > 0) {
+    providerWaiters.push(...deferred);
   }
 }
 
@@ -260,6 +326,31 @@ function chargeBatchTokens(batchId: string, usedTokens: number): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * C01/M-FR-10/12: charge a lane run's reported usage against the batch
+ * budget. The envelope carries `tokensUsed` at the TOP level (the
+ * fast-runner maps the decision runner's provider-reported usage) and the
+ * collector charges EVERY run — the initial dispatch AND a queued-account
+ * retry (previously the retry's actual cost was never charged).
+ * Returns true when the charge EXCEEDED the budget (the caller aborts the
+ * remaining lanes).
+ */
+function chargeLaneUsage(
+  batchId: string,
+  result: { tokensUsed?: number; output?: { tokensUsed?: number } }
+): boolean {
+  const laneUsage =
+    typeof result.tokensUsed === "number"
+      ? result.tokensUsed
+      : typeof result.output?.tokensUsed === "number"
+        ? result.output.tokensUsed
+        : 0;
+  if (laneUsage <= 0) {
+    return false;
+  }
+  return !chargeBatchTokens(batchId, laneUsage);
 }
 
 /** True while the batch's token budget has not been exceeded. */
@@ -657,6 +748,8 @@ export async function runBrowserTasks(
   options?: {
     executor?: "llm_agent" | "fast_runner";
     subAgentModel?: string | null;
+    /** C01/M-FR-10: the provider-identity scope for the in-flight cap. */
+    providerScope?: string;
   }
 ): Promise<{
   batchId: string;
@@ -883,6 +976,7 @@ export async function runBrowserTasks(
               extracted?: unknown[];
               evidence?: string[];
               finalObservation?: { url?: string | null } | null;
+              tokensUsed?: number;
             };
             // B03: the collector validates output.status strictly against
             // completed | failed | needs_user. interrupted = partial
@@ -901,8 +995,16 @@ export async function runBrowserTasks(
                 : terminalStatus === "partial" || terminalStatus === "interrupted"
                   ? "needs_user"
                   : "failed";
+            // C01/M-FR-10/12: the decision runner's ACTUAL token usage
+            // rides the envelope so the collector charges the batch
+            // budget with real cost (never a mock-shaped field).
+            const laneTokensUsed =
+              typeof executed.tokensUsed === "number" && executed.tokensUsed > 0
+                ? executed.tokensUsed
+                : undefined;
             return {
               status: "completed",
+              ...(laneTokensUsed !== undefined ? { tokensUsed: laneTokensUsed } : {}),
               output: {
                 status: taskStatus,
                 summary:
@@ -912,6 +1014,9 @@ export async function runBrowserTasks(
                 extracted: executed.extracted ?? [],
                 final_url: executed.finalObservation?.url ?? null,
                 evidence: executed.evidence ?? [],
+                ...(laneTokensUsed !== undefined
+                  ? { tokensUsed: laneTokensUsed }
+                  : {}),
                 // B03/M-FR-07: the retained session id rides the output —
                 // the keep-open transfer reads it; a missing id released
                 // the browser even on a COMPLETED keep-open task.
@@ -1012,22 +1117,35 @@ export async function runBrowserTasks(
             ),
           };
         }
-        await acquireProviderSlot(childAbort.signal);
+        // C01/M-FR-06/10: a canceled acquire grants NOTHING — the lane
+        // ends as a user stop without running provider work and without
+        // releasing a slot it never held.
+        const providerScope = options?.providerScope ?? "default";
         let result: Awaited<ReturnType<typeof runOnce>>;
+        if (
+          !(await acquireProviderSlot(providerScope, childAbort.signal))
+        ) {
+          control.setState(taskId, "cancelled", "user_stop");
+          return {
+            task_index: index,
+            status: "cancelled",
+            summary: "cancelled by user stop (queued for a provider slot)",
+            extracted: [],
+            final_url: null,
+            evidence: ["provider_slot_cancelled"],
+            needs_user: null,
+            user_interventions: mapInterventions(
+              control.get(taskId)?.interventions ?? []
+            ),
+          };
+        }
         try {
           result = await runOnce();
         } finally {
-          releaseProviderSlot();
+          releaseProviderSlot(providerScope);
         }
-        // R03: charge the lane's reported usage against the budget.
-        const laneUsage = (
-          result as { tokensUsed?: number; output?: { tokensUsed?: number } }
-        )?.tokensUsed;
-        if (
-          typeof laneUsage === "number" &&
-          laneUsage > 0 &&
-          !chargeBatchTokens(batchId, laneUsage)
-        ) {
+        // R03/C01: charge the lane's reported usage against the budget.
+        if (chargeLaneUsage(batchId, result)) {
           // The batch aborts the REMAINING lanes (truthful partial).
           batchAbort.abort();
         }
@@ -1114,11 +1232,26 @@ export async function runBrowserTasks(
                   summary: "queued task retrying",
                   sessionId: liveSessionId(),
                 });
-                await acquireProviderSlot(childAbort.signal);
-                try {
-                  result = await runOnce();
-                } finally {
-                  releaseProviderSlot();
+                // C01/M-FR-06/10: the retry's acquire is cancelable too —
+                // a Stop while queued ends the lane without a slot, and
+                // the retry's actual usage IS charged (it was missed).
+                if (
+                  await acquireProviderSlot(providerScope, childAbort.signal)
+                ) {
+                  try {
+                    result = await runOnce();
+                  } finally {
+                    releaseProviderSlot(providerScope);
+                  }
+                  // R03/C01: charge the retry run's reported usage.
+                  if (chargeLaneUsage(batchId, result)) {
+                    batchAbort.abort();
+                  }
+                } else {
+                  result = {
+                    status: "cancelled",
+                    output: null,
+                  } as unknown as Awaited<ReturnType<typeof runOnce>>;
                 }
               } finally {
                 releaseReservation();
