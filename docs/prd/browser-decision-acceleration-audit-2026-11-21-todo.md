@@ -115,3 +115,19 @@ One commit per logical unit, all with tests where the path is unit-testable.
 - R12: durable restart reconciliation (interrupted partials, lease sweep) — persistence redesign.
 - E01–E05: the six Electron scenarios, held-out qualification, Chromium qualification, hosted gateway confirmation, packaged evidence — operator/CI per AGENTS.md.
 - CI run `44842628562` (fix-pass head `6d6e9b3ec`): **SUCCESS** on all three jobs — Lint and unit tests, Package smoke test, Electron E2E (Playwright).
+
+---
+
+## Second fix pass — November 21, 2026 (scheduling, windows, prompt, evidence-adjacent items)
+
+- **R05** — `--disable-backgrounding-occluded-windows` in the composed argv (the AI must keep driving a window the USER covered); the START_SESSION payload carries `windowLayout` (position offset by the live-session index, 3/row × 60px, + the AI title marker) so concurrent headed windows never stack; the worker applies an `evaluateOnNewDocument` title marker ('[AI] ' prefix). Fingerprint self-test unaffected (the occlusion flag disables a throttle, not a security control).
+- **R10** — the renderer's start schema accepts the SAME proxy wire union as the model tool (ids only); the IPC handler maps it through the discriminated selection (an account-linked default still requires its confirmation inside start); the account detail page gains the session-proxy select (Account default / Direct / saved proxies, i18n-ready labels via the API).
+- **R06** — a shared handoff-dialog queue: ONE dialog app-wide; other cards show a "N task(s) need you" badge (i18n x6). The claim releases on leaving handoff states, dismiss, terminal, and unmount; the card tracks its OWN claimed session precisely, and the test file resets the queue between tests.
+- **R12** — `BrowserTaskEntity.interruptedPartial` (bounded JSON: 50 extracted rows / 20 evidence strings, <256 KB) persisted at every terminal through recordTerminal; restart reconciliation shows what LANDED without replaying a mutation (in-memory leases cannot survive the process; releaseAll covers graceful shutdown).
+- **R03** — a process-wide provider gate (max 2 concurrent provider calls) wraps every lane execution + a batch token budget (400k shared): a charge that exceeds it aborts remaining lanes, and skipped lanes report the TRUE reason (`batch_token_budget_exceeded`) — a truthful partial. Gate + budget die with the batch. Tests: 4 lanes cap at 2 in flight; the budget-exceeded batch stops with evidence.
+- **R04** — the batch args gain `executor: 'llm_agent' | 'fast_runner'` — fast_runner drives the decision runner DIRECTLY (startSession → executeTask → stop unless keep_open, no LLM loop); settings decisionRoute gains `batchSubAgentModel` (parsed/bounded/exposed through getEffectiveSettings + the IPC patch schema + the settings panel, i18n x6); the lane's runSync carries the model override.
+- **R09** — the ONE-TIME existing-account opt-in prompt: `ai_use_prompted` on the entity, `listAccountsMissingOptIn`/`markAiUsePrompted`, new validated IPC channels, and `AiOptInPromptDialog` on the accounts list page — declining leaves every account opted OUT (`account_not_eligible` at sign-in) until a detail-page toggle; strictly best-effort fetch.
+
+**Still open (operator/qualification scope, unchanged)**
+
+- R07 (public-suffix library) and E01–E05 (the six Electron scenarios, held-out qualification, Chromium qualification, hosted gateway confirmation, packaged evidence) — operator/CI per AGENTS.md. R07's suffix set is currently a curated subset; swapping in `tldts` is a dependency + packaging decision.
