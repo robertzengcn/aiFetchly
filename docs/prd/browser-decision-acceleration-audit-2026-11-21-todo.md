@@ -88,3 +88,29 @@ These are not extra features. The PRD does not allow release without them (§§8
 5. R01–R04. Batch admission and scheduling.
 6. R05, R06, R09, R10, R11, R12.
 7. E01–E05 only after the P1 bugs above are fixed. A green skipped E2E file is not acceptance.
+
+---
+
+## Fix pass — November 21, 2026 (implementable items closed)
+
+One commit per logical unit, all with tests where the path is unit-testable.
+
+- **B01** — `BrowserSignInInput` gains `rootConversationId`; every card (credential, picker, site-confirm) publishes AND binds its submit channel to `displayConversationOf(input)`; the direct `browser_sign_in` tool passes `context.rootConversationId` through. A sub-agent's cards now render in the parent chat.
+- **B02** — the three card waits call `beginIntervention` on the owning control task id (the lane freezes as `waiting_for_user`, the batch watchdog sees it, the parent poll extends) alongside the existing job user-wait flag, and `endIntervention` on resolve/cancel/handoff; the runner's signIn seam carries `controlTaskId` and the wrapper passes `context.jobId`.
+- **B03** — `peekResumeInstructions` (non-consuming) for the agent transcript; the runner's safe point stays the single consumer that clears the text for the next decision input. A second resume records fresh text; no replay.
+- **B04+B05** — a failed switch restores the OLD route INCLUDING direct (an explicit `{kind:"direct"}` prevents an account default sneaking back); the rollback outcome is named in the thrown `proxy_switch_restore_failed` reason (both codes when the restore also fails); the replacement and restored sessions carry `rootConversationId` so the parent chat keeps receiving cards/notices.
+- **R08** — cookie refresh derives its policy from the site registry first; the static manifest is only a legacy seed.
+- **B06** — an edited platform change rebinds `site_id` to the new platform's registry site (or null → the legacy fallback), so the OR-match no longer hits both the old site and the new platform.
+- **R01** — a missing confirmation sink REFUSES the batch (fail-open removed); a confirmed batch records a scoped routine-action grant (observe/navigate/click/fill/select for its agent task ids) that dies with the batch; consequential actions can never use it. `hasRoutineGrantForAgentTask` is the enforcement source when policy tightens routine ops.
+- **R02** — the busy-account queue bound is the batch horizon (10 min; test override) instead of ~8 s — the second task waits for the holder and starts on release.
+- **R11** — overlapping capability probes serialize on one chain (each captures its revision when it starts; last-verified-wins). The hosted model echo check is deferred with E04/Q-05 — the decision envelope carries no client-requested model to compare against.
+- **D01** — design §13.7 now marks registration deferred (`registration_disabled`, no handoff), matching the revised PRD cut.
+
+**Still open (design/qualification/operator scope)**
+
+- R03/R04/R05: per-provider concurrency + batch token/cost budget, executor/model selection + sub-agent model setting, and window title/tiling/occlusion throttling — scheduler/product-feature scope with window qualification in real Electron.
+- R06: the handoff dialog queue ("N tasks need you") — renderer product work.
+- R09: the one-time existing-account opt-in prompt — new UI flow.
+- R10: renderer start-proxy selection — schema + IPC + card work.
+- R12: durable restart reconciliation (interrupted partials, lease sweep) — persistence redesign.
+- E01–E05: the six Electron scenarios, held-out qualification, Chromium qualification, hosted gateway confirmation, packaged evidence — operator/CI per AGENTS.md.
