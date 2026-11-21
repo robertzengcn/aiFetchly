@@ -98,6 +98,12 @@ export interface PuppeteerDownloadLike {
 export interface PuppeteerPageLike
   extends ObservationPageLike,
     ExecutorPageLike {
+  /**
+   * R05/M-FR-13: an early init script (the AI window-title marker
+   * re-applies on every document load). Optional — the real Puppeteer
+   * page provides it; fakes may omit it.
+   */
+  evaluateOnNewDocument?: (script: string) => Promise<unknown>;
   /** Main-frame + sub-frame navigation events (used to invalidate refs). */
   on(
     event: "framenavigated",
@@ -268,6 +274,10 @@ export class WorkerSession {
         userDataDir: storagePolicy.temporaryProfilePath,
         diskCacheDir,
         proxyServer,
+        // R05/M-FR-13: concurrent sessions tile/offset.
+        ...(payload.windowLayout
+          ? { windowPosition: payload.windowLayout.position }
+          : {}),
       });
       const launch = this.launch ?? defaultLaunchBrowser;
       const browser = await launch({
@@ -291,6 +301,20 @@ export class WorkerSession {
       const pages = await browser.pages();
       this.page = pages[0] ?? (await browser.newPage());
       this.watchPageNavigations(this.page);
+      // R05/M-FR-13: the OS window title names the AI controller. The
+      // marker re-applies on every document load (the page's own scripts
+      // can overwrite it afterwards — a best-effort label, not a
+      // security control).
+      if (payload.windowLayout?.aiWindowTitle && this.page.evaluateOnNewDocument) {
+        await this.page.evaluateOnNewDocument(
+          "try { document.title = '[AI] ' + document.title; } catch { /* about:blank */ }"
+        );
+        await this.page
+          .evaluate(
+            "try { document.title = '[AI] ' + document.title; } catch { /* about:blank */ }"
+          )
+          .catch(() => undefined);
+      }
       if (
         proxy &&
         proxy.mode !== "direct" &&

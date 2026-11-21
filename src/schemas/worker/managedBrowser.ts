@@ -502,6 +502,17 @@ const startSessionMessageSchema = z.strictObject({
   storagePolicy: storagePolicySchema,
   platform: platformDefinitionSchema,
   proxy: proxyConfigSchema.nullable(),
+  /**
+   * R05/M-FR-13: concurrent-window layout — the position offset (and the
+   * AI title marker flag) computed by the module from the live session
+   * count, so two headed windows never stack on the same origin.
+   */
+  windowLayout: z
+    .strictObject({
+      position: z.object({ x: z.number().int(), y: z.number().int() }),
+      aiWindowTitle: z.boolean(),
+    })
+    .optional(),
   /** SECRET payload: allowlisted, domain-filtered cookies. */
   cookies: z.array(normalizedCookieSchema).max(3000),
 });

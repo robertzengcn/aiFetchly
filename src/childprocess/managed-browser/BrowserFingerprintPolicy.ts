@@ -183,6 +183,11 @@ export interface ComposeLaunchArgsOptions {
   /** `host:port` proxy endpoint (credentials NEVER go on the argv). */
   readonly proxyServer?: string | null;
   readonly locale?: string | null;
+  /**
+   * R05/M-FR-13: the AI-controlled window's position offset — concurrent
+   * sessions tile instead of stacking on the same origin.
+   */
+  readonly windowPosition?: { x: number; y: number } | null;
 }
 
 /**
@@ -205,6 +210,10 @@ export function composeLaunchArgs(
     `--disable-extensions`,
     `--disable-sync`,
     `--metrics-recording-only`,
+    // R05/M-FR-13: the AI must keep driving a window that the USER
+    // covered — Chromium's occlusion-based backgrounding throttles
+    // timers and can stall the automation loop.
+    `--disable-backgrounding-occluded-windows`,
   ];
   if (options.diskCacheDir) {
     args.push(`--disk-cache-dir=${options.diskCacheDir}`);
@@ -220,6 +229,12 @@ export function composeLaunchArgs(
   const locale = options.locale ?? policy.locale;
   if (locale) {
     args.push(`--lang=${locale}`);
+  }
+  if (options.windowPosition) {
+    // R05/M-FR-13: concurrent sessions tile/offset instead of stacking.
+    args.push(
+      `--window-position=${options.windowPosition.x},${options.windowPosition.y}`
+    );
   }
   args.push(...policy.extraArgs);
   return args;

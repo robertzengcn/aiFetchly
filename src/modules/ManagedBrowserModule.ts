@@ -936,6 +936,22 @@ export class ManagedBrowserModule {
           storagePolicy: { temporaryProfilePath, persistentCache },
           platform: toWorkerPlatform(manifest),
           proxy: sessionProxy,
+          // R05/M-FR-13: concurrent headed windows tile/offset (this
+          // session's index among the LIVE sessions drives the offset)
+          // and the OS window title names the AI controller.
+          windowLayout: (() => {
+            const index = this.sessions.size;
+            const perRow = 3;
+            const stepX = 60;
+            const stepY = 60;
+            return {
+              position: {
+                x: (index % perRow) * stepX,
+                y: Math.floor(index / perRow) * stepY,
+              },
+              aiWindowTitle: true,
+            };
+          })(),
           cookies: startCookies,
         },
         START_SESSION_TIMEOUT_MS,
