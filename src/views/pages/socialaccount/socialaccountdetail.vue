@@ -212,8 +212,8 @@
             v-if="socialaccountId > 0"
             v-model="sessionProxyChoice"
             :items="[
-              { title: 'Account default', value: 'default' },
-              { title: 'Direct (no proxy)', value: 'direct' },
+              { title: t('socialaccount.session_proxy_default') || 'Account default', value: 'default' },
+              { title: t('socialaccount.session_proxy_direct') || 'Direct (no proxy)', value: 'direct' },
               ...savedProxies.map((p) => ({ title: p.label, value: String(p.id) })),
             ]"
             item-title="title"
@@ -335,7 +335,10 @@ const savedProxies = ref<Array<{ id: number; label: string }>>([]);
 async function loadSavedProxies(): Promise<void> {
   try {
     const { getProxyList } = await import('@/views/api/proxy');
-    const result = await getProxyList({ page: 1, limit: 50 } as never);
+    // P05/P-FR-01: the strict pagination schema accepts `size` (not
+    // `limit`) — the malformed key failed the parse and the saved-proxy
+    // list stayed empty, hiding every explicit proxy choice.
+    const result = await getProxyList({ page: 1, size: 50 });
     savedProxies.value = (result.data ?? []).map((row) => ({
       id: row.id,
       label: `${row.host}:${row.port}`,
@@ -366,6 +369,12 @@ async function openManagedBrowser(): Promise<void> {
     await router.push('/aiworkspace');
   } catch (error) {
     console.error('[socialaccountdetail] managed browser start failed:', error);
+    // P05/P-FR-01: a failed start is VISIBLE — never a silent button.
+    alertContent.value =
+      t('socialaccount.open_managed_browser_failed') ||
+      'Opening the managed browser failed. Check the proxy settings and try again.';
+    alertcolor.value = 'error';
+    alert.value = true;
   } finally {
     openingManagedBrowser.value = false;
   }

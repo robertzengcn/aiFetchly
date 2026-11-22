@@ -2844,13 +2844,22 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
       // direct session has effectiveProxyId null; refusing here left the
       // browser STOPPED after a failed switch (the audit's direct→bad-
       // proxy case).
-      const restoreSelection =
+      // C05/P-FR-02: KNOWN-direct vs UNKNOWN-effective are different
+      // states — an active auto/default route with an unrecorded
+      // effective id is NOT direct; silently restoring it as direct is
+      // the forbidden silent direct fallback. The original selector is
+      // restored instead (start health-checks it; a checked auto
+      // selector may resolve again, which the check validates).
+      const restoreSelection: BrowserProxySelection =
         restoreSnapshot.effectiveProxyId != null
-          ? { kind: "proxy_id" as const, proxyId: restoreSnapshot.effectiveProxyId }
-          : { kind: "direct" as const };
+          ? { kind: "proxy_id", proxyId: restoreSnapshot.effectiveProxyId }
+          : restoreSnapshot.proxySelection?.kind === "direct"
+            ? { kind: "direct" }
+            : (restoreSnapshot.proxySelection ?? { kind: "auto" });
       let rollbackOutcome: string;
+      let restoredSessionId: string | null = null;
       try {
-        await this.start({
+        const restored = await this.start({
           ...(restoreSnapshot.accountId
             ? { accountId: restoreSnapshot.accountId }
             : {}),
@@ -2870,10 +2879,13 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
             ? { requestedStartUrl: restoreSnapshot.lastUrl }
             : {}),
         });
+        restoredSessionId = restored.sessionId;
         rollbackOutcome =
           restoreSnapshot.effectiveProxyId != null
             ? `restored proxied session (proxy ${restoreSnapshot.effectiveProxyId})`
-            : "restored direct session";
+            : restoreSnapshot.proxySelection?.kind === "direct"
+              ? "restored direct session"
+              : "restored original route (effective id unknown)";
       } catch (restoreError) {
         // B04/P-AC-01: the rollback outcome is NAMED, never swallowed —
         // the caller must know the browser is STOPPED and on which route.
@@ -2889,9 +2901,13 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
         startError instanceof ManagedBrowserError
           ? startError.code
           : "proxy_no_usable_proxy";
+      // C05/P-FR-02: the error names the RESTORED session (when the
+      // rollback succeeded) so the caller can address the live window.
       throw new ManagedBrowserError(
         "proxy_switch_restore_failed",
-        `switch_failed=${startCode}; ${rollbackOutcome}`,
+        `switch_failed=${startCode}; ${rollbackOutcome}${
+          restoredSessionId ? `; restored_session=${restoredSessionId}` : ""
+        }`,
         startError instanceof Error ? startError.message : String(startError)
       );
     }

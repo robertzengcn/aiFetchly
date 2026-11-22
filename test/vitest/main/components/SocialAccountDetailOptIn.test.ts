@@ -88,6 +88,9 @@ const i18n = createI18n({
         save_fail: "failed",
         inactive: "Inactive",
         active: "Active",
+        session_proxy_default: "Account default",
+        session_proxy_direct: "Direct (no proxy)",
+        open_managed_browser_failed: "Opening the managed browser failed. Check the proxy settings and try again.",
       },
       common: {
         status: "Status",
@@ -263,6 +266,97 @@ describe("SocialAccountDetailPage AI opt-in (N08/Q-01)", () => {
     const error = wrapper.find("[data-testid='socialaccount-ai-optin-error']");
     expect(error.exists()).toBe(true);
     expect(error.text()).toBe("storage unavailable");
+    wrapper.unmount();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P05/P-FR-01: the session proxy route — the saved-proxy list actually
+// LOADS (the schema-valid paging shape), the explicit/direct options are
+// translated, and a failed managed-browser start is VISIBLE.
+// ---------------------------------------------------------------------------
+const proxyApiMock = vi.hoisted(() => ({
+  getProxyList: vi.fn(async () => ({
+    data: [
+      { id: 11, host: "proxy-one.example", port: 8080 },
+      { id: 12, host: "proxy-two.example", port: 3128 },
+    ],
+    total: 2,
+  })),
+}));
+vi.mock("@/views/api/proxy", () => proxyApiMock);
+
+describe("SocialAccountDetailPage session proxy route (P05)", () => {
+  beforeEach(() => {
+    proxyApiMock.getProxyList.mockClear();
+    proxyApiMock.getProxyList.mockImplementation(async () => ({
+      data: [
+        { id: 11, host: "proxy-one.example", port: 8080 },
+        { id: 12, host: "proxy-two.example", port: 3128 },
+      ],
+      total: 2,
+    }));
+  });
+
+  it("loads the saved proxies with the SCHEMA-VALID paging shape", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(proxyApiMock.getProxyList).toHaveBeenCalled();
+    const arg = proxyApiMock.getProxyList.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    // The strict pagination schema accepts `size` — a `limit` key failed
+    // the parse and silently emptied the list.
+    expect(arg).toMatchObject({ page: 1, size: 50 });
+    expect(arg).not.toHaveProperty("limit");
+    // Both saved proxies reached the selection state (the option list is
+    // built from it).
+    const state = (
+      wrapper.vm as unknown as {
+        $: { setupState: { savedProxies: Array<{ id: number; label: string }> } };
+      }
+    ).$.setupState;
+    expect(state.savedProxies.map((p) => p.id)).toEqual([11, 12]);
+    wrapper.unmount();
+  });
+
+  it("the translated explicit and direct options resolve (no raw keys)", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const state = (
+      wrapper.vm as unknown as {
+        $: { setupState: { sessionProxyChoice: string } };
+      }
+    ).$.setupState;
+    // The default choice is the account default (setupState unwraps
+    // template refs).
+    expect(state.sessionProxyChoice).toBe("default");
+    const html = wrapper.html();
+    // The raw i18n keys never leak into the markup.
+    expect(html).not.toContain("socialaccount.session_proxy_default");
+    expect(html).not.toContain("socialaccount.session_proxy_direct");
+    wrapper.unmount();
+  });
+
+  it("a failed managed-browser start shows a VISIBLE error alert", async () => {
+    const { startManagedBrowser } = await import("@/views/api/managedBrowser");
+    (startManagedBrowser as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        throw new Error("proxy_check_failed");
+      }
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+    const openButton = wrapper.find("[data-testid='open-managed-browser']");
+    expect(openButton.exists()).toBe(true);
+    await openButton.trigger("click");
+    await flushPromises();
+    // The v-alert stub always renders a plain div — the VISIBLE failure
+    // is the alert CONTENT after the failed click.
+    expect(wrapper.html()).toContain(
+      "Opening the managed browser failed"
+    );
     wrapper.unmount();
   });
 });
