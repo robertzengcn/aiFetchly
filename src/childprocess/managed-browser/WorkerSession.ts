@@ -521,6 +521,10 @@ export class WorkerSession {
         registry: this.registry,
         navigation: {
           publicBrowsing: this.platformDefinition?.platformId === 0,
+          // E01/F23: the E2E launch permits the loopback HTTP fixtures
+          // (the network guard already constrains the app to loopback);
+          // production/dev builds never define AIFETCHLY_E2E.
+          allowLoopbackFixtures: process.env.AIFETCHLY_E2E === "1",
           allowedOrigins: [
             ...this.adapter.allowedOrigins,
             ...this.adapter.loginOrigins,

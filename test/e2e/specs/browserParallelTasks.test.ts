@@ -1,68 +1,84 @@
 import { expect, test } from "@playwright/test";
+import { startFakeOpenAiServer } from "../fixtures/fakeOpenAiServer";
+import { createTemporaryRoot, writeStateManifest } from "../fixtures/temporaryState";
+import { launchAiFetchly, type LaunchedApp } from "../fixtures/electronApp";
 
 /**
- * T28 M-AC-01/C-AC-01/03: deterministic parallel-tasks E2E against local
- * fake sites. The harness exposes two local fixture origins and injects:
- *  - a fake CAPTCHA on site A (blocks one task in a handoff),
- *  - a normal result page on site B.
- *
- * Asserts: two browser tasks run concurrently; the CAPTCHA task waits
- * (Waiting for you) while the other completes; after the user resolves the
- * dialog in the fixture, the first task resumes and completes; a 45-minute
- * wait does not trip the parent poll (harness compresses time).
+ * T28 M-AC-01/C-AC-01/03 (E01): parallel-tasks E2E through the APP PATH.
+ * E01 enablement state:
+ *  - Stop-cancels-and-releases: ENABLED - the REAL batch tool runs two
+ *    fast-runner lanes; a mid-run Stop cancels both and the collector
+ *    cleanup releases every session (openSessions === 0).
+ *  - CAPTCHA wait/resume: still test.fixme - it needs the handoff dialog
+ *    driven in the MAIN WINDOW (a UI harness) plus a challenge fixture;
+ *    the wait/resume mechanics are covered by the runner + control
+ *    suites (R05/F06) and the handoff coordinator tests.
  */
-/**
- * F23 BOUNDARY: these tests drive the Electron app through the
- * window.__e2e* hooks that the app-run harness must expose — they
- * are test.fixme until that layer lands (the deterministic fixture
- * and the worker-equivalent driver pattern are proven in
- * browserSignIn.test.ts, which PASSES).
- */
-test.describe("browser parallel tasks E2E (deterministic fixture)", () => {
-  test.fixme("CAPTCHA wait on one task does not block the other; resume completes", async ({
-    page,
-  }) => {
-    await page.goto("https://localhost:8443/__e2e__/parallel-harness");
-
-    // Fan out: task A hits the CAPTCHA fixture, task B the result page.
-    await page.getByTestId("run-batch").click();
-    await page.getByTestId("run-batch").click; // settle harness handler
-
-    // Task B completes while task A is waiting for the user.
-    await expect(page.getByTestId("task-state-batch_1:1")).toHaveText(
-      "Completed",
-      { timeout: 30_000 }
-    );
-    await expect(page.getByTestId("task-state-batch_1:0")).toHaveText(
-      "Waiting for you"
-    );
-
-    // The user resolves the handoff dialog in the fixture (Verify).
-    await page.getByTestId("resolve-handoff").click();
-
-    // Task A resumes with a fresh observation and completes.
-    await expect(page.getByTestId("task-state-batch_1:0")).toHaveText(
-      "Completed",
-      { timeout: 30_000 }
-    );
-
-    // Both sessions stopped; leases released (harness assert endpoint).
-    const cleanup = await page.request.get("https://localhost:8443/__e2e__/cleanup-state");
-    expect(await cleanup.json()).toMatchObject({ openSessions: 0 });
+test.describe("browser parallel tasks E2E (app-path harness)", () => {
+  test("Stop cancels all tasks and releases every lease", async () => {
+    test.setTimeout(180_000);
+    const fakeAi = await startFakeOpenAiServer();
+    const root = createTemporaryRoot({
+      testId: "browser-parallel-tasks-e2e",
+      workerIndex: 0,
+    });
+    writeStateManifest(root, {
+      authState: "authenticated",
+      aiState: "local-enabled",
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      workspacePath: root.workspacePath,
+    });
+    const app = await launchAiFetchly({
+      testRoot: root,
+      fakeAiBaseUrl: fakeAi.providerBaseUrl,
+      extraEnv: { AIFETCHLY_E2E_APP_HOOKS: "1" },
+    });
+    try {
+      await fakeAi.setScenario("browser-decision");
+      const result = await app.mainWindow.evaluate(
+        async (stopAfterMs: number) => {
+          const hooks = (window as unknown as {
+            __e2e?: {
+              runBatchAndStop?: (input: {
+                readonly stopAfterMs: number;
+                readonly goals: readonly string[];
+              }) => Promise<{
+                batchId: string;
+                statuses: string[];
+                openSessions: number;
+              }>;
+            };
+          }).__e2e;
+          if (!hooks?.runBatchAndStop) {
+            throw new Error("e2e_hooks_missing");
+          }
+          return await hooks.runBatchAndStop({
+            stopAfterMs,
+            goals: ["slow lane A", "slow lane B"],
+          });
+        },
+        900
+      );
+      // T13 semantics: UNFINISHED lanes end cancelled/partial (a user
+      // stop, never a failure); a lane that already COMPLETED before the
+      // stop landed keeps its honest result.
+      expect(result.statuses.length).toBe(2);
+      for (const status of result.statuses) {
+        expect(["cancelled", "partial", "completed"]).toContain(status);
+      }
+      expect(result.statuses).toContain("cancelled");
+      // E01/M-FR-09: every lease released - no session survives.
+      expect(result.openSessions).toBe(0);
+    } finally {
+      await app.electronApp.close();
+      await fakeAi.stop();
+    }
   });
 
-  test.fixme("Stop cancels all tasks and releases every lease", async ({ page }) => {
-    await page.goto("https://localhost:8443/__e2e__/parallel-harness");
-    await page.getByTestId("run-batch").click();
-    await page.getByTestId("stop-all").click();
-
-    await expect(page.getByTestId("task-state-batch_1:0")).toHaveText(
-      "Stopped"
-    );
-    await expect(page.getByTestId("task-state-batch_1:1")).toHaveText(
-      "Stopped"
-    );
-    const cleanup = await page.request.get("https://localhost:8443/__e2e__/cleanup-state");
-    expect(await cleanup.json()).toMatchObject({ openSessions: 0 });
+  test.fixme("CAPTCHA wait on one task does not block the other; resume completes", async () => {
+    // E01 boundary: needs the handoff dialog driven in the MAIN WINDOW
+    // (a UI harness) plus a challenge fixture; the wait/resume mechanics
+    // are covered by the runner + control suites (R05/F06) and the
+    // handoff coordinator tests.
   });
 });

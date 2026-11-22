@@ -91,6 +91,8 @@ import {
 import { noInputSchema } from "@/schemas/ipc/_shared/common";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import { getDefaultManagedBrowserAiToolService } from "@/service/ManagedBrowserAiToolService";
+import { ipcMain } from "electron";
+import { bumpProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import type { SafeBrowserChatNotice } from "@/entityTypes/managedBrowserTypes";
 
 /**
@@ -915,4 +917,165 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       }
     }
   );
+
+// ---------------------------------------------------------------------------
+// E01/D-AC-02/06/09: the APP-PATH acceptance harness. Mounted ONLY when the
+// E2E launch env opts in (AIFETCHLY_E2E_APP_HOOKS=1); product behavior is
+// unchanged otherwise. The hooks call the REAL production services
+// (startSession + executeTask against the loopback fixture) through the
+// same code paths the accelerated task uses in production.
+// ---------------------------------------------------------------------------
+void (async () => {
+  if (process.env.AIFETCHLY_E2E_APP_HOOKS !== "1") {
+    return;
+  }
+  const runE2ETask = async (input: {
+    readonly startUrl: string;
+    readonly goal: string;
+    readonly completionCriteria?: ReadonlyArray<{ kind: string; value: string }>;
+    readonly flipProviderMidTask?: boolean;
+    readonly stopAfterMs?: number;
+  }): Promise<{
+    status: string;
+    reason: string;
+    finalObservation: { url: string | null } | null;
+    sessionId: string | null;
+    evidence: string[];
+  }> => {
+    // E01: seed the decision route with the fake provider's model (the
+    // follow_chat route needs a RESOLVABLE model; the fake accepts any).
+    // Idempotent: every call re-writes the same deterministic value.
+    const { ManagedBrowserSettingsModule } = await import(
+      "@/modules/ManagedBrowserSettingsModule"
+    );
+    await new ManagedBrowserSettingsModule().updatePreferences({
+      decisionRoute: { chatDecisionModel: "e2e-decision-model" },
+    });
+    const service = getDefaultManagedBrowserAiToolService();
+    const started = (await service.startSession(
+      { purpose: "e2e-acceptance", requested_start_url: input.startUrl },
+      {
+        conversationId: "e2e-conv",
+        toolCallId: "e2e-start",
+        skipPermissionCheck: true,
+      }
+    )) as { sessionId?: string; session_id?: string };
+    const sessionId = started.sessionId ?? started.session_id ?? null;
+    if (!sessionId) {
+      throw new Error("e2e_start_no_session");
+    }
+    if (input.flipProviderMidTask) {
+      // D-FR-02: the provider revision bumps mid-task - the decision
+      // client refuses the next dispatch (provider_config_changed).
+      // E01/D-FR-02: the bump lands AFTER the planner round (the fake's
+      // per-decision delay keeps it deterministic) - mid-loop, so the
+      // refused DISPATCH is the observable (never a planner failure).
+      setTimeout(() => {
+        bumpProviderConfigVersion();
+      }, 900);
+    }
+    let stopTimer: NodeJS.Timeout | null = null;
+    const abortController = new AbortController();
+    if (input.stopAfterMs !== undefined) {
+      stopTimer = setTimeout(() => {
+        abortController.abort();
+        void getDefaultManagedBrowserModule().stop(sessionId, "user_stop").catch(() => undefined);
+      }, input.stopAfterMs);
+    }
+    try {
+      const result = (await service.executeTask(
+        {
+          session_id: sessionId,
+          goal: input.goal,
+          ...(input.completionCriteria
+            ? { completion_criteria: input.completionCriteria }
+            : {}),
+        },
+        {
+          conversationId: "e2e-conv",
+          toolCallId: "e2e-exec",
+          skipPermissionCheck: true,
+          signal: abortController.signal,
+        }
+      )) as {
+        status: string;
+        reason: string;
+        finalObservation: { url: string | null } | null;
+        evidence: string[];
+      };
+      return {
+        status: result.status,
+        reason: result.reason,
+        finalObservation: result.finalObservation ?? null,
+        evidence: [...(result.evidence ?? [])],
+        sessionId,
+      };
+    } finally {
+      if (stopTimer) {
+        clearTimeout(stopTimer);
+      }
+    }
+  };
+
+  ipcMain.handle(
+    "managed-browser:e2e:run-batch-and-stop", async (_e: unknown, input: unknown) => {
+      // E01/M-AC-01/M-FR-09: the REAL batch tool with two slow lanes; the
+      // caller's stop aborts mid-run and the result must carry cancelled
+      // rows (leases released via the collector's cleanup).
+      const parsed = input as {
+        readonly stopAfterMs: number;
+        readonly goals: readonly string[];
+      };
+      const { runBrowserTasks, getBatchConfirmWaitRegistry } = await import(
+        "@/service/agentTools/runBrowserTasksTool"
+      );
+      // E01: auto-confirm the batch card (the renderer card harness is
+      // not part of this acceptance path).
+      getBatchConfirmWaitRegistry().setSink((request) => {
+        const entry = getBatchConfirmWaitRegistry().consume({
+          requestId: request.requestId,
+          conversationId: request.conversationId,
+        });
+        entry?.resolve({ confirmed: true, cancelled: false });
+      });
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), parsed.stopAfterMs);
+      const { batchId, results } = await runBrowserTasks(
+        parsed.goals.map((goal) => ({ goal })),
+        2,
+        "e2e-conv",
+        controller.signal,
+        {},
+        undefined,
+        { executor: "fast_runner" }
+      );
+      // E01: the lease/sessional cleanup check — every lane's sessions
+      // must be stopped by the collector's cleanup before this returns.
+      return {
+        batchId,
+        statuses: results.map((r) => r.status),
+        openSessions: getDefaultManagedBrowserModule().listActiveSessions()
+          .length,
+      };
+    }
+  );
+  ipcMain.handle(
+    "managed-browser:e2e:execute-task",
+    async (_e: unknown, input: unknown) => {
+      const parsed = input as {
+        readonly startUrl: string;
+        readonly goal: string;
+        readonly completionCriteria?: ReadonlyArray<{
+          kind: string;
+          value: string;
+        }>;
+        readonly flipProviderMidTask?: boolean;
+        readonly stopAfterMs?: number;
+      };
+      return runE2ETask(parsed);
+    }
+  );
+})().catch((error) => {
+  console.error("[managed-browser] e2e harness mount failed:", error);
+});
 }

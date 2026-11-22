@@ -1594,6 +1594,58 @@ contextBridge.exposeInMainWorld("api", {
   },
 });
 
+// E01/D-AC-02/06/09: the APP-PATH acceptance hooks - exposed ONLY when the
+// E2E launch env opts in (the main-process bridge is gated identically).
+// The hooks drive the REAL production accelerated-task path (startSession +
+// executeTask) against the loopback fixture; product behavior is unchanged
+// otherwise.
+if (process.env.AIFETCHLY_E2E_APP_HOOKS === "1") {
+  contextBridge.exposeInMainWorld("__e2e", {
+    executeTask: (input: {
+      readonly startUrl: string;
+      readonly goal: string;
+      readonly completionCriteria?: ReadonlyArray<{
+        kind: string;
+        value: string;
+      }>;
+      readonly flipProviderMidTask?: boolean;
+      readonly stopAfterMs?: number;
+    }): Promise<{
+      status: string;
+      reason: string;
+      finalObservation: { url: string | null } | null;
+      sessionId: string | null;
+      evidence: string[];
+    }> =>
+      ipcRenderer.invoke(
+        "managed-browser:e2e:execute-task",
+        input
+      ) as unknown as Promise<{
+        status: string;
+        reason: string;
+        finalObservation: { url: string | null } | null;
+        sessionId: string | null;
+        evidence: string[];
+      }>,
+    runBatchAndStop: (input: {
+      readonly stopAfterMs: number;
+      readonly goals: readonly string[];
+    }): Promise<{
+      batchId: string;
+      statuses: string[];
+      openSessions: number;
+    }> =>
+      ipcRenderer.invoke(
+        "managed-browser:e2e:run-batch-and-stop",
+        input
+      ) as unknown as Promise<{
+        batchId: string;
+        statuses: string[];
+        openSessions: number;
+      }>,
+  });
+}
+
 // Dedicated diagnostics bridge for renderer-originated error reports.
 // Kept separate from the generic `api` whitelist so the renderer entry point
 // (src/views/main.ts) can report uncaught errors without referencing channel

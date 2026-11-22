@@ -158,6 +158,15 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         description: "managed-browser-decision-enabled-description",
       },
       {
+        // P01/E01: the decision-route row is SEEDED - a fresh install
+        // must be able to persist the route (and the capability probe
+        // flags) without a setting_row_missing failure.
+        key: MANAGED_BROWSER_SETTING_KEYS.decisionRoute,
+        value: "{\"version\":1,\"mode\":\"follow_chat\",\"chatDecisionModel\":null,\"batchSubAgentModel\":null,\"nativeProfile\":null,\"requestTimeoutMs\":null,\"chatCapabilities\":null}",
+        description: "managed-browser-decision-route-description",
+        type: "input",
+      },
+      {
         key: "managed-browser-2captcha-non-login",
         value: "0",
         description: "managed-browser-2captcha-non-login-description",

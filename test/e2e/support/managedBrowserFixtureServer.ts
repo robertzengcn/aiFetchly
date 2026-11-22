@@ -54,12 +54,50 @@ const CONSEQUENTIAL_HTML = `<!doctype html>
   <button id="publish">Publish video</button>
 </body></html>`;
 
+/** E01: the deterministic search fixture page (the task's start). */
+const SEARCH_HTML = `<!doctype html>
+<html><head><title>Fixture Search</title></head>
+<body>
+  <h1>Fixture Search</h1>
+  <form action="/results" method="get">
+    <input id="search" name="q" type="text" value="__QUERY__" aria-label="Search" />
+    <button id="go" type="submit">Search</button>
+  </form>
+</body></html>`;
+
+/** E01: the deterministic results page (the verified-completion target). */
+const RESULTS_HTML = `<!doctype html>
+<html><head><title>Fixture Results</title></head>
+<body>
+  <h1>Fixture Results</h1>
+  <p class="query-term">__QUERY__</p>
+  <ul id="results">
+    <li>supplier prices list A</li>
+    <li>supplier prices list B</li>
+  </ul>
+</body></html>`;
+
 export async function startManagedBrowserFixtureServer(): Promise<FixtureServer> {
   const requests: string[] = [];
   const server = http.createServer((req, res) => {
     const url = req.url ?? "/";
     requests.push(url);
     const [path] = url.split("?");
+    // E01/D-AC-02/06/09: the deterministic SEARCH fixture - a search
+    // box that navigates to /results?q=<term> (the accelerated
+    // task's verified-completion criteria live on the RESULT URL).
+    if (path === "/search") {
+      const q = new URL(url, "http://127.0.0.1").searchParams.get("q") ?? "";
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(SEARCH_HTML.replace("__QUERY__", q));
+      return;
+    }
+    if (path === "/results") {
+      const q = new URL(url, "http://127.0.0.1").searchParams.get("q") ?? "";
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(RESULTS_HTML.replace("__QUERY__", q));
+      return;
+    }
     const page =
       path === "/login"
         ? LOGIN_HTML

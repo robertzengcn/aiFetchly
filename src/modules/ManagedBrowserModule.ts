@@ -715,6 +715,8 @@ export class ManagedBrowserModule {
       const decision = evaluateNavigationTarget(input.requestedStartUrl, {
         allowedOrigins: manifest.allowedDomainSuffixes,
         publicBrowsing,
+        // E01/F23: the E2E launch permits the loopback HTTP fixtures.
+        allowLoopbackFixtures: process.env.AIFETCHLY_E2E === "1",
       });
       if (!decision.allowed) throw new ManagedBrowserError("navigation_blocked", decision.reasonCode);
     }
@@ -1032,6 +1034,7 @@ export class ManagedBrowserModule {
         const navDecision = evaluateNavigationTarget(input.requestedStartUrl, {
           allowedOrigins: [...manifest.allowedDomainSuffixes],
           publicBrowsing,
+          allowLoopbackFixtures: process.env.AIFETCHLY_E2E === "1",
         });
         if (navDecision.allowed) {
           const navigation = await this.requestWorker(

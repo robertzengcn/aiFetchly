@@ -53,5 +53,16 @@ export default defineConfig({
       // startup. Polling is heavier but never hits the watcher cap.
       env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
     },
+    {
+      // E01/F23: the deterministic LOGIN fixture (https://localhost:8443)
+      // boots with the suite - the spec was runnable only with a
+      // manually-started fixture before this entry existed.
+      command: "node test/e2e/fixtures/fakeLoginSiteBoot.mjs",
+      // The PLAIN HTTP health endpoint (port + 1 = 8444) is the readiness
+      // URL - the poll never depends on TLS negotiation.
+      url: "http://127.0.0.1:8444",
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
   ],
 });

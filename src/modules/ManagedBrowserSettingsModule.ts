@@ -168,6 +168,13 @@ export interface ManagedBrowserSettingWriter {
     settingId: number,
     settingValue: string | null
   ): Promise<unknown>;
+  /**
+   * P01/E01: insert a MISSING setting row (key + value) — a fresh
+   * install's managed-browser group rows may not exist yet; a preference
+   * write must not fail with setting_row_missing. Optional for legacy
+   * writers; when absent a missing row still fails closed.
+   */
+  insertSettingRow?(key: string, value: string | null): Promise<unknown>;
 }
 
 /** User-controllable preference patch for the settings panel. */
@@ -518,7 +525,18 @@ export class ManagedBrowserSettingsModule {
     const writer = this.writer as ManagedBrowserSettingWriter;
     const item = await writer.getSettingItem(key);
     if (!item) {
-      throw new Error("setting_row_missing");
+      // P01/E01: a fresh install may not have seeded the managed-browser
+      // group rows yet — create the row instead of failing every first
+      // preference write with setting_row_missing.
+      if (typeof writer.insertSettingRow !== "function") {
+        throw new Error("setting_row_missing");
+      }
+      await writer.insertSettingRow(key, value);
+      const created = await writer.getSettingItem(key);
+      if (!created) {
+        throw new Error("setting_row_missing");
+      }
+      return await writer.updateSystemSetting(created.id, value);
     }
     return writer.updateSystemSetting(item.id, value);
   }

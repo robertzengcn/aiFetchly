@@ -34,6 +34,43 @@ export class SystemSettingModule extends BaseModule {
    * preferences stored in the system_setting table (e.g. auto-dream,
    * memory injection) as opposed to subscription flags kept on Token.
    */
+  /**
+   * P01/E01: insert a MISSING setting row (key + value). The settings
+   * group seeding only runs on the init path; a fresh install's first
+   * managed-browser preference write must not fail.
+   */
+  public async insertSettingRow(
+    key: string,
+    value: string | null
+  ): Promise<unknown> {
+    // P01/E01: the row requires its group + description + type (NOT NULL
+    // columns) — the managed-browser group is created on demand (the
+    // canonical seeding only runs on the init path).
+    const { SystemSettingGroupModel } = await import(
+      "@/model/SystemSettingGroup.model"
+    );
+    const { MANAGED_BROWSER_SETTING_KEYS } = await import(
+      "@/config/managedBrowser"
+    );
+    const groupModel = new SystemSettingGroupModel(this.dbpath);
+    let group = await groupModel.getGroupItembyName(
+      MANAGED_BROWSER_SETTING_KEYS.group
+    );
+    if (!group) {
+      group = await groupModel.createGroup(
+        MANAGED_BROWSER_SETTING_KEYS.group,
+        MANAGED_BROWSER_SETTING_KEYS.groupDescription
+      );
+    }
+    const entity = new SystemSettingEntity();
+    entity.key = key;
+    entity.value = value ?? "";
+    entity.description = "managed-browser setting (auto-created on write)";
+    entity.type = "input";
+    entity.group = group;
+    return await this.systemSettingModel.insert(entity);
+  }
+
   public async getSettingValue(key: string): Promise<string | null> {
     const setting = await this.systemSettingModel.getSettingItem(key);
     return setting?.value ?? null;
