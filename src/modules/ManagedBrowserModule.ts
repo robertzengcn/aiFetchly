@@ -640,6 +640,12 @@ export class ManagedBrowserModule {
         );
       }
     }
+    // P06/S-FR-01: the REGISTRY is authoritative at launch — the
+    // siteMatch-derived definition wins and the static manifest is the
+    // legacy fallback (the old order let a stale static record override
+    // a seeded/updated registry site). siteMatch is guaranteed by the
+    // platform_not_in_pilot throw above, so the non-public branch always
+    // yields a manifest.
     const manifest: PlatformSessionDefinition | undefined = publicBrowsing
       ? {
           platformId: 0,
@@ -650,18 +656,21 @@ export class ManagedBrowserModule {
           requiredDomainSuffixes: [],
           browserProfileImportEnabled: false,
         }
-      : (getPlatformManifest(account.platformId) ?? {
-          platformId: siteMatch!.siteId,
-          platformName: siteMatch!.name,
-          loginUrl: siteMatch!.loginUrl ?? `https://${siteMatch!.registrableDomain}`,
-          verificationUrl:
-            siteMatch!.verificationUrl ??
-            siteMatch!.loginUrl ??
-            `https://${siteMatch!.registrableDomain}`,
-          allowedDomainSuffixes: [...siteMatch!.allowedDomainSuffixes],
-          requiredDomainSuffixes: [...siteMatch!.requiredDomainSuffixes],
-          browserProfileImportEnabled: false,
-        });
+      : (siteMatch
+        ? {
+            platformId: siteMatch.siteId,
+            platformName: siteMatch.name,
+            loginUrl:
+              siteMatch.loginUrl ?? `https://${siteMatch.registrableDomain}`,
+            verificationUrl:
+              siteMatch.verificationUrl ??
+              siteMatch.loginUrl ??
+              `https://${siteMatch.registrableDomain}`,
+            allowedDomainSuffixes: [...siteMatch.allowedDomainSuffixes],
+            requiredDomainSuffixes: [...siteMatch.requiredDomainSuffixes],
+            browserProfileImportEnabled: false,
+          }
+        : (getPlatformManifest(account.platformId) as PlatformSessionDefinition));
 
     // 4a. PRD P-FR-01: explicit proxy choice at session start. Selection
     // is fail-closed: SOCKS/unknown/unusable proxies are rejected, and an
@@ -2460,9 +2469,10 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
       // still-public worker (platformId=0) never captures refreshed
       // cookies, so a signed_in result would lack the promised persistent
       // account session.
+      // P06/S-FR-01: the registry is authoritative at bind too.
       bindManifest =
-        getPlatformManifest(account.platformId) ??
-        (await this.deriveManifestFromSite(account.platformId));
+        (await this.deriveManifestFromSite(account.platformId)) ??
+        getPlatformManifest(account.platformId);
       if (!bindManifest) {
         throw new ManagedBrowserError(
           "managed_browser_disabled",

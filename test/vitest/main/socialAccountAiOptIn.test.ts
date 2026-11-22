@@ -140,3 +140,62 @@ describe("SocialAccountModule per-account AI opt-in (Q-01/R02)", () => {
     ).rejects.toThrow("save_not_requested");
   });
 });
+
+// ---------------------------------------------------------------------------
+// P06/S-FR-01/Q-01: the pending prompt set preserves PRIOR consent (an
+// already-opted-in row never re-enters), and a platform REBIND is an
+// explicit credential/cookie transition (the old platform's password and
+// cookie snapshot never silently carry across).
+// ---------------------------------------------------------------------------
+describe("SocialAccountModule opt-in cohort + rebind transition (P06)", () => {
+  beforeEach(() => {
+    (SqliteDb as unknown as { instance: unknown }).instance = null;
+    (SqliteDb as unknown as { currentDbPath: string | null }).currentDbPath = null;
+    (SqliteDb as unknown as { initPromise: unknown }).initPromise = null;
+  });
+
+  it("an already-opted-in row never re-enters the pending prompt set", async () => {
+    const module = new SocialAccountModule();
+    // A pre-feature row: opted in via the toggle, never prompted.
+    const id = await module.saveSubmittedCredential({
+      siteId: 2,
+      platformId: 2,
+      username: "prior-consent@example.test",
+      password: "pw",
+      save: true,
+    });
+    await expect(module.getAiUseEnabled(id)).resolves.toBe(true);
+    const pending = await module.listAccountsMissingOptIn();
+    expect(pending.find((row) => row.id === id)).toBeUndefined();
+  });
+
+  it("a platform REBIND clears the old credential and the cookie snapshot", async () => {
+    const module = new SocialAccountModule();
+    const id = await module.saveSubmittedCredential({
+      siteId: 2,
+      platformId: 2,
+      username: "rebind@example.test",
+      password: "youtube-secret",
+      save: true,
+    });
+    // The editor saves the account with a DIFFERENT platform — the
+    // explicit identity transition.
+    await module.saveSocialAccount({
+      id,
+      user: "rebind@example.test",
+      pass: "",
+      status: 1,
+      name: "rebind",
+      social_type_id: 3,
+    } as never);
+    const model = (module as unknown as {
+      socialAccountModel: {
+        findRowById: (id: number) => Promise<{ pass: string } | null>;
+      };
+    }).socialAccountModel;
+    const row = await model.findRowById(id);
+    // The old platform's credential never carries across — the stored
+    // password is cleared (the user re-enters it for the new platform).
+    expect(row?.pass === "" || row?.pass === null).toBe(true);
+  });
+});

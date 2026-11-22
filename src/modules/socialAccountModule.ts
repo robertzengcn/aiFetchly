@@ -275,6 +275,23 @@ export class SocialAccountModule extends BaseModule {
               socialAccountData.social_type_id
             );
             socialAccount.site_id = newSite ? newSite.siteId : null;
+            // P06/S-FR-01: the platform change is an EXPLICIT identity
+            // transition — the OLD platform's stored credential and its
+            // cookie snapshot must not silently carry across (a YouTube
+            // password is useless — and dangerous — against a Facebook
+            // login). The user re-enters the credential for the new
+            // platform; sign-in refuses until then.
+            socialAccount.pass = "";
+            try {
+              await this.accountSessionService.clearAccountSession(
+                socialAccountData.id
+              );
+            } catch (err) {
+              console.error(
+                "[socialaccount] rebind cookie clear failed:",
+                err
+              );
+            }
           }
         }
       }
