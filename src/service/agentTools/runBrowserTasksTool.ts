@@ -49,9 +49,44 @@ export interface BrowserBatchTaskResult {
    * to the parent.
    */
   readonly output_ids?: readonly string[];
+  /** E02/N01/D-AC-08: the lane's provider-reported token usage. */
+  readonly tokensUsed?: number;
+  /** E02/design §21: the lane's per-phase duration metadata. */
+  readonly timings?: {
+    readonly wallMs: number;
+    readonly observationMs: number;
+    readonly decideMs: number;
+    readonly executeMs: number;
+    readonly verifyMs: number;
+    readonly attempts: number;
+  };
 }
 
 export const MAX_BATCH_TASKS = 5;
+
+/**
+ * E02/design §21: the batch-level qualification summary — wall time,
+ * provider cost and token totals, per-phase sums and the parent-context
+ * size. Metadata only (never page/credential content); the per-row
+ * detail rides each result's own counts/timings.
+ */
+export interface BrowserBatchMetrics {
+  /** Full batch wall duration (confirmation -> final row). */
+  readonly wallMs: number;
+  /** Sum of provider-reported token usage across lanes. */
+  readonly tokensUsed: number;
+  /** Sum of provider attempts (decisions incl. recovery) across lanes. */
+  readonly attempts: number;
+  /** Per-phase sums across lanes (ms). */
+  readonly phases: {
+    readonly observationMs: number;
+    readonly decideMs: number;
+    readonly executeMs: number;
+    readonly verifyMs: number;
+  };
+  /** Parent-context size proxy: the serialized batch result bytes. */
+  readonly parentContextBytes: number;
+}
 export const MAX_BATCH_CONCURRENCY = 3;
 
 /** M-FR-02: strict sub-agent result schema. */
@@ -132,6 +167,8 @@ export async function runBrowserTasksForTool(
   results: BrowserBatchTaskResult[];
   /** M-FR-04: false when the user refused the batch confirmation card. */
   confirmed?: boolean;
+  /** E02/design §21: the batch qualification summary. */
+  metrics?: BrowserBatchMetrics;
 }> {
   const { BrowserAiAvailabilityService } = await import(
     "@/service/browserDecision/BrowserAiAvailabilityService"
@@ -814,8 +851,13 @@ export async function runBrowserTasks(
   results: BrowserBatchTaskResult[];
   /** M-FR-04: false when the user refused the batch confirmation card. */
   confirmed?: boolean;
+  /** E02/design §21: the batch qualification summary. */
+  metrics?: BrowserBatchMetrics;
 }> {
   const batchId = `batch_${randomUUID().slice(0, 12)}`;
+  // E02/design §21: the qualification wall clock starts BEFORE the
+  // confirmation wait (the full user-visible batch duration).
+  const batchStartedAtMs = Date.now();
   const batchAbort = new AbortController();
   const onOuterAbort = (): void => batchAbort.abort();
   signal.addEventListener("abort", onOuterAbort, { once: true });
@@ -1046,6 +1088,14 @@ export async function runBrowserTasks(
               evidence?: string[];
               finalObservation?: { url?: string | null } | null;
               tokensUsed?: number;
+              timings?: {
+                wallMs: number;
+                observationMs: number;
+                decideMs: number;
+                executeMs: number;
+                verifyMs: number;
+                attempts: number;
+              };
             };
             // B03: the collector validates output.status strictly against
             // completed | failed | needs_user. interrupted = partial
@@ -1074,6 +1124,9 @@ export async function runBrowserTasks(
             return {
               status: "completed",
               ...(laneTokensUsed !== undefined ? { tokensUsed: laneTokensUsed } : {}),
+              // E02/design §21: the lane's phase timings ride the envelope
+              // for the batch qualification summary.
+              ...(executed.timings ? { timings: executed.timings } : {}),
               output: {
                 status: taskStatus,
                 summary:
@@ -1791,6 +1844,26 @@ export async function runBrowserTasks(
           ],
           needs_user: boundedNeedsUser,
           user_interventions: mapInterventions(control.get(taskId)?.interventions ?? []),
+          // E02/N01/D-AC-08 + §21: usage and phase timings ride the row.
+          ...((() => {
+            const usage = (result as { tokensUsed?: number }).tokensUsed;
+            return typeof usage === "number" && usage > 0
+              ? { tokensUsed: usage }
+              : {};
+          })()),
+          ...((() => {
+            const raw = (result as { timings?: unknown }).timings;
+            if (
+              raw !== null &&
+              typeof raw === "object" &&
+              typeof (raw as { wallMs?: unknown }).wallMs === "number"
+            ) {
+              return {
+                timings: raw as BrowserBatchTaskResult["timings"],
+              };
+            }
+            return {} as Pick<BrowserBatchTaskResult, "timings">;
+          })()),
           ...(task.keep_open
             ? { session_id: transferredSessionId }
             : {}),
@@ -1973,7 +2046,36 @@ export async function runBrowserTasks(
   // M-FR-11: the returned rows already carry the per-row extracted dedupe
   // and the cross-row output-receipt dedupe (computed above, feeding both
   // the final events and this result).
-  return { batchId, results: deduped };
+  // E02/design §21: the batch qualification summary — wall time, token
+  // totals, per-phase sums and the parent-context size (the serialized
+  // report itself is the proxy; content is redacted upstream per row).
+  const phases = deduped.reduce(
+    (acc, row) => ({
+      observationMs: acc.observationMs + (row.timings?.observationMs ?? 0),
+      decideMs: acc.decideMs + (row.timings?.decideMs ?? 0),
+      executeMs: acc.executeMs + (row.timings?.executeMs ?? 0),
+      verifyMs: acc.verifyMs + (row.timings?.verifyMs ?? 0),
+    }),
+    { observationMs: 0, decideMs: 0, executeMs: 0, verifyMs: 0 }
+  );
+  const attempts = deduped.reduce(
+    (sum, row) => sum + (row.timings?.attempts ?? 0),
+    0
+  );
+  const tokensUsed = deduped.reduce((sum, r) => sum + (r.tokensUsed ?? 0), 0);
+  const metrics: BrowserBatchMetrics = {
+    wallMs: Date.now() - batchStartedAtMs,
+    tokensUsed,
+    attempts,
+    phases: {
+      observationMs: phases.observationMs,
+      decideMs: phases.decideMs,
+      executeMs: phases.executeMs,
+      verifyMs: phases.verifyMs,
+    },
+    parentContextBytes: Buffer.byteLength(JSON.stringify(deduped), "utf8"),
+  };
+  return { batchId, results: deduped, metrics };
 }
 
 /**

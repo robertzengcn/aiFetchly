@@ -100,6 +100,24 @@ export interface BrowserTaskResult {
     readonly startedAtEpochMs: number;
     readonly durationMs: number | null;
   }>;
+  /**
+   * E02/design §21: per-phase duration instrumentation (ms). Metadata
+   * only - never page/field/credential content. observation/decide/
+   * execute/verify are SUMS over the loop's iterations; wall is the full
+   * run() duration (including user waits, which the active clock
+   * excludes); attempts counts provider calls incl. recovery.
+   */
+  readonly timings?: TaskPhaseTimings;
+}
+
+export interface TaskPhaseTimings {
+  readonly wallMs: number;
+  readonly observationMs: number;
+  readonly decideMs: number;
+  readonly executeMs: number;
+  readonly verifyMs: number;
+  /** Provider attempts (decisions + recovery + verifier), all tries. */
+  readonly attempts: number;
 }
 
 export interface RunnerDeps {
@@ -385,6 +403,16 @@ export class BrowserTaskRunner {
   private pendingRecoveryGeneration: number | null = null;
   /** B16: the URL the task started on (documented DONE fallback). */
   private startUrl: string | null = null;
+  /** E02/design §21: per-phase duration accumulators (ms). */
+  private readonly phaseTimings = {
+    wallMs: 0,
+    observationMs: 0,
+    decideMs: 0,
+    executeMs: 0,
+    verifyMs: 0,
+    attempts: 0,
+  };
+  private runStartedAtMs = 0;
   /** A-FR-14: bounded credential-service attempts per task. */
   private signInAttempts = 0;
   /** N02/D-FR-05: the plan established once at admission. */
@@ -432,6 +460,9 @@ export class BrowserTaskRunner {
   }
 
   public async run(): Promise<BrowserTaskResult> {
+    // E02/design §21: the wall clock covers the FULL run (including user
+    // waits — the ACTIVE clock excludes them); phase sums exclude idle.
+    this.runStartedAtMs = Date.now();
     // R01/design §6.3 (ACCEPTED SUBSTITUTE, documented): the design's
     // state machine (`reconciling` / `verifying` / `awaiting_approval`
     // micro-states) is implemented as ONE bounded while-loop with
@@ -523,7 +554,7 @@ export class BrowserTaskRunner {
       if (!this.plannerRan && this.deps.plan) {
         this.plannerRan = true;
         const firstObservation =
-          observation ?? (await this.deps.observe(this.input.sessionId));
+          observation ?? (await this.observeTimed(this.input.sessionId));
         const plan = firstObservation
           ? await this.deps.plan({
               goal: this.input.goal,
@@ -573,7 +604,7 @@ export class BrowserTaskRunner {
           return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
         }
         if (!observation) {
-          observation = await this.deps.observe(this.input.sessionId);
+          observation = await this.observeTimed(this.input.sessionId);
           if (!observation) {
             return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
           }
@@ -701,7 +732,7 @@ export class BrowserTaskRunner {
                 // best-effort release
               }
             }
-            observation = await this.deps.observe(this.input.sessionId);
+            observation = await this.observeTimed(this.input.sessionId);
             if (!observation) {
               return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
             }
@@ -783,7 +814,7 @@ export class BrowserTaskRunner {
             // best-effort: a failed pin must not block the decision
           }
           try {
-            decision = await this.deps.decisionClient.decide(
+            decision = await this.decideTimed(
               decisionInput,
               attemptController.signal
             );
@@ -822,7 +853,7 @@ export class BrowserTaskRunner {
             control.getResumeGeneration(this.taskId) > generationBeforeDecide
           ) {
             evidence.push("decision_discarded_after_resume");
-            observation = await this.deps.observe(this.input.sessionId);
+            observation = await this.observeTimed(this.input.sessionId);
             if (!observation) {
               return this.terminal("failed", "observation_unavailable", evidence, extracted, null);
             }
@@ -848,7 +879,7 @@ export class BrowserTaskRunner {
               !decisionFromRecovery &&
               this.recoveryCalls < this.budget.recoveryCalls
             ) {
-              const freshLlmObservation = await this.deps.observe(
+              const freshLlmObservation = await this.observeTimed(
                 this.input.sessionId
               );
               if (freshLlmObservation) {
@@ -927,7 +958,7 @@ export class BrowserTaskRunner {
           control.getResumeGeneration(this.taskId) > generationBeforeDecide
         ) {
           evidence.push("decision_discarded_after_resume");
-          observation = await this.deps.observe(this.input.sessionId);
+          observation = await this.observeTimed(this.input.sessionId);
           continue;
         }
         // F05: active runtime is re-checked AFTER inference — an
@@ -973,7 +1004,7 @@ export class BrowserTaskRunner {
           // D-AC-09/R16: verification uses FRESH state. If the fresh
           // observation FAILS, the task is partial/unverified — never
           // completed using the stale pre-action snapshot.
-          const freshObservation = await this.deps.observe(this.input.sessionId);
+          const freshObservation = await this.observeTimed(this.input.sessionId);
           // F05: Stop during the fresh observation must not be
           // overwritten by completed when the observation resolves.
           if (signal.aborted) {
@@ -1012,6 +1043,7 @@ export class BrowserTaskRunner {
           if (control.activeTimeMs(this.taskId) > this.budget.activeRuntimeMs) {
             return this.terminal("partial", "active_runtime_exhausted", evidence, extracted, observation);
           }
+          const verifyStarted = Date.now();
           const verification = this.verifyCompletion(observation, extracted);
           if (verification.verified) {
             return this.terminal("completed", "verified", [...evidence, verification.evidence], extracted, observation);
@@ -1061,6 +1093,7 @@ export class BrowserTaskRunner {
                 clearTimeout(verifierTimer);
                 signal.removeEventListener("abort", onVerifierAbort);
               }
+              this.phaseTimings.verifyMs += Date.now() - verifyStarted;
               if (signal.aborted) {
                 return this.terminal("cancelled", "task_cancelled", evidence, extracted, observation);
               }
@@ -1170,7 +1203,7 @@ export class BrowserTaskRunner {
               this.taskId
             );
             if (resolution === "resolved") {
-              observation = await this.deps.observe(this.input.sessionId);
+              observation = await this.observeTimed(this.input.sessionId);
               continue;
             }
             return this.terminal(
@@ -1186,7 +1219,7 @@ export class BrowserTaskRunner {
             // the runner must not decide against that page.
             return this.terminal("partial", "sign_in_handoff", evidence, extracted, observation);
           }
-          observation = await this.deps.observe(this.input.sessionId);
+          observation = await this.observeTimed(this.input.sessionId);
           continue;
         }
         if (action.operation === "ESCALATE") {
@@ -1197,7 +1230,7 @@ export class BrowserTaskRunner {
           // ESCALATE that CAME FROM recovery is already the recovery
           // outcome — routing it back would only burn budget.
           if (!decisionFromRecovery && this.recoveryCalls < this.budget.recoveryCalls) {
-            const freshEscalationObservation = await this.deps.observe(
+            const freshEscalationObservation = await this.observeTimed(
               this.input.sessionId
             );
             if (freshEscalationObservation) {
@@ -1233,7 +1266,7 @@ export class BrowserTaskRunner {
         }
         if (action.operation === "WAIT") {
           await new Promise((resolve) => setTimeout(resolve, 250));
-          observation = await this.deps.observe(this.input.sessionId);
+          observation = await this.observeTimed(this.input.sessionId);
           continue;
         }
         if (
@@ -1361,7 +1394,7 @@ export class BrowserTaskRunner {
           }
           if (control.getResumeGeneration(this.taskId) > generationBeforeDecide) {
             evidence.push("action_discarded_after_resume");
-            observation = await this.deps.observe(this.input.sessionId);
+            observation = await this.observeTimed(this.input.sessionId);
             continue;
           }
           // R01/D-FR-01: MUTATION BOUNDARY (untargeted) — same epoch
@@ -1372,7 +1405,7 @@ export class BrowserTaskRunner {
           }
           let execution: RunnerExecutionResult;
           try {
-            execution = await this.deps.runActions(this.input.sessionId, {
+            execution = await this.executeTimed(this.input.sessionId, {
               actions: [programAction],
             });
           } catch (stepError) {
@@ -1522,7 +1555,7 @@ export class BrowserTaskRunner {
             if (
               processed.stop.reason.startsWith("three_equivalent_failures")
             ) {
-              const freshRecoveryObservation = await this.deps.observe(
+              const freshRecoveryObservation = await this.observeTimed(
                 this.input.sessionId
               );
               if (freshRecoveryObservation) {
@@ -1557,7 +1590,7 @@ export class BrowserTaskRunner {
               processed.stop.reason,
               evidence,
               extracted,
-              await this.deps.observe(this.input.sessionId)
+              await this.observeTimed(this.input.sessionId)
             );
           }
           if (action.operation === "EXTRACT" && execution.extracted) {
@@ -1565,7 +1598,7 @@ export class BrowserTaskRunner {
             // extract_nonempty criterion can verify.
             extracted.push(...execution.extracted);
           }
-          observation = await this.deps.observe(this.input.sessionId);
+          observation = await this.observeTimed(this.input.sessionId);
           // F15: untargeted actions participate in progress accounting —
           // 5 untargeted steps that change nothing are still no progress.
           if (observation) {
@@ -1592,7 +1625,7 @@ export class BrowserTaskRunner {
             // B17/D-FR-25: recovery decides against the state it will
             // execute on — re-observe and rebuild the candidates/input
             // FIRST; the stale decision input never reaches the model.
-            const freshRecoveryObservation = await this.deps.observe(
+            const freshRecoveryObservation = await this.observeTimed(
               this.input.sessionId
             );
             if (freshRecoveryObservation) {
@@ -1684,7 +1717,7 @@ export class BrowserTaskRunner {
         }
         if (control.getResumeGeneration(this.taskId) > generationBeforeDecide) {
           evidence.push("action_discarded_after_resume");
-          observation = await this.deps.observe(this.input.sessionId);
+          observation = await this.observeTimed(this.input.sessionId);
           continue;
         }
         // R01/D-FR-01: MUTATION BOUNDARY — journaling and field
@@ -1698,7 +1731,7 @@ export class BrowserTaskRunner {
         }
         let execution: RunnerExecutionResult;
         try {
-          execution = await this.deps.runActions(this.input.sessionId, {
+          execution = await this.executeTimed(this.input.sessionId, {
             actions: [programAction],
           });
         } catch (stepError) {
@@ -1828,7 +1861,7 @@ export class BrowserTaskRunner {
           if (processed.stop.reason.startsWith("three_equivalent_failures")) {
             // B17/D-FR-25: recovery sees the FRESH state — observe before
             // the recovery decision, not only after it.
-            const freshRecoveryObservation = await this.deps.observe(
+            const freshRecoveryObservation = await this.observeTimed(
               this.input.sessionId
             );
             if (freshRecoveryObservation) {
@@ -1857,7 +1890,7 @@ export class BrowserTaskRunner {
                 continue;
               }
             } else {
-              observation = await this.deps.observe(this.input.sessionId);
+              observation = await this.observeTimed(this.input.sessionId);
             }
           }
           return this.terminal(
@@ -1865,12 +1898,12 @@ export class BrowserTaskRunner {
             processed.stop.reason,
             evidence,
             extracted,
-            await this.deps.observe(this.input.sessionId)
+            await this.observeTimed(this.input.sessionId)
           );
         }
 
         // D-FR-11: fresh observation after the action (already cached by the module).
-        observation = await this.deps.observe(this.input.sessionId);
+        observation = await this.observeTimed(this.input.sessionId);
         // C06/D-FR-10/C-FR-14: the per-step BOUNDED checkpoint lands
         // BEFORE the next decision — a crash mid-run leaves the durable
         // journal with the evidence that actually landed (best-effort: a
@@ -2123,7 +2156,7 @@ export class BrowserTaskRunner {
       }
       let proposalStored = false;
       try {
-        result = await this.deps.decisionClient.decide(
+        result = await this.decideTimed(
           recoveryInput,
           attemptController.signal
         );
@@ -2220,7 +2253,7 @@ export class BrowserTaskRunner {
       // against a post-action cursor produced refs the loop could not
       // resolve (unknown_target). The stall is reported honestly and
       // recovery is skipped (report unavailable).
-      const freshNoProgressObservation = await this.deps.observe(
+      const freshNoProgressObservation = await this.observeTimed(
         this.input.sessionId
       );
       if (!freshNoProgressObservation) {
@@ -2523,6 +2556,58 @@ export class BrowserTaskRunner {
     return { verified: true, evidence: `verified:${criteria.length}_criteria` };
   }
 
+  /**
+   * E02/design §21: TIMED phase wrappers — every observe/decide/execute/
+   * verify duration accumulates into the phase metadata that rides the
+   * result. Bounded metadata only (never page content).
+   */
+  private async observeTimed(
+    sessionId: string
+  ): Promise<RunnerObservation | null> {
+    const started = Date.now();
+    try {
+      return await this.deps.observe(sessionId);
+    } finally {
+      this.phaseTimings.observationMs += Date.now() - started;
+    }
+  }
+
+  private async executeTimed(
+    sessionId: string,
+    program: { actions: RunnerAction[] }
+  ): Promise<RunnerExecutionResult> {
+    const started = Date.now();
+    try {
+      return await this.deps.runActions(sessionId, program);
+    } finally {
+      this.phaseTimings.executeMs += Date.now() - started;
+    }
+  }
+
+  private decideTimed = async (
+    input: import("@/entityTypes/browserDecisionTypes").BrowserDecisionInput,
+    signal: AbortSignal
+  ): Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> => {
+    const started = Date.now();
+    this.phaseTimings.attempts += 1;
+    try {
+      return await this.deps.decisionClient.decide(input, signal);
+    } finally {
+      this.phaseTimings.decideMs += Date.now() - started;
+    }
+  };
+
+  private snapshotTimings(): TaskPhaseTimings {
+    return {
+      wallMs: this.runStartedAtMs > 0 ? Date.now() - this.runStartedAtMs : 0,
+      observationMs: this.phaseTimings.observationMs,
+      decideMs: this.phaseTimings.decideMs,
+      executeMs: this.phaseTimings.executeMs,
+      verifyMs: this.phaseTimings.verifyMs,
+      attempts: this.phaseTimings.attempts,
+    };
+  }
+
   private terminal(
     status: BrowserTaskTerminalStatus,
     reason: string,
@@ -2583,6 +2668,8 @@ export class BrowserTaskRunner {
       // C01/N01/D-AC-08: actual usage rides the result for batch budget
       // charging (0 for routes that report none).
       tokensUsed: this.tokenUsage,
+      // E02/design §21: the per-phase duration metadata.
+      timings: this.snapshotTimings(),
       userInterventions: control.get(this.taskId)?.interventions ?? [],
     };
   }

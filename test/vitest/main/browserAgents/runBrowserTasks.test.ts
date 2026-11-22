@@ -1580,3 +1580,83 @@ describe("runBrowserTasks provider gate (C01)", () => {
     expect(results[1]!.summary).toContain("budget");
   });
 });
+
+// ---------------------------------------------------------------------------
+// E02/design §21: the batch qualification summary — wall time, token
+// totals, per-phase sums, attempts and the parent-context size ride the
+// batch result.
+// ---------------------------------------------------------------------------
+describe("runBrowserTasks batch metrics (E02/§21)", () => {
+  beforeEach(() => {
+    autoConfirmSink();
+    fastServiceCalls.startArgs.length = 0;
+    fastServiceCalls.execArgs.length = 0;
+    fastServiceCalls.startImpl = null;
+    fastServiceCalls.execImpl = null;
+    ownerBySession.clear();
+    transferCalls.length = 0;
+    stopMock.mockClear();
+    stopAllForAgentTaskMock.mockClear();
+  });
+  afterAll(() => {
+    getBatchConfirmWaitRegistry().setSink(null);
+  });
+
+  it("aggregates wall time, tokens, attempts, phase sums and parent bytes", async () => {
+    const control = new AgentTaskControlService();
+    fastServiceCalls.execImpl = async () => ({
+      status: "completed",
+      reason: "verified",
+      evidence: [],
+      extracted: [{ price: 10 }],
+      finalObservation: { url: "https://example.test/done" },
+      tokensUsed: 250,
+      timings: {
+        wallMs: 900,
+        observationMs: 100,
+        decideMs: 300,
+        executeMs: 200,
+        verifyMs: 50,
+        attempts: 3,
+      },
+    });
+    const { batchId, results, metrics } = (await runBrowserTasks(
+      [{ goal: "lane one" }, { goal: "lane two" }],
+      2,
+      "conv-e02metrics",
+      new AbortController().signal,
+      { control },
+      undefined,
+      { executor: "fast_runner" }
+    )) as unknown as {
+      batchId: string;
+      results: Array<Record<string, unknown>>;
+      metrics: {
+        wallMs: number;
+        tokensUsed: number;
+        attempts: number;
+        phases: {
+          observationMs: number;
+          decideMs: number;
+          executeMs: number;
+          verifyMs: number;
+        };
+        parentContextBytes: number;
+      };
+    };
+    void batchId;
+    expect(results).toHaveLength(2);
+    // Per-row timings ride the rows.
+    for (const row of results) {
+      expect((row.timings as { attempts: number }).attempts).toBe(3);
+    }
+    // The batch summary aggregates them.
+    expect(metrics.tokensUsed).toBe(500);
+    expect(metrics.attempts).toBe(6);
+    expect(metrics.phases.decideMs).toBe(600);
+    expect(metrics.phases.executeMs).toBe(400);
+    expect(metrics.wallMs).toBeGreaterThanOrEqual(0);
+    // The parent-context proxy is the serialized report's byte size.
+    expect(metrics.parentContextBytes).toBeGreaterThan(0);
+  });
+});
