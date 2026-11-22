@@ -193,6 +193,8 @@ export interface ManagedBrowserPreferencePatch {
   readonly decisionRoute?: {
     readonly mode?: "follow_chat" | "native_profile";
     readonly chatDecisionModel?: string | null;
+    /** C02/M-FR-12: the batch lane sub-agent model override. */
+    readonly batchSubAgentModel?: string | null;
     readonly nativeProfile?: {
       readonly displayName: string;
       readonly baseUrl: string;
@@ -394,6 +396,9 @@ export class ManagedBrowserSettingsModule {
       patch.decisionRoute !== undefined &&
       (patch.decisionRoute.mode !== undefined ||
         patch.decisionRoute.chatDecisionModel !== undefined ||
+        // C02/M-FR-12: the batch sub-agent model is provider-bound — a
+        // change re-probes like a decision-model change.
+        patch.decisionRoute.batchSubAgentModel !== undefined ||
         patch.decisionRoute.nativeProfile !== undefined ||
         patch.decisionRoute.requestTimeoutMs !== undefined);
     const decisionRelevantChange =
@@ -425,6 +430,15 @@ export class ManagedBrowserSettingsModule {
               ? null
               : patchRoute.chatDecisionModel.trim().slice(0, 200) || null
             : current.chatDecisionModel,
+        // C02/M-FR-12: the batch sub-agent model merges like the decision
+        // model — omitting it here dropped the key on every save (the
+        // panel sends it, the reader parses it, the merge reset it).
+        batchSubAgentModel:
+          patchRoute.batchSubAgentModel !== undefined
+            ? patchRoute.batchSubAgentModel === null
+              ? null
+              : patchRoute.batchSubAgentModel.trim().slice(0, 200) || null
+            : current.batchSubAgentModel,
         nativeProfile:
           nativeProfile === null
             ? null

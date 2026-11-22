@@ -380,6 +380,16 @@ describe("executeTask integration (P0-1 acceptance)", () => {
     const { getDefaultAgentTaskControlService } = await import(
       "@/service/browserAgents/AgentTaskControlService"
     );
+    // C02/M-FR-04: the accelerated lane's routine dispatch requires the
+    // batch's routine grant (registered at batch confirmation) — register
+    // it exactly as the collector does.
+    const { registerBatchRoutineGrantForTest } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    registerBatchRoutineGrantForTest({
+      batchId: "batch_b01",
+      taskIds: ["lane_b01:0"],
+    });
     const browserTaskModule = await import("@/modules/BrowserTaskModule");
     const calls = (
       browserTaskModule as unknown as {
@@ -1015,6 +1025,210 @@ describe("executeTask native route + model override (E01/E02)", () => {
 // client refuse the next dispatch (previously the getter returned the
 // frozen epoch itself, so a change was unobservable).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// C02/M-FR-04: an agent task's ROUTINE dispatch requires the batch's
+// routine grant. Without one the action upgrades to the approval path
+// (the card answers it); with one it dispatches directly. Consequential
+// approvals are a separate, unchanged flow.
+// ---------------------------------------------------------------------------
+describe("routine dispatch requires the batch grant (C02)", () => {
+  beforeEach(() => {
+    // Earlier tests navigate the shared fixture to /results and leave a
+    // stale decision route behind — the C02 tests need the pre-action
+    // page and the default route so a CLICK decision dispatches.
+    observeUrl = "https://www.youtube.com/watch?v=abc";
+    scriptedDecisions.length = 0;
+    EXECUTE_TASK_DECISION_ROUTE = null;
+    // The W05/native tests vi.doMock'd the chat transport for THEIR
+    // scenarios (always-DONE decisions); re-mock the scripted planner +
+    // loop for the C02 dispatch flows.
+    vi.doMock("@/api/aiChatApi", () => ({
+      AiChatApi: class {
+        public async openAIChatCompletion(request: {
+          messages: ReadonlyArray<{ role: string; content: string }>;
+        }): Promise<unknown> {
+          const prompt = request.messages[1]?.content ?? "";
+          if (prompt.includes("PLAN ONCE")) {
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      operation: "DONE",
+                      target_id: null,
+                      option_id: null,
+                      key: null,
+                      url: null,
+                      text: JSON.stringify({
+                        completion_criteria: [],
+                        bindings: [],
+                        first_subgoal: "click search",
+                      }),
+                    }),
+                  },
+                },
+              ],
+            };
+          }
+          const operation = observeUrl.includes("/results") ? "DONE" : "CLICK";
+          return {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    operation,
+                    target_id: operation === "CLICK" ? "e_bbb" : null,
+                    option_id: null,
+                    key: null,
+                    url: null,
+                    text: null,
+                  }),
+                },
+              },
+            ],
+          };
+        }
+      },
+    }));
+    // The W05 tests also pinned the LOCAL provider transport to
+    // always-DONE decisions; restore the scripted planner + loop there
+    // (the default route resolves kind=local through the last resolver
+    // doMock below).
+    vi.doMock("@/service/aiProvider/OpenAICompatibleProviderClient", () => ({
+      OpenAICompatibleProviderClient: class {
+        constructor(
+          public config: unknown,
+          public apiKey: string
+        ) {}
+        public async complete(request: {
+          messages: ReadonlyArray<{ role: string; content: string }>;
+        }): Promise<unknown> {
+          const prompt = request.messages[1]?.content ?? "";
+          if (prompt.includes("PLAN ONCE")) {
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      operation: "DONE",
+                      target_id: null,
+                      option_id: null,
+                      key: null,
+                      url: null,
+                      text: JSON.stringify({
+                        completion_criteria: [],
+                        bindings: [],
+                        first_subgoal: "click search",
+                      }),
+                    }),
+                  },
+                },
+              ],
+            };
+          }
+          const operation = observeUrl.includes("/results") ? "DONE" : "CLICK";
+          return {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    operation,
+                    target_id: operation === "CLICK" ? "e_bbb" : null,
+                    option_id: null,
+                    key: null,
+                    url: null,
+                    text: null,
+                  }),
+                },
+              },
+            ],
+          };
+        }
+      },
+    }));
+    vi.doMock("@/service/aiProvider/AIProviderResolver", () => ({
+      AIProviderResolver: class {
+        public resolveForChat(): {
+          canUse: boolean;
+          kind: string;
+          config: { defaultModel: string };
+        } {
+          return {
+            canUse: true,
+            kind: "local",
+            config: { defaultModel: "gpt-4o-mini" },
+          };
+        }
+      },
+    }));
+  });
+
+  it("an agent dispatch without a grant goes through the approval card and completes after approval", async () => {
+    const module = makeModule();
+    // The card is answered slightly AFTER publication: the pre-publish
+    // consume finds nothing (so the card IS published), and the runner's
+    // in-job wait then consumes the recorded approval.
+    let consumed = false;
+    const approveAt = Date.now() + 100;
+    (module as unknown as {
+      peekApprovalForProgram?: () => "approve" | null;
+    }).peekApprovalForProgram = () =>
+      Date.now() >= approveAt && !consumed ? "approve" : null;
+    (module as unknown as {
+      consumeApprovalForProgram?: () => "approve" | null;
+    }).consumeApprovalForProgram = () => {
+      if (Date.now() >= approveAt && !consumed) {
+        consumed = true;
+        return "approve";
+      }
+      return null;
+    };
+    const service = makeService(module);
+    const result = (await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "open the results page",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      { ...CTX, ownerAgentId: "lane_c02none:0" }
+    )) as Record<string, unknown>;
+    // The ungranted routine action was NOT silently dispatched — it went
+    // through the card, and the approved pending step re-dispatched.
+    expect(result.status).toBe("completed");
+    expect(
+      (module.notifyApprovalRequired as unknown as { mock: { calls: unknown[] } })
+        .mock.calls.length
+    ).toBeGreaterThan(0);
+  });
+
+  it("an agent dispatch WITH the batch grant dispatches directly (no approval card)", async () => {
+    const { registerBatchRoutineGrantForTest } = await import(
+      "@/service/agentTools/runBrowserTasksTool"
+    );
+    registerBatchRoutineGrantForTest({
+      batchId: "batch_c02grant",
+      taskIds: ["lane_c02grant:0"],
+    });
+    const module = makeModule();
+    const service = makeService(module);
+    const result = (await service.executeTask(
+      {
+        session_id: SESSION_ID,
+        goal: "open the results page",
+        completion_criteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      { ...CTX, ownerAgentId: "lane_c02grant:0" }
+    )) as Record<string, unknown>;
+    expect(result.status).toBe("completed");
+    // The grant covered the routine dispatch — no approval card was
+    // published for it.
+    expect(
+      (module.notifyApprovalRequired as unknown as { mock: { calls: unknown[] } })
+        .mock.calls.length
+    ).toBe(0);
+  });
+});
+
 describe("executeTask live epoch getter (A01)", () => {
   it("a provider revision advanced mid-task aborts the next decision", async () => {
     EXECUTE_TASK_DECISION_ROUTE = {

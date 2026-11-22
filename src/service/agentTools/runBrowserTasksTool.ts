@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { AgentRuntimeRegistry, getDefaultAgentRuntimeDeps } from "@/service/AgentRuntimeRegistry";
 import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { getDefaultToolJobRegistry } from "@/service/ToolJobRegistry";
+import { registrableDomainOf } from "@/service/browserDecision/RegistrableDomain";
 
 // B03: the managed-browser module is imported dynamically at every use
 // site (the static binding can be uninitialized in mocked/circular
@@ -374,14 +375,41 @@ function releaseBatchTokenBudget(batchId: string): void {
 interface BatchRoutineGrant {
   readonly batchId: string;
   readonly taskIds: ReadonlyArray<string>;
+  /** C02/M-FR-04: registrable domains the confirmed batch may act on. */
+  readonly domains: ReadonlySet<string>;
   readonly grantedAtEpochMs: number;
+  /** C02/M-FR-04: expiring — bounded to the batch horizon. */
+  readonly expiresAtEpochMs: number;
 }
+/** C02/M-FR-04: routine grants expire (covers the longest user-wait). */
+const ROUTINE_GRANT_TTL_MS = 60 * 60_000;
 const batchRoutineGrants = new Map<string, BatchRoutineGrant>();
 
-/** True when the agent task belongs to a live confirmed batch grant. */
-export function hasRoutineGrantForAgentTask(agentTaskId: string): boolean {
-  for (const grant of batchRoutineGrants.values()) {
-    if (grant.taskIds.includes(agentTaskId)) {
+/**
+ * C02/M-FR-04: True when the agent task belongs to a LIVE (unexpired)
+ * confirmed batch grant AND the dispatch site is in scope. A grant with
+ * derived domains only covers those sites; a grant with NO derivable
+ * domains covers the batch's own started sessions (tasks without an
+ * explicit start_url run on the account's platform home). Consequential
+ * approvals are a separate, unchanged path.
+ */
+export function hasRoutineGrantForAgentTask(
+  agentTaskId: string,
+  currentDomain?: string | null
+): boolean {
+  const now = Date.now();
+  for (const [batchId, grant] of batchRoutineGrants) {
+    if (grant.expiresAtEpochMs <= now) {
+      batchRoutineGrants.delete(batchId);
+      continue;
+    }
+    if (!grant.taskIds.includes(agentTaskId)) {
+      continue;
+    }
+    if (grant.domains.size === 0) {
+      return true;
+    }
+    if (currentDomain && grant.domains.has(currentDomain)) {
       return true;
     }
   }
@@ -390,17 +418,47 @@ export function hasRoutineGrantForAgentTask(agentTaskId: string): boolean {
 
 function registerBatchRoutineGrant(
   batchId: string,
-  taskCount: number
+  tasks: readonly BrowserBatchTaskInput[]
 ): void {
+  const domains = new Set<string>();
+  for (const task of tasks) {
+    if (typeof task.start_url === "string" && task.start_url) {
+      try {
+        const domain = registrableDomainOf(new URL(task.start_url).hostname);
+        if (domain) {
+          domains.add(domain);
+        }
+      } catch {
+        /* unparsable start urls contribute no scope */
+      }
+    }
+  }
   batchRoutineGrants.set(batchId, {
     batchId,
-    taskIds: Array.from({ length: taskCount }, (_, index) => `${batchId}:${index}`),
+    taskIds: Array.from({ length: tasks.length }, (_, index) => `${batchId}:${index}`),
+    domains,
     grantedAtEpochMs: Date.now(),
+    expiresAtEpochMs: Date.now() + ROUTINE_GRANT_TTL_MS,
   });
 }
 
 function releaseBatchRoutineGrant(batchId: string): void {
   batchRoutineGrants.delete(batchId);
+}
+
+/** C02 test seam: register a grant exactly as a confirmed batch would. */
+export function registerBatchRoutineGrantForTest(input: {
+  readonly batchId: string;
+  readonly taskIds: readonly string[];
+  readonly domains?: readonly string[];
+}): void {
+  batchRoutineGrants.set(input.batchId, {
+    batchId: input.batchId,
+    taskIds: [...input.taskIds],
+    domains: new Set(input.domains ?? []),
+    grantedAtEpochMs: Date.now(),
+    expiresAtEpochMs: Date.now() + ROUTINE_GRANT_TTL_MS,
+  });
 }
 /**
  * F17: per-child abort trees — stopping ONE batch child task must
@@ -781,7 +839,7 @@ export async function runBrowserTasks(
   }
   // R01/M-FR-04: the confirmed batch's scoped routine grant lives for
   // exactly the batch lifetime.
-  registerBatchRoutineGrant(batchId, tasks.length);
+  registerBatchRoutineGrant(batchId, tasks);
   // R03/M-FR-10: the batch token budget (per batch, all lanes share).
   registerBatchTokenBudget(batchId, BATCH_TOKEN_BUDGET);
   // F21: the batch card lives from the first lane start.

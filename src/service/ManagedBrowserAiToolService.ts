@@ -769,7 +769,7 @@ export class ManagedBrowserAiToolService {
         return rest as BrowserAction;
       });
     program = { ...program, actions: stripExpected(program.actions) } as BrowserActionProgram;
-    const assessment = this.classifier.classifyProgram(
+    let assessment = this.classifier.classifyProgram(
       flattenProgramActions(program.actions).map((action) => {
         if (
           (action.type === "click" ||
@@ -795,6 +795,28 @@ export class ManagedBrowserAiToolService {
     );
     if (assessment.routing === "handoff") {
       await this.requireHandoff(parsed.data.session_id, assessment);
+    }
+    // C02/M-FR-04: an agent task's ROUTINE ("auto") dispatch requires a
+    // LIVE batch routine grant — batch-scoped, site-scoped (when the
+    // confirmed tasks declared start urls), and expiring. A missing grant
+    // upgrades the routine action to the approval path (needs_user for a
+    // headless child / the F06 card for the runner). Consequential
+    // approvals are a separate, unchanged ALWAYS-CONFIRM flow.
+    if (context.ownerAgentId && !assessment.requiresApproval) {
+      const { hasRoutineGrantForAgentTask } = await import(
+        "@/service/agentTools/runBrowserTasksTool"
+      );
+      const currentDomain = extractRegistrableDomainSafe(
+        sessionStatus.currentOrigin
+      );
+      if (!hasRoutineGrantForAgentTask(context.ownerAgentId, currentDomain)) {
+        assessment = {
+          ...assessment,
+          requiresApproval: true,
+          routing: "approval",
+          reasonCode: "routine_grant_missing",
+        };
+      }
     }
     // TODO-MSB-002: consequential actions are ALWAYS-CONFIRM — no
     // permission mode (session consent, permission-prompt skip, or
