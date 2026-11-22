@@ -81,20 +81,26 @@ test.describe("persistent shell startup (design §14, §25.6)", () => {
 });
 
 test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
-  test("renders a two-row textarea with selectors below it", async ({
+  test("fits the input, workspace controls and send in one composer panel", async ({
     shellApp: app,
   }) => {
     const page = app.mainWindow;
     await openWorkspace(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByTestId("workspace-new-chat").click();
+    const panel = page.getByTestId("chat-composer-panel");
     // Vuetify auto-grow also renders a hidden measurement sizer textarea —
     // target the real, labelled input only.
-    const textarea = page
+    const textarea = panel
       .getByTestId("ai-chat-composer")
       .locator("textarea.v-field__input:not(.v-textarea__sizer)");
     await expect(textarea).toBeVisible({ timeout: 10_000 });
     expect(await textarea.getAttribute("rows")).toBe("2");
-    // Mode/model/approval render after the textarea in DOM order.
+    await expect(panel.getByTestId("workspace-badge-choose")).toBeVisible();
+    await expect(panel.getByTestId("chat-model-selector")).toBeVisible();
+    await expect(panel.getByTestId("chat-permission-selector")).toBeVisible();
+    await expect(panel.locator(".v2-mode-selector")).toHaveCount(0);
+    // Workspace, model and permissions follow the textarea in DOM order.
     const order = await page.evaluate(() => {
       const input =
         document
@@ -111,6 +117,50 @@ test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
         : "before";
     });
     expect(order).toBe("after");
+
+    for (const width of [1280, 700]) {
+      await page.setViewportSize({ width, height: 800 });
+      const send = panel.getByTestId("ai-chat-send");
+      await expect(send).toBeInViewport();
+      const panelBox = await panel.boundingBox();
+      const sendBox = await send.boundingBox();
+      if (!panelBox || !sendBox) throw new Error("Composer should be visible");
+      expect(sendBox.x + sendBox.width).toBeLessThan(panelBox.x + panelBox.width);
+    }
+  });
+
+  test("uses dark theme colors and shows the entire Full Access description", async ({
+    shellApp: app,
+  }) => {
+    const page = app.mainWindow;
+    await openWorkspace(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.evaluate(() => {
+      type AppRoot = HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: { $pinia: { _s: Map<string, { theme: string }> } };
+          };
+        };
+      };
+      const root = document.getElementById("app") as AppRoot;
+      const store = root.__vue_app__.config.globalProperties.$pinia._s.get("main");
+      if (!store) throw new Error("Main store is missing");
+      store.theme = "aifetchlyDark";
+    });
+
+    const panel = page.getByTestId("chat-composer-panel");
+    await panel.locator("textarea.v-field__input:not(.v-textarea__sizer)").fill("Draft a campaign brief");
+    await expect(panel).toHaveCSS("background-color", "rgb(26, 26, 34)");
+    await expect(panel.getByTestId("ai-chat-send")).toHaveCSS("color", "rgb(16, 16, 20)");
+    await expect(panel.getByTestId("spoken-response-toggle")).toHaveCSS("color", "rgb(233, 233, 236)");
+
+    await panel.getByTestId("chat-permission-selector").locator(".v-field").click();
+    const description = page.getByRole("option", { name: /Full access/i })
+      .locator(".v-list-item-subtitle");
+    await expect(description).toBeVisible();
+    const clipped = await description.evaluate((element) => element.scrollHeight > element.clientHeight);
+    expect(clipped).toBe(false);
   });
 });
 

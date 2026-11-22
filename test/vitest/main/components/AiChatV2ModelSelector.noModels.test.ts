@@ -35,6 +35,8 @@ const models: OpenAIModel[] = [
 
 function mountSelector(props: {
   items: OpenAIModel[];
+  modelValue?: string;
+  compact?: boolean;
   loading?: boolean;
   noModels?: boolean;
 }) {
@@ -44,15 +46,19 @@ function mountSelector(props: {
       plugins: [i18n],
       stubs: {
         VSelect: {
+          name: "VSelect",
           props: [
             "modelValue",
             "placeholder",
             "disabled",
             "loading",
             "ariaLabel",
+            "variant",
+            "prependInnerIcon",
           ],
+          emits: ["update:modelValue"],
           template:
-            '<div class="stub-select" :data-disabled="disabled !== undefined && disabled !== false ? \'\' : undefined">{{ modelValue ?? placeholder }}</div>',
+            '<div class="stub-select" :aria-label="ariaLabel" :data-variant="variant" :data-icon="prependInnerIcon" :data-disabled="disabled !== undefined && disabled !== false ? \'\' : undefined">{{ modelValue ?? placeholder }}</div>',
         },
         VBtn: {
           props: ["ariaLabel", "title"],
@@ -109,5 +115,37 @@ describe("AiChatV2ModelSelector no-model action state (PRD §13.4)", () => {
       expect(wrapper.attributes("title")).toBeUndefined();
       expect(wrapper.text()).not.toContain("No models available");
     });
+  });
+
+  it("uses a compact, named composer control and emits the full model id", async () => {
+    const wrapper = mountSelector({ items: models, compact: true });
+    const select = wrapper.get('[data-testid="chat-model-selector"]');
+    expect(select.attributes("data-variant")).toBe("solo");
+    expect(select.attributes("data-icon")).toBe("mdi-chip");
+    expect(select.attributes("aria-label")).toBe("Model");
+    wrapper
+      .getComponent({ name: "VSelect" })
+      .vm.$emit("update:modelValue", models[0].id);
+    await flushPromises();
+    expect(wrapper.emitted("update:modelValue")).toEqual([[models[0].id]]);
+  });
+
+  it("lets the compact control open settings when a saved model is unavailable", async () => {
+    const wrapper = mountSelector({
+      items: [],
+      modelValue: models[0].id,
+      noModels: true,
+      compact: true,
+    });
+    const select = wrapper.get('[data-testid="chat-model-selector"]');
+    expect(select.attributes("data-disabled")).toBe("");
+    expect(select.text()).toBe("No models available");
+    await wrapper.get('[data-testid="model-open-settings"]').trigger("click");
+    expect(wrapper.emitted("open-settings")).toEqual([[]]);
+  });
+
+  it("preserves the outlined control for form callers", () => {
+    const wrapper = mountSelector({ items: models });
+    expect(wrapper.get(".stub-select").attributes("data-variant")).toBe("outlined");
   });
 });

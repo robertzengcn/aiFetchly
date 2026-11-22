@@ -1,5 +1,10 @@
 <template>
-  <div ref="composerRoot" class="v2-composer">
+  <div
+    ref="composerRoot"
+    class="v2-composer"
+    :class="workspaceLayout ? 'v2-composer--workspace app-theme-scope' : undefined"
+    :data-testid="workspaceLayout ? 'chat-composer-panel' : undefined"
+  >
     <div class="v2-composer__mention">
       <AiChatV2AtMentionSuggestions
         v-if="atMentionOpen"
@@ -147,7 +152,7 @@
     <v-textarea
       v-model="draft"
       :placeholder="t('aiChatV2.input_placeholder') || 'Send a message…'"
-      variant="outlined"
+      :variant="workspaceLayout ? 'plain' : 'outlined'"
       auto-grow
       rows="2"
       max-rows="6"
@@ -162,31 +167,12 @@
       @click="onTextareaCursor"
       @paste="onPaste"
     >
-      <!--
-        FR-VOICE-001/003/005 + FR-COMP-009: the microphone affordance stays
-        VISIBLE in every state on builds that support microphone capture —
-        policy-enabled (record), policy-disabled (setup affordance routing to
-        voice settings), or recoverable-unavailable (settings failed to load).
-        Only a permanently unsupported build (no getUserMedia) hides it, and
-        the accessible label always states WHY recording is currently
-        impossible.
-      -->
-      <template v-if="voiceSupportedByBuild" #append-inner>
+      <template v-if="!workspaceLayout && voiceSupportedByBuild" #append-inner>
         <v-btn
-          icon
-          size="small"
-          variant="text"
-          class="v2-composer__voice-button v2-composer__icon-target"
-          :color="isRecording ? 'error' : undefined"
-          :disabled="micDisabled"
-          :loading="isTranscribing"
-          :title="micTitle"
-          :aria-label="micTitle"
-          data-testid="ai-chat-microphone"
+          v-bind="micButton"
+          class="v2-composer__voice-button v2-composer__voice-button--inline v2-composer__icon-target"
           @click.stop="onMicClick"
-        >
-          <v-icon size="small">{{ isRecording ? "mdi-stop" : "mdi-microphone" }}</v-icon>
-        </v-btn>
+        />
       </template>
     </v-textarea>
 
@@ -307,13 +293,7 @@
       </div>
     </v-slide-y-reverse-transition>
     <div class="v2-composer__bar">
-      <!-- Lower toolbar (chat-first shell design §10.3 / PRD §13.3): the
-           semantic `controls` slot (mode, model, tool approval, context)
-           renders FIRST, then the attach action — the PRD declares the
-           mode → model → approval → context → attachment → spoken-response
-           order fixed and authoritative. When the controls slot is absent
-           the legacy `prepend` slot renders instead so a flag rollback never
-           loses controls. -->
+      <!-- Settings for the next message precede its accessory actions. -->
       <div
         v-if="$slots.controls || $slots.prepend"
         class="v2-composer__prepend"
@@ -323,25 +303,20 @@
           <slot name="prepend" />
         </slot>
       </div>
-      <!-- Attach file button: after the selectors, before the trailing
-           actions. FR-SUB-008 (R8 P2): allowed while a turn runs — the
-           queued follow-up carries the files; only attachment
-           preprocessing (isProcessing) keeps it hidden. -->
-      <v-btn
-        v-if="!isProcessing"
-        icon
-        size="small"
-        variant="text"
-        class="v2-composer__attach v2-composer__icon-target"
-        data-testid="ai-chat-attach"
-        :title="t('aiChatV2.attachments.add') || 'Attach file'"
-        @click="triggerFilePicker"
-      >
-        <v-icon size="small">mdi-paperclip</v-icon>
-      </v-btn>
       <div class="v2-composer__actions">
-        <!-- Spoken-response and other trailing actions (design §10.1) render
-             before stop-speaking/send so Send stays the last control. -->
+        <v-btn
+          v-if="!isProcessing"
+          icon
+          size="small"
+          variant="text"
+          class="v2-composer__icon-target v2-composer__accessory"
+          data-testid="ai-chat-attach"
+          :title="t('aiChatV2.attachments.add') || 'Attach file'"
+          :aria-label="t('aiChatV2.attachments.add') || 'Attach file'"
+          @click="triggerFilePicker"
+        >
+          <v-icon size="small">mdi-paperclip</v-icon>
+        </v-btn>
         <div
           v-if="$slots['toolbar-actions']"
           class="v2-composer__toolbar-actions"
@@ -349,13 +324,21 @@
         >
           <slot name="toolbar-actions" />
         </div>
+        <!-- A supported microphone can still open setup when recording is unavailable. -->
+        <v-btn
+          v-if="workspaceLayout && voiceSupportedByBuild"
+          v-bind="micButton"
+          class="v2-composer__voice-button v2-composer__icon-target v2-composer__accessory"
+          :class="{ 'v2-composer__accessory--recording': isRecording }"
+          @click.stop="onMicClick"
+        />
         <v-btn
           v-if="voiceSpeaking"
           icon
           size="small"
           variant="text"
           color="primary"
-          class="v2-composer__stop-speaking v2-composer__icon-target"
+          class="v2-composer__stop-speaking v2-composer__icon-target v2-composer__accessory"
           :title="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
           :aria-label="t('aiChatV2.voice.stop_speaking') || 'Stop speaking'"
           @click="$emit('stop-speaking')"
@@ -369,18 +352,22 @@
           color="error"
           icon="mdi-stop"
           size="small"
-          class="v2-composer__icon-target"
+          :variant="workspaceLayout ? 'tonal' : undefined"
+          class="v2-composer__icon-target v2-composer__stop"
+          :title="t('aiChatV2.stop') || 'Stop'"
           :aria-label="t('aiChatV2.stop') || 'Stop'"
           data-testid="ai-chat-stop"
           @click="$emit('stop')"
         />
         <v-btn
-          color="primary"
-          icon="mdi-send"
+          :color="workspaceLayout ? undefined : 'primary'"
+          :icon="workspaceLayout ? 'mdi-arrow-up' : 'mdi-send'"
           size="small"
-          class="v2-composer__icon-target"
+          :variant="workspaceLayout ? 'flat' : undefined"
+          class="v2-composer__icon-target v2-composer__send"
           :disabled="hasNothingToSend || isProcessing"
           :loading="isProcessing"
+          :title="t('aiChatV2.send') || 'Send'"
           :aria-label="t('aiChatV2.send') || 'Send'"
           data-testid="ai-chat-send"
           @click="onSend"
@@ -440,6 +427,7 @@ const SUPPORTED_DOC_EXTS = new Set([".pdf", ".docx", ".csv", ".xlsx", ".xls"]);
 
 const props = defineProps<{
   isStreaming: boolean;
+  workspaceLayout?: boolean;
   /**
    * Bound workspace id for this conversation (surface feeds it from
    * useConversationWorkspace). Rebinding a different directory on the SAME
@@ -770,6 +758,27 @@ const micTitle = computed(() => {
   }
   return t("aiChatV2.voice.start_recording") || "Start recording";
 });
+const micButton = computed<{
+  icon: string;
+  size: "small";
+  variant: "text";
+  color?: "error";
+  disabled: boolean;
+  loading: boolean;
+  title: string;
+  "aria-label": string;
+  "data-testid": "ai-chat-microphone";
+}>(() => ({
+  icon: isRecording.value ? "mdi-stop" : "mdi-microphone",
+  size: "small",
+  variant: "text",
+  color: isRecording.value ? "error" : undefined,
+  disabled: micDisabled.value,
+  loading: isTranscribing.value,
+  title: micTitle.value,
+  "aria-label": micTitle.value,
+  "data-testid": "ai-chat-microphone",
+}));
 
 function appendTranscript(text: string): void {
   const clean = text.trim();
@@ -1859,7 +1868,7 @@ watch(
   min-width: 0;
   flex: 1 1 auto;
 }
-.v2-composer__voice-button {
+.v2-composer__voice-button--inline {
   margin-top: -2px;
 }
 .v2-composer__voice-status {
@@ -1938,10 +1947,6 @@ watch(
   align-items: center;
   gap: 8px;
 }
-/* Attach button never shrinks — always visible after the selectors. */
-.v2-composer__attach {
-  flex: 0 0 auto;
-}
 /*
  * PRD §16.4: pointer/touch targets are at least 40x40px. Applied to the
  * composer's compact icon-only controls (attach, microphone, stop-speaking,
@@ -1976,5 +1981,98 @@ watch(
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+}
+
+.v2-composer--workspace {
+  box-sizing: border-box;
+  width: calc(100% - 24px);
+  margin: 4px 12px 12px;
+  padding: 6px 8px 8px;
+  gap: 2px;
+  border: 1px solid var(--app-border-strong);
+  border-radius: var(--app-radius-overlay);
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
+.v2-composer--workspace:has(textarea:focus-visible) {
+  border-color: var(--app-focus);
+}
+
+.v2-composer--workspace :deep(.v-textarea .v-field) {
+  --v-field-padding-start: 8px;
+  --v-field-padding-end: 8px;
+  --v-field-padding-top: 9px;
+  --v-input-padding-top: 0px;
+  --v-field-padding-bottom: 6px;
+}
+
+.v2-composer--workspace :deep(.v-textarea .v-field__input) {
+  line-height: 1.5;
+  color: var(--app-text);
+}
+
+.v2-composer--workspace :deep(textarea::placeholder) {
+  opacity: 1;
+  color: var(--app-text-soft);
+}
+
+.v2-composer--workspace .v2-composer__bar {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.v2-composer--workspace .v2-composer__prepend {
+  flex-basis: auto;
+  column-gap: 3px;
+  max-width: 100%;
+}
+
+.v2-composer--workspace .v2-composer__actions,
+.v2-composer--workspace .v2-composer__toolbar-actions {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.v2-composer--workspace .v2-composer__accessory {
+  border-radius: var(--app-radius-control);
+}
+
+.v2-composer--workspace .v2-composer__accessory:not(.v2-composer__accessory--recording) {
+  color: var(--app-text-soft);
+}
+
+.v2-composer--workspace .v2-composer__send,
+.v2-composer--workspace .v2-composer__stop {
+  border-radius: var(--app-radius-panel);
+}
+
+.v2-composer--workspace .v2-composer__send {
+  margin-inline-start: 3px;
+  background: var(--app-accent);
+  color: var(--app-canvas);
+}
+
+.v2-composer--workspace .v2-composer__icon-target:focus-visible {
+  outline: 2px solid var(--app-focus);
+  outline-offset: 1px;
+}
+
+.v2-composer--workspace .v2-composer__notice {
+  background: var(--app-warning-soft);
+  color: var(--app-text);
+}
+
+.v2-composer--workspace .v2-composer__voice-status {
+  color: var(--app-text-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-composer__stop-speaking {
+    animation: none;
+  }
 }
 </style>

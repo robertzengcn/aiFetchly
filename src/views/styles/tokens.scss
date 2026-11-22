@@ -12,7 +12,11 @@
   // fontScale.ts write this variable; the html rule below consumes it.
   --app-font-scale: 1;
   --app-chat-font-size: 14px;
+}
 
+// Recompute the aliases when a component sits inside a Vuetify theme.
+:root,
+.app-theme-scope {
   --app-canvas: rgb(var(--v-theme-background));
   --app-shell: rgb(var(--v-theme-surface));
   --app-surface: rgb(var(--v-theme-surface));
@@ -31,7 +35,9 @@
   --app-border: rgba(var(--v-theme-on-surface), 0.12);
   --app-border-strong: rgba(var(--v-theme-on-surface), 0.24);
   --app-focus: var(--app-accent);
+}
 
+:root {
   // 4px base spacing scale (PRD §9.3).
   --app-space-1: 4px;
   --app-space-2: 8px;

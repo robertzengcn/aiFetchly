@@ -1,0 +1,57 @@
+.chat-composer-select {
+  flex: 0 1 auto;
+  inline-size: fit-content;
+}
+
+.chat-composer-select :deep(.v-field.v-field--variant-solo) {
+  --v-field-padding-start: 0px;
+  --v-field-padding-end: 0px;
+  --v-field-padding-top: 0px;
+  --v-field-padding-bottom: 0px;
+  --v-input-padding-top: 0px;
+  min-block-size: 40px;
+  padding-inline: var(--app-space-2);
+  background: transparent;
+  color: var(--app-text);
+  border-radius: var(--app-radius-control);
+  font-size: 0.8125rem;
+  font-weight: 550;
+  letter-spacing: normal;
+}
+
+.chat-composer-select :deep(.v-field:not(.v-field--disabled):hover),
+.chat-composer-select.v-select--active-menu :deep(.v-field) {
+  background: var(--app-surface-variant);
+}
+
+.chat-composer-select :deep(.v-field:has(input:focus-visible)) {
+  outline: 2px solid var(--app-focus);
+  outline-offset: -2px;
+}
+
+.chat-composer-select :deep(.v-field__prepend-inner) {
+  padding-inline-end: var(--app-space-1);
+}
+
+.chat-composer-select :deep(.v-field__prepend-inner > .v-icon) {
+  color: var(--chat-select-icon-color, var(--app-text-soft));
+  font-size: 16px;
+  opacity: 1;
+}
+
+.chat-composer-select :deep(.v-field__input) {
+  letter-spacing: inherit;
+}
+
+.chat-composer-select :deep(.v-select__menu-icon) {
+  color: var(--app-text-muted);
+  font-size: 15px;
+  opacity: 1;
+  transition-duration: var(--app-duration-micro);
+}
+
+.chat-composer-select__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
