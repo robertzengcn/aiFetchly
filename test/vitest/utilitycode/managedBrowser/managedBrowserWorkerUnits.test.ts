@@ -1215,3 +1215,42 @@ describe("C04 window title marker", () => {
     expect(title).toBe("[AI] planted.example");
   });
 });
+
+// ---------------------------------------------------------------------------
+// P02/D-FR-15a: a PASSIVE reobserve neither replaces a live pin nor
+// invalidates authorized work — the pinned observation survives bounds
+// enforcement, and a same-revision reobserve keeps the approval binding
+// (digest + revision) resolvable.
+// ---------------------------------------------------------------------------
+describe("P02 passive reobserve vs live pin", () => {
+  it("the pinned observation survives a later reobserve and its bounds sweep", () => {
+    const registry = new PageReferenceRegistry<FakeHandle>(64);
+    // The approval's observation A: register a ref, pin it, commit.
+    registry.beginObservation("obs-A");
+    const refA = registry.register({ element: new FakeHandle(), role: "button", name: "Go" });
+    registry.pinObservation("obs-A");
+    registry.commitObservation("obs-A");
+    // A PASSIVE reobserve commits a LATER observation (same revision —
+    // no navigation happened).
+    registry.beginObservation("obs-B");
+    const refB = registry.register({ element: new FakeHandle(), role: "button", name: "Buy" });
+    registry.commitObservation("obs-B");
+    // Bounds enforcement (a full sweep) never evicts the PINNED A...
+    registry.expire();
+    expect(registry.lookup(refA, registry.currentRevision).status).toBe("ok");
+    // ...and the reobserve's own refs resolve for the authorized work.
+    expect(registry.lookup(refB, registry.currentRevision).status).toBe("ok");
+  });
+
+  it("the approval's revision binding survives a same-revision reobserve", () => {
+    const registry = new PageReferenceRegistry<FakeHandle>(64);
+    registry.beginObservation("obs-A");
+    registry.register({ element: new FakeHandle(), role: "button", name: "Go" });
+    registry.commitObservation("obs-A");
+    const revisionAtApproval = registry.currentRevision;
+    // A PASSIVE reobserve (no navigation) — the revision does NOT move.
+    registry.beginObservation("obs-B");
+    registry.commitObservation("obs-B");
+    expect(registry.currentRevision).toBe(revisionAtApproval);
+  });
+});
