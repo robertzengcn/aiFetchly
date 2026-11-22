@@ -2,7 +2,7 @@ import { SocialAccountModel } from "@/model/SocialAccount.model";
 import { log } from "@/modules/Logger";
 import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
 import { ProxyEntity } from "@/entity/Proxy.entity";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { BaseModule } from "@/modules/baseModule";
 import {
   SocialAccountResponse,
@@ -596,6 +596,20 @@ export class SocialAccountModule extends BaseModule {
   public static readonly WRONG_CREDENTIAL_SAVED_REASON =
     "WRONG_CREDENTIAL_SAVED";
 
+  /**
+   * P03/A-FR-10: the KEYED credential-identity verifier - an HMAC over
+   * the credential value with the account encryption key (never a bare
+   * unkeyed hash of the password, which an attacker with DB read access
+   * could brute-force offline). Both the marker WRITE (credential
+   * service) and the COMPARE (cooldown check) derive the same value.
+   */
+  public static async credentialVerifierDigest(
+    password: string
+  ): Promise<string> {
+    const key = await userSecretKeyService.getKey();
+    return createHmac("sha256", key).update(password).digest("hex").slice(0, 32);
+  }
+
   /** A-FR-10: record a failed automated sign-in (cooldown + UI reason). */
   public async recordLoginFailure(
     accountId: number,
@@ -691,6 +705,13 @@ export class SocialAccountModule extends BaseModule {
     // never mark a newer credential). The block is account-wide: the
     // saved credential is an account-level secret.
     const failureReason = account.last_login_failure_reason ?? "";
+    if (failureReason === SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON) {
+      // P03: a LEGACY bare marker (recorded before the digest scheme)
+      // binds to NO known value — the conservative direction is to keep
+      // the cooldown until a replacement lifts it (credentialReplaced
+      // clears the exact bare marker).
+      return true;
+    }
     if (failureReason.startsWith(SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON)) {
       const markerDigest = failureReason.slice(
         SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON.length + 1
@@ -704,10 +725,9 @@ export class SocialAccountModule extends BaseModule {
         // bind to and does not persist.
         return false;
       }
-      const currentDigest = createHash("sha256")
-        .update(currentPassword)
-        .digest("hex")
-        .slice(0, 16);
+      // P03: the SAME keyed verifier the marker write used.
+      const currentDigest =
+        await SocialAccountModule.credentialVerifierDigest(currentPassword);
       return markerDigest === currentDigest;
     }
     // A-FR-10: the window is per account AND SITE — a failure on site B

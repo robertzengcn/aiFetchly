@@ -1,6 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
 import { SocialAccountModule } from "@/modules/socialAccountModule";
+
+// P03: the verifier is KEYED by the account encryption key - the test
+// pins a fixed key so both the marker and the comparison derive the same
+// value (the real service fetches from a backend that is absent here).
+vi.mock("@/modules/fieldCipher", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/modules/fieldCipher")>();
+  const spiedInstance = {
+    ...original.userSecretKeyService,
+    getKey: async (): Promise<Buffer> => Buffer.alloc(32, 0x42),
+    invalidate: (): void => {},
+  };
+  return {
+    ...original,
+    userSecretKeyService: spiedInstance,
+  };
+});
 
 /**
  * A-FR-10: the 15-minute sign-in cooldown is per account AND SITE, and a
@@ -17,10 +33,9 @@ describe("sign-in cooldown scope (A-FR-10)", () => {
       }
     ).ensureConnection = async () => undefined;
     const rejectedValue = "rejected-secret-v1";
-    const rejectedDigest = createHash("sha256")
-      .update(rejectedValue)
-      .digest("hex")
-      .slice(0, 16);
+    // P03: the marker uses the SAME keyed verifier as the comparison.
+    const rejectedDigest =
+      await SocialAccountModule.credentialVerifierDigest(rejectedValue);
     const now = new Date("2026-11-14T12:00:00Z");
     const makeFixture = (
       storedPass: string | null
@@ -175,5 +190,79 @@ describe("sign-in cooldown scope (A-FR-10)", () => {
       now: new Date(fixed.getTime() + 16 * 60_000),
     });
     expect(expired).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P03/A-FR-10: legacy BARE markers (recorded before the digest scheme)
+// keep the cooldown conservatively until a replacement lifts them, and
+// the keyed verifier replaces the unkeyed truncated password hash.
+// ---------------------------------------------------------------------------
+describe("legacy marker compatibility (P03)", () => {
+  it("a legacy BARE marker keeps the cooldown (conservative until replaced)", async () => {
+    const module = new SocialAccountModule();
+    (
+      module as unknown as { ensureConnection: () => Promise<void> }
+    ).ensureConnection = async () => undefined;
+    (
+      module as unknown as {
+        socialAccountModel: {
+          findRowById: (id: number) => Promise<unknown>;
+        };
+      }
+    ).socialAccountModel = {
+      findRowById: async () => ({
+        last_login_failure_at: new Date("2026-11-01T00:00:00Z"),
+        last_login_failure_site: null,
+        // The LEGACY bare marker (no digest suffix).
+        last_login_failure_reason:
+          SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON,
+        pass: "any-stored-value",
+      }),
+    };
+    // The rejected value is unknown — the cooldown applies regardless of
+    // the current stored credential (the safe direction).
+    await expect(module.isSignInCoolingDown(1)).resolves.toBe(true);
+    // A replacement clears the bare marker.
+    (
+      module as unknown as {
+        socialAccountModel: {
+          findRowById: (id: number) => Promise<unknown>;
+          updateLoginFailure: (
+            id: number,
+            reason: string,
+            siteId: number | null
+          ) => Promise<void>;
+        };
+      }
+    ).socialAccountModel.updateLoginFailure = async () => undefined;
+    const clearSpy = vi.fn();
+    (
+      module as unknown as {
+        recordLoginFailureClear: (id: number) => Promise<void>;
+      }
+    ).recordLoginFailureClear = clearSpy;
+    (
+      module as unknown as {
+        socialAccountModel: {
+          findRowById: (id: number) => Promise<{ last_login_failure_reason: string } | null>;
+        };
+      }
+    ).socialAccountModel.findRowById = async () => ({
+      last_login_failure_reason: SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON,
+    });
+    await module.credentialReplaced(1);
+    expect(clearSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("the keyed verifier differs from the bare unkeyed hash and is stable", async () => {
+    const digest = await SocialAccountModule.credentialVerifierDigest("pw");
+    // 32 hex chars (128 bits of keyed verifier) — not the old 16-char
+    // bare hash.
+    expect(digest).toHaveLength(32);
+    const digest2 = await SocialAccountModule.credentialVerifierDigest("pw");
+    expect(digest2).toBe(digest);
+    const other = await SocialAccountModule.credentialVerifierDigest("pw2");
+    expect(other).not.toBe(digest);
   });
 });

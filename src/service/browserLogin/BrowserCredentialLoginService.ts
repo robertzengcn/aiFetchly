@@ -855,8 +855,12 @@ export class BrowserCredentialLoginService {
         username: submitted.username,
         password: submitted.password,
         accountId: chosen.id,
-        // R08: the card value was just SAVED as the stored credential.
-        fromStoredCredential: true,
+        // R08 + P03/A-FR-10: the card value counts as the STORED
+        // credential ONLY when it was actually saved — a ONE-TIME
+        // submission's rejection marks nothing (the stored credential is
+        // innocent; the old flag marked it with a one-time value's
+        // verifier and blocked the wrong credential).
+        fromStoredCredential: submitted.save === true,
       });
     }
     return this.fillAndAssess(input, site, {
@@ -1059,10 +1063,13 @@ export class BrowserCredentialLoginService {
           (result.outcome === "wrong_credential" ||
             result.reasonCode === "wrong_password");
         if (isRejectedSavedCredential) {
-          const rejectedDigest = createHash("sha256")
-            .update(credential.password)
-            .digest("hex")
-            .slice(0, 16);
+          // P03: the KEYED verifier (HMAC over the value with the
+          // account encryption key) — never a bare unkeyed, truncated
+          // password hash an attacker with DB access could brute-force.
+          const rejectedDigest =
+            await SocialAccountModule.credentialVerifierDigest(
+              credential.password
+            );
           await accountModule.recordLoginFailure(
             credential.accountId,
             `${SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON}:${rejectedDigest}`,
