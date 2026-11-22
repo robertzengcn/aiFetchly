@@ -1375,9 +1375,12 @@ export async function runBrowserTasks(
               /* best effort */
             }
           }
-          // R11/C-FR-11: partial EVIDENCE the child already produced is
-          // carried into the interrupted/cancelled result (bounded like
-          // the terminal path) instead of a synthesized empty partial.
+          // R11/C-FR-11 + C06/D-FR-09: partial EVIDENCE the child already
+          // produced rides the interrupted/cancelled result — bounded like
+          // the terminal path (PER-ITEM caps AND the total-byte check the
+          // count-only cap missed), and a cancelled child's TEXT result
+          // (partialContent — the AgentRuntime cancelled envelope has no
+          // output object) is preserved as bounded evidence too.
           const partialOutput = result.output as {
             evidence?: unknown;
             extracted?: unknown;
@@ -1389,14 +1392,52 @@ export async function runBrowserTasks(
                 .map((item) => item.slice(0, 300))
                 .slice(0, 20)
             : [];
+          const cancelledPartialText =
+            typeof (result as unknown as { partialContent?: unknown })
+              .partialContent === "string"
+              ? ((result as unknown as { partialContent: string })
+                  .partialContent || ""
+                ).slice(0, 2000)
+              : "";
+          if (cancelledPartialText) {
+            partialEvidence.push(`partial_text:${cancelledPartialText}`);
+          }
           const partialExtracted = Array.isArray(partialOutput?.extracted)
-            ? (partialOutput.extracted as unknown[])
-                .filter(
-                  (item) =>
-                    typeof item === "string" ||
-                    (item !== null && typeof item === "object")
-                )
-                .slice(0, 50)
+            ? ((): unknown[] => {
+                // C06: the count cap alone let an oversized AGGREGATE
+                // through — per-item caps AND the total-byte check apply
+                // exactly like the terminal path.
+                const items = (partialOutput.extracted as unknown[])
+                  .filter(
+                    (item) =>
+                      typeof item === "string" ||
+                      (item !== null && typeof item === "object")
+                  )
+                  .slice(0, 50);
+                const bounded: unknown[] = [];
+                let totalBytes = 0;
+                for (const item of items) {
+                  let safe: unknown = item;
+                  if (typeof item === "string") {
+                    safe = item.slice(0, 2000);
+                  } else if (item !== null && typeof item === "object") {
+                    try {
+                      const serialized = JSON.stringify(item);
+                      if (serialized.length > 2000) {
+                        safe = { truncated: true, bytes: serialized.length };
+                      }
+                    } catch {
+                      safe = { truncated: true, bytes: 0 };
+                    }
+                  }
+                  totalBytes += JSON.stringify(safe ?? null).length;
+                  if (totalBytes > 64 * 1024) {
+                    break;
+                  }
+                  bounded.push(safe);
+                }
+                return bounded;
+              })()
             : [];
           const partialFinalUrl =
             typeof partialOutput?.final_url === "string" &&

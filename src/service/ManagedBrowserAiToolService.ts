@@ -2111,6 +2111,20 @@ export class ManagedBrowserAiToolService {
         // excluded from active budgets by the control service.
         // T19: durable cursor — admission, per-phase cursor, mutation
         // journal (intent before dispatch, outcome after), terminal.
+        // C06/D-FR-10/C-FR-14: the per-step BOUNDED checkpoint lands on
+        // THIS execution's admitted row — a crash before the terminal
+        // write leaves the journal showing what landed (never replayed).
+        persistCheckpoint: async (partial) => {
+          const { getDefaultBrowserTaskModule } = await import(
+            "@/modules/BrowserTaskModule"
+          );
+          await getDefaultBrowserTaskModule()
+            .recordCheckpoint({
+              taskId: awaitedResultRef.executionId ?? awaitedResultRef.taskId ?? "",
+              partial,
+            })
+            .catch(() => undefined);
+        },
         persistCursor: async (cursor) => {
           const { getDefaultBrowserTaskModule } = await import(
             "@/modules/BrowserTaskModule"

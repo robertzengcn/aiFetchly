@@ -126,6 +126,63 @@ describe("BrowserTaskModule execution-id journal (B01, real SQLite)", () => {
     expect(swept?.phase).toBe("interrupted");
   });
 
+  it("a mid-run CHECKPOINT survives a crash before the terminal write (C06)", async () => {
+    const module = new BrowserTaskModule();
+    const executionId = "exec_b06ckpt0001";
+    await admit(module, executionId);
+    // Two steps landed, each checkpointing the evidence so far...
+    await module.recordCheckpoint({
+      taskId: executionId,
+      partial: {
+        extracted: [{ price: 10 }],
+        evidence: ["CLICK:Go:confirmed"],
+      },
+    });
+    await module.recordCheckpoint({
+      taskId: executionId,
+      partial: {
+        extracted: [{ price: 10 }, { price: 12 }],
+        evidence: ["CLICK:Go:confirmed", "EXTRACT:rows:confirmed"],
+      },
+    });
+    // ...then the process CRASHED before recordTerminal. The startup
+    // sweep marks the row interrupted — the checkpoint SHOWS what landed
+    // (bounded, structured) and nothing is replayed.
+    expect(await module.markUnfinishedInterrupted()).toBe(1);
+    const row = await module.getCursor(executionId);
+    expect(row?.phase).toBe("interrupted");
+    expect(row?.pendingActionOutcome).toBeNull();
+    expect(row?.interruptedPartial).not.toBeNull();
+    const checkpoint = JSON.parse(row?.interruptedPartial ?? "{}") as {
+      extracted: unknown[];
+      evidence: string[];
+    };
+    expect(checkpoint.extracted).toEqual([{ price: 10 }, { price: 12 }]);
+    expect(checkpoint.evidence).toContain("EXTRACT:rows:confirmed");
+    // The terminal write still works after recovery and REPLACES the
+    // checkpoint view with the final partial bundle.
+    await module.recordTerminal({
+      taskId: executionId,
+      phase: "interrupted",
+      reason: "handoff_expired",
+      partial: { extracted: [{ price: 10 }], evidence: ["final"] },
+    });
+    const terminalRow = await module.getCursor(executionId);
+    const finalBundle = JSON.parse(
+      terminalRow?.interruptedPartial ?? "{}"
+    ) as { evidence: string[] };
+    expect(finalBundle.evidence).toEqual(["final"]);
+  });
+
+  it("a checkpoint never creates a row for an unadmitted execution (C06)", async () => {
+    const module = new BrowserTaskModule();
+    await module.recordCheckpoint({
+      taskId: "exec_b06ghost02",
+      partial: { extracted: ["x"], evidence: ["y"] },
+    });
+    expect(await module.getCursor("exec_b06ghost02")).toBeNull();
+  });
+
   it("refuses an intent for an execution that was never admitted", async () => {
     const module = new BrowserTaskModule();
     await expect(

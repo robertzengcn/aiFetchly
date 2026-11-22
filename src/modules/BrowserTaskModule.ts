@@ -148,6 +148,57 @@ export class BrowserTaskModule extends BaseModule {
     await model.upsertByTaskId(existing);
   }
 
+  /**
+   * C06/D-FR-10/C-FR-14: a BOUNDED mid-run checkpoint (extracted rows +
+   * evidence so far) merges into the admitted row's interruptedPartial —
+   * a crash before the terminal write leaves the journal showing what
+   * landed (restart marks the row interrupted; nothing is replayed).
+   * Best-effort: a missing admitted row (pre-admission crash) has
+   * nothing to checkpoint.
+   */
+  public async recordCheckpoint(input: {
+    readonly taskId: string;
+    readonly partial: {
+      readonly extracted?: readonly unknown[];
+      readonly evidence?: readonly string[];
+    };
+  }): Promise<void> {
+    const model = await this.getModel();
+    const existing = await model.findByTaskId(input.taskId);
+    if (!existing) {
+      return;
+    }
+    const bounded = {
+      extracted: (input.partial.extracted ?? [])
+        .slice(0, 50)
+        .map((item) =>
+          typeof item === "string"
+            ? item.slice(0, 2000)
+            : item !== null && typeof item === "object"
+              ? (() => {
+                  try {
+                    const s = JSON.stringify(item);
+                    return s.length > 2000
+                      ? { truncated: true, bytes: s.length }
+                      : item;
+                  } catch {
+                    return { truncated: true, bytes: 0 };
+                  }
+                })()
+              : null,
+        ),
+      evidence: (input.partial.evidence ?? [])
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.slice(0, 300))
+        .slice(0, 20),
+    };
+    const serialized = JSON.stringify(bounded);
+    if (serialized.length <= 256 * 1024) {
+      existing.interruptedPartial = serialized;
+      await model.upsertByTaskId(existing);
+    }
+  }
+
   /** Terminal phase. */
   public async recordTerminal(input: {
     readonly taskId: string;

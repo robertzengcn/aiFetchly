@@ -197,6 +197,17 @@ export interface RunnerDeps {
    * T19: durable cursor hooks (best-effort persistence; failures never
    * block execution but ARE logged by the module).
    */
+  /**
+   * C06/D-FR-10/C-FR-14: persist a BOUNDED mid-run checkpoint (the
+   * extracted rows + evidence so far) after each completed step — a crash
+   * before the terminal write still leaves the durable journal showing
+   * what LANDED (restart marks the row interrupted and shows the
+   * checkpoint; no mutation is ever replayed).
+   */
+  readonly persistCheckpoint?: (partial: {
+    readonly extracted: readonly unknown[];
+    readonly evidence: readonly string[];
+  }) => Promise<void>;
   readonly persistCursor?: (input: {
     phase: string;
     leafSteps: number;
@@ -1860,6 +1871,13 @@ export class BrowserTaskRunner {
 
         // D-FR-11: fresh observation after the action (already cached by the module).
         observation = await this.deps.observe(this.input.sessionId);
+        // C06/D-FR-10/C-FR-14: the per-step BOUNDED checkpoint lands
+        // BEFORE the next decision — a crash mid-run leaves the durable
+        // journal with the evidence that actually landed (best-effort: a
+        // checkpoint failure never blocks the task).
+        await this.deps
+          .persistCheckpoint?.({ extracted, evidence })
+          .catch(() => undefined);
         if (!observation) {
           continue;
         }
