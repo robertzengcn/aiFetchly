@@ -63,6 +63,7 @@ import {
   toSafeErrorMessage,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
+import { windowTitleMarkerScript } from "@/childprocess/managed-browser/WindowTitleMarker";
 
 /**
  * Managed-browser worker session (technical design §4 worker column).
@@ -307,14 +308,12 @@ export class WorkerSession {
       // can overwrite it afterwards — a best-effort label, not a
       // security control).
       if (payload.windowLayout?.aiWindowTitle && this.page.evaluateOnNewDocument) {
-        await this.page.evaluateOnNewDocument(
-          "try { document.title = '[AI] ' + document.title; } catch { /* about:blank */ }"
-        );
-        await this.page
-          .evaluate(
-            "try { document.title = '[AI] ' + document.title; } catch { /* about:blank */ }"
-          )
-          .catch(() => undefined);
+        // C04/M-FR-13: the marker is IDEMPOTENT — the old plain
+        // concatenation grew "[AI] [AI] ..." on every document load, and
+        // the marker never left the title after a takeover.
+        const markerScript = windowTitleMarkerScript("[AI]");
+        await this.page.evaluateOnNewDocument(markerScript);
+        await this.page.evaluate(markerScript).catch(() => undefined);
       }
       if (
         proxy &&
@@ -1021,6 +1020,39 @@ export class WorkerSession {
     }
     try {
       await this.page.bringToFront();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * C04/M-FR-13: the OS-window title marker, IDEMPOTENTLY applied — the
+   * script strips ANY existing marker prefix before applying the wanted
+   * one, so document reloads never grow "[AI] [AI] ..." and a takeover
+   * actually renames the window to the user marker. Only document.title
+   * is touched (never page content).
+   */
+  /**
+   * C04/M-FR-13: RETITLE_WINDOW — best-effort; a headless page (no
+   * window) resolves silently.
+   */
+  public async retitleWindow(prefix: "ai" | "user"): Promise<boolean> {
+    if (!this.page) {
+      return false;
+    }
+    const marker = prefix === "user" ? "[You]" : "[AI]";
+    try {
+      await this.page.evaluate(
+        windowTitleMarkerScript(marker)
+      );
+      // The in-page override re-applies "[AI] ..." on every load; a
+      // takeover marker must survive navigations, so re-register it.
+      if (this.page.evaluateOnNewDocument) {
+        await this.page.evaluateOnNewDocument(
+          windowTitleMarkerScript(marker)
+        );
+      }
       return true;
     } catch {
       return false;

@@ -366,6 +366,8 @@ export interface BrowserCredentialRequestEvent {
   readonly prefillUsername: string | null;
   /** A-FR-05/N03: a username-only saved account asks for the password. */
   readonly passwordOnly: boolean;
+  /** C04/M-FR-08: the owning task's user-visible label ("Browser task 2/3"). */
+  readonly taskLabel?: string | null;
 }
 
 /**
@@ -392,6 +394,8 @@ export interface BrowserAccountPickerRequestEvent {
     name: string;
   }>;
   readonly createdAt: number;
+  /** C04/M-FR-08: the owning task's user-visible label. */
+  readonly taskLabel?: string | null;
 }
 
 /** B02: live account-picker requests (multi-account sign-in path). */
@@ -430,6 +434,8 @@ export interface BrowserSiteConfirmRequestEvent {
   readonly registrableDomain: string;
   readonly proposedDomains: readonly string[];
   readonly createdAt: number;
+  /** C04/M-FR-08: the owning task's user-visible label. */
+  readonly taskLabel?: string | null;
 }
 
 /** B03: live extra-domain confirmation proposals (post sign-in). */

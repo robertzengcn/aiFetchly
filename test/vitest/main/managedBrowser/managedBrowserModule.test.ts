@@ -2275,3 +2275,52 @@ describe("observation trusted-boundary projection (B04)", () => {
     expect(projected).toBe(observation);
   });
 });
+
+// ---------------------------------------------------------------------------
+// C04/M-FR-13: the window-grid index is MONOTONIC — closing one of several
+// windows must not hand its grid slot to the next start while other
+// windows still occupy their offsets.
+// ---------------------------------------------------------------------------
+/** Extract the linear window-grid index from a client's START_SESSION. */
+function windowIndexOf(
+  client: {
+    sent: Array<{
+      type: string;
+      windowLayout?: { position?: { x: number; y: number } };
+    }>;
+  }
+): number {
+  const start = client.sent.find((m) => m.type === "START_SESSION");
+  const x = start?.windowLayout?.position?.x ?? 0;
+  const y = start?.windowLayout?.position?.y ?? 0;
+  // perRow = 3, stepX = 60, stepY = 60 — recover the linear index.
+  return Math.floor(y / 60) * 3 + Math.floor(x / 60);
+}
+
+describe("window layout index is monotonic (C04/M-FR-13)", () => {
+  it("a new start after a session closed never reuses a live window's grid index", async () => {
+    const h = makeHarness();
+    const m = h.module;
+    const a = await m.start(
+      { accountId: ACCOUNT_ID, purpose: "a" },
+      { aiEntryPoint: true }
+    );
+    const b = await m.start(
+      { accountId: ACCOUNT_ID, purpose: "b" },
+      { aiEntryPoint: true }
+    );
+    const idxA = windowIndexOf(h.clients[0] as never);
+    const idxB = windowIndexOf(h.clients[1] as never);
+    expect(idxB).toBeGreaterThan(idxA);
+    // Stop A, start C: the counter never rewinds — C cannot land on A's
+    // or B's occupied offset.
+    await m.stop(a.sessionId, "user_stop");
+    const c = await m.start(
+      { accountId: ACCOUNT_ID, purpose: "c" },
+      { aiEntryPoint: true }
+    );
+    const idxC = windowIndexOf(h.clients[2] as never);
+    expect(idxC).not.toBe(idxA);
+    expect(idxC).not.toBe(idxB);
+  });
+});

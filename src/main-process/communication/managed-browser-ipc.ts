@@ -55,7 +55,10 @@ import {
   getSiteConfirmWaitRegistry,
 } from "@/service/browserLogin/BrowserCredentialLoginService";
 import { getBatchConfirmWaitRegistry } from "@/service/agentTools/runBrowserTasksTool";
-import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+import {
+  getDefaultAgentTaskControlService,
+  getAgentTaskLabel,
+} from "@/service/browserAgents/AgentTaskControlService";
 import {
   listEligibleAccountsInputSchema,
   managedBrowserStartInputSchema,
@@ -138,6 +141,16 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       // startup sweep is best-effort
     }
   })();
+  // C04/M-FR-08: the user-visible task label rides every card payload —
+  // the cards publish on the ROOT conversation, where the owning task's
+  // name ("Browser task 2/3") is the only way to tell siblings apart.
+  const taskLabelForSession = (sessionId: string): string | null => {
+    const ownerTaskId = getDefaultManagedBrowserModule().getSessionOwnerAgentTaskId(
+      sessionId
+    );
+    return ownerTaskId ? (getAgentTaskLabel(ownerTaskId) ?? null) : null;
+  };
+
   // PRD A-FR-05: credential-card requests reach the parent conversation as
   // an event; the card submits through the single-use validated channel.
   getCredentialCardWaitRegistry().setSink((request) =>
@@ -153,6 +166,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       mode: request.mode,
       prefillUsername: request.prefillUsername,
       passwordOnly: request.passwordOnly,
+      taskLabel: taskLabelForSession(request.sessionId),
     })
   );
 
@@ -166,6 +180,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       siteDomain: request.siteDomain,
       candidates: request.candidates,
       createdAt: request.createdAt,
+      taskLabel: taskLabelForSession(request.sessionId),
     })
   );
 
@@ -181,6 +196,7 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       registrableDomain: request.registrableDomain,
       proposedDomains: request.proposedDomains,
       createdAt: request.createdAt,
+      taskLabel: taskLabelForSession(request.sessionId),
     })
   );
 

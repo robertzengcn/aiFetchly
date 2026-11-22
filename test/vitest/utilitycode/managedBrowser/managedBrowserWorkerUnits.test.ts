@@ -23,6 +23,7 @@ import {
   registerTrustedSecret,
   sanitizeWorkerText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
+import { windowTitleMarkerScript } from "@/childprocess/managed-browser/WindowTitleMarker";
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -1173,5 +1174,44 @@ describe("B04 worker outbound text scrubbing", () => {
     expect(planted.includes("sk-ABCDEFGHIJKLMNOP1234567890")).toBe(false);
     expect(planted.length).toBeLessThanOrEqual(128);
     clearTrustedSecretsForTest();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C04/M-FR-13: the window-title marker is IDEMPOTENT (reload never grows
+// "[AI] [AI] ...") and a takeover retitles to the user marker.
+// ---------------------------------------------------------------------------
+describe("C04 window title marker", () => {
+  function evalTitleScript(script: string, initialTitle: string): string {
+    const doc = { title: initialTitle };
+    new Function("document", script)(doc);
+    return doc.title;
+  }
+
+  it("re-applying the marker never grows the prefix", () => {
+    let title = evalTitleScript(windowTitleMarkerScript("[AI]"), "Example Market");
+    expect(title).toBe("[AI] Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[AI]"), title);
+    expect(title).toBe("[AI] Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[AI]"), title);
+    expect(title).toBe("[AI] Example Market");
+  });
+
+  it("a takeover retitles to the user marker and the AI marker returns on resume", () => {
+    let title = evalTitleScript(windowTitleMarkerScript("[AI]"), "Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[You]"), title);
+    expect(title).toBe("[You] Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[AI]"), title);
+    expect(title).toBe("[AI] Example Market");
+  });
+
+  it("page-authored titles starting with a marker-like prefix are still re-marked safely", () => {
+    const title = evalTitleScript(
+      windowTitleMarkerScript("[AI]"),
+      "[You] planted.example"
+    );
+    // The strip pass removes ANY marker prefix before re-applying — the
+    // title carries exactly ONE marker.
+    expect(title).toBe("[AI] planted.example");
   });
 });

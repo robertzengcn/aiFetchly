@@ -395,6 +395,10 @@ export class ManagedBrowserModule {
     | null = null;
   /** Handoff-window expiry timers per session (FR-P0-013 enforcement). */
   private readonly handoffTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** C04/M-FR-13: monotonic window-index source (never resets). */
+  private nextWindowIndex = 0;
+  /** C04/M-FR-13: the grid index each live window was laid out at. */
+  private readonly sessionWindowIndexes = new Map<string, number>();
   private now: () => number = Date.now;
 
   constructor(deps: ManagedBrowserModuleDeps = {}) {
@@ -493,6 +497,28 @@ export class ManagedBrowserModule {
     await record.client
       .request(
         { type: "PIN_OBSERVATION", observationId, pinned },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * C04/M-FR-13: retitle the OS window marker WITHOUT page-content
+   * mutation — "user" marks a takeover, "ai" names the AI controller.
+   * Best-effort: an old worker or a stopped session ignores it.
+   */
+  public async retitleSessionWindow(
+    sessionId: string,
+    prefix: "ai" | "user"
+  ): Promise<void> {
+    const record = this.sessions.get(sessionId);
+    if (!record || !record.client) {
+      return;
+    }
+    await record.client
+      .request(
+        { type: "RETITLE_WINDOW", prefix },
         MANAGED_BROWSER_TIMEOUTS.singleActionMs,
         (m) => m.type === "SESSION_STATE_CHANGED"
       )
@@ -959,7 +985,11 @@ export class ManagedBrowserModule {
           // session's index among the LIVE sessions drives the offset)
           // and the OS window title names the AI controller.
           windowLayout: (() => {
-            const index = this.sessions.size;
+            // C04/M-FR-13: a MONOTONIC window index — sessions.size reuses
+            // an occupied grid offset after one of several windows closes
+            // (size drops, the new session takes the LAST slot again).
+            const index = this.nextWindowIndex++;
+            this.sessionWindowIndexes.set(sessionId, index);
             const perRow = 3;
             const stepX = 60;
             const stepY = 60;
@@ -1660,6 +1690,10 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
     );
     record.state = "handoff";
     record.handoffReason = reason;
+    // C04/M-FR-13: the window marker follows control — the takeover
+    // renames the window to the user marker (the [AI] label no longer
+    // sticks while the user drives).
+    void this.retitleSessionWindow(sessionId, "user");
     // PRD D-FR-15a: keep the latest observation's refs resolvable for
     // the whole handoff window (may last up to 60 minutes).
     void this.setObservationPin(
@@ -1773,6 +1807,8 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
     // a worker that is actually ready (review finding).
     if (message.type === "SESSION_STATE_CHANGED") {
       record.state = message.state;
+      // C04/M-FR-13: the AI controller marker returns on resume.
+      void this.retitleSessionWindow(sessionId, "ai");
       // B13/C-FR-07: resume ADVANCES the page revision — the worker has
       // already reset its reference registry, and the module mirror must
       // follow so held approvals and stale refs against the pre-handoff
@@ -2024,6 +2060,8 @@ record.currentUrl = outbound.observation.policyUrl || outbound.observation.url |
     this.cacheModule.onSessionTerminal(sessionId);
     this.clearHandoffTimer(sessionId);
     this.sessions.delete(sessionId);
+    // C04/M-FR-13: the window index dies with the session record.
+    this.sessionWindowIndexes.delete(sessionId);
   }
 
   private requireSession(sessionId: string): ActiveSessionRecord {

@@ -257,6 +257,21 @@ parentPort.on("message", async (event: { data: unknown }) => {
         );
         return;
       }
+      case "RETITLE_WINDOW": {
+        // C04/M-FR-13: the OS-window marker follows control — "ai" names
+        // the AI controller; "user" marks a takeover. Only document.title
+        // is touched; best-effort (a headless page replies anyway).
+        const retitled = await session.retitleWindow(message.prefix);
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+            reasonCode: retitled ? "window_retitled" : "window_headless",
+          })
+        );
+        return;
+      }
       case "CANCEL_REQUEST":
         session.cancelCurrent();
         parentPort.postMessage(

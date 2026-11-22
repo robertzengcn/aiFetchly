@@ -306,10 +306,31 @@ const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
 // R06/C-FR-10: ONE handoff dialog across ALL cards — the others badge.
-const { claim: claimHandoffDialog, release: releaseHandoffDialog, waitingCount } =
-  useHandoffDialogQueue();
+const {
+  claim: claimHandoffDialog,
+  release: releaseHandoffDialog,
+  waitingCount,
+  onPromoted,
+} = useHandoffDialogQueue();
 /** R06: the session THIS card holds the dialog slot for (precise release). */
 const claimedSessionId = ref<string | null>(null);
+/**
+ * C04/C-FR-10: the queue PROMOTES this card — the handoff dialog opens
+ * the moment the slot is handed over (the previous holder released or
+ * ended), without waiting for a status refresh that may never come. The
+ * listener dies with the component.
+ */
+const releasePromotionListener = onPromoted("*", (sessionId: string) => {
+  if (
+    status.value?.sessionId === sessionId &&
+    stateIsHandoffLike.value &&
+    !handoffDismissed.value
+  ) {
+    handoffDialogOpen.value = true;
+    claimedSessionId.value = sessionId;
+  }
+});
+onBeforeUnmount(releasePromotionListener);
 /**
  * Sticky dismiss (FR-HANDOFF-CLOSE): when the user closes the handoff dialog
  * while the session stays in a handoff/login state, the periodic handoff
@@ -439,9 +460,18 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
       // R06/C-FR-10: the terminal status releases the handoff dialog slot
       // (a dismissed-but-still-claimed session must not block the next
       // task's dialog).
-      if (claimedSessionId.value !== null) {
-        releaseHandoffDialog(claimedSessionId.value);
+      if (claimedSessionId.value === next.sessionId) {
+        releaseHandoffDialog(next.sessionId);
         claimedSessionId.value = null;
+      }
+      // C04/C-FR-10: a sibling session's terminal event must NOT clear
+      // THIS card's displayed session — only a terminal status for the
+      // DISPLAYED session (or a null reset) tears the card down.
+      if (
+        status.value !== null &&
+        status.value.sessionId !== next.sessionId
+      ) {
+        return;
       }
     }
     status.value = null;

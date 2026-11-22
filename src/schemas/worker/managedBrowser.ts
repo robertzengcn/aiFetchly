@@ -564,6 +564,15 @@ const resumeHandoffMessageSchema = z.strictObject({
   type: z.literal("RESUME_HANDOFF"),
 });
 
+// C04/M-FR-13: retitle the OS window marker WITHOUT mutating page content
+// beyond the document.title label — "ai" names the AI controller, "user"
+// marks a takeover (the [AI] marker no longer sticks after takeover).
+const retitleWindowMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("RETITLE_WINDOW"),
+  prefix: z.enum(["ai", "user"]),
+});
+
 const verifyManualLoginMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("VERIFY_MANUAL_LOGIN"),
@@ -664,6 +673,7 @@ export const managedBrowserInboundSchema = lazySchema(() =>
     captureScreenshotMessageSchema,
     beginHandoffMessageSchema,
     resumeHandoffMessageSchema,
+    retitleWindowMessageSchema,
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
     pauseRequestMessageSchema,
