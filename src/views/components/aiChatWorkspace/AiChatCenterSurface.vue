@@ -255,7 +255,7 @@
       @stop-speaking="voice.stopSpeaking"
       @open-voice-settings="openVoiceSettings"
     >
-      <template #controls>
+      <template #workspace>
         <WorkspaceBadge
           compact
           :workspace="conversationWorkspace.workspace.value"
@@ -265,6 +265,8 @@
           @request-set-workspace="onInteractiveWorkspaceSetup"
           @request-remove-workspace="onRequestWorkspaceRemove"
         />
+      </template>
+      <template #controls>
         <AiChatV2ModelSelector
           v-model="selectedModel"
           compact

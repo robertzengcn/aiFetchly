@@ -310,7 +310,7 @@ const i18n = createI18n({
   },
 });
 
-/** Composer stub renders its lower slots so control placement is testable. */
+/** Composer stub preserves the order of the composer slots and input. */
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
   props: {
@@ -327,6 +327,7 @@ const ComposerStub = defineComponent({
   emits: ["send", "stop"],
   template:
     '<div class="composer-stub" data-testid="composer-stub">' +
+    '<div data-testid="composer-workspace-stub"><slot name="workspace" /></div>' +
     '<div data-testid="composer-textarea"></div>' +
     '<div data-testid="composer-controls-stub"><slot name="controls" /></div>' +
     '<div data-testid="composer-actions-stub"><slot name="toolbar-actions" /></div>' +
@@ -3625,12 +3626,12 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(notice.text()).toContain("Selection changed");
   });
 
-  it("shows the compact workspace chooser in the composer with no conversation selected", async () => {
+  it("shows the compact workspace chooser above the input with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();
 
-    const controls = wrapper.get('[data-testid="composer-controls-stub"]');
-    expect(controls.getComponent({ name: "WorkspaceBadge" }).props("compact")).toBe(true);
+    const workspace = wrapper.get('[data-testid="composer-workspace-stub"]');
+    expect(workspace.getComponent({ name: "WorkspaceBadge" }).props("compact")).toBe(true);
     expect(wrapper.getComponent(ComposerStub).props("workspaceLayout")).toBe(true);
   });
 
@@ -3803,14 +3804,12 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     );
   });
 
-  it("places workspace, model and permissions before the accessory buttons", async () => {
+  it("keeps model and permissions in the lower toolbar before the accessory buttons", async () => {
     const wrapper = mountSurface();
     await flushPromises();
     const controls = wrapper.get('[data-testid="composer-controls-stub"]');
     const actions = wrapper.get('[data-testid="composer-actions-stub"]');
-    expect(controls.element.children).toHaveLength(3);
     expect(Array.from(controls.element.children, (child) => child.getAttribute("data-testid"))).toEqual([
-      "workspace-badge-stub",
       "model-selector-stub",
       "approval-mode-selector-stub",
     ]);

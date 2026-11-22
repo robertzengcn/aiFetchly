@@ -108,11 +108,10 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
       if (focus.testid === "ai-chat-send") break;
     }
     const joined = encountered.join(" | ");
-    // Folder and model (or provider setup) precede context, voice and Send.
-    const workspaceIdx = joined.indexOf("workspace-badge-choose");
-    expect(workspaceIdx).toBeGreaterThan(-1);
+    // Model (or provider setup) precedes permissions, context, voice and Send.
+    expect(joined).not.toContain("workspace-badge-choose");
     const modelIdx = joined.search(/chat-model-selector|model-open-settings/);
-    expect(modelIdx, joined).toBeGreaterThan(workspaceIdx);
+    expect(modelIdx, joined).toBeGreaterThanOrEqual(0);
     const permissionIdx = joined.indexOf("chat-permission-selector");
     expect(permissionIdx, joined).toBeGreaterThan(modelIdx);
     const contextIdx = joined.indexOf("workspace-context-indicator");
@@ -160,6 +159,7 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     await page.getByTestId("workspace-new-chat").focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("chat-center-surface")).toBeVisible();
+    await expect(textarea).toBeFocused();
 
     // --- Narrow drawer: keyboard open, trapped Tab, Escape + restore -------
     await page.setViewportSize({ width: 700, height: 800 });
@@ -209,7 +209,9 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     // keyboard; opening the picker card is observable without choosing.
     const choose = page.getByTestId("workspace-badge-choose");
     await expect(choose).toBeVisible({ timeout: 10_000 });
-    await choose.focus();
+    await textarea.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(choose).toBeFocused();
     await page.keyboard.press("Enter");
     const card = page.getByTestId("workspace-required").first();
     await expect(card.getByRole("button", { name: /pick folder/i })).toBeFocused();

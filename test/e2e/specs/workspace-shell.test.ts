@@ -81,7 +81,7 @@ test.describe("persistent shell startup (design §14, §25.6)", () => {
 });
 
 test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
-  test("fits the input, workspace controls and send in one composer panel", async ({
+  test("keeps the workspace chooser above the input and send below it", async ({
     shellApp: app,
   }) => {
     const page = app.mainWindow;
@@ -96,12 +96,14 @@ test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
       .locator("textarea.v-field__input:not(.v-textarea__sizer)");
     await expect(textarea).toBeVisible({ timeout: 10_000 });
     expect(await textarea.getAttribute("rows")).toBe("2");
-    await expect(panel.getByTestId("workspace-badge-choose")).toBeVisible();
+    const chooseWorkspace = panel.getByTestId("workspace-badge-choose");
+    await expect(chooseWorkspace).toBeVisible();
     await expect(panel.getByTestId("chat-model-selector")).toBeVisible();
     await expect(panel.getByTestId("chat-permission-selector")).toBeVisible();
     await expect(panel.locator(".v2-mode-selector")).toHaveCount(0);
-    // Workspace, model and permissions follow the textarea in DOM order.
+    // The folder chooser precedes the input. Model and permissions follow it.
     const order = await page.evaluate(() => {
+      const chooser = document.querySelector('[data-testid="workspace-badge-choose"]');
       const input =
         document
           .querySelector('[data-testid="ai-chat-composer"]')
@@ -110,21 +112,28 @@ test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
       const controls = document.querySelector(
         '[data-testid="v2-composer-controls"]'
       );
-      if (!input || !controls) return "missing";
-      return input.compareDocumentPosition(controls) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-        ? "after"
-        : "before";
+      if (!chooser || !input || !controls) return null;
+      return [
+        Boolean(chooser.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING),
+        Boolean(input.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING),
+      ];
     });
-    expect(order).toBe("after");
+    expect(order).toEqual([true, true]);
 
     for (const width of [1280, 700]) {
       await page.setViewportSize({ width, height: 800 });
       const send = panel.getByTestId("ai-chat-send");
       await expect(send).toBeInViewport();
       const panelBox = await panel.boundingBox();
+      const chooserBox = await chooseWorkspace.boundingBox();
+      const inputBox = await textarea.boundingBox();
       const sendBox = await send.boundingBox();
-      if (!panelBox || !sendBox) throw new Error("Composer should be visible");
+      if (!panelBox || !chooserBox || !inputBox || !sendBox) {
+        throw new Error("Composer controls should be visible");
+      }
+      expect(chooserBox.x).toBeGreaterThanOrEqual(panelBox.x);
+      expect(chooserBox.x).toBeLessThanOrEqual(panelBox.x + 32);
+      expect(chooserBox.y + chooserBox.height).toBeLessThanOrEqual(inputBox.y);
       expect(sendBox.x + sendBox.width).toBeLessThan(panelBox.x + panelBox.width);
     }
   });

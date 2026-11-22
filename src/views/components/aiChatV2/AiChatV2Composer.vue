@@ -5,6 +5,9 @@
     :class="workspaceLayout ? 'v2-composer--workspace app-theme-scope' : undefined"
     :data-testid="workspaceLayout ? 'chat-composer-panel' : undefined"
   >
+    <div v-if="$slots.workspace" class="v2-composer__workspace">
+      <slot name="workspace" />
+    </div>
     <div class="v2-composer__mention">
       <AiChatV2AtMentionSuggestions
         v-if="atMentionOpen"
@@ -1997,6 +2000,11 @@ watch(
 
 .v2-composer--workspace:has(textarea:focus-visible) {
   border-color: var(--app-focus);
+}
+
+.v2-composer__workspace {
+  align-self: flex-start;
+  max-inline-size: 100%;
 }
 
 .v2-composer--workspace :deep(.v-textarea .v-field) {
