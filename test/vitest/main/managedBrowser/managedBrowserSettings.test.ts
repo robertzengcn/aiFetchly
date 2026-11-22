@@ -104,38 +104,40 @@ describe("settinggroupInit managed-browser rows", () => {
 // probe writes never drop it, and a model change is decision-relevant
 // (epoch bump).
 // ---------------------------------------------------------------------------
+/** P01/C02: a read-write store harness shared by the settings tests. */
+function makeReadWriteStore(initial: Record<string, string | null> = {}): {
+  reader: ManagedBrowserSettingReader;
+  store: Map<string, string | null>;
+} {
+  const store = new Map<string, string | null>(
+    Object.entries(initial)
+  );
+  let lastKey: string | null = null;
+  const reader = {
+    getSettingValue: async (key: string) =>
+      store.has(key) ? (store.get(key) ?? null) : null,
+    getSettingItem: async (key: string) => {
+      // Rows pre-exist in production; the store auto-creates.
+      if (!store.has(key)) {
+        store.set(key, null);
+      }
+      lastKey = key;
+      return { id: 1 };
+    },
+    updateSystemSetting: async (
+      _id: number,
+      value: string | null
+    ): Promise<unknown> => {
+      if (lastKey !== null) {
+        store.set(lastKey, value);
+      }
+      return value;
+    },
+  };
+  return { reader: reader as unknown as ManagedBrowserSettingReader, store };
+}
+
 describe("batchSubAgentModel preference persistence (C02)", () => {
-  function makeReadWriteStore(initial: Record<string, string | null> = {}): {
-    reader: ManagedBrowserSettingReader;
-    store: Map<string, string | null>;
-  } {
-    const store = new Map<string, string | null>(
-      Object.entries(initial)
-    );
-    let lastKey: string | null = null;
-    const reader = {
-      getSettingValue: async (key: string) =>
-        store.has(key) ? (store.get(key) ?? null) : null,
-      getSettingItem: async (key: string) => {
-        // Rows pre-exist in production; the store auto-creates.
-        if (!store.has(key)) {
-          store.set(key, null);
-        }
-        lastKey = key;
-        return { id: 1 };
-      },
-      updateSystemSetting: async (
-        _id: number,
-        value: string | null
-      ): Promise<unknown> => {
-        if (lastKey !== null) {
-          store.set(lastKey, value);
-        }
-        return value;
-      },
-    };
-    return { reader: reader as unknown as ManagedBrowserSettingReader, store };
-  }
 
   it("a save carrying batchSubAgentModel persists it and a reload reads it back", async () => {
     const { reader, store } = makeReadWriteStore();
@@ -185,5 +187,39 @@ describe("batchSubAgentModel preference persistence (C02)", () => {
       decisionRoute: { batchSubAgentModel: null },
     });
     expect((await mod.getEffectiveSettings()).decisionRoute.batchSubAgentModel).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P01: independent preference updates SERIALIZE through the per-module
+// write mutex — two awaited read/merge/write cycles never interleave
+// (the old last-write-wins dropped one caller's changes).
+// ---------------------------------------------------------------------------
+describe("preference write mutex (P01)", () => {
+  it("two concurrent route updates both persist (no lost update)", async () => {
+    const { reader, store } = makeReadWriteStore();
+    const mod = new ManagedBrowserSettingsModule(
+      reader,
+      () => true,
+      reader as never
+    );
+    await mod.updatePreferences({
+      decisionRoute: { chatDecisionModel: "model-a" },
+    });
+    // Both updates are IN FLIGHT concurrently — the merge serializes.
+    const [r1, r2] = await Promise.all([
+      mod.updatePreferences({
+        decisionRoute: { batchSubAgentModel: "lane-model" },
+      }),
+      mod.updatePreferences({
+        decisionRoute: { chatDecisionModel: "model-b" },
+      }),
+    ]);
+    void r1;
+    void r2;
+    const settings = await mod.getEffectiveSettings();
+    // BOTH changes survive: no interleaved merge dropped one of them.
+    expect(settings.decisionRoute.chatDecisionModel).toBe("model-b");
+    expect(settings.decisionRoute.batchSubAgentModel).toBe("lane-model");
   });
 });

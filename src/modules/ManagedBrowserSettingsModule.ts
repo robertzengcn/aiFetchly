@@ -333,7 +333,24 @@ export class ManagedBrowserSettingsModule {
    * settinggroupInit; a missing row is a setup error, not a silent default.
    * Returns the refreshed effective settings.
    */
+  /**
+   * P01: a per-module write mutex — independent preference updates
+   * serialize through this chain so two awaited read/merge/write cycles
+   * can never interleave (a lost update dropped one caller's changes).
+   */
+  private preferenceWriteChain: Promise<unknown> = Promise.resolve();
+
   public async updatePreferences(
+    patch: ManagedBrowserPreferencePatch
+  ): Promise<EffectiveManagedBrowserSettings> {
+    const run = this.preferenceWriteChain.then(() =>
+      this.updatePreferencesLocked(patch)
+    );
+    this.preferenceWriteChain = run.catch(() => undefined);
+    return await run;
+  }
+
+  private async updatePreferencesLocked(
     patch: ManagedBrowserPreferencePatch
   ): Promise<EffectiveManagedBrowserSettings> {
     if (!this.writer) {

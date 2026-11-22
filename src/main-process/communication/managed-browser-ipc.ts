@@ -854,9 +854,14 @@ export function registerManagedBrowserIpcHandlers(win: BrowserWindow): void {
       // probe reports invalidated when it no longer owns the slot.
       const persisted = await new ManagedBrowserSettingsModule()
         .getEffectiveSettings();
+      // P01/D-AC-08: the post-save check runs against the LIVE epoch as
+      // well — the saved capabilities could still carry this probe's
+      // revision while the provider configuration moved AFTER the save
+      // (comparing the saved value alone passed a stale probe).
       if (
+        providerConfigKey() !== probedRevision ||
         persisted.decisionRoute.chatCapabilities?.providerRevision !==
-        probedRevision
+          probedRevision
       ) {
         return {
           chat: false,

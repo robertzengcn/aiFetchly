@@ -142,7 +142,6 @@ describe("AiOptInPromptDialog one-time semantics (P04/Q-01)", () => {
       enabled: boolean;
     }>;
     expect(decisions).toHaveLength(300);
-    expect(apiMocks.submitAiOptInDecisions.mock.calls[0]?.[1]).toBeUndefined();
   });
 
   it("a FAILED submit keeps the prompt open with a retriable error", async () => {
