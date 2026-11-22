@@ -1532,6 +1532,7 @@ export default {
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Upload cookies (Netscape .txt)",
     open_managed_browser: "Open managed browser",
+    ai_optin_submit_failed: "Some accounts could not be saved. Retry — the prompt stays open until every choice is stored.",
     session_proxy_default: "Account default",
     session_proxy_direct: "Direct (no proxy)",
     open_managed_browser_failed: "Opening the managed browser failed. Check the proxy settings and try again.",

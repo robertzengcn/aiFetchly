@@ -1490,6 +1490,7 @@ export default {
       "ブラウザからCookieをエクスポートし、Cookieファイルを手動でアップロードしてください",
     upload_cookies_button: "Cookieをアップロード (Netscape .txt)",
     open_managed_browser: "管理ブラウザを開く",
+    ai_optin_submit_failed: "一部のアカウントを保存できませんでした。再試行してください — すべての選択が保存されるまでプロンプトは開いたままです。",
     session_proxy_default: "アカウントのデフォルト",
     session_proxy_direct: "ダイレクト（プロキシなし）",
     open_managed_browser_failed: "管理ブラウザーを開けませんでした。プロキシ設定を確認して再試行してください。",

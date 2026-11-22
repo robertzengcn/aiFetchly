@@ -1516,6 +1516,7 @@ export default {
       "Por favor exporte las cookies de su navegador y suba el archivo de cookies manualmente",
     upload_cookies_button: "Subir cookies (Netscape .txt)",
     open_managed_browser: "Abrir navegador gestionado",
+    ai_optin_submit_failed: "No se pudieron guardar algunas cuentas. Reintenta: el aviso permanece abierto hasta que se guarde cada elección.",
     session_proxy_default: "Predeterminado de la cuenta",
     session_proxy_direct: "Directo (sin proxy)",
     open_managed_browser_failed: "No se pudo abrir el navegador gestionado. Comprueba la configuración del proxy e inténtalo de nuevo.",

@@ -35,7 +35,10 @@ export const socialAccountAiOptInBulkSchema = lazySchema(() =>
         })
       )
       .min(1)
-      .max(200),
+      // P04/Q-01: the WHOLE reviewed cohort submits per decision — a
+      // large Decline (or a confirm with unselected accounts) must not
+      // trip the IPC bound; the handler chunks the writes.
+      .max(5000),
   })
 );
 

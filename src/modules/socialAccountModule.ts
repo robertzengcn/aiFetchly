@@ -290,6 +290,13 @@ export class SocialAccountModule extends BaseModule {
       }
       socialAccount.status = socialAccountData.status;
       socialAccount.name = socialAccountData.name;
+      // P04/Q-01: a NEWLY CREATED account is not part of the one-time
+      // existing-account migration cohort — it is born prompted (the
+      // detail-page toggle is its consent surface), so it can never
+      // enter the pending prompt set.
+      if (!socialAccountData.id) {
+        socialAccount.ai_use_prompted = true;
+      }
       if (socialAccountData.phone) {
         socialAccount.phone = socialAccountData.phone;
       }
@@ -595,8 +602,15 @@ export class SocialAccountModule extends BaseModule {
   > {
     await this.ensureConnection();
     const rows = await this.socialAccountModel.listAllRaw();
+    // P04/Q-01: the prompt is the ONE-TIME migration for the EXISTING
+    // cohort — an already-OPTED-IN row (consent given via the detail-page
+    // toggle before the prompt ran) must never re-enter the pending set
+    // (its prior consent is preserved), and a declined row never
+    // reappears either (it was prompted).
     return rows
-      .filter((row) => row.ai_use_prompted !== true)
+      .filter(
+        (row) => row.ai_use_prompted !== true && row.ai_use_enabled !== true
+      )
       .map((row) => ({ id: row.id, user: row.user, name: row.name ?? null }));
   }
 

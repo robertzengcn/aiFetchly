@@ -1444,6 +1444,7 @@ export default {
     uploadfilemsg_content: "请从浏览器导出cookies并手动上传cookies文件",
     upload_cookies_button: "上传 cookies (Netscape .txt)",
     open_managed_browser: "打开托管浏览器",
+    ai_optin_submit_failed: "部分账户未能保存。请重试——在所有选择保存完成前，提示会保持打开。",
     session_proxy_default: "账户默认",
     session_proxy_direct: "直连（不使用代理）",
     open_managed_browser_failed: "打开托管浏览器失败。请检查代理设置后重试。",

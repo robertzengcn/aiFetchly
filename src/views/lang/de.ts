@@ -1512,6 +1512,7 @@ export default {
       "Bitte exportieren Sie die Cookies aus Ihrem Browser und laden Sie die Cookie-Datei manuell hoch",
     upload_cookies_button: "Cookies hochladen (Netscape .txt)",
     open_managed_browser: "Verwalteten Browser öffnen",
+    ai_optin_submit_failed: "Einige Konten konnten nicht gespeichert werden. Bitte wiederholen — der Dialog bleibt offen, bis jede Auswahl gespeichert ist.",
     session_proxy_default: "Konto-Standard",
     session_proxy_direct: "Direkt (ohne Proxy)",
     open_managed_browser_failed: "Das verwaltete Browserfenster konnte nicht geöffnet werden. Bitte Proxy-Einstellungen prüfen und erneut versuchen.",

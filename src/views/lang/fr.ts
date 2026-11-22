@@ -1503,6 +1503,7 @@ export default {
       "Please export cookies from your browser and upload cookies file manually",
     upload_cookies_button: "Importer les cookies (Netscape .txt)",
     open_managed_browser: "Ouvrir le navigateur géré",
+    ai_optin_submit_failed: "Certains comptes n'ont pas pu être enregistrés. Réessayez — l'invite reste ouverte jusqu'à ce que chaque choix soit enregistré.",
     session_proxy_default: "Par défaut du compte",
     session_proxy_direct: "Direct (sans proxy)",
     open_managed_browser_failed: "L'ouverture du navigateur géré a échoué. Vérifiez les paramètres de proxy et réessayez.",

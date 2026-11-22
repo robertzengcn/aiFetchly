@@ -112,8 +112,12 @@ export async function getAiOptInPendingAccounts(): Promise<
 
 export async function submitAiOptInDecisions(
   decisions: ReadonlyArray<{ id: number; enabled: boolean }>
-): Promise<void> {
-  await windowInvoke(SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT, { decisions });
+): Promise<{ ok: boolean; failedIds?: number[] }> {
+  // P04/Q-01: the IPC reports ids that could not be written so the
+  // prompt stays open and retries (never a partial silent apply).
+  return (await windowInvoke(SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT, {
+    decisions,
+  })) as { ok: boolean; failedIds?: number[] };
 }
 
 // Q-01/R02: the per-account AI opt-in (read + toggle).

@@ -276,7 +276,7 @@ describe("SocialAccountDetailPage AI opt-in (N08/Q-01)", () => {
 // translated, and a failed managed-browser start is VISIBLE.
 // ---------------------------------------------------------------------------
 const proxyApiMock = vi.hoisted(() => ({
-  getProxyList: vi.fn(async () => ({
+  getProxyList: vi.fn(async (_arg?: Record<string, unknown>) => ({
     data: [
       { id: 11, host: "proxy-one.example", port: 8080 },
       { id: 12, host: "proxy-two.example", port: 3128 },
@@ -302,10 +302,9 @@ describe("SocialAccountDetailPage session proxy route (P05)", () => {
     const wrapper = mountPage();
     await flushPromises();
     expect(proxyApiMock.getProxyList).toHaveBeenCalled();
-    const arg = proxyApiMock.getProxyList.mock.calls[0]?.[0] as Record<
-      string,
-      unknown
-    >;
+    const arg = (proxyApiMock.getProxyList.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >)[0]?.[0] as Record<string, unknown>;
     // The strict pagination schema accepts `size` — a `limit` key failed
     // the parse and silently emptied the list.
     expect(arg).toMatchObject({ page: 1, size: 50 });

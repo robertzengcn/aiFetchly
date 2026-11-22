@@ -159,13 +159,31 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
         "@/modules/socialAccountModule"
       );
       const module = new SocialAccountModule();
-      for (const decision of input.decisions) {
-        await module.setAiUseEnabled(decision.id, decision.enabled);
+      // P04/Q-01: writes are CHUNKED and each chunk's prompted-marking
+      // follows its value writes — a failure reports WHICH ids remain
+      // unprocessed (the dialog stays open and retries) instead of a
+      // partial apply silently closing the prompt.
+      const CHUNK = 100;
+      const failedIds: number[] = [];
+      for (let i = 0; i < input.decisions.length; i += CHUNK) {
+        const chunk = input.decisions.slice(i, i + CHUNK);
+        try {
+          for (const decision of chunk) {
+            await module.setAiUseEnabled(decision.id, decision.enabled);
+          }
+          // Marking happens AFTER the value write so a declined account
+          // keeps ai_use_enabled false but is never asked again.
+          await module.markAiUsePrompted(chunk.map((d) => d.id));
+        } catch (err) {
+          console.error("[socialaccount] opt-in chunk failed:", err);
+          for (const decision of chunk) {
+            failedIds.push(decision.id);
+          }
+        }
       }
-      // Marking happens AFTER the value write so a declined account
-      // keeps ai_use_enabled false but is never asked again.
-      await module.markAiUsePrompted(input.decisions.map((d) => d.id));
-      return { ok: true };
+      return failedIds.length > 0
+        ? { ok: false, failedIds }
+        : { ok: true };
     }
   );
 

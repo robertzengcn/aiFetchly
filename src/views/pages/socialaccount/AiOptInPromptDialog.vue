@@ -30,6 +30,19 @@
             <span>{{ account.name || account.user }} ({{ account.user }})</span>
           </template>
         </v-checkbox>
+        <v-alert
+          v-if="submitError"
+          type="error"
+          variant="tonal"
+          density="compact"
+          class="mt-2"
+          data-testid="ai-optin-submit-error"
+        >
+          {{
+            t('socialaccount.ai_optin_submit_failed') ||
+              'Some accounts could not be saved. Retry — the prompt stays open until every choice is stored.'
+          }}
+        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-spacer></v-spacer>
@@ -69,6 +82,13 @@ const { t } = useI18n();
 const visible = ref(false);
 const pending = ref<ReadonlyArray<AiOptInPendingAccount>>([]);
 const selected = ref<number[]>([]);
+/**
+ * P04/Q-01: a FAILED submit keeps the prompt OPEN with a retriable
+ * error — closing on failure made every unprocessed account reappear on
+ * the next page load (the prompt lost its one-time property).
+ */
+const submitError = ref(false);
+const submitting = ref(false);
 
 onMounted(async () => {
   try {
@@ -94,19 +114,42 @@ function onVisibility(value: boolean): void {
 }
 
 async function submit(optIn: boolean): Promise<void> {
-  const ids = optIn
-    ? [...selected.value]
-    : pending.value.map((account) => account.id);
-  if (ids.length === 0) {
+  // P04/Q-01: the ENTIRE reviewed cohort submits per decision — an
+  // unselected account is explicitly stored opted-OUT (declined once),
+  // so it never reappears; a subset submit left unchecked accounts
+  // unasked and re-prompting forever.
+  const cohort = pending.value.map((account) => ({
+    id: account.id,
+    enabled: optIn && selected.value.includes(account.id),
+  }));
+  if (cohort.length === 0) {
     visible.value = false;
     return;
   }
+  submitting.value = true;
+  submitError.value = false;
   try {
-    await submitAiOptInDecisions(
-      ids.map((id) => ({ id, enabled: optIn && selected.value.includes(id) }))
-    );
-  } finally {
+    const result = await submitAiOptInDecisions(cohort);
+    // The IPC reports ids that could not be written — the prompt stays
+    // open for a retriable resubmit of the remaining cohort.
+    const failedIds = (
+      result as { ok?: boolean; failedIds?: number[] }
+    )?.failedIds;
+    if (failedIds && failedIds.length > 0) {
+      pending.value = pending.value.filter((account) =>
+        failedIds.includes(account.id)
+      );
+      selected.value = selected.value.filter((id) =>
+        failedIds.includes(id)
+      );
+      submitError.value = true;
+      return;
+    }
     visible.value = false;
+  } catch {
+    submitError.value = true;
+  } finally {
+    submitting.value = false;
   }
 }
 </script>
