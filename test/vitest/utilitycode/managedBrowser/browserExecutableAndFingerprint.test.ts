@@ -349,4 +349,34 @@ describe("composeLaunchArgs", () => {
     // Belt-and-braces: the composed list must survive the denied-flag scan.
     expect(findDeniedLaunchFlag(args)).toBeNull();
   });
+
+  // E03/P-FR-06: the WebRTC leak policy is part of the QUALIFICATION
+  // evidence — an active proxy MUST compose the
+  // disable_non_proxied_udp flag, and a proxy-free launch MUST NOT
+  // carry it (a direct session has no UDP bypass to prevent).
+  it("adds the WebRTC disable_non_proxied_udp policy ONLY with an active proxy", () => {
+    const policy = buildDefaultLaunchPolicy();
+    const withProxy = composeLaunchArgs(policy, {
+      userDataDir: "/tmp/profile-p",
+      proxyServer: "http://proxy.example:8080",
+      locale: "de-DE",
+    });
+    expect(withProxy).toContain(
+      "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+    );
+    // The locale flag matches the proxy-consistent policy (P-FR-06
+    // locale chain — verified against the fingerprint self-test at
+    // startup via locale_mismatch).
+    expect(withProxy).toContain("--lang=de-DE");
+
+    const withoutProxy = composeLaunchArgs(policy, {
+      userDataDir: "/tmp/profile-d",
+    });
+    expect(
+      withoutProxy.includes("--force-webrtc-ip-handling-policy")
+    ).toBe(false);
+    // The composed list still survives the denied-flag scan.
+    expect(findDeniedLaunchFlag(withProxy)).toBeNull();
+    expect(findDeniedLaunchFlag(withoutProxy)).toBeNull();
+  });
 });

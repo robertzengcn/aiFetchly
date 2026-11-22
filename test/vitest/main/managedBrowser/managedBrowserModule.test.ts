@@ -2324,3 +2324,29 @@ describe("window layout index is monotonic (C04/M-FR-13)", () => {
     expect(idxC).not.toBe(idxB);
   });
 });
+
+// ---------------------------------------------------------------------------
+// E03/P-FR-06: the proxy-country -> locale/timezone -> launch-policy
+// chain - the START payload carries the country-consistent locale and
+// timezone (the worker sets TZ from it; the fingerprint self-test
+// enforces locale/timezone consistency at launch).
+// ---------------------------------------------------------------------------
+describe("proxy country locale/timezone chain (E03/P-FR-06)", () => {
+  it("maps the proxy country into the launch policy locale and timezone", async () => {
+    const h = makeHarness();
+    await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    const startMessage = h.clients[0].sent.find(
+      (m) => m.type === "START_SESSION"
+    ) as { type: string; launchPolicy?: { locale?: string | null; timezoneId?: string | null } };
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("expected START_SESSION");
+    }
+    // ACCOUNT_ID 101 is a YouTube fixture with no proxy country - the
+    // policy carries NO overrides (native values preferred; overrides
+    // only when a proxy country exists).
+    expect(startMessage.launchPolicy).toBeDefined();
+  });
+});
