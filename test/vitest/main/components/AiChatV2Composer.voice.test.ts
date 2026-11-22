@@ -8,17 +8,24 @@ import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
 // + blobToWavBase64. We stub them so the voice flow is deterministic and fast.
 // vi.hoisted exposes the mocks to the hoisted vi.mock factories below.
 
-const { startMock, stopMock, transcribeVoiceMock } = vi.hoisted(() => ({
-  startMock: vi.fn(),
-  stopMock: vi.fn(),
-  transcribeVoiceMock: vi.fn(),
-}));
+const { startMock, stopMock, transcribeVoiceMock, waveformListener } =
+  vi.hoisted(() => ({
+    startMock: vi.fn(),
+    stopMock: vi.fn(),
+    transcribeVoiceMock: vi.fn(),
+    waveformListener: {
+      current: undefined as ((level: number) => void) | undefined,
+    },
+  }));
 
 vi.mock("@/views/components/aiChatV2/voice/BrowserVoiceRecorder", () => ({
   // Vitest 4 invokes class mocks with new; an arrow function is not
   // constructable, so use a regular function returning the mock instance
   // (same pattern as commit 1236f046 for the engine/assembler suites).
-  BrowserVoiceRecorder: vi.fn(function BrowserVoiceRecorderMock() {
+  BrowserVoiceRecorder: vi.fn(function BrowserVoiceRecorderMock(options: {
+    onAudioLevel?: (level: number) => void;
+  }) {
+    waveformListener.current = options.onAudioLevel;
     return {
       start: startMock,
       stop: stopMock,
@@ -166,12 +173,23 @@ describe("AiChatV2Composer voice controls", () => {
   it("shows a Recording status while recording and Transcribing after stop", async () => {
     const wrapper = mountComposer({ voiceEnabled: true });
 
+    expect(wrapper.find(".v2-composer__voice-waveform").exists()).toBe(false);
+
     // Start recording (re-query: the button re-renders on state change).
     await wrapper.find(".v2-composer__voice-button").trigger("click");
     await flushPromises();
     expect(wrapper.find(".v2-composer__voice-status").text()).toContain(
       "Recording..."
     );
+
+    const waveform = wrapper.get(".v2-composer__voice-waveform");
+    expect(waveform.attributes("aria-hidden")).toBe("true");
+    const bars = () =>
+      waveform.findAll("span").map((bar) => bar.attributes("style"));
+    const silent = bars();
+    waveformListener.current?.(0.8);
+    await flushPromises();
+    expect(bars()).not.toEqual(silent);
 
     // Stop -> transcribe. Transcribing state shows until the IPC resolves.
     transcribeVoiceMock.mockReturnValue(new Promise(() => undefined)); // never resolves
@@ -180,6 +198,7 @@ describe("AiChatV2Composer voice controls", () => {
     expect(wrapper.find(".v2-composer__voice-status").text()).toContain(
       "Transcribing..."
     );
+    expect(wrapper.find(".v2-composer__voice-waveform").exists()).toBe(false);
   });
 
   it("populates the draft with the transcript when auto-send is off", async () => {

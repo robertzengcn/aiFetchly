@@ -68,7 +68,7 @@ interface ElectronAbiInfo {
  * manifest against.
  */
 export async function resolveElectronAbi(): Promise<ElectronAbiInfo> {
-  const electronRoot = path.dirname(String(require.resolve("electron")));
+  const electronRoot = path.dirname(require.resolve("electron/package.json"));
   const binaryName =
     process.platform === "win32" ? "electron.exe" : "electron";
   const binaryPath = path.join(electronRoot, "dist", binaryName);
