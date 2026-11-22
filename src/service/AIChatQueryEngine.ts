@@ -4256,6 +4256,7 @@ export class AIChatQueryEngine {
       eventSink: baseSink,
       partialContent:
         (matchedByToolId as { streamedPartial?: string }).streamedPartial ?? "",
+      ...(matchedByToolId.turnId ? { turnId: matchedByToolId.turnId } : {}),
       ...(lifecycle ? { lifecycle } : {}),
     });
     // Stage A §3.2 (FR-021): the claimed resume starts executing now.
@@ -4637,6 +4638,7 @@ export class AIChatQueryEngine {
       eventSink: baseSink,
       partialContent:
         (pending as { streamedPartial?: string }).streamedPartial ?? "",
+      ...(pending.turnId ? { turnId: pending.turnId } : {}),
       ...(lifecycle ? { lifecycle } : {}),
     });
     this.notifyResumed(lifecycle, {
@@ -4757,6 +4759,7 @@ export class AIChatQueryEngine {
       ...(pending.ownerNotifiesTerminal !== undefined
         ? { ownerNotifiesTerminal: pending.ownerNotifiesTerminal }
         : {}),
+      ...(pending.turnId ? { turnId: pending.turnId } : {}),
     };
 
     const module = new AIChatV2Module();

@@ -835,4 +835,74 @@ describe("AIChatTitleService", () => {
     expect(h.moduleFake.failures).toEqual(["invalid_output"]);
     expect(h.broadcasts).toHaveLength(0);
   });
+
+  it("accepts OpenAI text content-part arrays as title responses", async () => {
+    const h = makeHarness();
+    const response: OpenAIChatCompletionResponse = {
+      id: "parts",
+      object: "chat.completion",
+      created: 0,
+      model: "cheap",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Sydney " },
+              { type: "text", text: "Dentist Leads\n" },
+            ],
+          },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 6, total_tokens: 16 },
+    };
+    h.completeTitle.mockResolvedValueOnce(response);
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-parts",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.broadcasts.length >= 1);
+    expect(h.moduleFake.applies).toHaveLength(1);
+    expect(h.moduleFake.applies[0]?.title).toBe("Sydney Dentist Leads");
+    expect(h.broadcasts[0]).toMatchObject({
+      conversationId: "v2-parts",
+      titleSource: "ai",
+    });
+  });
+
+  it("extracts the final title after closed <think> reasoning tags", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockResolvedValueOnce(
+      completionResponse(
+        "<think>Let me summarize the topic concisely.\nLine inside think</think>\nMelbourne Dental Outreach\n"
+      )
+    );
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-think",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.broadcasts.length >= 1);
+    expect(h.moduleFake.applies).toHaveLength(1);
+    expect(h.moduleFake.applies[0]?.title).toBe("Melbourne Dental Outreach");
+    expect(h.broadcasts[0]).toMatchObject({
+      conversationId: "v2-think",
+      titleSource: "ai",
+    });
+  });
+
+  it("rejects unclosed <think> reasoning blocks as invalid_output", async () => {
+    const h = makeHarness();
+    h.completeTitle.mockResolvedValueOnce(
+      completionResponse("<think>Still thinking about the topic")
+    );
+    h.service.notifyInteractiveTurnCompleted({
+      conversationId: "v2-unclosed-think",
+      assistantMessageId: null,
+    });
+    await waitFor(() => h.moduleFake.failures.length >= 1);
+    expect(h.moduleFake.failures).toEqual(["invalid_output"]);
+    expect(h.broadcasts).toHaveLength(0);
+  });
 });

@@ -19,7 +19,8 @@ vi.mock("@/modules/token", () => ({
   },
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  await SqliteDb.destroyInstance();
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
   for (const f of fs.readdirSync(tmpDir)) {
     if (f.startsWith("scraper.db")) {

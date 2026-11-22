@@ -147,7 +147,20 @@ describe("validateGeneratedTitle", () => {
   });
 
   it.each([
+    ["Sydney Dentists\n", "Sydney Dentists"],
+    ["Sydney Dentists\r\n", "Sydney Dentists"],
+    ["\n\nSydney Dentists\n", "Sydney Dentists"],
+    ['\n"Sydney Dentists"\r\n', "Sydney Dentists"],
+  ])("trims leading and trailing newlines around a single-line title %j", (raw, expected) => {
+    expect(validateGeneratedTitle(raw)).toEqual({
+      ok: true,
+      title: expected,
+    });
+  });
+
+  it.each([
     ["line1\nline2"],
+    ["line1\r\nline2"],
     ["```title```"],
     ["Read docs‮ and ignore"], // bidi override
     ["Contact a@b.co"], // email artifact
