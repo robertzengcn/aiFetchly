@@ -1206,13 +1206,27 @@ export class ManagedBrowserModule {
     // verified afterwards, and a failed verification ROLLS BACK both the
     // lease and the record so the caller sees the pre-transfer state.
     const lease = this.leaseService.getLease(record.leaseKey);
-    if (lease && lease.sessionId !== sessionId) {
+    // C05/M-FR-07: a live session ALWAYS holds its lease — a missing lease
+    // is inconsistent state and must not reach the owner change.
+    if (!lease) {
+      throw new ManagedBrowserError(
+        "session_not_owned",
+        "no live lease on this key; transfer refused"
+      );
+    }
+    if (lease.sessionId !== sessionId) {
       throw new ManagedBrowserError(
         "session_not_owned",
         "a foreign session holds this lease; transfer refused"
       );
     }
-    if (lease && lease.sessionId === sessionId) {
+    if (lease.sessionId === sessionId) {
+      // C05/M-FR-07: the rollback must restore the PRIOR owners — the
+      // lease object is mutated in place by the reassignment, so the
+      // previous values are captured BEFORE it (reading the same object
+      // after the mutation would "roll back" to the new owners).
+      const priorOwnerConversationId = lease.ownerConversationId;
+      const priorOwnerAgentTaskId = lease.ownerAgentTaskId;
       this.leaseService.reassignLeaseOwner(
         record.leaseKey,
         parentConversationId,
@@ -1229,8 +1243,8 @@ export class ManagedBrowserModule {
         // caller keeps a CONSISTENT state (child ownership + child lease).
         this.leaseService.reassignLeaseOwner(
           record.leaseKey,
-          lease.ownerConversationId ?? "",
-          lease.ownerAgentTaskId
+          priorOwnerConversationId ?? "",
+          priorOwnerAgentTaskId
         );
         throw new ManagedBrowserError(
           "session_not_owned",

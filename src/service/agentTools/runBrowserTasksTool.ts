@@ -1451,13 +1451,124 @@ export async function runBrowserTasks(
                 : strictChildStatus === "completed"
                   ? "completed"
                   : "failed";
+        const cleanupEvidence: string[] = [];
+        // C05/M-FR-07: the child-reported session id is read and
+        // shape-validated BEFORE terminalization — the ownership check
+        // happens in the transfer path below.
+        const outputSessionId = (
+          result.output as { session_id?: string } | null
+        )?.session_id;
+        // R01/M-FR-02: batch-boundary output VALIDATION — the child's
+        // summary/evidence/final_url are bounded and shape-checked (the
+        // schema allows longer strings through the lenient parse path),
+        // and a malformed retained session id is dropped.
+        const rawOutput = result.output as {
+          summary?: string;
+          evidence?: string[];
+          final_url?: string | null;
+        } | null;
+        const boundedSummary = String(
+          rawOutput?.summary ?? result.errorMessage ?? result.status
+        ).slice(0, 1000);
+        // A09/M-FR-09: evidence/extracted/needs_user are SHAPE-CHECKED —
+        // a malformed value (non-array evidence, wrong container) never
+        // throws into the generic handler or changes task ownership.
+        const boundedEvidence = Array.isArray(rawOutput?.evidence)
+          ? (rawOutput.evidence as unknown[])
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => item.slice(0, 300))
+              .slice(0, 20)
+          : [];
+        const boundedFinalUrl =
+          typeof rawOutput?.final_url === "string" &&
+          (() => {
+            try {
+              const parsed = new URL(rawOutput.final_url);
+              return parsed.protocol === "http:" || parsed.protocol === "https:";
+            } catch {
+              return false;
+            }
+          })()
+            ? rawOutput.final_url.slice(0, 2048)
+            : null;
+        // R07/M-FR-09: nested extraction is bounded PER ITEM and in
+        // TOTAL bytes — the top-level cap alone let one oversized item
+        // (or an oversized aggregate) through to the parent envelope.
+        const boundedExtracted = Array.isArray(
+          (result.output as { extracted?: unknown } | null)?.extracted
+        )
+          ? ((): unknown[] => {
+              const items = ((result.output as { extracted: unknown[] }).extracted as unknown[])
+                .slice(0, 200);
+              const bounded: unknown[] = [];
+              let totalBytes = 0;
+              for (const item of items) {
+                let safe: unknown = item;
+                if (typeof item === "string") {
+                  safe = item.slice(0, 2000);
+                } else if (item !== null && typeof item === "object") {
+                  try {
+                    const serialized = JSON.stringify(item);
+                    if (serialized.length > 2000) {
+                      // An oversized object degrades to a bounded marker —
+                      // its content never reaches the parent verbatim.
+                      safe = { truncated: true, bytes: serialized.length };
+                    }
+                  } catch {
+                    safe = { truncated: true, bytes: 0 };
+                  }
+                } else if (typeof item === "number" || typeof item === "boolean") {
+                  safe = item;
+                } else {
+                  safe = null;
+                }
+                totalBytes += JSON.stringify(safe ?? null).length;
+                if (totalBytes > 64 * 1024) {
+                  cleanupEvidence.push("extracted_total_bytes_capped");
+                  break;
+                }
+                bounded.push(safe);
+              }
+              return bounded;
+            })()
+          : [];
+        // R07/M-FR-09: the proposal TYPE is enum-validated against the
+        // child output schema (approval | login | input) — a permissive
+        // type check let arbitrary strings surface as actionable cards.
+        const rawNeedsUser = (result.output as { needs_user?: unknown } | null)?.needs_user;
+        const needsUserType = (
+          rawNeedsUser as { type?: unknown } | null
+        )?.type;
+        if (
+          rawNeedsUser !== null &&
+          typeof rawNeedsUser === "object" &&
+          !(
+            typeof needsUserType === "string" &&
+            ["approval", "login", "input"].includes(needsUserType)
+          )
+        ) {
+          cleanupEvidence.push("needs_user_proposal_dropped:unknown_type");
+        }
+        const boundedNeedsUser =
+          rawNeedsUser !== null &&
+          typeof rawNeedsUser === "object" &&
+          typeof needsUserType === "string" &&
+          ["approval", "login", "input"].includes(needsUserType)
+            ? {
+                type: needsUserType,
+                ...((rawNeedsUser as { proposed_action?: unknown }).proposed_action !== undefined
+                  ? {
+                      proposed_action: String(
+                        (rawNeedsUser as { proposed_action: unknown }).proposed_action
+                      ).slice(0, 1000),
+                    }
+                  : {}),
+              }
+            : null;
         // F17: cancellation is a CONTROL state, not a failure.
         // W02: the control record carries the result's real status — a
         // needs_user partial is terminal partial, not failed.
         control.setState(taskId, finalStatus);
-        const outputSessionId = (
-          result.output as { session_id?: string } | null
-        )?.session_id;
         // B01/M-AC-01/M-FR-07: cleanup and transfer validate the
         // session's AUTHORITATIVE owner — a child-reported session_id
         // that belongs to another task is never stopped or transferred,
@@ -1465,7 +1576,6 @@ export async function runBrowserTasks(
         // sessions, never the conversation-wide set (which would close
         // sibling and parent sessions). Cleanup is AWAITED so the result
         // does not claim released leases before the module acted.
-        const cleanupEvidence: string[] = [];
         if (!task.keep_open) {
           // N02/M-AC-01: the reported id, when owned by this task, is
           // stopped; a FOREIGN id is refused AND the child's own sessions
@@ -1479,7 +1589,16 @@ export async function runBrowserTasks(
             if (typeof outputSessionId === "string" && outputSessionId) {
               const owner = module.getSessionOwnerAgentTaskId(outputSessionId);
               if (owner === childAgentTaskId) {
-                await module.stop(outputSessionId, "cancelled");
+                // C05/M-FR-09: a failure stopping the REPORTED id must not
+                // skip the other owned sessions' cleanup — every stop is
+                // attempted and unresolved state is reported in evidence.
+                try {
+                  await module.stop(outputSessionId, "cancelled");
+                } catch {
+                  cleanupEvidence.push(
+                    `cleanup_stop_failed:${outputSessionId}`
+                  );
+                }
                 // R06: the reported id is closed AND every OTHER
                 // child-owned session (a first attempt's leftover) is
                 // released too — the reported id never suppresses the
@@ -1617,113 +1736,6 @@ export async function runBrowserTasks(
             }
           }
         }
-        // R01/M-FR-02: batch-boundary output VALIDATION — the child's
-        // summary/evidence/final_url are bounded and shape-checked (the
-        // schema allows longer strings through the lenient parse path),
-        // and a malformed retained session id is dropped.
-        const rawOutput = result.output as {
-          summary?: string;
-          evidence?: string[];
-          final_url?: string | null;
-        } | null;
-        const boundedSummary = String(
-          rawOutput?.summary ?? result.errorMessage ?? result.status
-        ).slice(0, 1000);
-        // A09/M-FR-09: evidence/extracted/needs_user are SHAPE-CHECKED —
-        // a malformed value (non-array evidence, wrong container) never
-        // throws into the generic handler or changes task ownership.
-        const boundedEvidence = Array.isArray(rawOutput?.evidence)
-          ? (rawOutput.evidence as unknown[])
-              .filter((item): item is string => typeof item === "string")
-              .map((item) => item.slice(0, 300))
-              .slice(0, 20)
-          : [];
-        const boundedFinalUrl =
-          typeof rawOutput?.final_url === "string" &&
-          (() => {
-            try {
-              const parsed = new URL(rawOutput.final_url);
-              return parsed.protocol === "http:" || parsed.protocol === "https:";
-            } catch {
-              return false;
-            }
-          })()
-            ? rawOutput.final_url.slice(0, 2048)
-            : null;
-        // R07/M-FR-09: nested extraction is bounded PER ITEM and in
-        // TOTAL bytes — the top-level cap alone let one oversized item
-        // (or an oversized aggregate) through to the parent envelope.
-        const boundedExtracted = Array.isArray(
-          (result.output as { extracted?: unknown } | null)?.extracted
-        )
-          ? ((): unknown[] => {
-              const items = ((result.output as { extracted: unknown[] }).extracted as unknown[])
-                .slice(0, 200);
-              const bounded: unknown[] = [];
-              let totalBytes = 0;
-              for (const item of items) {
-                let safe: unknown = item;
-                if (typeof item === "string") {
-                  safe = item.slice(0, 2000);
-                } else if (item !== null && typeof item === "object") {
-                  try {
-                    const serialized = JSON.stringify(item);
-                    if (serialized.length > 2000) {
-                      // An oversized object degrades to a bounded marker —
-                      // its content never reaches the parent verbatim.
-                      safe = { truncated: true, bytes: serialized.length };
-                    }
-                  } catch {
-                    safe = { truncated: true, bytes: 0 };
-                  }
-                } else if (typeof item === "number" || typeof item === "boolean") {
-                  safe = item;
-                } else {
-                  safe = null;
-                }
-                totalBytes += JSON.stringify(safe ?? null).length;
-                if (totalBytes > 64 * 1024) {
-                  cleanupEvidence.push("extracted_total_bytes_capped");
-                  break;
-                }
-                bounded.push(safe);
-              }
-              return bounded;
-            })()
-          : [];
-        // R07/M-FR-09: the proposal TYPE is enum-validated against the
-        // child output schema (approval | login | input) — a permissive
-        // type check let arbitrary strings surface as actionable cards.
-        const rawNeedsUser = (result.output as { needs_user?: unknown } | null)?.needs_user;
-        const needsUserType = (
-          rawNeedsUser as { type?: unknown } | null
-        )?.type;
-        if (
-          rawNeedsUser !== null &&
-          typeof rawNeedsUser === "object" &&
-          !(
-            typeof needsUserType === "string" &&
-            ["approval", "login", "input"].includes(needsUserType)
-          )
-        ) {
-          cleanupEvidence.push("needs_user_proposal_dropped:unknown_type");
-        }
-        const boundedNeedsUser =
-          rawNeedsUser !== null &&
-          typeof rawNeedsUser === "object" &&
-          typeof needsUserType === "string" &&
-          ["approval", "login", "input"].includes(needsUserType)
-            ? {
-                type: needsUserType,
-                ...((rawNeedsUser as { proposed_action?: unknown }).proposed_action !== undefined
-                  ? {
-                      proposed_action: String(
-                        (rawNeedsUser as { proposed_action: unknown }).proposed_action
-                      ).slice(0, 1000),
-                    }
-                  : {}),
-              }
-            : null;
         return {
           task_index: index,
           status: finalStatus,
@@ -1850,10 +1862,21 @@ export async function runBrowserTasks(
   // to the parent exactly once. The deduped rows feed BOTH the final
   // events and the returned result.
   const surfacedReceipts = new Set<string>();
+  // C05/M-FR-11: extracted-row dedupe is CROSS-ROW too — two lanes that
+  // scraped the same table surface identical rows to the parent once
+  // (the shared identity set spans the whole batch; per-row dedupe is
+  // implied by the same mechanism).
+  const surfacedRowIdentities = new Set<string>();
   const deduped: BrowserBatchTaskResult[] = results.map((result) => {
     const withUniqueExtracted =
-      result.extracted.length > 1
-        ? { ...result, extracted: dedupeExtractedRows(result.extracted) }
+      result.extracted.length > 0
+        ? {
+            ...result,
+            extracted: dedupeExtractedRows(
+              result.extracted,
+              surfacedRowIdentities
+            ),
+          }
         : result;
     if (!withUniqueExtracted.output_ids || withUniqueExtracted.output_ids.length === 0) {
       return withUniqueExtracted;
@@ -1918,9 +1941,12 @@ export async function runBrowserTasks(
  * `{b:2,a:1}` dedupe to one row.
  */
 function dedupeExtractedRows(
-  rows: readonly unknown[]
+  rows: readonly unknown[],
+  sharedSeen?: Set<string>
 ): BrowserBatchTaskResult["extracted"] {
-  const seen = new Set<string>();
+  // C05/M-FR-11: the caller may share the identity set ACROSS sibling
+  // rows — identical rows surface to the parent exactly once per batch.
+  const seen = sharedSeen ?? new Set<string>();
   const out: unknown[] = [];
   for (const row of rows) {
     let identity: string;

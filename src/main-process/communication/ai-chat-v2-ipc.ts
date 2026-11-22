@@ -1773,6 +1773,37 @@ async function handleClearAll(): Promise<
       log.error("[ai-chat-v2] pending clearAll failed:", err);
     }
     const module = new AIChatV2Module();
+    // C05/M-FR-09: Clear All also closes every retained managed-browser
+    // session (keep-open transfers made them conversation-owned; a
+    // deleted chat history must not leak live browsers). EVERY stop is
+    // attempted — one failure never skips the rest — and unresolved
+    // state is reported instead of silently leaked.
+    try {
+      const { getDefaultManagedBrowserModule } = await import(
+        "@/modules/ManagedBrowserModule"
+      );
+      const browserModule = getDefaultManagedBrowserModule();
+      const failedSessionIds: string[] = [];
+      for (const session of browserModule.listActiveSessions()) {
+        try {
+          await browserModule.stop(session.sessionId, "user_stop");
+        } catch (stopErr) {
+          failedSessionIds.push(session.sessionId);
+          log.error(
+            `[ai-chat-v2] clear-all retained session stop failed (${session.sessionId}):`,
+            stopErr
+          );
+        }
+      }
+      if (failedSessionIds.length > 0) {
+        log.error(
+          "[ai-chat-v2] clear-all left sessions unresolved:",
+          failedSessionIds.join(",")
+        );
+      }
+    } catch (err) {
+      log.error("[ai-chat-v2] clear-all retained browser cleanup failed:", err);
+    }
     const deleted = await module.clearAllV2History();
     return ok({ deleted });
   } catch (err) {
