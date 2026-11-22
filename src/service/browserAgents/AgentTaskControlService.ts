@@ -73,7 +73,18 @@ export class AgentTaskControlService {
   >();
   /** R04: per-task resume generation (incremented on resume). */
   private readonly resumeGenerations = new Map<string, number>();
-  /** B13/C-FR-07: instructions typed by the user on resume (consume-once). */
+  /**
+   * B13/C-FR-07 + C03: per-generation resume notes with SEPARATE delivery
+   * cursors — the runner consumes for its next decision, the outer loop
+   * delivers to the transcript per pause-wait exit. The runner consuming
+   * a note no longer steals it from the live outer model turn (the old
+   * single consume-once string raced whichever consumer ran first).
+   */
+  private readonly resumeNotes = new Map<
+    string,
+    Map<number, { text: string; consumedForDecision: boolean }>
+  >();
+  /** Legacy consume-once map kept for callers/tests on the old shape. */
   private readonly resumeInstructions = new Map<string, string>();
   private readonly now: () => number;
   /** F06: lazy sweep enforcing the 60-minute pause/wait cap. */
@@ -194,6 +205,8 @@ export class AgentTaskControlService {
       // or resumed again, so its transient state is released.
       this.waiters.delete(taskId);
       this.resumeGenerations.delete(taskId);
+      this.resumeNotes.delete(taskId);
+      this.resumeInstructions.delete(taskId);
     }
   }
 
@@ -378,7 +391,16 @@ export class AgentTaskControlService {
     this.setState(taskId, "running");
     // R04/C-FR-06: increment the generation so runners discard proposals
     // that were pending across the pause/resume boundary.
-    this.resumeGenerations.set(taskId, (this.resumeGenerations.get(taskId) ?? 0) + 1);
+    const generation = (this.resumeGenerations.get(taskId) ?? 0) + 1;
+    this.resumeGenerations.set(taskId, generation);
+    // C03: re-key PENDING notes (recorded while the gate was closed) to
+    // the generation that resume just opened — per-generation delivery.
+    const notes = this.resumeNotes.get(taskId);
+    if (notes && notes.has(Number.MAX_SAFE_INTEGER)) {
+      const pending = notes.get(Number.MAX_SAFE_INTEGER)!;
+      notes.delete(Number.MAX_SAFE_INTEGER);
+      notes.set(generation, pending);
+    }
     this.resolveAllWaiters(taskId);
     return true;
   }
@@ -391,22 +413,91 @@ export class AgentTaskControlService {
   /**
    * B13/C-FR-07: the instructions the user typed when resuming. The
    * consuming loop (runner/sub-agent) folds them into its next decision
-   * input; they are consumed exactly once.
+   * input; they are consumed exactly once FOR THE DECISION — the note
+   * stays available for the transcript's per-generation delivery (C03).
+   * Recorded while the gate is still closed (the IPC calls this before
+   * resume()), so the note is PENDING until resume() re-keys it to the
+   * new generation.
    */
   public recordResumeInstructions(taskId: string, instructions: string): void {
     const trimmed = instructions.trim();
     if (trimmed.length === 0) {
       return;
     }
+    let notes = this.resumeNotes.get(taskId);
+    if (!notes) {
+      notes = new Map();
+      this.resumeNotes.set(taskId, notes);
+    }
+    if (notes.size >= 8) {
+      const oldest = Math.min(...notes.keys());
+      notes.delete(oldest);
+    }
+    notes.set(Number.MAX_SAFE_INTEGER, {
+      text: trimmed.slice(0, 2000),
+      consumedForDecision: false,
+    });
+    // Legacy single-slot shape for callers/tests still reading it.
     this.resumeInstructions.set(taskId, trimmed.slice(0, 2000));
   }
 
   public consumeResumeInstructions(taskId: string): string | null {
-    const stored = this.resumeInstructions.get(taskId) ?? null;
-    if (stored !== null) {
-      this.resumeInstructions.delete(taskId);
+    const notes = this.resumeNotes.get(taskId);
+    if (!notes) {
+      // Legacy shape fallback.
+      const stored = this.resumeInstructions.get(taskId) ?? null;
+      if (stored !== null) {
+        this.resumeInstructions.delete(taskId);
+      }
+      return stored;
     }
-    return stored;
+    const pending: string[] = [];
+    for (const note of notes.values()) {
+      if (!note.consumedForDecision) {
+        note.consumedForDecision = true;
+        pending.push(note.text);
+      }
+    }
+    return pending.length > 0 ? pending.join(" ") : null;
+  }
+
+  /**
+   * C03/C-FR-07: NON-consuming read for the AGENT TRANSCRIPT, scoped by
+   * generation — the caller delivers every note for a generation newer
+   * than its last delivery exactly once. The runner's decision consume
+   * no longer hides the text from the live outer model turn.
+   */
+  public peekResumeInstructionsSince(
+    taskId: string,
+    lastDeliveredGeneration: number
+  ): { text: string; latestGeneration: number } | null {
+    const notes = this.resumeNotes.get(taskId);
+    if (!notes) {
+      // Legacy shape fallback: deliver the pending note once per call
+      // window (the caller's cursor prevents replay).
+      const legacy = this.resumeInstructions.get(taskId) ?? null;
+      return legacy !== null
+        ? { text: legacy, latestGeneration: lastDeliveredGeneration + 1 }
+        : null;
+    }
+    const texts: string[] = [];
+    let latest = lastDeliveredGeneration;
+    for (const [generation, note] of notes) {
+      // C03: a PENDING note (recorded before resume re-keys it) must
+      // never leak MAX_SAFE_INTEGER as a generation — clamp it to the
+      // CURRENT generation so the caller's cursor stays monotonic.
+      const effectiveGeneration =
+        generation === Number.MAX_SAFE_INTEGER
+          ? this.getResumeGeneration(taskId)
+          : generation;
+      if (effectiveGeneration > lastDeliveredGeneration) {
+        texts.push(note.text);
+        latest = Math.max(latest, effectiveGeneration);
+      }
+    }
+    return texts.length > 0
+      ? { text: texts.join(" "), latestGeneration: latest }
+      : null;
   }
 
   /**
@@ -417,6 +508,14 @@ export class AgentTaskControlService {
    * fresh text and the cycle repeats without replaying the old one).
    */
   public peekResumeInstructions(taskId: string): string | null {
+    const notes = this.resumeNotes.get(taskId);
+    if (notes && notes.size > 0) {
+      const texts: string[] = [];
+      for (const note of notes.values()) {
+        texts.push(note.text);
+      }
+      return texts.join(" ");
+    }
     return this.resumeInstructions.get(taskId) ?? null;
   }
 

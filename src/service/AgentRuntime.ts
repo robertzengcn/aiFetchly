@@ -617,6 +617,10 @@ export class AgentRuntime {
     // N03: the resume generation at the current model round — the per-tool
     // gate compares it so pre-pause tool calls never execute.
     let generationBeforeModel: number | undefined = undefined;
+    // C03/C-FR-07: the transcript's resume-note delivery cursor — each
+    // generation's note is delivered to the outer model turn exactly
+    // once, independent of the runner's decision consume.
+    let resumeNotesDeliveredThroughGeneration = 0;
     try {
       const loopInput = {
         conversationId: agentConversationId,
@@ -646,12 +650,33 @@ export class AgentRuntime {
         // the turn cancelled. The gate check is non-blocking: a response
         // already in flight finishes, but its tool calls hit the paused
         // branch in policyCheckedExecute below (held as a set).
-        onBeforeModelRound: () => {
+        onBeforeModelRound: async () => {
           const record = getDefaultAgentTaskControlService().get(controlTaskId);
           // N03: snapshot the resume generation at the round top — the
           // per-tool gate compares it to discard pre-pause calls.
           generationBeforeModel = getDefaultAgentTaskControlService()
             .getResumeGeneration(controlTaskId);
+          // C03/C-FR-07: a resume that landed DURING a tool call never
+          // reached onPauseWait (the loop was inside the tool, not at a
+          // round top) — deliver each undelivered generation's note into
+          // the transcript HERE, awaited so the model request reads it.
+          const currentGeneration = generationBeforeModel;
+          if (currentGeneration > resumeNotesDeliveredThroughGeneration) {
+            const note = getDefaultAgentTaskControlService()
+              .peekResumeInstructionsSince(
+                controlTaskId,
+                resumeNotesDeliveredThroughGeneration
+              );
+            resumeNotesDeliveredThroughGeneration = Math.max(
+              resumeNotesDeliveredThroughGeneration,
+              note?.latestGeneration ?? currentGeneration
+            );
+            await transcript.appendSystemText(
+              agentTaskId,
+              `[resume ${new Date().toISOString()}] the user controlled the browser; observe before acting.` +
+                (note?.text ? ` user instructions: ${note.text}` : "")
+            );
+          }
           if (!record) {
             return "ok";
           }
@@ -676,21 +701,26 @@ export class AgentRuntime {
           // instructions ride the transcript entry (and are consumed by
           // the runner through the control record).
           await gate.waitUntilOpen(signal);
-          // B03/C-FR-07: the transcript PEEKS (non-consuming) — the
-          // runner's safe point is the single consumer that clears the
-          // text for its next decision input. Consuming here raced the
-          // runner (executeTask adopts this control id): whichever ran
-          // first kept the text and the other lost it.
-          const resumeInstructions =
-            getDefaultAgentTaskControlService().peekResumeInstructions(
-              controlTaskId
-            ) ?? "";
+          // B03/C-FR-07 + C03: the transcript delivery is PER GENERATION
+          // with its own cursor — the runner's decision consume no longer
+          // steals the text from the live outer model turn, and a second
+          // pause-wait exit never replays an already-delivered note.
+          const note = getDefaultAgentTaskControlService()
+            .peekResumeInstructionsSince(
+              controlTaskId,
+              resumeNotesDeliveredThroughGeneration
+            );
+          resumeNotesDeliveredThroughGeneration = Math.max(
+            resumeNotesDeliveredThroughGeneration,
+            note?.latestGeneration ??
+              getDefaultAgentTaskControlService().getResumeGeneration(
+                controlTaskId
+              )
+          );
           await transcript.appendSystemText(
             agentTaskId,
             `[resume ${new Date().toISOString()}] the user controlled the browser; observe before acting.` +
-              (resumeInstructions
-                ? ` user instructions: ${resumeInstructions}`
-                : "")
+              (note?.text ? ` user instructions: ${note.text}` : "")
           );
         },
         // Retry transient content failures instantly. Agents run under a tight

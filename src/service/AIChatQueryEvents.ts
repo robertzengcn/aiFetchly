@@ -689,7 +689,12 @@ export interface AIChatQueryLoopInput {
    * are spent until resume re-enters). Tool calls of a response already
    * in flight are gated per call by the caller's executeTool wrapper.
    */
-  onBeforeModelRound?: () => "ok" | "pause" | "cancel";
+  onBeforeModelRound?:
+    | (() => "ok" | "pause" | "cancel")
+    // C03/C-FR-07: an async verdict lets the runtime deliver a resume
+    // note into the transcript BEFORE the model request reads it (a
+    // resume landing mid-tool never reached onPauseWait).
+    | (() => Promise<"ok" | "pause" | "cancel">);
   /**
    * R01/C-FR-04: when onBeforeModelRound reports "pause" AND this hook is
    * present, the loop AWAITS it (blocking on the caller's resume gate)

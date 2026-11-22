@@ -825,9 +825,20 @@ export async function runBrowserTasks(
   // listed tasks and sites. The confirm grant is consumed by this start
   // and expires with the batch (nothing persists past the run). A parent
   // abort during the wait refuses the batch.
+  // C03/C-FR-09: the confirmation wait is a USER wait — the parent poll's
+  // deadline must freeze for it (the watchdog below only starts once the
+  // batch is running; a 45-minute confirmation decision never trips the
+  // turn deadline).
+  const registryForConfirm = getDefaultToolJobRegistry();
+  if (parentJobId && !signal.aborted) {
+    registryForConfirm.setUserWait(parentJobId, true, "batch_confirmation_wait");
+  }
   const confirmed = signal.aborted
     ? false
     : await requestBatchConfirmation(conversationId, tasks, signal);
+  if (parentJobId) {
+    registryForConfirm.setUserWait(parentJobId, false);
+  }
   if (!confirmed || signal.aborted) {
     liveBatches.delete(batchId);
     signal.removeEventListener("abort", onOuterAbort);

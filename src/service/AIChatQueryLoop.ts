@@ -331,6 +331,7 @@ export class AIChatSteeringRoundLimitError extends Error {
  * floor is the absolute minimum interval regardless of decay or a tiny
  * registry pollMinIntervalMs.
  */
+const ASYNC_POLL_DEADLINE_GRACE_MS = 2_000;
 const ASYNC_POLL_BACKOFF_START_MS = 5_000;
 const ASYNC_POLL_BACKOFF_GROWTH = 1.5;
 const ASYNC_POLL_BACKOFF_MAX_MS = 15_000;
@@ -2548,7 +2549,10 @@ export class AIChatQueryLoop {
         // already in flight finishes — none of its tool calls then act (the
         // executeTool wrapper returns paused results per call).
         if (input.onBeforeModelRound) {
-          const gateVerdict = input.onBeforeModelRound();
+          // C03: the verdict may be async (the runtime delivers a resume
+          // note into the transcript first) — awaiting a sync value is a
+          // no-op.
+          const gateVerdict = await input.onBeforeModelRound();
           if (gateVerdict === "cancel") {
             return {
               type: "cancelled",
@@ -6568,6 +6572,12 @@ export class AIChatQueryLoop {
     // deadline is frozen while waiting and extended by the waited amount
     // on resume, so a 45-minute handoff never trips ASYNC_POLL_MAX_MS.
     let userWaitSincePerfMs: number | null = null;
+    // C03/C-FR-09: one grace window before expiry — the batch watchdog
+    // flags a user wait on a 1s interval, so a wait that STARTED just
+    // before the deadline may not be flagged yet at the exact deadline
+    // tick. The grace gives it time to land; a confirmed wait then
+    // extends the deadline through the normal freeze path.
+    let deadlineGraceTaken = false;
     while (true) {
       // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
       // the poll interval is only a backstop; the absolute deadline governs
@@ -6606,8 +6616,18 @@ export class AIChatQueryLoop {
       } else if (userWaitSincePerfMs !== null) {
         deadlinePerfAt += performance.now() - userWaitSincePerfMs;
         userWaitSincePerfMs = null;
+        // C03: a flagged wait just extended the deadline — the NEXT
+        // deadline approach gets a fresh grace window (the watchdog
+        // latency race re-opens every time).
+        deadlineGraceTaken = false;
       }
 
+      if (performance.now() >= deadlinePerfAt && !deadlineGraceTaken) {
+        // C03/C-FR-09: first arrival at the deadline grants ONE grace
+        // window (watchdog flag latency) before the turn expires.
+        deadlineGraceTaken = true;
+        deadlinePerfAt += ASYNC_POLL_DEADLINE_GRACE_MS;
+      }
       if (performance.now() >= deadlinePerfAt) {
         // PRD §11.8: expiry must CANCEL the job and stop its browser before
         // returning — never tell the model to retry while the original
