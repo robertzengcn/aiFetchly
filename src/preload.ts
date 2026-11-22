@@ -1628,20 +1628,48 @@ if (process.env.AIFETCHLY_E2E_APP_HOOKS === "1") {
         evidence: string[];
       }>,
     runBatchAndStop: (input: {
-      readonly stopAfterMs: number;
+      readonly stopAfterMs?: number;
       readonly goals: readonly string[];
+      readonly executor?: "fast_runner" | "llm_agent";
+      readonly subAgentModel?: string | null;
     }): Promise<{
       batchId: string;
       statuses: string[];
       openSessions: number;
+      metrics?: {
+        wallMs: number;
+        tokensUsed: number;
+        attempts: number;
+        phases: {
+          observationMs: number;
+          decideMs: number;
+          executeMs: number;
+          verifyMs: number;
+        };
+        parentContextBytes: number;
+      };
+      rows: Array<Record<string, unknown>>;
     }> =>
       ipcRenderer.invoke(
-        "managed-browser:e2e:run-batch-and-stop",
+        "managed-browser:e2e:run-batch",
         input
       ) as unknown as Promise<{
         batchId: string;
         statuses: string[];
         openSessions: number;
+        metrics?: {
+          wallMs: number;
+          tokensUsed: number;
+          attempts: number;
+          phases: {
+            observationMs: number;
+            decideMs: number;
+            executeMs: number;
+            verifyMs: number;
+          };
+          parentContextBytes: number;
+        };
+        rows: Array<Record<string, unknown>>;
       }>,
   });
 }

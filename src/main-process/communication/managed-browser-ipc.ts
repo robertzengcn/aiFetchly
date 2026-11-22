@@ -1018,13 +1018,16 @@ void (async () => {
   };
 
   ipcMain.handle(
-    "managed-browser:e2e:run-batch-and-stop", async (_e: unknown, input: unknown) => {
-      // E01/M-AC-01/M-FR-09: the REAL batch tool with two slow lanes; the
-      // caller's stop aborts mid-run and the result must carry cancelled
-      // rows (leases released via the collector's cleanup).
+    "managed-browser:e2e:run-batch", async (_e: unknown, input: unknown) => {
+      // E01/M-AC-01/M-FR-09 + E02/§21: the REAL batch tool driven by the
+      // harness — a stop-after aborts mid-run (cancelled rows; leases
+      // released via the collector cleanup); the executor arm selects the
+      // qualification arm (fast_runner vs llm_agent).
       const parsed = input as {
-        readonly stopAfterMs: number;
+        readonly stopAfterMs?: number;
         readonly goals: readonly string[];
+        readonly executor?: "fast_runner" | "llm_agent";
+        readonly subAgentModel?: string | null;
       };
       const { runBrowserTasks, getBatchConfirmWaitRegistry } = await import(
         "@/service/agentTools/runBrowserTasksTool"
@@ -1039,23 +1042,33 @@ void (async () => {
         entry?.resolve({ confirmed: true, cancelled: false });
       });
       const controller = new AbortController();
-      setTimeout(() => controller.abort(), parsed.stopAfterMs);
-      const { batchId, results } = await runBrowserTasks(
+      if (parsed.stopAfterMs !== undefined) {
+        setTimeout(() => controller.abort(), parsed.stopAfterMs);
+      }
+      const { batchId, results, metrics } = await runBrowserTasks(
         parsed.goals.map((goal) => ({ goal })),
         2,
         "e2e-conv",
         controller.signal,
         {},
         undefined,
-        { executor: "fast_runner" }
+        {
+          executor: parsed.executor ?? "fast_runner",
+          ...(parsed.subAgentModel !== undefined
+            ? { subAgentModel: parsed.subAgentModel }
+            : {}),
+        }
       );
       // E01: the lease/sessional cleanup check — every lane's sessions
       // must be stopped by the collector's cleanup before this returns.
+      // E02/§21: the qualification summary rides the result.
       return {
         batchId,
         statuses: results.map((r) => r.status),
         openSessions: getDefaultManagedBrowserModule().listActiveSessions()
           .length,
+        metrics,
+        rows: results,
       };
     }
   );
