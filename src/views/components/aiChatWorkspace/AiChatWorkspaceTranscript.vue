@@ -127,6 +127,10 @@
           :message="item.message"
           :show-reasoning="false"
           :status="streamStatusForMessage(item.message)"
+          @grant-permission="
+            (msg, payload) => emit('grant-permission', msg, payload)
+          "
+          @deny-permission="(msg) => emit('deny-permission', msg)"
           @stop-batch="emit('stop-batch')"
           @retry-generated-image-batch="(p) => emit('retry-generated-image-batch', p)"
         />
@@ -359,6 +363,38 @@ type ProjectedItem =
  * - No generic Tool Call/Tool Result cards (FR-043)
  * - No nested plan-document scroller (FR-055)
  */
+function isRenderableAssistantMessage(msg: ChatV2MessageView): boolean {
+  if (
+    msg.messageType !== ("message" as MessageType) ||
+    msg.role !== "assistant" ||
+    msg.metadata?.planEventType ||
+    msg.metadata?.planStateView
+  ) {
+    return false;
+  }
+  const hasContent = Boolean(msg.content && msg.content.length > 0);
+  const hasReasoning = Boolean(
+    props.showReasoning &&
+      msg.metadata?.reasoning?.content &&
+      msg.metadata.reasoning.content.length > 0
+  );
+  const hasActionableMetadata = Boolean(
+    msg.metadata?.error ||
+      msg.metadata?.cancelled ||
+      msg.metadata?.artifact ||
+      msg.metadata?.toolResult ||
+      msg.metadata?.toolCallId ||
+      (Array.isArray(msg.metadata?.generatedImages) &&
+        msg.metadata.generatedImages.length > 0) ||
+      (Array.isArray(msg.metadata?.generatedImageReferences) &&
+        msg.metadata.generatedImageReferences.length > 0) ||
+      (Array.isArray(msg.metadata?.attachments) &&
+        msg.metadata.attachments.length > 0) ||
+      msg.metadata?.planStateView
+  );
+  return hasContent || hasReasoning || hasActionableMetadata;
+}
+
 const projectedItems = computed<ProjectedItem[]>(() => {
   const messages = props.messages;
   const result: ProjectedItem[] = [];
@@ -376,6 +412,87 @@ const projectedItems = computed<ProjectedItem[]>(() => {
     for (const exec of group.executions) {
       receiptKeys.add(exec.key);
     }
+  }
+
+  const messageIndexById = new Map<string, number>();
+  messages.forEach((m, idx) => {
+    if (m.id && !messageIndexById.has(m.id)) {
+      messageIndexById.set(m.id, idx);
+    }
+  });
+  const emittedGroupKeys = new Set<string>();
+  const deferredByAssistantId = new Map<string, ProjectedItem[]>();
+
+  const toolCallIdsWithResults = new Set<string>();
+  for (const m of messages) {
+    if (
+      m.messageType === ("tool_result" as MessageType) &&
+      typeof m.metadata?.toolCallId === "string" &&
+      m.metadata.toolCallId.trim().length > 0
+    ) {
+      toolCallIdsWithResults.add(m.metadata.toolCallId.trim());
+    }
+  }
+
+  function projectInteractiveToolItem(
+    targetMsg: ChatV2MessageView
+  ): ProjectedItem | null {
+    if (isPermissionPrompt(targetMsg)) {
+      return {
+        kind: "permission-prompt",
+        key: `permission-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    const replyId = emailReplyDraftId(targetMsg);
+    if (replyId !== null) {
+      return {
+        kind: "email-reply",
+        key: `email-reply-${targetMsg.id}`,
+        draftId: replyId,
+      };
+    }
+    // R12/T14: organization mutation results render the shared operation
+    // card (progress, recipient outcomes, Undo/Restore) — for the anchor and
+    // every tool message of the group sequence alike.
+    const orgOperationId = organizationOperationIdFromMessage(targetMsg);
+    if (orgOperationId !== null) {
+      return {
+        kind: "email-organization",
+        key: `email-organization-${targetMsg.id}`,
+        operationId: orgOperationId,
+      };
+    }
+    if (isOutboundBatchResultMessage(targetMsg)) {
+      return {
+        kind: "outbound-batch",
+        key: `outbound-batch-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    if (isSkillInstallResult(targetMsg)) {
+      return {
+        kind: "skill-install",
+        key: `skill-install-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    if (isBatchToolCard(targetMsg)) {
+      const toolCallId = targetMsg.metadata?.toolCallId?.trim();
+      if (
+        targetMsg.messageType === ("tool_call" as MessageType) &&
+        toolCallId &&
+        toolCallIdsWithResults.has(toolCallId)
+      ) {
+        return null;
+      }
+      return {
+        kind: "batch-card",
+        key: `batch-card-${targetMsg.id}`,
+        message: targetMsg,
+      };
+    }
+    return null;
   }
 
   // Walk messages in order; replace tool sequences with groups.
@@ -405,189 +522,84 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         // One group per assistant response. Skip ahead past all tool messages
         // in this group, surfacing gated-tool permission prompts hidden among
         // them as interactive cards after the group (design §15.5).
-        result.push({
-          kind: "execution-group",
-          key: group.key,
-          group,
-        });
-        // The anchor tool message itself can carry an interactive surface
-        // (a solo batch result owns a legacy group) — check it too.
-        const replyId = emailReplyDraftId(msg);
-        if (replyId !== null) {
-          result.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: replyId });
-        }
-        if (isOutboundBatchResultMessage(msg)) {
-          result.push({
-            kind: "outbound-batch",
-            key: `outbound-batch-${msg.id}`,
-            message: msg,
+        const batchItems: ProjectedItem[] = [];
+        if (!emittedGroupKeys.has(group.key)) {
+          emittedGroupKeys.add(group.key);
+          batchItems.push({
+            kind: "execution-group",
+            key: group.key,
+            group,
           });
         }
-        // R12: organization mutation results render the shared operation
-        // card (progress, recipient outcomes, Undo/Restore).
-        const orgOperationId = organizationOperationIdFromMessage(msg);
-        if (orgOperationId !== null) {
-          result.push({
-            kind: "email-organization",
-            key: `email-organization-${msg.id}`,
-            operationId: orgOperationId,
-          });
-        }
-        // FR-SKL-001: installation results render the shared install card
-        // (approvals, dependencies, credentials) outside the collapsed group.
-        if (isSkillInstallResult(messages[i])) {
-          result.push({
-            kind: "skill-install",
-            key: `skill-install-${messages[i].id}`,
-            message: messages[i],
-          });
-        }
-        // T4/D1 (audit): an ANCHOR message can itself be a permission prompt
-        // (a failed-resume restored row, or a historical prompt whose paired
-        // call sits outside the mounted window) — surface it too, mirroring
-        // the in-loop branch, or the decision card silently disappears.
-        if (isPermissionPrompt(messages[i])) {
-          result.push({
-            kind: "permission-prompt",
-            key: `permission-${messages[i].id}`,
-            message: messages[i],
-          });
-        }
-        // T3/D2 (audit): generated-image batch cards carry live progress,
-        // Stop, and Retry — they must not collapse into a generic receipt.
-        if (isBatchToolCard(messages[i])) {
-          result.push({
-            kind: "batch-card",
-            key: `batch-card-${messages[i].id}`,
-            message: messages[i],
-          });
-        }
-        // Skip all consecutive tool messages.
-        i += 1;
         while (
           i < messages.length &&
           (messages[i].messageType === ("tool_call" as MessageType) ||
             messages[i].messageType === ("tool_result" as MessageType))
         ) {
-          if (isPermissionPrompt(messages[i])) {
-            result.push({
-              kind: "permission-prompt",
-              key: `permission-${messages[i].id}`,
-              message: messages[i],
-            });
-          }
-          // The outbound batch card is the review/approve/send authorization
-          // surface (§18, AD-003) — surface it beside the group, not inside
-          // the collapsed receipt.
-          const replyId = emailReplyDraftId(messages[i]);
-          if (replyId !== null) {
-            result.push({ kind: "email-reply", key: `email-reply-${messages[i].id}`, draftId: replyId });
-          }
-          // T14: organization cards surface in the skip loop too — the common
-          // call/result sequence must not lose the progress/Undo card.
-          const orgId = organizationOperationIdFromMessage(messages[i]);
-          if (orgId !== null) {
-            result.push({
-              kind: "email-organization",
-              key: `email-organization-${messages[i].id}`,
-              operationId: orgId,
-            });
-          }
-          if (isOutboundBatchResultMessage(messages[i])) {
-            result.push({
-              kind: "outbound-batch",
-              key: `outbound-batch-${messages[i].id}`,
-              message: messages[i],
-            });
-          }
-          if (isSkillInstallResult(messages[i])) {
-            result.push({
-              kind: "skill-install",
-              key: `skill-install-${messages[i].id}`,
-              message: messages[i],
-            });
-          }
-          if (isBatchToolCard(messages[i])) {
-            result.push({
-              kind: "batch-card",
-              key: `batch-card-${messages[i].id}`,
-              message: messages[i],
-            });
+          const interactive = projectInteractiveToolItem(messages[i]);
+          if (interactive) {
+            batchItems.push(interactive);
           }
           i += 1;
         }
-      } else if (isPermissionPrompt(msg)) {
-        // Unpaired gated tool result: the interactive card IS the surface —
-        // a compact receipt would hide the approval decision from the user.
-        result.push({
-          kind: "permission-prompt",
-          key: `permission-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (isSkillInstallResult(msg)) {
-        // FR-SKL-001: unpaired (historical) installation result — the
-        // interactive install card IS the surface, never a collapsed receipt.
-        result.push({
-          kind: "skill-install",
-          key: `skill-install-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (isBatchToolCard(msg)) {
-        // T3/D2: an unpaired (live or historical) batch card — progress,
-        // Stop, and Retry stay interactive, never a collapsed receipt.
-        result.push({
-          kind: "batch-card",
-          key: `batch-card-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (emailReplyDraftId(msg) !== null) {
-        result.push({ kind: "email-reply", key: `email-reply-${msg.id}`, draftId: emailReplyDraftId(msg)! });
-        i += 1;
-      } else if (isOutboundBatchResultMessage(msg)) {
-        // Unpaired outbound batch result: same rule — the review card IS the
-        // authorization surface, never a collapsed receipt.
-        result.push({
-          kind: "outbound-batch",
-          key: `outbound-batch-${msg.id}`,
-          message: msg,
-        });
-        i += 1;
-      } else if (
-        msg.messageType === ("tool_call" as MessageType) &&
-        isPlanModeUiToolName(msg.metadata?.toolName)
-      ) {
-        // Plan-mode UI tool calls (EnterPlanMode, AskUserQuestion,
-        // SubmitPlanForApproval) have no execution receipt — their state
-        // renders through the plan decision/receipt/question surfaces
-        // (FR-052). A legacy receipt here would show a bogus completed row.
-        i += 1;
-        continue;
+        const ownerIdx = group.assistantMessageId
+          ? messageIndexById.get(group.assistantMessageId)
+          : undefined;
+        // When loaded from history, tool_call/tool_result rows are persisted
+        // chronologically before the final assistant MESSAGE row. Defer the
+        // group until after its owning assistant message so tool executions
+        // consistently render below the AI response (matching live chat).
+        if (
+          ownerIdx !== undefined &&
+          ownerIdx >= i &&
+          isRenderableAssistantMessage(messages[ownerIdx])
+        ) {
+          const existing =
+            deferredByAssistantId.get(group.assistantMessageId!) ?? [];
+          existing.push(...batchItems);
+          deferredByAssistantId.set(group.assistantMessageId!, existing);
+        } else {
+          result.push(...batchItems);
+        }
       } else {
-        // Legacy unpaired receipt.
-        result.push({
-          kind: "legacy-receipt",
-          key: `legacy-${msg.id}`,
-          execution: {
+        const interactive = projectInteractiveToolItem(msg);
+        if (interactive) {
+          result.push(interactive);
+          i += 1;
+        } else if (
+          msg.messageType === ("tool_call" as MessageType) &&
+          isPlanModeUiToolName(msg.metadata?.toolName)
+        ) {
+          // Plan-mode UI tool calls (EnterPlanMode, AskUserQuestion,
+          // SubmitPlanForApproval) have no execution receipt — their state
+          // renders through the plan decision/receipt/question surfaces
+          // (FR-052). A legacy receipt here would show a bogus completed row.
+          i += 1;
+          continue;
+        } else {
+          // Legacy unpaired receipt.
+          result.push({
+            kind: "legacy-receipt",
             key: `legacy-${msg.id}`,
-            assistantMessageId: null,
-            toolCallId: msg.metadata?.toolCallId ?? null,
-            toolName: msg.metadata?.toolName ?? "",
-            status:
-              msg.messageType === ("tool_result" as MessageType)
-                ? msg.metadata?.toolResultStatus === "error"
-                  ? "failed"
-                  : "completed"
-                : "completed",
-            outputKind: "summary",
-            isError: msg.metadata?.toolResultStatus === "error",
-            isLegacyUnpaired: true,
-            summary: msg.metadata?.toolResultSummary ?? msg.content,
-          },
-        });
-        i += 1;
+            execution: {
+              key: `legacy-${msg.id}`,
+              assistantMessageId: null,
+              toolCallId: msg.metadata?.toolCallId ?? null,
+              toolName: msg.metadata?.toolName ?? "",
+              status:
+                msg.messageType === ("tool_result" as MessageType)
+                  ? msg.metadata?.toolResultStatus === "error"
+                    ? "failed"
+                    : "completed"
+                  : "completed",
+              outputKind: "summary",
+              isError: msg.metadata?.toolResultStatus === "error",
+              isLegacyUnpaired: true,
+              summary: msg.metadata?.toolResultSummary ?? msg.content,
+            },
+          });
+          i += 1;
+        }
       }
       continue;
     }
@@ -607,32 +619,19 @@ const projectedItems = computed<ProjectedItem[]>(() => {
     // Regular message.
     if (msg.role === "user") {
       result.push({ kind: "user-message", key: msg.id, message: msg });
-    } else {
-      const hasContent = Boolean(msg.content && msg.content.length > 0);
-      const hasReasoning = Boolean(
-        props.showReasoning &&
-          msg.metadata?.reasoning?.content &&
-          msg.metadata.reasoning.content.length > 0
-      );
-      const hasActionableMetadata = Boolean(
-        msg.metadata?.error ||
-          msg.metadata?.cancelled ||
-          msg.metadata?.artifact ||
-          msg.metadata?.toolResult ||
-          msg.metadata?.toolCallId ||
-          (Array.isArray(msg.metadata?.generatedImages) &&
-            msg.metadata.generatedImages.length > 0) ||
-          (Array.isArray(msg.metadata?.generatedImageReferences) &&
-            msg.metadata.generatedImageReferences.length > 0) ||
-          (Array.isArray(msg.metadata?.attachments) &&
-            msg.metadata.attachments.length > 0) ||
-          msg.metadata?.planStateView
-      );
-      if (hasContent || hasReasoning || hasActionableMetadata) {
-        result.push({ kind: "assistant-message", key: msg.id, message: msg });
+    } else if (isRenderableAssistantMessage(msg)) {
+      result.push({ kind: "assistant-message", key: msg.id, message: msg });
+      const deferred = deferredByAssistantId.get(msg.id);
+      if (deferred && deferred.length > 0) {
+        result.push(...deferred);
+        deferredByAssistantId.delete(msg.id);
       }
     }
     i += 1;
+  }
+
+  for (const leftover of deferredByAssistantId.values()) {
+    result.push(...leftover);
   }
 
   // ONE lifecycle surface for the latest plan (FR-052), placed AFTER the
@@ -678,6 +677,10 @@ function streamStatusForMessage(
 ): "idle" | "streaming" | "cancelled" | "error" | undefined {
   if (props.activeAssistantMessageId === message.id) {
     return props.streamStatus;
+  }
+  if (message.role === "assistant") {
+    if (message.metadata?.error) return "error";
+    if (message.metadata?.cancelled) return "cancelled";
   }
   return undefined;
 }

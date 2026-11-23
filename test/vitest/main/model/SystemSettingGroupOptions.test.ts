@@ -102,4 +102,21 @@ describe("SystemSettingGroupModel language option seeding", () => {
     const options = await getLanguageOptions();
     expect(options).toHaveLength(SUPPORTED_LANGUAGES.length);
   });
+
+  it("handles concurrent tableInit calls safely without UNIQUE constraint failures", async () => {
+    await SqliteDb.ensureInitialized();
+    const groupModel2 = new SystemSettingGroupModel(tmpDir);
+    const groupModel3 = new SystemSettingGroupModel(tmpDir);
+
+    await expect(
+      Promise.all([
+        groupModel.tableInit(),
+        groupModel2.tableInit(),
+        groupModel3.tableInit(),
+      ])
+    ).resolves.toBeDefined();
+
+    const options = await getLanguageOptions();
+    expect(options).toHaveLength(SUPPORTED_LANGUAGES.length);
+  });
 });

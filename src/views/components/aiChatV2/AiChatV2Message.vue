@@ -334,7 +334,7 @@
           <summary>
             <v-icon size="x-small">mdi-brain</v-icon>
             {{
-              status === "streaming"
+              effectiveStatus === "streaming"
                 ? t("aiChatV2.reasoning_streaming") || "Reasoning…"
                 : t("aiChatV2.reasoning_title") || "Reasoning"
             }}
@@ -513,9 +513,14 @@
         </div>
       </template>
       <AiChatV2StreamStatus
-        v-if="message.role === 'assistant' && status !== 'idle'"
-        :status="status"
-        :error-message="errorMessage"
+        v-if="
+          message.role === 'assistant' &&
+          message.messageType !== MessageType.TOOL_CALL &&
+          message.messageType !== MessageType.TOOL_RESULT &&
+          effectiveStatus !== 'idle'
+        "
+        :status="effectiveStatus"
+        :error-message="effectiveErrorMessage"
       />
       <div
         v-if="message.role === 'user' && mentionChips.length > 0"
@@ -652,6 +657,7 @@ import {
   expandPastedTextForDisplay,
 } from "@/service/pastedText/PastedTextDisplay";
 import { windowInvoke } from "@/views/utils/apirequest";
+import { localizeWorkspaceError } from "@/views/utils/workspaceErrorLocalization";
 
 type Status = "idle" | "streaming" | "cancelled" | "error";
 type ShellPreview = {
@@ -733,7 +739,7 @@ const isReportableAssistant = computed(() => {
   if (props.message.role !== "assistant") return false;
   if (props.message.messageType === MessageType.TOOL_CALL) return false;
   if (props.message.messageType === MessageType.TOOL_RESULT) return false;
-  if (status.value !== "idle") return false;
+  if (effectiveStatus.value !== "idle") return false;
   const hasText =
     typeof props.message.content === "string" && props.message.content.trim().length > 0;
   const hasImages =
@@ -823,7 +829,43 @@ const roleLabel = computed(() => {
   return props.message.role;
 });
 
-const status = computed<Status>(() => props.status ?? "idle");
+const persistedErrorText = computed<string | undefined>(() => {
+  if (props.message.role !== "assistant") return undefined;
+  if (
+    props.message.messageType === MessageType.TOOL_CALL ||
+    props.message.messageType === MessageType.TOOL_RESULT
+  ) {
+    return undefined;
+  }
+  const raw = props.message.metadata?.error;
+  if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
+  return localizeWorkspaceError(raw, (key) => t(key)).text;
+});
+
+const effectiveStatus = computed<Status>(() => {
+  if (props.status && props.status !== "idle") {
+    return props.status;
+  }
+  if (
+    persistedErrorText.value &&
+    props.message.content !== props.message.metadata?.error &&
+    props.message.content !== persistedErrorText.value
+  ) {
+    return "error";
+  }
+  if (
+    props.message.role === "assistant" &&
+    props.message.messageType !== MessageType.TOOL_CALL &&
+    props.message.messageType !== MessageType.TOOL_RESULT &&
+    props.message.metadata?.cancelled === true
+  ) {
+    return "cancelled";
+  }
+  return "idle";
+});
+const effectiveErrorMessage = computed<string | undefined>(
+  () => props.errorMessage || persistedErrorText.value
+);
 const disabled = computed(() => props.disabled ?? false);
 
 const messageTime = computed(() => {
@@ -1761,7 +1803,8 @@ const isBatchToolCard = computed(
   () =>
     (props.message.messageType === MessageType.TOOL_CALL ||
       props.message.messageType === MessageType.TOOL_RESULT) &&
-    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME
+    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME &&
+    !needsPermissionPrompt.value
 );
 
 /** Stop renders while the batch tool is still executing: either a tool_call
@@ -2108,6 +2151,10 @@ const pastedChips = computed<PastedChip[]>(() => {
   background: rgba(255, 255, 255, 0.7);
 }
 .v2-message__image-button {
+  /* Chromium shrink-wraps <button> even when display:block, so the inner
+     width:100% image would resolve against the button's content width and
+     render at its natural pixel size. Stretch the wrapper to the tile. */
+  width: 100%;
   padding: 0;
   color: inherit;
   cursor: pointer;
@@ -2131,6 +2178,9 @@ const pastedChips = computed<PastedChip[]>(() => {
   top: 4px;
   left: 4px;
   z-index: 1;
+  /* Decorative numbering only (aria-hidden): never intercept clicks that
+     land on the action buttons underneath when a tile collapses. */
+  pointer-events: none;
   min-width: 18px;
   height: 18px;
   padding: 0 5px;

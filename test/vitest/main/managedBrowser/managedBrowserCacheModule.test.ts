@@ -748,4 +748,30 @@ describe("enforceEvictionLimits (GAP-10)", () => {
       h.module.enforceEvictionLimits({ cacheMaxBytes: 100 })
     ).resolves.toEqual({ plannedScopes: 0, plannedBytes: 0, skipped: false });
   });
+
+  it("preserves `this` context when calling maintenance.planEviction", async () => {
+    const h = makeHarness();
+    let invokedWithMaintenance = false;
+    h.maintenance.planEviction = async function (
+      this: unknown,
+      _input: unknown
+    ): Promise<{
+      status: "ok";
+      planId: string;
+      plannedBytes: number;
+      entries: ReadonlyArray<{ scopeToken: string }>;
+    }> {
+      invokedWithMaintenance = this === h.maintenance;
+      return {
+        status: "ok" as const,
+        planId: "plan-context-test",
+        plannedBytes: 0,
+        entries: [],
+      };
+    };
+    await expect(
+      h.module.enforceEvictionLimits({ cacheMaxBytes: 100 })
+    ).resolves.toEqual({ plannedScopes: 0, plannedBytes: 0, skipped: false });
+    expect(invokedWithMaintenance).toBe(true);
+  });
 });

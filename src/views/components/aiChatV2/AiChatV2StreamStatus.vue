@@ -32,7 +32,7 @@ const props = defineProps<{ status: Status; errorMessage?: string }>();
 const { t } = useI18n();
 
 const visible = computed(
-  () => props.status !== "idle" && props.status !== "streaming"
+  () => props.status === "cancelled" || props.status === "error"
 );
 const text = computed(() => {
   if (props.status === "cancelled") return t("aiChatV2.cancelled") || "Cancelled";

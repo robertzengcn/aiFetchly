@@ -562,6 +562,57 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(denied?.[0]?.[0]).toMatchObject({ id: permMessage.id });
   });
 
+  it("§15.5: process_artifact_batch awaiting permission renders ONE interactive permission prompt and forwards grant-permission", async () => {
+    const callMessage = msg(MessageType.TOOL_CALL, {
+      toolCallId: "tc-batch-perm",
+      toolName: "process_artifact_batch",
+    });
+    const permMessage = msg(MessageType.TOOL_RESULT, {
+      toolCallId: "tc-batch-perm",
+      toolName: "process_artifact_batch",
+      toolResult: {
+        needsPermissionPrompt: true,
+        permissionCategory: "filesystem",
+        success: true,
+      },
+    });
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [callMessage, permMessage],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // Renders exactly ONE permission card in the DOM — no duplicate batch cards.
+    const cards = wrapper.findAll('[data-testid="ai-chat-permission-card"]');
+    expect(cards).toHaveLength(1);
+
+    // No Stop batch button while parked awaiting permission
+    expect(wrapper.find("button.v2-message__batch-stop").exists()).toBe(false);
+
+    // Clicking "ALLOW ONCE" forwards grant-permission with persistent: false
+    await wrapper
+      .find('[data-testid="ai-chat-permission-allow-once"]')
+      .trigger("click");
+    await flushPromises();
+    const granted = wrapper.emitted("grant-permission");
+    expect(granted).toBeTruthy();
+    expect(granted?.[0]?.[0]).toMatchObject({ id: permMessage.id });
+    expect(granted?.[0]?.[1]).toEqual({ persistent: false });
+
+    // Clicking "ALWAYS ALLOW" forwards grant-permission with persistent: true
+    await wrapper
+      .find('[data-testid="ai-chat-permission-always-allow"]')
+      .trigger("click");
+    await flushPromises();
+    expect(granted).toHaveLength(2);
+    expect(granted?.[1]?.[0]).toMatchObject({ id: permMessage.id });
+    expect(granted?.[1]?.[1]).toEqual({ persistent: true });
+  });
+
   it("§15.5/FR-048: permission-resumed completed group stays expanded; plain completed group collapses", async () => {
     const messages = [
       msg(MessageType.MESSAGE, {}, "assistant", "Reading the file."),
@@ -1535,5 +1586,131 @@ describe("AiChatWorkspaceTranscript remote working indicator & empty bubble supp
     await flushPromises();
 
     expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(false);
+  });
+
+  it("renders tool execution group below each AI response when loaded from persisted chat history order", async () => {
+    const messages: ChatV2MessageView[] = [
+      {
+        id: "u1",
+        conversationId: "v2-test",
+        role: "user",
+        content: "Search for leads",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u1" },
+      },
+      {
+        id: "tc1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "web_search",
+        timestamp: "2026-08-20T10:00:02.000Z",
+        messageType: MessageType.TOOL_CALL,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u1",
+          toolCallId: "call-1",
+          toolName: "web_search",
+        },
+      },
+      {
+        id: "tr1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: '{"success":true}',
+        timestamp: "2026-08-20T10:00:03.000Z",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u1",
+          toolCallId: "call-1",
+          toolName: "web_search",
+          toolResult: { success: true, summary: "Found 5 leads" },
+          toolResultSummary: "Found 5 leads",
+        },
+      },
+      {
+        id: "a1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "Here are the 5 leads I found.",
+        timestamp: "2026-08-20T10:00:04.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u1" },
+      },
+    ];
+
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const listEl = wrapper.find('[data-testid="workspace-transcript"]').element;
+    const childOrder = Array.from(listEl.children).map((el) => {
+      if (el.classList.contains("execution-group")) {
+        return "execution-group";
+      }
+      if (el.classList.contains("v2-message--user")) {
+        return "user-message";
+      }
+      if (el.classList.contains("v2-message--assistant")) {
+        return "assistant-message";
+      }
+      return "other";
+    });
+    expect(childOrder).toEqual([
+      "user-message",
+      "assistant-message",
+      "execution-group",
+    ]);
+  });
+
+  it("displays persisted AI response error when loading a failed turn with empty content from chat history", async () => {
+    const messages: ChatV2MessageView[] = [
+      {
+        id: "u-err",
+        conversationId: "v2-test",
+        role: "user",
+        content: "Hello AI",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u-err" },
+      },
+      {
+        id: "a-err",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-08-20T10:00:02.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u-err",
+          finishReason: "error",
+          error: "AI server returned 502 Bad Gateway",
+        },
+      },
+    ];
+
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const messageComponents = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(messageComponents).toHaveLength(2);
+    const errorStatus = wrapper.find(".v2-stream-status");
+    expect(errorStatus.exists()).toBe(true);
+    expect(errorStatus.text()).toContain("AI server returned 502 Bad Gateway");
   });
 });

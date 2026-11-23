@@ -17,8 +17,46 @@ import {
 // E2E main build via vite.main.shared.mjs so the two bundles always use the
 // same native-module / TypeORM bundling rules (design §6.4).
 
+/**
+ * Build-time mirror of the AiFetchHubMarketplaceFetcher https guard: an http
+ * non-loopback hub URL without AIFETCHLY_ALLOW_HTTP_HUB=1 is rejected by every
+ * packaged build at runtime (packaged apps never run with
+ * NODE_ENV=development), so surface the misconfiguration during the build
+ * instead of letting production discover it as "Plugin Hub URL must be
+ * https..." on each community:list call (incident 2026-11-16).
+ */
+function warnOnUnreachableHttpHub(env) {
+  const hubUrl = String(env.VITE_PLUGIN_HUB_URL || '').trim();
+  const allowHttp = String(env.AIFETCHLY_ALLOW_HTTP_HUB || '').trim();
+  if (!hubUrl.startsWith('http://')) return;
+  let hostname = '';
+  try {
+    hostname = new URL(hubUrl).hostname;
+  } catch {
+    return;
+  }
+  const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1';
+  if (!isLoopback && allowHttp !== '1') {
+    console.warn(
+      `[vite.main] VITE_PLUGIN_HUB_URL=${hubUrl} is http, not localhost, and AIFETCHLY_ALLOW_HTTP_HUB is not "1" — ` +
+        'the packaged app will reject every Plugin Hub request at runtime ' +
+        '(Plugin Hub URL must be https, or set AIFETCHLY_ALLOW_HTTP_HUB=1 in .env).'
+    );
+  }
+}
+
 export default ({ mode }) => {
-    process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
+    // loadEnv() defaults to the `VITE_` prefix, which silently drops the
+    // non-prefixed `AIFETCHLY_ALLOW_HTTP_HUB` from .env when vite runs
+    // outside electron-forge (forge.config.js dotenv-loads .env without a
+    // prefix filter, so forge builds were unaffected). That mismatch baked an
+    // http hub URL into production with the allow flag empty, and the
+    // fetcher's https guard then rejected every community catalog request at
+    // runtime ("Plugin Hub URL must be https..."). The empty prefix loads ALL
+    // .env vars (mirroring forge's dotenv behavior); only the keys referenced
+    // by `define` below are baked into the bundle.
+    process.env = { ...process.env, ...loadEnv(mode, process.cwd(), '') };
+    warnOnUnreachableHttpHub(process.env);
 
     return defineConfig({
         plugins: [
@@ -51,7 +89,9 @@ export default ({ mode }) => {
                 process.env.VITE_PLUGIN_HUB_URL || ''
             ),
             'process.env.AIFETCHLY_ALLOW_HTTP_HUB': JSON.stringify(
-                process.env.AIFETCHLY_ALLOW_HTTP_HUB || ''
+                process.env.AIFETCHLY_ALLOW_HTTP_HUB ||
+                process.env.VITE_ALLOW_HTTP_HUB ||
+                (String(process.env.VITE_PLUGIN_HUB_URL || '').startsWith('http://') ? '1' : '')
             ),
             // Bake the crash-upload mainLogTail rollout flag for PRODUCTION
             // builds only: packaged apps launched from Finder/Start Menu have

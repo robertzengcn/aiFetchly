@@ -1,11 +1,12 @@
 <template>
   <div
     class="v2-model-selector"
+    :class="{ 'v2-model-selector--compact': compact }"
     :title="noModels ? noModelsHint : undefined"
     :aria-label="noModels ? noModelsHint : undefined"
   >
     <v-select
-      :model-value="modelValue"
+      :model-value="displayModelValue"
       :items="selectItems"
       item-value="value"
       item-title="title"
@@ -15,16 +16,33 @@
           : t('aiChatV2.model_none_available') || 'No models available'
       "
       density="compact"
-      variant="outlined"
+      :variant="compact ? 'solo' : 'outlined'"
+      :flat="compact"
+      :prepend-inner-icon="compact ? 'mdi-chip' : undefined"
+      :menu-icon="compact ? 'mdi-chevron-down' : undefined"
+      :menu-props="compact ? { location: 'top start', minWidth: 240 } : undefined"
       hide-details
-      :disabled="disabled || selectItems.length === 0"
+      :disabled="disabled || (compact && (noModels || loading))"
       :loading="loading"
       :aria-label="t('aiChatV2.model_selector_label') || 'Model'"
+      :aria-busy="compact && loading ? true : undefined"
+      :data-testid="compact ? 'chat-model-selector' : undefined"
       class="v2-model-selector__select"
+      :class="{
+        'chat-composer-select': compact,
+        'v2-model-selector__select--status': compact && (loading || noModels),
+      }"
       @update:model-value="onChange"
     >
+      <template v-if="compact" #selection="{ item }">
+        <span class="chat-composer-select__label" :title="item.title">{{ item.title }}</span>
+      </template>
       <template #item="{ item, props: itemProps }">
-        <v-list-item v-bind="itemProps">
+        <v-list-item
+          v-bind="itemProps"
+          role="option"
+          :aria-selected="item.value === displayModelValue"
+        >
           <template #append>
             <v-chip
               v-if="item.raw.isFree"
@@ -80,6 +98,7 @@ import type { OpenAIModel } from "@/api/aiChatApi";
 const props = defineProps<{
   modelValue: string | undefined;
   items: OpenAIModel[];
+  compact?: boolean;
   /** Server-reported default model id; shown as the resolved target of "Auto". */
   defaultModel?: string;
   disabled?: boolean;
@@ -109,6 +128,12 @@ interface ModelSelectItem {
 
 /** Sentinel matching the parent's AUTO_MODEL_VALUE. */
 const AUTO_MODEL_VALUE = "auto";
+
+const displayModelValue = computed((): string | undefined => {
+  if (!props.compact) return props.modelValue;
+  if (props.loading || props.noModels) return undefined;
+  return props.modelValue ?? AUTO_MODEL_VALUE;
+});
 
 /** Show the provider-independent model name without changing its submitted id. */
 const getDisplayModelName = (modelId: string): string => {
@@ -168,6 +193,21 @@ const formatContextSize = (tokens: number): string => {
   min-width: 130px;
   max-width: 200px;
 }
+.v2-model-selector--compact {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.v2-model-selector--compact .v2-model-selector__select {
+  min-inline-size: 0;
+  max-inline-size: min(100%, 13rem);
+}
+.v2-model-selector--compact .v2-model-selector__select--status {
+  inline-size: 12rem;
+}
+.v2-model-selector__select--status :deep(.v-field__input > input) {
+  align-self: center;
+  text-overflow: ellipsis;
+}
 .v2-model-selector__settings {
   margin-left: 2px;
   /* PRD §16.4: interaction targets at least 40x40. */
@@ -175,3 +215,5 @@ const formatContextSize = (tokens: number): string => {
   min-height: 40px;
 }
 </style>
+
+<style scoped src="./composerSelect.css"></style>

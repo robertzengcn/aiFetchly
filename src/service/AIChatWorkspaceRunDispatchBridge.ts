@@ -51,7 +51,15 @@ export interface WorkspaceRunDispatchBridge {
     candidate: QueueDispatchCandidate
   ): Promise<{ runId: string; admitted: boolean } | null>;
   /** Persist the run terminal state (idempotent; ignored for null runId). */
-  finishRun(runId: string | null, status: TerminalRunStatus): Promise<void>;
+  finishRun(
+    runId: string | null,
+    status: TerminalRunStatus,
+    patch?: {
+      assistantMessageId?: string;
+      errorCode?: string | null;
+      errorSummary?: string | null;
+    }
+  ): Promise<void>;
   /**
    * B05 strict variant: returns true when the terminal row is durably
    * terminal after the call (persisted now or already terminal), false when
@@ -60,7 +68,12 @@ export interface WorkspaceRunDispatchBridge {
    */
   finishRunStrict(
     runId: string | null,
-    status: TerminalRunStatus
+    status: TerminalRunStatus,
+    patch?: {
+      assistantMessageId?: string;
+      errorCode?: string | null;
+      errorSummary?: string | null;
+    }
   ): Promise<boolean>;
   /** conversation_busy release: running -> queued for the next claim. */
   releaseToQueued(runId: string | null): Promise<void>;
@@ -196,14 +209,24 @@ export class AIChatWorkspaceRunDispatchBridge
 
   async finishRun(
     runId: string | null,
-    status: TerminalRunStatus
+    status: TerminalRunStatus,
+    patch?: {
+      assistantMessageId?: string;
+      errorCode?: string | null;
+      errorSummary?: string | null;
+    }
   ): Promise<void> {
-    await this.finishRunStrict(runId, status);
+    await this.finishRunStrict(runId, status, patch);
   }
 
   async finishRunStrict(
     runId: string | null,
-    status: TerminalRunStatus
+    status: TerminalRunStatus,
+    patch?: {
+      assistantMessageId?: string;
+      errorCode?: string | null;
+      errorSummary?: string | null;
+    }
   ): Promise<boolean> {
     if (!runId) return true;
     try {
@@ -216,7 +239,7 @@ export class AIChatWorkspaceRunDispatchBridge
         this.scheduler?.complete(runId);
         return true;
       }
-      await this.runModule.transition(runId, status);
+      await this.runModule.transition(runId, status, patch);
       // G03 §18.1: run terminals by status (bounded; error codes ride the
       // run row, never the counter).
       aiChatQueueCounters.incrementLabeled(

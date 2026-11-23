@@ -86,11 +86,87 @@ export class AIChatConversationModule extends BaseModule {
     hasOlder: boolean;
   }> {
     await this.ensureConnection();
+    if (!before) {
+      await this.repairUnrespondedFailedTurns(conversationId);
+    }
     return this.messageModel().getConversationPageDescending(
       conversationId,
       limit,
       before
     );
+  }
+
+  /**
+   * Reconcile historical unresponded failed turns when loading conversation history.
+   * If the latest run for a conversation ended in 'failed' or 'cancelled', but the
+   * transcript's newest message is still from the user (no assistant error row was saved),
+   * synthesize and persist the assistant error message row so the user sees the error
+   * in the transcript instead of an unresponsive chat.
+   */
+  async repairUnrespondedFailedTurns(conversationId: string): Promise<void> {
+    try {
+      const runs = await this.runModel().listByConversation(conversationId, 5);
+      if (runs.length === 0) return;
+      const latestRun = runs[0];
+      if (latestRun.status !== "failed" && latestRun.status !== "cancelled") {
+        return;
+      }
+      const lastMessage = await this.messageModel()
+        .repository.createQueryBuilder("message")
+        .where("message.conversationId = :conversationId", { conversationId })
+        .orderBy("message.timestamp", "DESC")
+        .addOrderBy("message.id", "DESC")
+        .take(1)
+        .getOne();
+      if (!lastMessage || lastMessage.role !== "user") {
+        return;
+      }
+      const errorText =
+        latestRun.errorSummary?.trim() ||
+        "The AI service is busy or had a transient issue. Please try again in a moment.";
+      const assistantMessageId =
+        latestRun.assistantMessageId?.trim() ||
+        `assistant-failed-run-${latestRun.runId}`;
+      const runTime = new Date(
+        latestRun.updatedAt || latestRun.createdAt || Date.now()
+      ).getTime();
+      const lastMsgTime = new Date(lastMessage.timestamp).getTime();
+      const timestamp = new Date(
+        runTime > lastMsgTime ? runTime : lastMsgTime + 1000
+      );
+
+      const v2Module = new AIChatV2Module();
+      await v2Module.saveAssistantMessage({
+        conversationId,
+        messageId: assistantMessageId,
+        content: "",
+        timestamp,
+        metadata: {
+          source: "chat-v2",
+          finishReason: "error",
+          error: errorText,
+        },
+      });
+
+      if (!latestRun.assistantMessageId) {
+        await this.runModel()
+          .transition(
+            latestRun.runId,
+            latestRun.status,
+            [latestRun.status],
+            {
+              assistantMessageId,
+              errorSummary: errorText,
+            }
+          )
+          .catch(() => undefined);
+      }
+    } catch (err) {
+      console.warn(
+        `[ai-chat-conversation] repairUnrespondedFailedTurns failed conv=${conversationId}:`,
+        err
+      );
+    }
   }
 
   /**
@@ -447,16 +523,16 @@ export class AIChatConversationModule extends BaseModule {
           pending = { turnId, typedText: typed };
         }
       } else if (message.role === "assistant") {
-        const content = message.content?.trim() ?? "";
-        // An empty assistant row is not a completed exchange — the turn may
-        // still produce its real answer.
-        if (content.length === 0) continue;
         // B02/F02: a cancelled or failed assistant ENDS its exchange; its
         // user row may never pair with anyone else.
         if (meta.cancelled || meta.error) {
           pending = null;
           continue;
         }
+        const content = message.content?.trim() ?? "";
+        // An empty assistant row is not a completed exchange — the turn may
+        // still produce its real answer.
+        if (content.length === 0) continue;
         if (message.messageId === trustedAssistantMessageId) {
           trustedSeen = true;
         }
