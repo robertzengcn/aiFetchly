@@ -81,21 +81,29 @@ test.describe("persistent shell startup (design §14, §25.6)", () => {
 });
 
 test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
-  test("renders a two-row textarea with selectors below it", async ({
+  test("keeps the workspace chooser above the input and send below it", async ({
     shellApp: app,
   }) => {
     const page = app.mainWindow;
     await openWorkspace(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.getByTestId("workspace-new-chat").click();
+    const panel = page.getByTestId("chat-composer-panel");
     // Vuetify auto-grow also renders a hidden measurement sizer textarea —
     // target the real, labelled input only.
-    const textarea = page
+    const textarea = panel
       .getByTestId("ai-chat-composer")
       .locator("textarea.v-field__input:not(.v-textarea__sizer)");
     await expect(textarea).toBeVisible({ timeout: 10_000 });
     expect(await textarea.getAttribute("rows")).toBe("2");
-    // Mode/model/approval render after the textarea in DOM order.
+    const chooseWorkspace = panel.getByTestId("workspace-badge-choose");
+    await expect(chooseWorkspace).toBeVisible();
+    await expect(panel.getByTestId("chat-model-selector")).toBeVisible();
+    await expect(panel.getByTestId("chat-permission-selector")).toBeVisible();
+    await expect(panel.locator(".v2-mode-selector")).toHaveCount(0);
+    // The folder chooser precedes the input. Model and permissions follow it.
     const order = await page.evaluate(() => {
+      const chooser = document.querySelector('[data-testid="workspace-badge-choose"]');
       const input =
         document
           .querySelector('[data-testid="ai-chat-composer"]')
@@ -104,13 +112,64 @@ test.describe("composer placement (design §10, FR-COMP-002/005/006)", () => {
       const controls = document.querySelector(
         '[data-testid="v2-composer-controls"]'
       );
-      if (!input || !controls) return "missing";
-      return input.compareDocumentPosition(controls) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-        ? "after"
-        : "before";
+      if (!chooser || !input || !controls) return null;
+      return [
+        Boolean(chooser.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING),
+        Boolean(input.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING),
+      ];
     });
-    expect(order).toBe("after");
+    expect(order).toEqual([true, true]);
+
+    for (const width of [1280, 700]) {
+      await page.setViewportSize({ width, height: 800 });
+      const send = panel.getByTestId("ai-chat-send");
+      await expect(send).toBeInViewport();
+      const panelBox = await panel.boundingBox();
+      const chooserBox = await chooseWorkspace.boundingBox();
+      const inputBox = await textarea.boundingBox();
+      const sendBox = await send.boundingBox();
+      if (!panelBox || !chooserBox || !inputBox || !sendBox) {
+        throw new Error("Composer controls should be visible");
+      }
+      expect(chooserBox.x).toBeGreaterThanOrEqual(panelBox.x);
+      expect(chooserBox.x).toBeLessThanOrEqual(panelBox.x + 32);
+      expect(chooserBox.y + chooserBox.height).toBeLessThanOrEqual(inputBox.y);
+      expect(sendBox.x + sendBox.width).toBeLessThan(panelBox.x + panelBox.width);
+    }
+  });
+
+  test("uses dark theme colors and shows the entire Full Access description", async ({
+    shellApp: app,
+  }) => {
+    const page = app.mainWindow;
+    await openWorkspace(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.evaluate(() => {
+      type AppRoot = HTMLElement & {
+        __vue_app__: {
+          config: {
+            globalProperties: { $pinia: { _s: Map<string, { theme: string }> } };
+          };
+        };
+      };
+      const root = document.getElementById("app") as AppRoot;
+      const store = root.__vue_app__.config.globalProperties.$pinia._s.get("main");
+      if (!store) throw new Error("Main store is missing");
+      store.theme = "aifetchlyDark";
+    });
+
+    const panel = page.getByTestId("chat-composer-panel");
+    await panel.locator("textarea.v-field__input:not(.v-textarea__sizer)").fill("Draft a campaign brief");
+    await expect(panel).toHaveCSS("background-color", "rgb(26, 26, 34)");
+    await expect(panel.getByTestId("ai-chat-send")).toHaveCSS("color", "rgb(16, 16, 20)");
+    await expect(panel.getByTestId("spoken-response-toggle")).toHaveCSS("color", "rgb(233, 233, 236)");
+
+    await panel.getByTestId("chat-permission-selector").locator(".v-field").click();
+    const description = page.getByRole("option", { name: /Full access/i })
+      .locator(".v-list-item-subtitle");
+    await expect(description).toBeVisible();
+    const clipped = await description.evaluate((element) => element.scrollHeight > element.clientHeight);
+    expect(clipped).toBe(false);
   });
 });
 

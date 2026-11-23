@@ -399,6 +399,8 @@ The R6 hydration fix addressed the reload path (`hydrateRuntime`). It did not up
 
 **Required fix:** Gate with `canUseChat()` before the provider call, and return the same denied envelope as the other chat handlers. This is a metadata call, not a generation bypass.
 
+**SUPERSEDED (product decision, 2026-11-21):** the `canUseChatWithReconcile()` gate that landed for this item (`54d039f80`) blocked users without a subscription from seeing the model catalog in the default AI chat workspace. The model list is read-only metadata — viewing it is not a generation bypass — so `handleModels` no longer applies the chat-availability gate; generation access stays enforced at the stream boundary. Regression: `test/vitest/main/ipc/ai-chat-v2-ipc.test.ts` "allows model listing when hosted AI is disabled without any local provider" and `test/vitest/main/aiChatPendingMessageIpc.test.ts` "keeps the model list available when chat availability is denied".
+
 ### P3 — Duplicate generic execution body beside specialized cards
 
 **Requirements:** PRD §13.3.

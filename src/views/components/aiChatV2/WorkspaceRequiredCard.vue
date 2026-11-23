@@ -1,5 +1,6 @@
 <template>
   <v-card
+    ref="card"
     class="workspace-required-card"
     elevation="2"
     rounded
@@ -28,6 +29,7 @@
         {{ cancelText }}
       </v-btn>
       <v-btn
+        ref="pickButton"
         color="primary"
         variant="flat"
         :loading="loading"
@@ -62,6 +64,20 @@ const { t } = useI18n();
 
 const loading = ref(false);
 const errorText = ref<string | null>(null);
+const card = ref<{ $el: unknown } | null>(null);
+const pickButton = ref<{ $el: unknown } | null>(null);
+
+function focusPickButton(): void {
+  const button = pickButton.value?.$el;
+  if (button instanceof HTMLButtonElement) button.focus();
+}
+
+function containsFocus(): boolean {
+  const element = card.value?.$el;
+  return element instanceof HTMLElement && element.contains(document.activeElement);
+}
+
+defineExpose({ focusPickButton, containsFocus });
 
 const titleText = t("workspace.required.title") || "Choose a workspace folder";
 const bodyText =

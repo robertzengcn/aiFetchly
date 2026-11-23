@@ -58,7 +58,8 @@ export function isBatchToolCard(message: ChatV2MessageView): boolean {
   return (
     (message.messageType === ("tool_call" as MessageType) ||
       message.messageType === ("tool_result" as MessageType)) &&
-    String(message.metadata?.toolName || "") === "process_artifact_batch"
+    String(message.metadata?.toolName || "") === "process_artifact_batch" &&
+    message.metadata?.toolResult?.needsPermissionPrompt !== true
   );
 }
 

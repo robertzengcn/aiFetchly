@@ -562,6 +562,57 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(denied?.[0]?.[0]).toMatchObject({ id: permMessage.id });
   });
 
+  it("§15.5: process_artifact_batch awaiting permission renders ONE interactive permission prompt and forwards grant-permission", async () => {
+    const callMessage = msg(MessageType.TOOL_CALL, {
+      toolCallId: "tc-batch-perm",
+      toolName: "process_artifact_batch",
+    });
+    const permMessage = msg(MessageType.TOOL_RESULT, {
+      toolCallId: "tc-batch-perm",
+      toolName: "process_artifact_batch",
+      toolResult: {
+        needsPermissionPrompt: true,
+        permissionCategory: "filesystem",
+        success: true,
+      },
+    });
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [callMessage, permMessage],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // Renders exactly ONE permission card in the DOM — no duplicate batch cards.
+    const cards = wrapper.findAll('[data-testid="ai-chat-permission-card"]');
+    expect(cards).toHaveLength(1);
+
+    // No Stop batch button while parked awaiting permission
+    expect(wrapper.find("button.v2-message__batch-stop").exists()).toBe(false);
+
+    // Clicking "ALLOW ONCE" forwards grant-permission with persistent: false
+    await wrapper
+      .find('[data-testid="ai-chat-permission-allow-once"]')
+      .trigger("click");
+    await flushPromises();
+    const granted = wrapper.emitted("grant-permission");
+    expect(granted).toBeTruthy();
+    expect(granted?.[0]?.[0]).toMatchObject({ id: permMessage.id });
+    expect(granted?.[0]?.[1]).toEqual({ persistent: false });
+
+    // Clicking "ALWAYS ALLOW" forwards grant-permission with persistent: true
+    await wrapper
+      .find('[data-testid="ai-chat-permission-always-allow"]')
+      .trigger("click");
+    await flushPromises();
+    expect(granted).toHaveLength(2);
+    expect(granted?.[1]?.[0]).toMatchObject({ id: permMessage.id });
+    expect(granted?.[1]?.[1]).toEqual({ persistent: true });
+  });
+
   it("§15.5/FR-048: permission-resumed completed group stays expanded; plain completed group collapses", async () => {
     const messages = [
       msg(MessageType.MESSAGE, {}, "assistant", "Reading the file."),

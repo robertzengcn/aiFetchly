@@ -1803,7 +1803,8 @@ const isBatchToolCard = computed(
   () =>
     (props.message.messageType === MessageType.TOOL_CALL ||
       props.message.messageType === MessageType.TOOL_RESULT) &&
-    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME
+    String(props.message.metadata?.toolName || "") === BATCH_TOOL_NAME &&
+    !needsPermissionPrompt.value
 );
 
 /** Stop renders while the batch tool is still executing: either a tool_call

@@ -126,6 +126,88 @@ describe("AIChatGeneratedImageStorageService", () => {
     expect(stored[0].delivery).toBe("local_file");
     expect(stored[0].local_path).not.toBe("/tmp/not-owned-by-chat.png");
   });
+
+  // The AI server delivers generated images inline as data URLs (delivery
+  // "data_url", no b64_json). Storage must decode them — otherwise the empty
+  // buffer pass-through left the data: descriptor un-stored and the agent
+  // runtime's sanctioned-protocol filter dropped it ("could not be stored
+  // locally"), failing every process_artifact_batch image edit.
+  it("stores inline data-url images and rewrites them to local file URLs", async () => {
+    const root = await makeTempDir();
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const dataUrl = `data:image/png;base64,${Buffer.from(bytes).toString(
+      "base64"
+    )}`;
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    const service = new AIChatGeneratedImageStorageService(
+      fetchMock,
+      root,
+      "user@example.com"
+    );
+
+    const stored = await service.storeImages({
+      conversationId: "agent-v2-conv",
+      messageId: "agent-assistant-1",
+      images: [
+        {
+          type: "image",
+          delivery: "data_url",
+          url: dataUrl,
+          mime_type: "image/png",
+        },
+      ],
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(stored[0].delivery).toBe("local_file");
+    expect(stored[0].url).toBe(
+      "aifetchly-generated-image://local/user%40example.com/agent-v2-conv/agent-assistant-1/image-1.png"
+    );
+    expect(stored[0].b64_json).toBeUndefined();
+    expect(stored[0].local_path).toBe(
+      path.join(
+        root,
+        "ai-chat-generated-images",
+        "user@example.com",
+        "agent-v2-conv",
+        "agent-assistant-1",
+        "image-1.png"
+      )
+    );
+    await expect(
+      fs.readFile(stored[0].local_path ?? "")
+    ).resolves.toEqual(expect.any(Buffer));
+    expect(
+      new Uint8Array(await fs.readFile(stored[0].local_path ?? ""))
+    ).toEqual(bytes);
+  });
+
+  it("passes through a malformed data-url descriptor unchanged", async () => {
+    const root = await makeTempDir();
+    const fetchMock = vi.fn() as unknown as typeof fetch;
+    const service = new AIChatGeneratedImageStorageService(
+      fetchMock,
+      root,
+      "user@example.com"
+    );
+
+    const descriptor: OpenAIChatImage = {
+      type: "image",
+      delivery: "data_url",
+      url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>",
+      mime_type: "image/svg+xml",
+    };
+    const stored = await service.storeImages({
+      conversationId: "v2-conv",
+      messageId: "assistant-1",
+      images: [descriptor],
+    });
+
+    // Non-base64 data URL decodes to an empty buffer -> unchanged descriptor
+    // (documented contract), never a bogus local file.
+    expect(stored[0]).toEqual(descriptor);
+    expect(stored[0].local_path).toBeUndefined();
+  });
 });
 
 describe("AIChatGeneratedImageStorageService.rehomeImages", () => {

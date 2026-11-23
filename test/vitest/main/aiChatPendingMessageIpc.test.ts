@@ -191,18 +191,24 @@ describe("pending-message IPC handlers", () => {
     expect(queueSpies.submit).not.toHaveBeenCalled();
   });
 
-  /** R8 P3: the model list is a metadata call, not a generation bypass —
-   * it must return the same denied envelope as the other chat handlers
-   * when AI is not enabled (PRD §14 item 1). */
-  it("gates the model list behind chat availability", async () => {
+  /** Supersedes R8 P3: the model list is read-only metadata — it must stay
+   * available when chat availability is denied (no subscription), so users
+   * can still browse/choose models. Generation access is gated at the
+   * stream boundary, not here. */
+  it("keeps the model list available when chat availability is denied", async () => {
     chatAvailable = false;
-    const result = await callChannel(AI_CHAT_V2_MODELS, undefined);
-    expect(result.status).toBe(false);
-    expect(result.msg).toContain("not available");
+    const pendingResult = await callChannel(AI_CHAT_V2_PENDING_CREATE, {
+      clientRequestId: "cr-gate",
+      request: { message: "hello" },
+    });
+    expect(pendingResult.status).toBe(false);
+    expect(pendingResult.msg).toContain("not available");
 
-    chatAvailable = true;
-    const allowed = await callChannel(AI_CHAT_V2_MODELS, undefined);
-    expect(allowed.status).toBe(true);
+    const models = await callChannel(AI_CHAT_V2_MODELS, undefined);
+    expect(models.status).toBe(true);
+    expect(models.data).toMatchObject({
+      data: [{ id: "model-a" }],
+    });
   });
 
   it("rejects oversized messages with a stable error", async () => {

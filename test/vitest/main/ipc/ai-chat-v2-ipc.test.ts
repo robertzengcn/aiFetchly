@@ -691,6 +691,32 @@ describe("AI Chat V2 — AI-disabled gate", () => {
       (result as { data: { default_model: string } }).data.default_model
     ).toBe("llama3.1");
   });
+
+  // Supersedes R8 P3: the model list is read-only metadata — a user without
+  // a subscription (hosted AI disabled, no local provider) must still be
+  // able to see the model catalog in the AI chat workspace. Generation
+  // access stays gated at the stream boundary.
+  it("allows model listing when hosted AI is disabled without any local provider", async () => {
+    mockState.aiEnabled = "false";
+    mockListOpenAIModels.mockResolvedValue({
+      object: "list",
+      data: [
+        { id: "hosted-model-a", object: "model", created: 0, owned_by: "aiFetchly" },
+        { id: "hosted-model-b", object: "model", created: 0, owned_by: "aiFetchly" },
+      ],
+      default_model: "hosted-model-a",
+    });
+
+    const result = await mockIpcMain.callHandler(AI_CHAT_V2_MODELS);
+
+    expect(result).toMatchObject({ status: true });
+    expect(mockListOpenAIModels).toHaveBeenCalledTimes(1);
+    const models = (result as { data: { data: Array<{ id: string }> } }).data;
+    expect(models.data.map((m) => m.id)).toEqual([
+      "hosted-model-a",
+      "hosted-model-b",
+    ]);
+  });
 });
 
 describe("AI Chat V2 — stream validation", () => {
