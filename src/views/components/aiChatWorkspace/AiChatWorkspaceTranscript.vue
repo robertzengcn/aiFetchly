@@ -633,6 +633,10 @@ function streamStatusForMessage(
   if (props.activeAssistantMessageId === message.id) {
     return props.streamStatus;
   }
+  if (message.role === "assistant") {
+    if (message.metadata?.error) return "error";
+    if (message.metadata?.cancelled) return "cancelled";
+  }
   return undefined;
 }
 

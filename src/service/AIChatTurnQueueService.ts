@@ -21,6 +21,8 @@ import {
   type AIChatPendingModuleErrorCode,
 } from "@/modules/AIChatPendingMessageModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { userSafeError, pendingErrorCode } from "@/service/AIChatErrorMapper";
 import { log } from "@/modules/Logger";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
@@ -195,7 +197,12 @@ export interface AIChatTurnQueueServiceDeps {
     }): Promise<{ runId: string; admitted: boolean } | null>;
     finishRun(
       runId: string | null,
-      status: "completed" | "failed" | "cancelled" | "interrupted"
+      status: "completed" | "failed" | "cancelled" | "interrupted",
+      patch?: {
+        assistantMessageId?: string;
+        errorCode?: string | null;
+        errorSummary?: string | null;
+      }
     ): Promise<void>;
     /**
      * B05 strict variant: false when terminal persistence failed — the
@@ -203,7 +210,12 @@ export interface AIChatTurnQueueServiceDeps {
      */
     finishRunStrict?(
       runId: string | null,
-      status: "completed" | "failed" | "cancelled" | "interrupted"
+      status: "completed" | "failed" | "cancelled" | "interrupted",
+      patch?: {
+        assistantMessageId?: string;
+        errorCode?: string | null;
+        errorSummary?: string | null;
+      }
     ): Promise<boolean>;
     /** conversation_busy release: running -> queued for the next claim. */
     releaseToQueued?(runId: string | null): Promise<void>;
@@ -1213,6 +1225,8 @@ export class AIChatTurnQueueService {
       const terminalGate = new AIChatTerminalGate(
         this.deps.streamSinkFactory(streamIdentity)
       );
+      let dispatchCaughtError: { code?: string; summary?: string } | null =
+        null;
       try {
         const turnInputs = await this.deps.pendingModule.rebuildTurnInputs(row);
         // Codex P1: stage the user-confirmed batch at DISPATCH — the row's
@@ -1245,10 +1259,32 @@ export class AIChatTurnQueueService {
           err
         );
         aiChatQueueCounters.increment("ai_chat_pending_failed_total");
+        const safeErr = userSafeError(err);
+        const code = pendingErrorCode(err);
+        dispatchCaughtError = { code: code ?? undefined, summary: safeErr };
+        await new AIChatV2Module()
+          .saveAssistantMessage({
+            conversationId,
+            content: "",
+            messageId: assistantMessageId,
+            metadata: {
+              source: "chat-v2",
+              turnId: `turn-${row.userMessageId}`,
+              sourceProviderVersion,
+              finishReason: "error",
+              error: safeErr,
+            },
+          })
+          .catch((persistErr: unknown) => {
+            log.error(
+              `[ai-chat-queue] failed to persist assistant error row conv=${conversationId}:`,
+              persistErr
+            );
+          });
         terminal = {
           type: "failed",
           conversationId,
-          assistantMessageId: "",
+          assistantMessageId,
         };
       }
 
@@ -1263,15 +1299,21 @@ export class AIChatTurnQueueService {
       // for explicit reconciliation instead of silently advancing.
       const bridge = this.deps.dispatchBridge;
       const persistTerminal = async (
-        status: "completed" | "failed" | "cancelled" | "interrupted"
+        status: "completed" | "failed" | "cancelled" | "interrupted",
+        patch?: {
+          assistantMessageId?: string;
+          errorCode?: string | null;
+          errorSummary?: string | null;
+        }
       ): Promise<boolean> => {
         if (bridge?.finishRunStrict) {
           return await bridge.finishRunStrict(
             bridgeRunId?.runId ?? null,
-            status
+            status,
+            patch
           );
         }
-        await bridge?.finishRun(bridgeRunId?.runId ?? null, status);
+        await bridge?.finishRun(bridgeRunId?.runId ?? null, status, patch);
         return true;
       };
       const reconcilePersistenceFailure = async (): Promise<void> => {
@@ -1301,7 +1343,11 @@ export class AIChatTurnQueueService {
         this.drainSchedulerWaiters(conversationId);
       };
       if (terminal.type === "completed") {
-        if (!(await persistTerminal("completed"))) {
+        if (
+          !(await persistTerminal("completed", {
+            assistantMessageId: terminal.assistantMessageId || undefined,
+          }))
+        ) {
           await reconcilePersistenceFailure();
           return;
         }
@@ -1410,7 +1456,13 @@ export class AIChatTurnQueueService {
       // cancelled | failed
       const failedStatus =
         terminal.type === "cancelled" ? "cancelled" : "failed";
-      if (!(await persistTerminal(failedStatus))) {
+      if (
+        !(await persistTerminal(failedStatus, {
+          assistantMessageId: terminal.assistantMessageId || undefined,
+          errorCode: dispatchCaughtError?.code ?? null,
+          errorSummary: dispatchCaughtError?.summary ?? null,
+        }))
+      ) {
         await reconcilePersistenceFailure();
         return;
       }
