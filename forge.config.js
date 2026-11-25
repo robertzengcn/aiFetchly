@@ -785,6 +785,10 @@ module.exports = {
               // unsigned. Fail hard instead so the real cause surfaces at
               // the signing step rather than later at notarization.
               continueOnError: false,
+              optionsForFile: (filePath) => ({
+                entitlements: "./build/entitlements.mac.plist",
+                hardenedRuntime: true,
+              }),
             },
             osxNotarize: {
               appleId: requireProductionEnv("APPLE_ID"),

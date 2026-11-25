@@ -9,6 +9,7 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
+import { patchSherpaNativeOnnxInDirSync } from "./LocalAiRuntimeMachOPatcher";
 import type {
   LocalAiRuntimeId,
   LocalAiRuntimeErrorCode,
@@ -50,6 +51,12 @@ async function defaultVoiceProbe(
   _signal: AbortSignal,
 ): Promise<HealthProbeOutcome> {
   try {
+    if (!process.env.PWD) {
+      process.env.PWD = runtime.runtimeRoot;
+    }
+    if (process.platform === "darwin") {
+      patchSherpaNativeOnnxInDirSync(runtime.runtimeRoot);
+    }
     const runtimeRequire = createRequire(path.join(runtime.runtimeRoot, "package.json"));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const mod = (runtimeRequire(runtime.manifest.entryModule ?? "sherpa-onnx-node") as Record<string, unknown>) ?? {};

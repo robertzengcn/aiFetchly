@@ -20,6 +20,7 @@ import {
   runtimeProbeRequestSchema,
   type RuntimeProbeResult,
 } from "@/schemas/worker/runtimeProbe";
+import { patchSherpaNativeOnnxInDirSync } from "@/service/localAiRuntime/LocalAiRuntimeMachOPatcher";
 
 interface ParentPortMessageEvent {
   data: string;
@@ -83,6 +84,12 @@ export async function dispatchProbeMessage(
   const { requestId, runtimeRoot, entryModule, requiredExports } = parsed.data;
 
   try {
+    if (!process.env.PWD) {
+      process.env.PWD = runtimeRoot;
+    }
+    if (process.platform === "darwin" && entryModule === "sherpa-onnx-node") {
+      patchSherpaNativeOnnxInDirSync(runtimeRoot);
+    }
     const runtimeRequire = createRequire(
       path.join(runtimeRoot, "package.json")
     );

@@ -27,7 +27,10 @@ export interface UtilityProcessLike {
   kill(): unknown;
 }
 
-export type ForkFn = (workerPath: string) => UtilityProcessLike;
+export type ForkFn = (
+  workerPath: string,
+  extraEnv?: Record<string, string>
+) => UtilityProcessLike;
 
 export interface VoiceReadyPayload {
   sttAvailable: boolean;
@@ -194,7 +197,7 @@ export function resolveAiChatVoiceWorkerPath(
   return null;
 }
 
-const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
+const defaultFork: ForkFn = (workerPath, extraEnv): UtilityProcessLike => {
   const proc = spawnOwned(
     "voice-worker",
     () =>
@@ -203,6 +206,7 @@ const defaultFork: ForkFn = (workerPath): UtilityProcessLike => {
     env: buildPackagedWorkerEnv({
       extraEnv: {
         WORKER_TYPE: "ai-chat-voice",
+        ...extraEnv,
       },
     }),
   })
@@ -434,14 +438,16 @@ export class SherpaVoiceWorkerClient {
     }
   }
 
-  private async ensureWorkerStarted(): Promise<UtilityProcessLike> {
+  private async ensureWorkerStarted(
+    runtimeRoot?: string | null
+  ): Promise<UtilityProcessLike> {
     if (this.workerProcess) {
       return this.workerProcess;
     }
     if (this.startupPromise) {
       return this.startupPromise;
     }
-    this.startupPromise = this.startWorker();
+    this.startupPromise = this.startWorker(runtimeRoot);
     try {
       return await this.startupPromise;
     } catch (error) {
@@ -450,9 +456,30 @@ export class SherpaVoiceWorkerClient {
     }
   }
 
-  private async startWorker(): Promise<UtilityProcessLike> {
+  private async startWorker(
+    runtimeRoot?: string | null
+  ): Promise<UtilityProcessLike> {
     const resolvedPath = this.resolveWorkerPath();
-    const worker = this.forkImpl(resolvedPath);
+    let extraEnv: Record<string, string> | undefined;
+    if (runtimeRoot) {
+      const platform = process.platform === "win32" ? "win" : process.platform;
+      const platformArch = `${platform}-${process.arch}`;
+      const sherpaPkgDir = path.join(
+        runtimeRoot,
+        "node_modules",
+        `sherpa-onnx-${platformArch}`
+      );
+      extraEnv = {
+        PWD: runtimeRoot,
+        DYLD_LIBRARY_PATH: [sherpaPkgDir, process.env.DYLD_LIBRARY_PATH]
+          .filter(Boolean)
+          .join(":"),
+        LD_LIBRARY_PATH: [sherpaPkgDir, process.env.LD_LIBRARY_PATH]
+          .filter(Boolean)
+          .join(":"),
+      };
+    }
+    const worker = this.forkImpl(resolvedPath, extraEnv);
 
     const onError = (error: unknown): void => {
       const msg = error instanceof Error ? error.message : String(error);
@@ -486,8 +513,6 @@ export class SherpaVoiceWorkerClient {
   private async startAndInitialize(
     init: VoiceInitOptions
   ): Promise<VoiceReadyPayload> {
-    const worker = await this.ensureWorkerStarted();
-    const requestId = `init-${uuidv4()}`;
     // Resolve the downloaded voice-sherpa runtime root (if any) before building
     // the init message. Bundled fallback is used when no resolver is installed
     // or the resolver returns null (runtime not installed).
@@ -499,6 +524,9 @@ export class SherpaVoiceWorkerClient {
         runtimeRoot = null;
       }
     }
+
+    const worker = await this.ensureWorkerStarted(runtimeRoot);
+    const requestId = `init-${uuidv4()}`;
 
     return new Promise<VoiceReadyPayload>((resolve, reject) => {
       const timeout = setTimeout(() => {

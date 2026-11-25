@@ -15,6 +15,7 @@ import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycl
  */
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { utilityProcess } from "electron";
 import {
   resolvePackagedWorkerPath,
@@ -47,7 +48,10 @@ export interface ProbeUtilityProcess {
 }
 
 /** Injectable fork for tests (mirrors SherpaVoiceWorkerClient.ForkFn). */
-export type ProbeForkFn = (workerPath: string) => ProbeUtilityProcess;
+export type ProbeForkFn = (
+  workerPath: string,
+  extraEnv?: Record<string, string>
+) => ProbeUtilityProcess;
 
 /**
  * Required native exports per runtime id. The probe reports `ok: false` when
@@ -92,14 +96,17 @@ export function resolveRuntimeProbeWorkerPath(
 }
 
 /** Default production fork: Electron utilityProcess with packaged-worker env. */
-const defaultFork: ProbeForkFn = (workerPath): ProbeUtilityProcess => {
+const defaultFork: ProbeForkFn = (workerPath, extraEnv): ProbeUtilityProcess => {
   const proc = spawnOwned(
     "runtime-probe",
     () =>
       utilityProcess.fork(workerPath, [], {
     stdio: "pipe",
     env: buildPackagedWorkerEnv({
-      extraEnv: { WORKER_TYPE: "runtime-probe" },
+      extraEnv: {
+        WORKER_TYPE: "runtime-probe",
+        ...extraEnv,
+      },
     }),
   })
   );
@@ -140,9 +147,26 @@ export class DisposableVoiceRuntimeProbe {
     const requiredExports =
       REQUIRED_EXPORTS_BY_RUNTIME[runtime.runtimeId] ?? [];
 
+    const platform = process.platform === "win32" ? "win" : process.platform;
+    const platformArch = `${platform}-${process.arch}`;
+    const sherpaPkgDir = path.join(
+      runtime.runtimeRoot,
+      "node_modules",
+      `sherpa-onnx-${platformArch}`
+    );
+    const extraEnv: Record<string, string> = {
+      PWD: runtime.runtimeRoot,
+      DYLD_LIBRARY_PATH: [sherpaPkgDir, process.env.DYLD_LIBRARY_PATH]
+        .filter(Boolean)
+        .join(":"),
+      LD_LIBRARY_PATH: [sherpaPkgDir, process.env.LD_LIBRARY_PATH]
+        .filter(Boolean)
+        .join(":"),
+    };
+
     let worker: ProbeUtilityProcess;
     try {
-      worker = this.forkImpl(this.resolveWorkerPath());
+      worker = this.forkImpl(this.resolveWorkerPath(), extraEnv);
     } catch (forkError) {
       return {
         ok: false,
