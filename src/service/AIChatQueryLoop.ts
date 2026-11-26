@@ -425,11 +425,29 @@ const MAX_TEXT_TOOL_CALL_MARKER_RETRIES = 1;
 const TEXT_TOOL_CALL_MARKER_RE =
   /^(?:(?:assistant|user|system):)?tool_call::def_tool_call:\d+\s*$/i;
 
-const TEXT_TOOL_CALL_BLOCK_RE =
-  /<tool_call>[\s¶]*<function=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/function>[\s¶]*<\/tool_call>/gi;
+const TEXT_TOOL_CALL_BLOCK_RE = /<tool_call>([\s\S]*?)<\/tool_call>/gi;
+
+const TEXT_TOOL_CALL_AGNES_BODY_RE =
+  /^[\s¶]*<function=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/function>[\s¶]*$/;
 
 const TEXT_TOOL_CALL_PARAMETER_RE =
   /<parameter=([A-Za-z0-9_.:-]+)>([\s\S]*?)<\/parameter>/gi;
+
+const TEXT_TOOL_CALL_GLM_NAME_RE = /^[\s¶]*([A-Za-z0-9_.:-]+)([\s\S]*)$/;
+
+const TEXT_TOOL_CALL_GLM_ARG_RE =
+  /[\s¶]*<arg_key>([\s\S]*?)<\/arg_key>[\s¶]*<arg_value>([\s\S]*?)<\/arg_value>/gi;
+
+/**
+ * GLM-5.3-flash (OpenRouter `z-ai/glm-5.3-flash`) often apologizes in one
+ * sentence and then emits its native tool XML. A short lead-in is still a
+ * tool call. A long writeup, a code fence, or a "for example" illustration
+ * is not.
+ */
+const MAX_GLM_TOOL_CALL_PREAMBLE_CHARS = 400;
+
+const GLM_TOOL_CALL_EXAMPLE_PREAMBLE_RE =
+  /\b(?:for example|e\.g\.|such as|sample|illustration)\b|\bhere(?:'|’)s\b|\bhere is\b/i;
 
 const TEXT_TOOL_CALL_MARKER_RETRY_PROMPT =
   "Your previous response was a malformed tool-call marker instead of a valid assistant response. Retry now. If you need a tool, emit a real OpenAI tool call with the function name and JSON arguments. Do not write tool_call::def_tool_call markers as text.";
@@ -707,60 +725,150 @@ function parseTextToolCallValue(raw: string): unknown {
   }
 }
 
+interface TextToolCallBlock {
+  name: string;
+  args: Record<string, unknown>;
+  kind: "agnes" | "glm";
+}
+
+function whitespaceOnly(value: string): boolean {
+  return value.replace(/[\s¶]+/g, "").length === 0;
+}
+
+function parseAgnesToolCallBody(body: string): TextToolCallBlock | null {
+  const match = TEXT_TOOL_CALL_AGNES_BODY_RE.exec(body);
+  if (!match) return null;
+  const name = match[1] ?? "";
+  const inner = match[2] ?? "";
+  const parameters = [...inner.matchAll(TEXT_TOOL_CALL_PARAMETER_RE)];
+  TEXT_TOOL_CALL_PARAMETER_RE.lastIndex = 0;
+  const bodyResidual = inner
+    .replace(TEXT_TOOL_CALL_PARAMETER_RE, "")
+    .replace(/[\s¶]+/g, "");
+  TEXT_TOOL_CALL_PARAMETER_RE.lastIndex = 0;
+  if (bodyResidual.length > 0 || !name) return null;
+
+  const args: Record<string, unknown> = {};
+  for (const parameter of parameters) {
+    args[parameter[1] ?? ""] = parseTextToolCallValue(parameter[2] ?? "");
+  }
+  return { name, args, kind: "agnes" };
+}
+
+function parseGlmToolCallBody(body: string): TextToolCallBlock | null {
+  const named = TEXT_TOOL_CALL_GLM_NAME_RE.exec(body);
+  if (!named) return null;
+  const name = named[1] ?? "";
+  const rest = named[2] ?? "";
+  if (!name) return null;
+
+  const args: Record<string, unknown> = {};
+  let cursor = 0;
+  let found = 0;
+  for (const arg of rest.matchAll(TEXT_TOOL_CALL_GLM_ARG_RE)) {
+    const argIndex = arg.index ?? 0;
+    if (!whitespaceOnly(rest.slice(cursor, argIndex))) {
+      TEXT_TOOL_CALL_GLM_ARG_RE.lastIndex = 0;
+      return null;
+    }
+    const key = (arg[1] ?? "").trim();
+    if (!key) {
+      TEXT_TOOL_CALL_GLM_ARG_RE.lastIndex = 0;
+      return null;
+    }
+    args[key] = parseTextToolCallValue(arg[2] ?? "");
+    cursor = argIndex + arg[0].length;
+    found += 1;
+  }
+  TEXT_TOOL_CALL_GLM_ARG_RE.lastIndex = 0;
+  if (!whitespaceOnly(rest.slice(cursor))) return null;
+  if (found === 0 && !whitespaceOnly(rest)) return null;
+  return { name, args, kind: "glm" };
+}
+
 /**
- * Parse the XML-style text tool protocol emitted by some OpenAI-compatible
- * providers (notably Agnes). We accept it only when the entire assistant
- * response consists of tool-call blocks plus whitespace/pilcrow separators,
- * so ordinary prose or code samples containing these tags are never executed.
- * Parsed calls still pass through the normal tool policy and permission gates.
+ * GLM flash models prefix a real tool call with a one-sentence correction.
+ * Reject illustrations, fenced samples, and long answers that merely mention
+ * the tags.
+ */
+function isAcceptableGlmToolCallPreamble(prefix: string): boolean {
+  const trimmed = prefix.replace(/^[\s¶]+|[\s¶]+$/g, "");
+  if (!trimmed) return true;
+  if (trimmed.length > MAX_GLM_TOOL_CALL_PREAMBLE_CHARS) return false;
+  if (/[`<>]/.test(trimmed)) return false;
+  if (GLM_TOOL_CALL_EXAMPLE_PREAMBLE_RE.test(trimmed)) return false;
+  return true;
+}
+
+function normalizeCatalogSearchArgs(
+  name: string,
+  args: Record<string, unknown>
+): void {
+  // Agnes sometimes uses the catalog result's `category` vocabulary as an
+  // input even though the actual search schema calls this field `query`.
+  if (
+    name === TOOL_CATALOG_SEARCH_TOOL_NAME &&
+    args.query === undefined &&
+    typeof args.category === "string"
+  ) {
+    args.query = args.category;
+    delete args.category;
+  }
+}
+
+/**
+ * Parse text tool protocols that some OpenAI-compatible models emit as
+ * assistant content instead of `tool_calls`.
+ *
+ * Agnes uses `<function=name><parameter=key>`. GLM-5.3-flash uses
+ * `<tool_call>name<arg_key>key</arg_key><arg_value>value</arg_value>`.
+ * Agnes is accepted only when the whole reply is tool-call blocks. GLM may
+ * lead with a short correction sentence. Trailing prose and code samples are
+ * never executed. Parsed calls still pass through tool policy and permission
+ * gates.
  */
 export function parseTextToolCalls(
   content: string,
   idPrefix = "text_tool_call"
 ): ParsedToolCallResult[] {
   const blocks = [...content.matchAll(TEXT_TOOL_CALL_BLOCK_RE)];
+  TEXT_TOOL_CALL_BLOCK_RE.lastIndex = 0;
   if (blocks.length === 0) return [];
 
-  const residual = content
-    .replace(TEXT_TOOL_CALL_BLOCK_RE, "")
-    .replace(/[\s¶]+/g, "");
-  if (residual.length > 0) return [];
+  const last = blocks[blocks.length - 1];
+  const lastEnd = (last.index ?? 0) + last[0].length;
+  if (!whitespaceOnly(content.slice(lastEnd))) return [];
 
-  const calls: ParsedToolCallResult[] = [];
-  for (const [index, block] of blocks.entries()) {
-    const name = block[1];
-    const body = block[2] ?? "";
-    const parameters = [...body.matchAll(TEXT_TOOL_CALL_PARAMETER_RE)];
-    const bodyResidual = body
-      .replace(TEXT_TOOL_CALL_PARAMETER_RE, "")
-      .replace(/[\s¶]+/g, "");
-    if (bodyResidual.length > 0) return [];
+  const parsed: TextToolCallBlock[] = [];
+  let cursor = 0;
+  for (const block of blocks) {
+    const start = block.index ?? 0;
+    const gap = content.slice(cursor, start);
+    if (parsed.length > 0 && !whitespaceOnly(gap)) return [];
+    const body = block[1] ?? "";
+    const call = parseAgnesToolCallBody(body) ?? parseGlmToolCallBody(body);
+    if (!call) return [];
+    parsed.push(call);
+    cursor = start + block[0].length;
+  }
 
-    const args: Record<string, unknown> = {};
-    for (const parameter of parameters) {
-      args[parameter[1]] = parseTextToolCallValue(parameter[2] ?? "");
-    }
-    // Agnes sometimes uses the catalog result's `category` vocabulary as an
-    // input even though the actual search schema calls this field `query`.
-    if (
-      name === TOOL_CATALOG_SEARCH_TOOL_NAME &&
-      args.query === undefined &&
-      typeof args.category === "string"
-    ) {
-      args.query = args.category;
-      delete args.category;
-    }
+  const prefix = content.slice(0, blocks[0]?.index ?? 0);
+  const glmOnly = parsed.every((call) => call.kind === "glm");
+  if (!whitespaceOnly(prefix)) {
+    if (!glmOnly || !isAcceptableGlmToolCallPreamble(prefix)) return [];
+  }
 
-    calls.push({
+  return parsed.map((call, index) => {
+    normalizeCatalogSearchArgs(call.name, call.args);
+    return {
       index,
       id: `${idPrefix}_${index}`,
-      name,
+      name: call.name,
       ok: true,
-      arguments: args,
-      rawArgumentsJson: JSON.stringify(args),
-    });
-  }
-  return calls;
+      arguments: call.args,
+      rawArgumentsJson: JSON.stringify(call.args),
+    };
+  });
 }
 
 /**
