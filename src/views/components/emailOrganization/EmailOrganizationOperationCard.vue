@@ -83,7 +83,7 @@
             class="text-caption text-warning ml-4"
             data-testid="org-op-sent-copy-warning"
           >
-            <v-icon size="x-small" class="mr-1">mdi-content-copy-off</v-icon>
+            <v-icon size="x-small" class="mr-1">mdi-alert-circle-outline</v-icon>
             {{ t("emailOrganization.sent_copy_warning", { status: sentCopyStatusLabel(item.sentCopyStatus ?? "unknown") }) || `Sent copy could not be verified (${item.sentCopyStatus}).` }}
           </div>
         </div>
