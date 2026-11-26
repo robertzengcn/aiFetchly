@@ -1,3 +1,5 @@
+import { monitorMicrophoneLevel } from "./monitorMicrophoneLevel";
+
 /**
  * BrowserVoiceRecorder — microphone capture for push-to-talk voice input.
  *
@@ -46,6 +48,7 @@ export interface BrowserVoiceRecorderDeps {
    * discarded capture silently loses the user's speech (FR-VOI-006).
    */
   onAutoStop?: (result: RecordingResult) => void;
+  onAudioLevel?: (level: number) => void;
 }
 
 const CANDIDATE_MIME_TYPES = [
@@ -80,6 +83,9 @@ export class BrowserVoiceRecorder {
   ) => Blob;
   /** Max-duration completion sink (audit R2 N05); set at construction. */
   private readonly autoStopListener: ((result: RecordingResult) => void) | null;
+
+  private readonly onAudioLevel?: (level: number) => void;
+  private stopLevelMonitor?: () => void;
 
   private state: RecorderState = "idle";
   private stream: MediaStreamLike | null = null;
@@ -119,6 +125,7 @@ export class BrowserVoiceRecorder {
     this.blobFactory =
       deps.blobFactory ?? ((parts, options) => new Blob(parts, options));
     this.autoStopListener = deps.onAutoStop ?? null;
+    this.onAudioLevel = deps.onAudioLevel;
   }
 
   get recordingState(): RecorderState {
@@ -187,6 +194,12 @@ export class BrowserVoiceRecorder {
         });
       }, maxDurationMs);
       recorder.start();
+      if (this.onAudioLevel) {
+        this.stopLevelMonitor = monitorMicrophoneLevel(
+          stream as unknown as MediaStream,
+          this.onAudioLevel
+        );
+      }
     } catch (err) {
       this.rollbackFailedStart(acquisition);
       throw err;
@@ -231,6 +244,7 @@ export class BrowserVoiceRecorder {
       this.clearTimeoutFn(this.maxTimer);
       this.maxTimer = null;
     }
+    this.stopMonitoringLevel();
     return new Promise<RecordingResult>((resolve) => {
       this.stopResolver = resolve;
       this.recorder?.stop();
@@ -265,7 +279,13 @@ export class BrowserVoiceRecorder {
     return "";
   }
 
+  private stopMonitoringLevel(): void {
+    this.stopLevelMonitor?.();
+    this.stopLevelMonitor = undefined;
+  }
+
   private cleanup(): void {
+    this.stopMonitoringLevel();
     if (this.stream) {
       try {
         this.stream.getTracks().forEach((track) => track.stop());

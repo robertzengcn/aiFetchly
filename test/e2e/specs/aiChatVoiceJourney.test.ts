@@ -157,9 +157,23 @@ async function recordAndRelease(app: LaunchedApp): Promise<void> {
   await expect(
     app.mainWindow.locator(".v2-composer__voice-status")
   ).toContainText(/Recording/i, { timeout: 10_000 });
+  const waveform = app.mainWindow.locator(".v2-composer__voice-waveform");
+  await expect(waveform).toBeVisible();
+  await expect
+    .poll(() =>
+      waveform
+        .locator("span")
+        .evaluateAll((bars) =>
+          bars.some(
+            (bar) => (bar as HTMLElement).style.transform !== "scaleY(0.15)"
+          )
+        )
+    )
+    .toBe(true);
   // ~1.4s of the synthetic tone so the fake device yields real PCM.
   await app.mainWindow.waitForTimeout(1_400);
   await button.click();
+  await expect(waveform).toHaveCount(0);
 }
 
 async function configureAutoSend(app: LaunchedApp): Promise<void> {

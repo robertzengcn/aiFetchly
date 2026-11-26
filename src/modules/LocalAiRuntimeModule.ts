@@ -50,6 +50,7 @@ import {
   extractRuntimeArchive,
   validateExtractedPackage,
 } from "@/service/localAiRuntime/LocalAiRuntimeExtractor";
+import { patchSherpaNativeOnnxInDir } from "@/service/localAiRuntime/LocalAiRuntimeMachOPatcher";
 import { renameWithRetry } from "@/service/localAiRuntime/renameWithRetry";
 import { RUNTIME_CONSENT_TTL_MS } from "@/service/localAiRuntime/localAiRuntimeConstants";
 
@@ -435,6 +436,14 @@ export class LocalAiRuntimeModule {
         stagingRoot,
         lease.controller.signal
       );
+
+      if (
+        entry.platform === "darwin" ||
+        this.deps.target.platform === "darwin" ||
+        process.platform === "darwin"
+      ) {
+        await patchSherpaNativeOnnxInDir(stagingRoot);
+      }
 
       this.emit(operationId, entry, "verifying");
       const validation = await validateExtractedPackage(

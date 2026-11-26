@@ -29,6 +29,7 @@ import {
   RUNTIME_ROOTS,
   SHERPA_PLATFORM_PACKAGE,
 } from "./lib/localAiRuntime/runtimeRoots.mjs";
+import { patchSherpaNativeOnnxInDirSync } from "./lib/localAiRuntime/machOPatcher.mjs";
 
 export { RUNTIME_ROOTS, SHERPA_PLATFORM_PACKAGE };
 
@@ -150,6 +151,10 @@ export function buildRuntimeArchive(args) {
   mkdirSync(stagingRoot, { recursive: true });
 
   copyClosure(closure, stagingRoot);
+
+  if (!isEmbedding && args.platform === "darwin") {
+    patchSherpaNativeOnnxInDirSync(stagingRoot);
+  }
 
   const dependencies = {};
   for (const [name, entry] of closure) dependencies[name] = entry.version;

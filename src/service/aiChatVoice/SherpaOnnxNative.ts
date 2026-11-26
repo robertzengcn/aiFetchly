@@ -14,6 +14,7 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
+import { patchSherpaNativeOnnxInDirSync } from "@/service/localAiRuntime/LocalAiRuntimeMachOPatcher";
 
 export interface RecognizerStream {
   acceptWaveform(input: { sampleRate: number; samples: Float32Array }): void;
@@ -59,6 +60,12 @@ export function loadSherpaOnnxNative(
   // Explicit downloaded runtime root wins (design §16.1, FR-11).
   if (runtimeRoot) {
     try {
+      if (!process.env.PWD) {
+        process.env.PWD = runtimeRoot;
+      }
+      if (process.platform === "darwin") {
+        patchSherpaNativeOnnxInDirSync(runtimeRoot);
+      }
       const runtimeRequire = createRequire(
         path.join(runtimeRoot, "package.json")
       );

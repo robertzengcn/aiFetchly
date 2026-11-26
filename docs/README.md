@@ -7,6 +7,8 @@
 
 ## Product Requirements
 
+- [Repository Root Organization — Product Requirements](./prd/repository-organization-prd.md)
+- [Repository Root Organization — Technical Design](./prd/repository-organization-technical-design.md)
 - [PRD: Browser Decision Acceleration](./prd/browser-decision-acceleration-prd.md)
 - [Technical Design: Browser Decision Acceleration](./prd/browser-decision-acceleration-technical-design.md)
 - [PRD: AI Chat Workspace and Chat V2 Capability Parity](./prd/ai-chat-workspace-v2-capability-parity-prd.md)

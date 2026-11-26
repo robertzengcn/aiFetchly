@@ -69,6 +69,79 @@ function makeFakeMedia(): {
 }
 
 describe("BrowserVoiceRecorder", () => {
+  it.each(["stop", "auto-stop", "dispose"])(
+    "samples the recording stream and releases the audio monitor on %s",
+    async (end) => {
+      vi.useFakeTimers();
+      const fx = makeFakeMedia();
+      let sample = 0;
+      const onAudioLevel = vi.fn();
+      const analyser = {
+        fftSize: 0,
+        getFloatTimeDomainData: (samples: Float32Array): void => {
+          samples.fill(sample);
+        },
+      };
+      const source = { connect: vi.fn(), disconnect: vi.fn() };
+      const createMediaStreamSource = vi.fn((_stream: MediaStream) => source);
+      const close = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal(
+        "AudioContext",
+        class {
+          state = "running";
+          createMediaStreamSource = createMediaStreamSource;
+          createAnalyser = (): typeof analyser => analyser;
+          close = close;
+        }
+      );
+      try {
+        const rec = new BrowserVoiceRecorder({
+          ...fx,
+          onAudioLevel,
+          isTypeSupported: () => true,
+        });
+        await rec.start();
+        expect(createMediaStreamSource.mock.calls[0]?.[0]).toBe(
+          fx.mediaRecorderFactory.mock.calls[0]?.[0]
+        );
+        expect(source.connect).toHaveBeenCalledWith(analyser);
+        vi.advanceTimersByTime(55);
+        expect(onAudioLevel).toHaveBeenLastCalledWith(0);
+        sample = 0.04;
+        vi.advanceTimersByTime(55);
+        expect(onAudioLevel).toHaveBeenLastCalledWith(expect.closeTo(0.272));
+        if (end === "auto-stop") fx.getMaxCallback()?.();
+        else if (end === "dispose") rec.dispose();
+        else await rec.stop();
+        vi.advanceTimersByTime(550);
+        expect(onAudioLevel).toHaveBeenCalledTimes(2);
+        expect(source.disconnect).toHaveBeenCalledOnce();
+        expect(close).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    }
+  );
+
+  it("records successfully when Web Audio is unavailable", async () => {
+    vi.stubGlobal("AudioContext", undefined);
+    try {
+      const fx = makeFakeMedia();
+      const rec = new BrowserVoiceRecorder({
+        ...fx,
+        isTypeSupported: () => true,
+        onAudioLevel: vi.fn(),
+      });
+      await rec.start();
+      expect(rec.recordingState).toBe("recording");
+      await rec.stop();
+      expect(fx.tracksStopped).toEqual([1]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("requests the mic, selects a supported MIME, and starts recording", async () => {
     const fx = makeFakeMedia();
     const rec = new BrowserVoiceRecorder({
@@ -354,10 +427,10 @@ describe("BrowserVoiceRecorder failed initialization rollback (audit R4-02)", ()
     const boom = { code: -1, message: "constraint failure" };
     const rec = new BrowserVoiceRecorder({
       getUserMedia: fx.getUserMedia,
-      mediaRecorderFactory: () => {
+      mediaRecorderFactory: (): never => {
         throw boom;
       },
-      isTypeSupported: () => true,
+      isTypeSupported: (): boolean => true,
       setTimeoutFn: fx.setTimeoutFn,
     });
     await expect(rec.start()).rejects.toBe(boom);

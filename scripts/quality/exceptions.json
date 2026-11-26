@@ -191,6 +191,33 @@
       ]
     },
     {
+      "path": "scripts/lib/localAiRuntime/machOPatcher.mjs",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 3,
+      "reason": "Onboarded at the 2026-11-26 test-merge: 3 over-threshold function(s) first pinned on the merged tree (test-branch code: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level); counts and per-function identities pinned — may only shrink.",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 18,
+          "column": 17,
+          "maxComplexity": 20
+        },
+        {
+          "line": 21,
+          "column": 12,
+          "maxComplexity": 34
+        },
+        {
+          "line": 128,
+          "column": 17,
+          "maxComplexity": 24
+        }
+      ],
+      "maxComplexity": 34,
+      "maxTotalComplexity": 78
+    },
+    {
       "path": "scripts/lib/localAiRuntime/packageInventory.mjs",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 2,
@@ -533,44 +560,44 @@
       "path": "src/background.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 7,
-      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 99, total 265) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 99, total 265) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 117,
-      "maxTotalComplexity": 283,
+      "maxTotalComplexity": 288,
       "functions": [
         {
           "line": 948,
           "column": 10,
-          "maxComplexity": 24
+          "maxComplexity": 29
         },
         {
-          "line": 1022,
+          "line": 1029,
           "column": 18,
           "maxComplexity": 22
         },
         {
-          "line": 1145,
+          "line": 1152,
           "column": 18,
           "maxComplexity": 23
         },
         {
-          "line": 1189,
+          "line": 1196,
           "column": 18,
           "maxComplexity": 63
         },
         {
-          "line": 1698,
+          "line": 1705,
           "column": 33,
           "maxComplexity": 117
         },
         {
-          "line": 2424,
+          "line": 2434,
           "column": 69,
           "maxComplexity": 17
         },
         {
-          "line": 2533,
+          "line": 2544,
           "column": 16,
           "maxComplexity": 17
         }
@@ -4058,19 +4085,19 @@
       "path": "src/modules/LocalAiRuntimeModule.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 2,
-      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 21, total 39) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 21, total 39) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 21,
       "maxTotalComplexity": 39,
       "functions": [
         {
-          "line": 659,
+          "line": 668,
           "column": 9,
           "maxComplexity": 21
         },
         {
-          "line": 921,
+          "line": 930,
           "column": 17,
           "maxComplexity": 18
         }
@@ -6121,11 +6148,11 @@
       "path": "src/service/AIChatQueryEngine.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 9,
-      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 171, total 412) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
+      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 171, total 412) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline); re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 185,
-      "maxTotalComplexity": 484,
+      "maxTotalComplexity": 487,
       "functions": [
         {
           "line": 1394,
@@ -6145,30 +6172,30 @@
         {
           "line": 4236,
           "column": 17,
-          "maxComplexity": 45
+          "maxComplexity": 46
         },
         {
-          "line": 4619,
+          "line": 4620,
           "column": 17,
-          "maxComplexity": 20
+          "maxComplexity": 22
         },
         {
-          "line": 4948,
+          "line": 4951,
           "column": 17,
           "maxComplexity": 96
         },
         {
-          "line": 5610,
+          "line": 5613,
           "column": 17,
           "maxComplexity": 24
         },
         {
-          "line": 5890,
+          "line": 5893,
           "column": 17,
           "maxComplexity": 18
         },
         {
-          "line": 6121,
+          "line": 6124,
           "column": 21,
           "maxComplexity": 16
         }
@@ -6206,57 +6233,57 @@
       "maxTotalComplexity": 1131,
       "functions": [
         {
-          "line": 851,
+          "line": 959,
           "column": 17,
           "maxComplexity": 41
         },
         {
-          "line": 1930,
+          "line": 2038,
           "column": 17,
           "maxComplexity": 16
         },
         {
-          "line": 2187,
+          "line": 2295,
           "column": 18,
           "maxComplexity": 18
         },
         {
-          "line": 2350,
+          "line": 2458,
           "column": 10,
           "maxComplexity": 19
         },
         {
-          "line": 2467,
+          "line": 2575,
           "column": 18,
           "maxComplexity": 844
         },
         {
-          "line": 5847,
+          "line": 5955,
           "column": 17,
           "maxComplexity": 31
         },
         {
-          "line": 6227,
+          "line": 6335,
           "column": 17,
           "maxComplexity": 44
         },
         {
-          "line": 6572,
+          "line": 6680,
           "column": 11,
           "maxComplexity": 44
         },
         {
-          "line": 6707,
+          "line": 6815,
           "column": 17,
           "maxComplexity": 51
         },
         {
-          "line": 7072,
+          "line": 7180,
           "column": 17,
           "maxComplexity": 23
         }
       ],
-      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 752, total 903) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing)",
+      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 752, total 903) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing); re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -6405,18 +6432,18 @@
       "path": "src/service/AIChatTitleService.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 1,
-      "reason": "Onboarded at the 2026-10-26 dev merge: 1 pre-existing finding(s) on the merged tree (dev-side changes); counts and per-function identities pinned — may only shrink.",
+      "reason": "Onboarded at the 2026-10-26 dev merge: 1 pre-existing finding(s) on the merged tree (dev-side changes); counts and per-function identities pinned — may only shrink.; re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "functions": [
         {
-          "line": 365,
+          "line": 401,
           "column": 17,
-          "maxComplexity": 51
+          "maxComplexity": 56
         }
       ],
-      "maxComplexity": 51,
-      "maxTotalComplexity": 51
+      "maxComplexity": 56,
+      "maxTotalComplexity": 56
     },
     {
       "path": "src/service/AIChatTurnQueueService.ts",
@@ -6460,14 +6487,14 @@
       "path": "src/service/aiChatVoice/SherpaVoiceWorkerClient.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 1,
-      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 17, total 17) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 17, total 17) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 17,
       "maxTotalComplexity": 17,
       "functions": [
         {
-          "line": 558,
+          "line": 586,
           "column": 11,
           "maxComplexity": 17
         }
@@ -8137,6 +8164,38 @@
           "maxComplexity": 19
         }
       ]
+    },
+    {
+      "path": "src/service/localAiRuntime/LocalAiRuntimeMachOPatcher.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 4,
+      "reason": "Onboarded at the 2026-11-26 test-merge: 4 over-threshold function(s) first pinned on the merged tree (test-branch code: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level); counts and per-function identities pinned — may only shrink.",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 40,
+          "column": 17,
+          "maxComplexity": 20
+        },
+        {
+          "line": 43,
+          "column": 12,
+          "maxComplexity": 34
+        },
+        {
+          "line": 163,
+          "column": 17,
+          "maxComplexity": 24
+        },
+        {
+          "line": 206,
+          "column": 23,
+          "maxComplexity": 24
+        }
+      ],
+      "maxComplexity": 34,
+      "maxTotalComplexity": 102
     },
     {
       "path": "src/service/localAiRuntime/LocalAiRuntimeStateStore.ts",
@@ -10622,6 +10681,23 @@
       "expiresOn": "2027-01-31"
     },
     {
+      "path": "src/utils/packagedWorkerPath.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Onboarded at the 2026-11-26 test-merge: 1 over-threshold function(s) first pinned on the merged tree (test-branch code: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level); counts and per-function identities pinned — may only shrink.",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 192,
+          "column": 17,
+          "maxComplexity": 16
+        }
+      ],
+      "maxComplexity": 16,
+      "maxTotalComplexity": 16
+    },
+    {
       "path": "src/utils/semanticBoolean.ts",
       "ruleId": "@typescript-eslint/explicit-function-return-type",
       "maxCount": 1,
@@ -11171,24 +11247,24 @@
       "path": "src/views/components/aiChatV2/AiChatV2Composer.vue",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 3,
-      "reason": "Legacy complexity: 3 over-threshold function(s) (worst 37, total 77) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
+      "reason": "Legacy complexity: 3 over-threshold function(s) (worst 37, total 77) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline); re-pinned at the 2026-11-26 test-merge (test-branch code integration: GLM text tool-call parser, mac voice runtime Mach-O patching, single-instance startup abort, live microphone level)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 37,
       "maxTotalComplexity": 71,
       "functions": [
         {
-          "line": 916,
+          "line": 932,
           "column": 16,
           "maxComplexity": 18
         },
         {
-          "line": 1482,
+          "line": 1499,
           "column": 10,
           "maxComplexity": 16
         },
         {
-          "line": 1736,
+          "line": 1753,
           "column": 48,
           "maxComplexity": 37
         }

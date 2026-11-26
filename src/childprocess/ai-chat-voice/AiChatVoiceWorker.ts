@@ -23,6 +23,7 @@ import {
   createVoiceServices,
   type VoiceServices,
 } from "@/childprocess/ai-chat-voice/voiceServices";
+import { patchSherpaNativeOnnxInDirSync } from "@/service/localAiRuntime/LocalAiRuntimeMachOPatcher";
 
 interface ParentPortMessageEvent {
   data: string;
@@ -59,6 +60,14 @@ async function handleInitialize(
   services: VoiceServices,
   sink: WorkerSink
 ): Promise<void> {
+  if (message.runtimeRoot) {
+    if (!process.env.PWD) {
+      process.env.PWD = message.runtimeRoot;
+    }
+    if (process.platform === "darwin") {
+      patchSherpaNativeOnnxInDirSync(message.runtimeRoot);
+    }
+  }
   const sttAvailable = await services.stt.load(
     message.sttModelPath,
     message.sttLanguage,

@@ -368,6 +368,58 @@ describe("AIChatQueryLoop", () => {
       expect(calls).toEqual([]);
     });
 
+    it("parses a GLM flash tool call that follows a short correction", () => {
+      const calls = parseTextToolCalls(
+        "That was an incorrect tool call on my part — let me load the proper image editing tools instead." +
+          "<tool_call>tool_catalog_search<arg_key>query</arg_key>" +
+          "<arg_value>image edit attach</arg_value></tool_call>"
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        name: "tool_catalog_search",
+        ok: true,
+        arguments: { query: "image edit attach" },
+      });
+    });
+
+    it("parses multiline GLM arguments, including JSON values", () => {
+      const calls = parseTextToolCalls(
+        "<tool_call>\nattach_local_images\n" +
+          "<arg_key>paths</arg_key>\n" +
+          '<arg_value>["1.jpeg","2.jpeg"]</arg_value>\n' +
+          "<arg_key>instruction</arg_key>\n" +
+          "<arg_value>replace the background with white</arg_value>\n" +
+          "</tool_call>"
+      );
+
+      expect(calls).toEqual([
+        expect.objectContaining({
+          name: "attach_local_images",
+          ok: true,
+          arguments: {
+            paths: ["1.jpeg", "2.jpeg"],
+            instruction: "replace the background with white",
+          },
+        }),
+      ]);
+    });
+
+    it("does not execute a GLM tool-call illustration", () => {
+      expect(
+        parseTextToolCalls(
+          "For example, <tool_call>file_read<arg_key>path</arg_key>" +
+            "<arg_value>README.md</arg_value></tool_call>"
+        )
+      ).toEqual([]);
+      expect(
+        parseTextToolCalls(
+          "Use this call:<tool_call>file_read<arg_key>path</arg_key>" +
+            "<arg_value>README.md</arg_value></tool_call> and then stop."
+        )
+      ).toEqual([]);
+    });
+
     it("submits an immediate approval plan when explicit submit-now plan mode gets an empty model response", async () => {
       const fakeStream = vi.fn(
         async (
@@ -1289,6 +1341,80 @@ describe("AIChatQueryLoop", () => {
       expect(toolResultEvents[1]?.toolResult).toMatchObject({
         query: "image",
       });
+    });
+
+    it("executes GLM flash XML tool calls instead of showing them as chat text", async () => {
+      const glmCatalogCall =
+        "That was an incorrect tool call on my part — let me load the proper image editing tools instead." +
+        "<tool_call>tool_catalog_search<arg_key>query</arg_key>" +
+        "<arg_value>image edit attach</arg_value></tool_call>";
+      const glmAttachCall =
+        "<tool_call>\nattach_local_images\n" +
+        "<arg_key>paths</arg_key>\n" +
+        '<arg_value>["1.jpeg"]</arg_value>\n' +
+        "<arg_key>instruction</arg_key>\n" +
+        "<arg_value>replace the background with white</arg_value>\n" +
+        "</tool_call>";
+      let callCount = 0;
+      const fakeStream = vi.fn(
+        async (
+          _req: unknown,
+          onChunk: (c: OpenAIChatCompletionChunk) => void
+        ) => {
+          if (callCount === 0) {
+            callCount += 1;
+            onChunk(makeChunk(glmCatalogCall, "stop"));
+            return;
+          }
+          if (callCount === 1) {
+            callCount += 1;
+            onChunk(makeChunk(glmAttachCall, "stop"));
+            return;
+          }
+          onChunk(makeChunk("Background replaced.", "stop"));
+        }
+      );
+      const fakeExecute = vi.fn().mockResolvedValue({
+        tool_call_id: "attach-1",
+        tool_name: "attach_local_images",
+        success: true,
+        result: { attached: 1 },
+        execution_time_ms: 1,
+      });
+      const loop = new AIChatQueryLoop({
+        streamChatCompletion: fakeStream,
+        executeTool: fakeExecute,
+        getSkillDefinition: vi.fn().mockReturnValue(undefined),
+      });
+
+      const result = await loop.run({
+        conversationId: "v2-glm-text-tools",
+        assistantMessageId: "a-glm-text-tools",
+        messages: [],
+        request: {
+          message:
+            "please replace the background color of image in workspace to white",
+        },
+        openAITools: [tool("attach_local_images"), tool("glob_files")],
+        abortController: new AbortController(),
+        eventSink: { emit: vi.fn() },
+        startRound: 0,
+        isActiveTurn: () => true,
+      });
+
+      expect(result.type).toBe("completed");
+      if (result.type === "completed") {
+        expect(result.fullContent).toBe("Background replaced.");
+        expect(result.fullContent).not.toContain("<tool_call>");
+      }
+      expect(fakeExecute).toHaveBeenCalledWith(
+        "attach_local_images",
+        {
+          paths: ["1.jpeg"],
+          instruction: "replace the background with white",
+        },
+        expect.anything()
+      );
     });
 
     it("sends forced shell_execute tool_choice for first-round file deletion", async () => {

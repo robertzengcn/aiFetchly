@@ -514,6 +514,17 @@ const isProductionBuild = env === "production";
 const isWindowsStoreBuild = process.env.WINDOWS_DISTRIBUTION === "store";
 const isMacStoreBuild = process.env.MAC_DISTRIBUTION === "store";
 const shouldBuildMacDmg = process.env.MAKE_MAC_DMG !== "false";
+const lifecycleEvent = process.env.npm_lifecycle_event || "";
+const isPackagingCommand =
+  ["package", "make", "publish", "prepackage"].includes(lifecycleEvent) ||
+  process.argv.some((a) => ["package", "make", "publish"].includes(a));
+if (!isPackagingCommand) {
+  // Dev/start: better-sqlite3 is rebuilt by preStart/rebuild-native; skip
+  // Forge's generic native rebuild to avoid node-gyp/VS detection failures on
+  // developer machines. Packaging keeps the normal rebuild path.
+  process.env.FORGE_SKIP_NATIVE_REBUILD =
+    process.env.FORGE_SKIP_NATIVE_REBUILD || "1";
+}
 const macStoreEntitlementsPath = path.resolve(
   __dirname,
   "build/entitlements.mas.plist"
@@ -774,6 +785,10 @@ module.exports = {
               // unsigned. Fail hard instead so the real cause surfaces at
               // the signing step rather than later at notarization.
               continueOnError: false,
+              optionsForFile: (_filePath) => ({
+                entitlements: "./build/entitlements.mac.plist",
+                hardenedRuntime: true,
+              }),
             },
             osxNotarize: {
               appleId: requireProductionEnv("APPLE_ID"),
@@ -1263,6 +1278,12 @@ module.exports = {
     // VS Code/Cursor launch electron-forge directly, bypassing npm prestart/predev.
     preStart: async () => {
       ensureBetterSqliteElectronBinary();
+      // Skip Forge's redundant "Preparing native dependencies" rebuild during
+      // start. The script above already rebuilt better-sqlite3 for Electron, and
+      // the generic Forge rebuild can fail on machines where node-gyp cannot
+      // detect the installed Visual Studio (e.g. VS 18/2026). Packaging keeps its
+      // own rebuild path via rebuild-native/prePackage.
+      process.env.FORGE_SKIP_NATIVE_REBUILD = "1";
     },
     prePackage: async () => {
       // Patch node-abi before @electron/rebuild runs so it can resolve

@@ -201,6 +201,17 @@
             ? t("aiChatV2.voice.recording") || "Recording..."
             : t("aiChatV2.voice.transcribing") || "Transcribing..."
         }}
+        <span
+          v-if="isRecording"
+          class="v2-composer__voice-waveform"
+          aria-hidden="true"
+        >
+          <span
+            v-for="(level, index) in voiceLevels"
+            :key="index"
+            :style="{ transform: `scaleY(${0.15 + level * 0.85})` }"
+          ></span>
+        </span>
       </div>
     </v-slide-y-reverse-transition>
 
@@ -663,12 +674,17 @@ if (draftStore) {
 // The composer owns the recorder + transcribe call for the MVP: the transcript
 // is appended to the draft for review (no auto-send). Auto-send + spoken
 // responses move orchestration to AiChatV2.vue in later phases.
+const voiceWaveformBars = 19;
+const voiceLevels = ref<number[]>(Array(voiceWaveformBars).fill(0));
 const voiceRecorder = new BrowserVoiceRecorder({
+  onAudioLevel: (level) => {
+    voiceLevels.value = [...voiceLevels.value.slice(1), level];
+  },
   // Audit R2 N05: the max-duration cap stops the recording on its own —
   // hand the captured audio to the same release chain as an explicit Stop
   // instead of discarding it (FR-VOI-006). The guard re-enters only when a
   // recording is still flagged live (one completion per session).
-  onAutoStop: (recording) => {
+  onAutoStop: (recording): void => {
     if (!isRecording.value) return;
     const voiceOwnerDraftKey = voiceSessionOwnerDraftKey;
     if (stillOwnsComposition(voiceOwnerDraftKey)) {
@@ -1097,6 +1113,7 @@ async function onMicClick(): Promise<void> {
   voiceSessionOwnerDraftKey = props.draftKey ?? null;
   voiceSessionOwnerFiles = [...selectedFiles.value];
   try {
+    voiceLevels.value = Array(voiceWaveformBars).fill(0);
     await voiceRecorder.start(props.voiceMaxRecordingMs ?? 60_000);
     isRecording.value = true;
     // R8 §2: recording-start action count (labels only).
@@ -1880,6 +1897,25 @@ watch(
   font-size: 12px;
   padding: 2px 8px;
   color: rgba(0, 0, 0, 0.7);
+}
+.v2-composer__voice-waveform {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-inline-start: 10px;
+  color: rgb(var(--v-theme-error));
+}
+.v2-composer__voice-waveform > span {
+  width: 2px;
+  height: 16px;
+  border-radius: 2px;
+  background-color: currentColor;
+  transition: transform 55ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .v2-composer__voice-waveform > span {
+    transition: none;
+  }
 }
 .v2-composer__stop-speaking {
   animation: v2-composer-pulse 1.4s ease-in-out infinite;

@@ -249,6 +249,29 @@ describe("DisposableVoiceRuntimeProbe", () => {
     expect(fake.killed).toBe(true);
   });
 
+  test("passes extraEnv with PWD and library paths to forkImpl", async () => {
+    let capturedExtraEnv: Record<string, string> | undefined;
+    const fake = makeFakeProbeProcess();
+    const probe = new DisposableVoiceRuntimeProbe(
+      5000,
+      (_path, extraEnv) => {
+        capturedExtraEnv = extraEnv;
+        return fake.proc;
+      },
+      "/fake/RuntimeProbeWorker.js"
+    );
+    const p = probe.run(
+      resolvedRuntime(),
+      "runtime_only",
+      new AbortController().signal
+    );
+    expect(capturedExtraEnv).toBeDefined();
+    expect(capturedExtraEnv?.PWD).toBe("/staging/voice-sherpa/1.0.0");
+    fake.emitMessage(resultJson(true, []));
+    fake.emitExit(0);
+    await p;
+  });
+
   test("aborts mid-flight when the signal fires later", async () => {
     const fake = makeFakeProbeProcess();
     const probe = makeProbe(fake);
@@ -301,7 +324,7 @@ describe("interpretProbeMessage", () => {
 describe("resolveRuntimeProbeWorkerPath", () => {
   test("returns the first candidate that exists", () => {
     const exists = vi.fn((candidate: string) =>
-      candidate.endsWith("/RuntimeProbeWorker.js")
+      candidate.replace(/\\/g, "/").endsWith("/RuntimeProbeWorker.js")
     );
     const resolved = resolveRuntimeProbeWorkerPath(
       {

@@ -1003,7 +1003,14 @@ function initialize() {
     }
   }
   if (startupPolicy.acquireSingleInstanceLock) {
-    makeSingleInstance();
+    if (!makeSingleInstance()) {
+      try {
+        __diagnosticsRetention.stop();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
   }
 
   function createHtmlFileLoader(targetWindow: BrowserWindow): HtmlFileLoader {
@@ -2410,14 +2417,17 @@ function configureContentSecurityPolicy() {
   );
 }
 
-function makeSingleInstance(): void {
-  if ((process as NodeJS.Process & { mas: boolean }).mas) return;
+function makeSingleInstance(): boolean {
+  if ((process as NodeJS.Process & { mas: boolean }).mas) return true;
 
   const gotThelock = acquireSingleInstanceLock(
     app as unknown as SingleInstanceApp
   );
   if (!gotThelock) {
-    return;
+    log.warn(
+      "[single-instance] Another aiFetchly instance is already running and holds the single-instance lock; exiting this instance."
+    );
+    return false;
   } else {
     // console.log('gotThelock:', gotThelock)
 
@@ -2478,6 +2488,7 @@ function makeSingleInstance(): void {
       "second-instance",
       onSecondInstance as unknown as (...args: unknown[]) => void
     );
+    return true;
   }
 }
 

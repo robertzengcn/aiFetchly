@@ -180,11 +180,44 @@ function raw_envelopeInvalid(
   return hasToolCalls || (refusal !== null && refusal.length > 0);
 }
 
+function extractRawAssistantContent(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const parts: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      parts.push(part);
+      continue;
+    }
+    if (
+      part &&
+      typeof part === "object" &&
+      (part as { type?: unknown }).type === "text" &&
+      typeof (part as { text?: unknown }).text === "string"
+    ) {
+      parts.push((part as { text: string }).text);
+    }
+  }
+  return parts.length > 0 ? parts.join("") : null;
+}
+
+function stripThinkBlocks(raw: string): string | null {
+  // Reasoning models (e.g. Qwen3, DeepSeek-R1) may emit inline
+  // <think>...</think> blocks before the final title line. Strip closed blocks;
+  // reject unclosed blocks as truncated reasoning without a final title.
+  const withoutClosed = raw.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "");
+  if (/<think\b/i.test(withoutClosed) || /<\/think>/i.test(withoutClosed)) {
+    return null;
+  }
+  return withoutClosed;
+}
+
 function extractAssistantText(
   response: OpenAIChatCompletionResponse
 ): string | null {
-  const content = response.choices?.[0]?.message?.content;
-  return typeof content === "string" ? content : null;
+  const raw = extractRawAssistantContent(response.choices?.[0]?.message?.content);
+  if (raw === null) return null;
+  return stripThinkBlocks(raw);
 }
 
 /**
@@ -310,6 +343,9 @@ export class AIChatTitleService {
     if (this.running) return;
     // Feature disabled: unclaimed jobs leave memory; rows stay pending.
     if (!this.isEnabled()) {
+      log.info(
+        `[ai-chat-title] skipped count=${this.queue.size} reason=feature_disabled`
+      );
       this.diagnostics.droppedFeatureDisabled += this.queue.size;
       this.queue.clear();
       return;
@@ -372,6 +408,9 @@ export class AIChatTitleService {
     if (this.deps.providerConfigVersion() !== versionAtPrepare) {
       // Settings changed between the source exchange and the pump: the
       // excerpt must not travel to the newly selected provider.
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} reason=provider_changed`
+      );
       this.recordFailure("provider_changed");
       return;
     }
@@ -383,6 +422,9 @@ export class AIChatTitleService {
     // (the resolver's local path carries its own availability).
     const earlyProvider = this.deps.resolveTitleProvider();
     if (!earlyProvider) {
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} reason=provider_unavailable`
+      );
       this.diagnostics.droppedProviderUnavailable += 1;
       return;
     }
@@ -391,12 +433,18 @@ export class AIChatTitleService {
     // entry TTL (expiry drops it without consuming an attempt).
     while (this.deps.isForegroundBusy()) {
       if (Date.now() - entry.enqueuedAt > QUEUE_ENTRY_TTL_MS) {
+        log.info(
+          `[ai-chat-title] skipped conv=${conversationId} reason=queue_expired`
+        );
         this.diagnostics.expired += 1;
         return;
       }
       if (preparationAbort.signal.aborted) return; // B09: cancelled while waiting
       await sleep(FOREGROUND_POLL_MS);
       if (!this.isEnabled()) {
+        log.info(
+          `[ai-chat-title] skipped conv=${conversationId} reason=feature_disabled`
+        );
         this.diagnostics.droppedFeatureDisabled += 1;
         return;
       }
@@ -410,7 +458,12 @@ export class AIChatTitleService {
       entry.sourceVersion
     );
     if (preparationAbort.signal.aborted) return; // B09: cancelled during preparation
-    if (candidate.kind !== "eligible") return; // pending_window/not_ready/suppressed
+    if (candidate.kind !== "eligible") {
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} candidate=${candidate.kind}`
+      );
+      return; // pending_window/not_ready/suppressed
+    }
     this.diagnostics.eligible += 1; // B24
     // B15: publish the committed excerpt replacement (revisioned) — windows
     // holding the greeting excerpt converge without waiting for bootstrap.
@@ -425,6 +478,9 @@ export class AIChatTitleService {
 
     const provider = this.deps.resolveTitleProvider();
     if (!provider) {
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} reason=provider_unavailable`
+      );
       this.diagnostics.droppedProviderUnavailable += 1;
       return;
     }
@@ -432,6 +488,9 @@ export class AIChatTitleService {
     if (provider.kind === "local") {
       const titleModel = provider.config.titleModel?.trim();
       if (!titleModel) {
+        log.info(
+          `[ai-chat-title] skipped conv=${conversationId} reason=missing_local_title_model`
+        );
         this.diagnostics.droppedMissingModel += 1; // AC-05: zero calls
         return;
       }
@@ -444,10 +503,16 @@ export class AIChatTitleService {
     // preparation — a turn that started, or an entry that aged out, during
     // preparation must not dispatch.
     if (this.deps.isForegroundBusy()) {
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} reason=foreground_busy`
+      );
       this.diagnostics.expired += 1; // yielded to foreground; no attempt consumed
       return;
     }
     if (Date.now() - entry.enqueuedAt > QUEUE_ENTRY_TTL_MS) {
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} reason=queue_expired`
+      );
       this.diagnostics.expired += 1;
       return;
     }
@@ -476,6 +541,9 @@ export class AIChatTitleService {
     if (!claimed) {
       // B24: the conditional update matched zero rows — another writer moved
       // the state first.
+      log.info(
+        `[ai-chat-title] skipped conv=${conversationId} req=${requestId} reason=claim_lost`
+      );
       this.diagnostics.claimsLost += 1;
       return;
     }
@@ -484,6 +552,9 @@ export class AIChatTitleService {
     // Recheck configuration immediately after claiming and before sending;
     // if invalidated then, mark the attempt failed WITHOUT sending.
     if (this.deps.providerConfigVersion() !== versionAtPrepare) {
+      log.info(
+        `[ai-chat-title] aborted conv=${conversationId} req=${requestId} reason=provider_changed`
+      );
       await module.markTitleAttemptFailed({
         conversationId,
         requestId,
@@ -493,6 +564,9 @@ export class AIChatTitleService {
       return;
     }
     if (!this.isEnabled()) {
+      log.info(
+        `[ai-chat-title] aborted conv=${conversationId} req=${requestId} reason=feature_disabled`
+      );
       await module.markTitleAttemptFailed({
         conversationId,
         requestId,
@@ -606,6 +680,9 @@ export class AIChatTitleService {
         );
       };
       if (envelopeInvalid) {
+        log.warn(
+          `[ai-chat-title] rejected conv=${conversationId} req=${requestId} provider=${provider.kind} reason=invalid_envelope finishReason=${String(finishReason ?? "missing")} hasToolCalls=${String(hasToolCalls)} hasRefusal=${String(Boolean(refusal && refusal.length > 0))}`
+        );
         await module.markTitleAttemptFailed({
           conversationId,
           requestId,
@@ -616,6 +693,12 @@ export class AIChatTitleService {
         return;
       }
       if (raw === null) {
+        const contentType = Array.isArray(choice?.message?.content)
+          ? "array"
+          : typeof choice?.message?.content;
+        log.warn(
+          `[ai-chat-title] rejected conv=${conversationId} req=${requestId} provider=${provider.kind} reason=unextractable_content contentType=${contentType} finishReason=${String(finishReason ?? "missing")}`
+        );
         await module.markTitleAttemptFailed({
           conversationId,
           requestId,
@@ -627,6 +710,9 @@ export class AIChatTitleService {
       }
       const validated = validateGeneratedTitle(raw);
       if (!validated.ok) {
+        log.warn(
+          `[ai-chat-title] rejected conv=${conversationId} req=${requestId} provider=${provider.kind} reason=validation_${validated.reason}`
+        );
         await module.markTitleAttemptFailed({
           conversationId,
           requestId,
@@ -638,6 +724,9 @@ export class AIChatTitleService {
       }
       if (validated.title.length === 0) {
         // Model declined: retain the excerpt, no retry (FR-05).
+        log.info(
+          `[ai-chat-title] declined conv=${conversationId} req=${requestId} provider=${provider.kind} reason=empty_output`
+        );
         await module.markTitleAttemptFailed({
           conversationId,
           requestId,
@@ -710,6 +799,9 @@ export class AIChatTitleService {
           titleSource: "ai",
         });
       } else {
+        log.info(
+          `[ai-chat-title] discarded conv=${conversationId} req=${requestId} outcome=${applied.outcome}`
+        );
         this.diagnostics.stale += 1; // manual rename/clear won the race
         this.recordAttempt(
           requestId,

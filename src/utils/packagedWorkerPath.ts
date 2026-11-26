@@ -231,5 +231,16 @@ export function buildPackagedWorkerEnv(
     env.ELECTRON_USER_DATA_PATH = electronDefaults.ELECTRON_USER_DATA_PATH;
   }
 
+  if (!env.PWD) {
+    try {
+      const cwd = process.cwd();
+      if (cwd) {
+        env.PWD = cwd;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   return env;
 }

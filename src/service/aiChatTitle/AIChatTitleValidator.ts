@@ -51,12 +51,15 @@ export type ManualTitleValidation =
  * malformed response must never replace the excerpt.
  */
 export function validateGeneratedTitle(raw: string): GeneratedTitleValidation {
-  // A multi-line response is never a title — check BEFORE normalization
-  // collapses the newlines that prove it.
-  if (raw.includes("\n")) return { ok: false, reason: "invalid" };
+  // Trim outer whitespace/newlines before checking for multi-line responses so
+  // LLMs emitting a trailing/leading newline don't fail single-line validation,
+  // while genuine multi-line responses still fail before normalizeText
+  // collapses internal whitespace.
+  const trimmed = raw.replace(/\r\n?/g, "\n").trim();
+  if (trimmed.includes("\n")) return { ok: false, reason: "invalid" };
   // #13: collapse internal whitespace (tabs/double spaces are rendering
   // artifacts, not title content).
-  let text = normalizeText(raw);
+  let text = normalizeText(trimmed);
   // Strip at most one matching outer quote pair.
   if (text.length >= 2) {
     const first = text[0];
