@@ -15,6 +15,8 @@ interface MacConfigProjection {
   childEntitlements?: string;
   mainTimestamp?: string;
   childTimestamp?: string;
+  mainHardenedRuntime?: boolean;
+  childHardenedRuntime?: boolean;
   preAutoEntitlements?: boolean;
 }
 
@@ -36,6 +38,7 @@ const childEntitlementsPath = path.join(
   "build",
   "entitlements.mas.inherit.plist"
 );
+const directEntitlementsPath = "./build/entitlements.mac.plist";
 
 const projectionScript = `
 Object.defineProperty(process, "platform", { value: "darwin" });
@@ -60,6 +63,12 @@ process.stdout.write(JSON.stringify({
     : undefined,
   childTimestamp: sign && sign.optionsForFile
     ? sign.optionsForFile(childPath).timestamp
+    : undefined,
+  mainHardenedRuntime: sign && sign.optionsForFile
+    ? sign.optionsForFile(mainPath).hardenedRuntime
+    : undefined,
+  childHardenedRuntime: sign && sign.optionsForFile
+    ? sign.optionsForFile(childPath).hardenedRuntime
     : undefined,
   preAutoEntitlements: sign && sign.preAutoEntitlements,
 }));
@@ -144,6 +153,8 @@ describe("Mac App Store packaging", (): void => {
       childEntitlements: childEntitlementsPath,
       mainTimestamp: "none",
       childTimestamp: "none",
+      mainHardenedRuntime: false,
+      childHardenedRuntime: false,
       preAutoEntitlements: true,
     });
   });
@@ -218,6 +229,10 @@ describe("Mac App Store packaging", (): void => {
     expect(result.projection).to.deep.equal({
       appBundleId: "com.aifetchly.desktop",
       osxNotarizeConfigured: true,
+      mainEntitlements: directEntitlementsPath,
+      childEntitlements: directEntitlementsPath,
+      mainHardenedRuntime: true,
+      childHardenedRuntime: true,
     });
   });
 
@@ -282,6 +297,18 @@ describe("Mac App Store packaging", (): void => {
     expect(readEntitlements(childEntitlementsPath)).to.deep.equal({
       "com.apple.security.app-sandbox": true,
       "com.apple.security.inherit": true,
+    });
+  });
+
+  it("grants direct distribution the voice runtime entitlements", (): void => {
+    expect(
+      readEntitlements(path.join(projectRoot, "build", "entitlements.mac.plist"))
+    ).to.deep.equal({
+      "com.apple.security.cs.allow-jit": true,
+      "com.apple.security.cs.allow-unsigned-executable-memory": true,
+      "com.apple.security.cs.allow-dyld-environment-variables": true,
+      "com.apple.security.cs.disable-library-validation": true,
+      "com.apple.security.device.audio-input": true,
     });
   });
 });
