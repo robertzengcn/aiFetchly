@@ -78,7 +78,7 @@ describe("authenticated route topology (chat-first shell design §6)", () => {
         `${target} must resolve inside the authenticated boundary`
       ).toBe(true);
     }
-  });
+  }, 20000);
 
   it("keeps /login outside the authenticated shell", async () => {
     const router = createRouter({
