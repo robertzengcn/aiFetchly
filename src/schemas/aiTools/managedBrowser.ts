@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
+import { browserProxySelectionSchema } from "@/schemas/aiTools/browserProxy";
 import { browserActionProgramSchema } from "@/schemas/worker/managedBrowser";
 
 /**
@@ -41,6 +42,9 @@ export const browserStartSessionToolSchema = lazySchema(() =>
     account_id: z.number().int().positive().optional(),
     purpose: z.string().min(1).max(300),
     requested_start_url: z.string().url().max(2048).optional(),
+    // PRD P-FR-01: optional proxy choice; validated in the main process
+    // (the model can never supply host/port/credentials).
+    proxy: browserProxySelectionSchema().optional(),
   })
 );
 

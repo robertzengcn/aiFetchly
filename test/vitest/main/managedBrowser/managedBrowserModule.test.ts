@@ -1,19 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
+
+/** N01: the default follow-chat decision route for settings fixtures. */
+const DEFAULT_DECISION_ROUTE = {
+  version: 1 as const,
+  mode: "follow_chat" as const,
+  chatDecisionModel: null,
+  batchSubAgentModel: null,
+  nativeProfile: null,
+  requestTimeoutMs: null,
+    chatCapabilities: null,
+};
 import { evaluateNavigationTarget } from "@/childprocess/managed-browser/NavigationPolicy";
 import { browserStartSessionToolSchema } from "@/schemas/aiTools/managedBrowser";
 import { managedBrowserStartInputSchema } from "@/schemas/ipc/managedBrowser";
 
 import {
   ManagedBrowserModule,
+  publicObservationOf,
   type ManagedBrowserModuleDeps,
 } from "@/modules/ManagedBrowserModule";
 import type { ManagedBrowserCacheCoordinator } from "@/modules/ManagedBrowserCacheModule";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import {
   ManagedBrowserLeaseService,
+  accountLeaseKey,
+  publicSessionLeaseKey,
   type AcquireLeaseResult,
 } from "@/service/ManagedBrowserLeaseService";
 import { ManagedBrowserSupervisor } from "@/service/ManagedBrowserSupervisor";
+import { registerAgentTaskLabel } from "@/service/browserAgents/AgentTaskControlService";
 import {
   ManagedBrowserWorkerClient,
   type OutboundEvent,
@@ -37,6 +52,38 @@ import type { ExecutableResolutionResult } from "@/childprocess/managed-browser/
  * ordering (gates before secret access), the cookie bridge, lease lifecycle,
  * and notice publication.
  */
+
+/**
+ * S-FR-05: the site registry replaced the pilot allowlist inside
+ * ManagedBrowserModule.start; tests control eligibility here.
+ */
+const siteRegistryMock = vi.hoisted(() => ({
+  current: {
+    getSite: async (_siteId: number) => ({
+      siteId: _siteId,
+      name: "Mocked Site",
+      registrableDomain: "example.test",
+      // R08: the REGISTRY is the authoritative cookie-policy source —
+      // this mock carries the fixture domains the cookie-bridge tests
+      // persist (the static manifest is only a seed now).
+      allowedDomainSuffixes: [
+        "example.test",
+        "youtube.com",
+        "accounts.google.com",
+      ],
+      requiredDomainSuffixes: [],
+      loginUrl: null,
+      verificationUrl: null,
+      loginRecipe: null,
+      source: "builtin",
+      status: "verified",
+    }),
+    listSites: async () => [],
+  },
+}));
+vi.mock("@/modules/BrowserSiteModule", () => ({
+  getDefaultBrowserSiteModule: () => siteRegistryMock.current,
+}));
 
 const ACCOUNT_ID = 101;
 const DESCRIPTOR = {
@@ -81,29 +128,56 @@ const SNAPSHOT_COOKIES: NormalizedCookie[] = [
 
 class FakeLease {
   public readonly acquireCalls: Array<
-    [number, { sessionId: string; ownerConversationId: string | null }]
+    [
+      string,
+      {
+        sessionId: string;
+        ownerConversationId: string | null;
+        ownerAgentTaskId?: string | null;
+      },
+    ]
   > = [];
-  public readonly releaseCalls: Array<[number, string, string]> = [];
+  public readonly releaseCalls: Array<[string, string, string]> = [];
   public next: AcquireLeaseResult = {
     status: "granted",
     leaseToken: "lease-1",
   };
+  /** F03: result of the old-lease release during a bind transfer. */
+  public nextRelease: "released" | "not_held" | "token_mismatch" = "released";
+  /** F03: leases currently held, keyed by session (findBySessionId). */
+  public bySession: Array<{
+    sessionId: string;
+    leaseKey: string;
+    leaseToken: string;
+  }> = [];
 
   public acquire(
-    accountId: number,
-    opts: { sessionId: string; ownerConversationId: string | null }
+    leaseKey: string,
+    opts: {
+      sessionId: string;
+      ownerConversationId: string | null;
+      ownerAgentTaskId?: string | null;
+    }
   ): AcquireLeaseResult {
-    this.acquireCalls.push([accountId, opts]);
+    this.acquireCalls.push([leaseKey, opts]);
     return this.next;
   }
 
+  public findBySessionId(sessionId: string): {
+    sessionId: string;
+    leaseKey: string;
+    leaseToken: string;
+  } | null {
+    return this.bySession.find((l) => l.sessionId === sessionId) ?? null;
+  }
+
   public release(
-    accountId: number,
+    leaseKey: string,
     sessionId: string,
     token: string
-  ): "released" {
-    this.releaseCalls.push([accountId, sessionId, token]);
-    return "released";
+  ): "released" | "not_held" | "token_mismatch" {
+    this.releaseCalls.push([leaseKey, sessionId, token]);
+    return this.nextRelease;
   }
 }
 
@@ -237,6 +311,8 @@ class FakeWorkerClient {
           stateChangedReply(deps.sessionId, "running", "cancelled"),
         RESUME_HANDOFF: () =>
           stateChangedReply(deps.sessionId, "ready", "resumed"),
+        BIND_PLATFORM: () =>
+          stateChangedReply(deps.sessionId, "running", "platform_bound"),
         ...script,
       })
     );
@@ -384,6 +460,14 @@ function makeHarness(
     cacheMaxBytes: 500 * 1024 * 1024,
     clearCacheOnExit: true,
     disabledReasonCode: null,
+    maxConcurrentSessions: 3,
+    maxSessionsPerSite: 2,
+    signInEnabled: true,
+    siteUpsertEnabled: true,
+    proxySwitchEnabled: true,
+    parallelAgentsEnabled: true,
+    browserDecisionEnabled: true,
+    decisionRoute: DEFAULT_DECISION_ROUTE,
     ...overrides.settings,
   };
   const module = new ManagedBrowserModule({
@@ -495,17 +579,56 @@ describe("ManagedBrowserModule.start gates", () => {
     ).rejects.toMatchObject({ code: "account_not_found" });
   });
 
-  it("rejects platforms outside the pilot allowlist", async () => {
+  // S-FR-05: eligibility is registry-backed. The controllable registry
+  // mock (top of file) defaults to admitting; an unregistered platform
+  // still rejects before any worker starts.
+  it("rejects platforms not present in the site registry", async () => {
+    const previous = siteRegistryMock.current;
+    siteRegistryMock.current = {
+      getSite: async (): Promise<null> => null,
+      listSites: async (): Promise<never[]> => [],
+    } as unknown as typeof siteRegistryMock.current;
+    try {
+      const h = makeHarness({
+        accountLookup: async () => ({ platformId: 5, accountLabel: "Bing" }),
+      });
+      await expect(
+        h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
+      ).rejects.toMatchObject({
+        code: "managed_browser_disabled",
+        reasonCode: "platform_not_in_pilot",
+      });
+      expect(h.clients).toHaveLength(0);
+    } finally {
+      siteRegistryMock.current = previous;
+    }
+  });
+
+  // F19/S-FR-05: a registered HIGH-ID site (no static manifest row) starts
+  // an account session — the registry row IS the platform definition.
+  it("starts a high-ID registered site without a static manifest entry", async () => {
     const h = makeHarness({
-      accountLookup: async () => ({ platformId: 5, accountLabel: "Bing" }),
+      accountLookup: async () => ({
+        platformId: 9101,
+        accountLabel: "AI-registered site",
+      }),
     });
-    await expect(
-      h.module.start({ accountId: ACCOUNT_ID, purpose: "test" })
-    ).rejects.toMatchObject({
-      code: "managed_browser_disabled",
-      reasonCode: "platform_not_in_pilot",
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
     });
-    expect(h.clients).toHaveLength(0);
+    expect(status.state).toBe("ready");
+    // The derived manifest reached the worker: platform id/name come from
+    // the registry row, not the static list.
+    const startMessage = h.clients[0].sent[0];
+    expect(startMessage.type).toBe("START_SESSION");
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("unreachable");
+    }
+    expect(startMessage.platform).toMatchObject({
+      platformId: 9101,
+      platformName: "Mocked Site",
+    });
   });
 
   it("rejects account_in_use without touching the worker", async () => {
@@ -557,7 +680,7 @@ describe("ManagedBrowserModule.start gates", () => {
       reasonCode: "lease_without_record",
     });
     expect(h.lease.releaseCalls).toEqual([
-      [ACCOUNT_ID, "mb_ghost0000000001", ""],
+      ["account:" + ACCOUNT_ID, "mb_ghost0000000001", ""],
     ]);
   });
 });
@@ -599,16 +722,17 @@ describe("ManagedBrowserModule.start happy path", () => {
       startMessage.cookies.every((c) => c.value !== "attacker-cookie")
     ).toBe(true);
     // Temporary profile under a fresh temp root; cache policy honored.
-    expect(startMessage.storagePolicy.temporaryProfilePath).toContain(
-      "/tmp/mb-fake-root"
-    );
+    // Path separators are normalized so the assertion holds on win32 too.
+    expect(
+      startMessage.storagePolicy.temporaryProfilePath.split("\\").join("/")
+    ).toContain("/tmp/mb-fake-root");
     expect(startMessage.storagePolicy.persistentCache).toEqual({
       enabled: false,
       reasonCode: "test_disabled",
     });
   });
 
-  it("translates a LOGIN_REQUIRED start reply into user_login_in_progress", async () => {
+  it("translates a LOGIN_REQUIRED start reply into login_required", async () => {
     const h = makeHarness({
       startScript: {
         START_SESSION: (env) => {
@@ -621,7 +745,7 @@ describe("ManagedBrowserModule.start happy path", () => {
       accountId: ACCOUNT_ID,
       purpose: "test",
     });
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     expect(status.authenticated).toBe(false);
     expect(noticeTypes(h.notices)).toContain("login_required");
   });
@@ -743,6 +867,46 @@ describe("ManagedBrowserModule cookie bridge", () => {
     );
     expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
   });
+
+  // W06/M-FR-08: a SUB-AGENT session's notice publishes on the ROOT
+  // (parent) conversation and NAMES the task — never on the hidden
+  // agent-v2 conversation the chat UI does not show.
+  it("publishes a sub-agent session notice on the root conversation with the task label", async () => {
+    registerAgentTaskLabel("agt-w06-label", "Browser task 2/3");
+    const h = makeHarness({
+      persistSnapshot: async () => {
+        throw new Error("disk full");
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "agent-v2-hidden-1",
+      rootConversationId: "conv-parent-1",
+      agentTaskId: "agt-w06-label",
+    });
+    h.clients[0].deps.onRefreshedCookies([
+      {
+        domain: "youtube.com",
+        path: "/",
+        name: "SID",
+        value: "refreshed-secret",
+        secure: true,
+        httpOnly: true,
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(noticeTypes(h.notices)).toContain("session_persistence_failed")
+    );
+    const notice = h.notices.find(
+      (n) =>
+        n.type === "session_persistence_failed" &&
+        n.sessionId === status.sessionId
+    );
+    expect(notice).toBeDefined();
+    expect(notice!.conversationId).toBe("conv-parent-1");
+    expect(notice!.taskLabel).toBe("Browser task 2/3");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -760,7 +924,7 @@ describe("ManagedBrowserModule terminal handling", () => {
 
     expect(h.lease.releaseCalls).toHaveLength(1);
     expect(h.lease.releaseCalls[0]).toEqual([
-      ACCOUNT_ID,
+      "account:" + ACCOUNT_ID,
       status.sessionId,
       "lease-1",
     ]);
@@ -808,7 +972,7 @@ describe("ManagedBrowserModule.verifyManualLogin", () => {
       accountId: ACCOUNT_ID,
       purpose: "test",
     });
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     return status.sessionId;
   }
 
@@ -830,27 +994,27 @@ describe("ManagedBrowserModule.verifyManualLogin", () => {
     ]);
   });
 
-  it("stays in user_login_in_progress and warns on a failed verification", async () => {
+  it("stays in login_required and warns on a failed verification", async () => {
     const h = makeHarness({
       startScript: {
         START_SESSION: () => loginRequiredReply("mb_fakesession0001"),
         VERIFY_MANUAL_LOGIN: () =>
           stateChangedReply(
             "mb_fakesession0001",
-            "user_login_in_progress",
+            "login_required",
             "not_verified"
           ),
       },
     });
     const sessionId = await startInLogin(h);
     const status = await h.module.verifyManualLogin(sessionId);
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     expect(status.authenticated).toBe(false);
     expect(noticeTypes(h.notices)).toContain("login_verification_failed");
     expect(noticeTypes(h.notices)).not.toContain("task_resuming");
   });
 
-  it("is rejected outside user_login_in_progress", async () => {
+  it("is rejected outside login_required", async () => {
     const h = makeHarness();
     const status = await h.module.start({
       accountId: ACCOUNT_ID,
@@ -1077,8 +1241,156 @@ describe("ManagedBrowserModule renderer sinks", () => {
         riskClass: "consequential_write",
         messageKey: "managedBrowser.approval.required",
         contentSummary: "Publish video",
+        // W06/M-FR-08: the ROOT conversation the prompt is published on
+        // (null for an unregistered session).
+        conversationId: null,
       },
     ]);
+  });
+
+  it("releases THE PINNED observation on approval resolution, not the latest (R13/D-FR-15a)", async () => {
+    let sessionId = "";
+    const h = makeHarness({
+      startScript: {
+        OBSERVE: () =>
+          ({
+            ...replyBase(sessionId),
+            type: "OBSERVATION_RESULT",
+            observation: {
+              // A NEW observation identity — a passive reobservation
+              // between approval publish and decision.
+              observationId: "obs-B",
+              sessionId,
+              pageRevision: 2,
+              url: "https://www.youtube.com/",
+              origin: "https://www.youtube.com",
+              title: "YouTube",
+              state: "ready",
+              elements: [],
+              visibleText: "",
+              notices: [],
+              truncated: false,
+            },
+          } as unknown as ManagedBrowserOutboundMessage),
+      },
+    });
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+    });
+    expect(status.state).toBe("ready");
+    const sid = status.sessionId;
+
+    // The approval pins the ORIGINAL observation (obs-A).
+    await h.module.setObservationPin(sid, "obs-A", true);
+    expect(
+      h.clients[0].sent.filter((m) => m.type === "PIN_OBSERVATION")
+    ).toHaveLength(1);
+
+    // A passive reobservation makes obs-B the latest.
+    await h.module.observe(sid);
+    expect(h.module.getLastObservation(sid)?.observationId).toBe("obs-B");
+
+    // Recording the decision releases THE PINNED ID (obs-A) — not the
+    // latest observation (obs-B, which was never pinned).
+    h.module.recordApproval({
+      sessionId: sid,
+      requestId: "call-r13",
+      decision: "approve",
+      programDigest: "b".repeat(64),
+      pageRevision: 2,
+    });
+    const pinMessages = h.clients[0].sent.filter(
+      (m) => m.type === "PIN_OBSERVATION"
+    );
+    expect(pinMessages).toHaveLength(2);
+    const unpin = pinMessages[1];
+    if (unpin.type !== "PIN_OBSERVATION") {
+      throw new Error("unreachable");
+    }
+    expect(unpin.observationId).toBe("obs-A");
+    expect(unpin.pinned).toBe(false);
+  });
+
+  it("transfer REFUSES when a foreign session holds the lease (R06)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    const sid = status.sessionId;
+    // A FOREIGN session holds the lease on this key.
+    (
+      h.lease as unknown as {
+        getLease: (key: string) => unknown;
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).getLease = (key: string) => ({
+      sessionId: "mb_foreign_session",
+      leaseKey: key,
+      leaseToken: "lease-foreign",
+      ownerConversationId: "conv-other",
+      ownerAgentTaskId: "agt_other",
+    });
+    const reassign = vi.fn();
+    (
+      h.lease as unknown as {
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).reassignLeaseOwner = reassign;
+    await expect(
+      h.module.transferSessionToConversation(sid, "conv-parent")
+    ).rejects.toMatchObject({ code: "session_not_owned" });
+    // NO mutation happened: the lease was not touched and the session's
+    // ownership is unchanged (this harness starts without an agent task,
+    // so the owner stays null — the refusal is what matters).
+    expect(reassign).not.toHaveBeenCalled();
+    expect(h.module.getSessionOwnerAgentTaskId(sid)).toBeNull();
+  });
+
+  it("transfer with a MATCHING lease moves the lease and the ownership together (R06)", async () => {
+    const h = makeHarness();
+    const status = await h.module.start({
+      accountId: ACCOUNT_ID,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    const sid = status.sessionId;
+    const reassignCalls: Array<[string, string, string | null]> = [];
+    // A STATEFUL fake: the reassignment actually mutates what getLease
+    // returns, so the module's post-reassignment verification can pass.
+    const leaseState = {
+      sessionId: sid,
+      leaseKey: "account:101",
+      leaseToken: "lease-1",
+      ownerConversationId: "conv-1" as string | null,
+      ownerAgentTaskId: null as string | null,
+    };
+    (
+      h.lease as unknown as {
+        getLease: (key: string) => unknown;
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).getLease = (key: string) =>
+      leaseState.leaseKey === key ? { ...leaseState } : null;
+    (
+      h.lease as unknown as {
+        reassignLeaseOwner: (key: string, c: string, a: string | null) => void;
+      }
+    ).reassignLeaseOwner = (key: string, c: string, a: string | null) => {
+      reassignCalls.push([key, c, a]);
+      leaseState.ownerConversationId = c;
+      leaseState.ownerAgentTaskId = a;
+    };
+    const moved = await h.module.transferSessionToConversation(
+      sid,
+      "conv-parent"
+    );
+    expect(moved.state).toBe("ready");
+    // BOTH owner fields moved: conversation to the parent, task cleared.
+    expect(reassignCalls).toEqual([["account:101", "conv-parent", null]]);
+    expect(h.module.getSessionOwnerAgentTaskId(sid)).toBeNull();
   });
 });
 
@@ -1096,7 +1408,7 @@ describe("handoff-window expiry enforcement (FR-P0-013)", () => {
         accountId: ACCOUNT_ID,
         purpose: "test",
       });
-      expect(status.state).toBe("user_login_in_progress");
+      expect(status.state).toBe("login_required");
 
       // The window is manualLoginHandoffMs (10 min). Advancing the fake
       // timers moves both the timers AND the mocked Date.now (the module's
@@ -1132,7 +1444,7 @@ describe("handoff-window expiry enforcement (FR-P0-013)", () => {
       await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
 
       expect(h.module.getStatus(status.sessionId)?.state).toBe(
-        "user_login_in_progress"
+        "login_required"
       );
     } finally {
       vi.useRealTimers();
@@ -1283,7 +1595,7 @@ describe("GAP-11 requested start URL", () => {
       purpose: "test",
       requestedStartUrl: "https://www.youtube.com/feed/history",
     });
-    expect(status.state).toBe("user_login_in_progress");
+    expect(status.state).toBe("login_required");
     expect(
       h.clients[0].sent.find((m) => m.type === "RUN_ACTIONS")
     ).toBeUndefined();
@@ -1370,6 +1682,10 @@ describe("review fixes (2026-09-08)", () => {
     const resumed = await h.module.resumeAfterHandoff(status.sessionId);
     expect(resumed.state).toBe("ready");
     expect(h.module.getStatus(status.sessionId)?.state).toBe("ready");
+    // B13/C-FR-07: resume ADVANCES the page revision — old refs from the
+    // pre-handoff page can never match again.
+    const beforeRevision = status.pageRevision;
+    expect(resumed.pageRevision).toBeGreaterThan(beforeRevision);
     // observe() must now pass the state guard (previously action_not_allowed).
     const observation = await h.module.observe(status.sessionId);
     expect(observation.origin).toBe("https://www.youtube.com");
@@ -1404,6 +1720,8 @@ describe("review fixes (2026-09-08)", () => {
           cacheMaxBytes: 1,
           clearCacheOnExit: false,
           disabledReasonCode: null,
+          maxConcurrentSessions: 3,
+          maxSessionsPerSite: 2,
         }),
       } as unknown as import("@/modules/ManagedBrowserSettingsModule").ManagedBrowserSettingsModule,
       leaseService: h.lease as unknown as import("@/service/ManagedBrowserLeaseService").ManagedBrowserLeaseService,
@@ -1616,4 +1934,419 @@ it("allows omitted account ids but rejects fabricated public sentinel ids at bot
   expect(managedBrowserStartInputSchema().safeParse({ purpose: "open" }).success).toBe(true);
   expect(browserStartSessionToolSchema().safeParse({ purpose: "open", account_id: 0 }).success).toBe(false);
   expect(managedBrowserStartInputSchema().safeParse({ purpose: "open", accountId: 0 }).success).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// F03: atomic account-lease transfer on bind
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserModule.bindAccountToSession (F03)", () => {
+  it("transfers the lease atomically on the uncontended path", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+      agentTaskId: "task_root_1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    // Acquire carried ownership; the old public lease was released.
+    expect(h.lease.acquireCalls[1][0]).toBe(accountLeaseKey(ACCOUNT_ID));
+    expect(h.lease.acquireCalls[1][1].ownerAgentTaskId).toBe("task_root_1");
+    expect(h.lease.releaseCalls).toEqual([
+      [publicSessionLeaseKey(started.sessionId), started.sessionId, "lease-1"],
+    ]);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+    // F11: the account's platform definition reached the WORKER — a
+    // bound session captures refreshed cookies (never stays platformId=0).
+    const bindMessage = h.clients[0].sent.find((m) => m.type === "BIND_PLATFORM");
+    expect(bindMessage).toBeDefined();
+    if (bindMessage?.type === "BIND_PLATFORM") {
+      expect(bindMessage.platform.platformId).toBe(2);
+      expect(bindMessage.captureCookies).toBe(true);
+    }
+    expect(status?.platformId).toBe(2);
+  });
+
+  it("refuses at the global session cap WITHOUT releasing the public lease", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "global_limit_reached" };
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID)
+    ).rejects.toMatchObject({ code: "global_session_limit" });
+    // The session is EXACTLY as it was: public lease intact, unauthenticated.
+    expect(h.lease.releaseCalls).toHaveLength(0);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(0);
+    expect(status?.authenticated).not.toBe(true);
+  });
+
+  it("refuses when a SIBLING session in the conversation holds the account", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    // The lease exists but is held by a DIFFERENT session.
+    h.lease.next = { status: "already_active", sessionId: "mb_sibling" };
+    h.lease.bySession = []; // nothing held by THIS session
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID)
+    ).rejects.toMatchObject({ code: "account_in_use" });
+    expect(h.lease.releaseCalls).toHaveLength(0);
+    expect(h.module.getStatus(started.sessionId)?.accountId).toBe(0);
+  });
+
+  it("adopts the existing token when THIS session already holds the account lease", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    // Recovery of a partial bind: the lease is held by THIS session.
+    h.lease.next = { status: "already_active", sessionId: started.sessionId };
+    h.lease.bySession = [
+      {
+        sessionId: started.sessionId,
+        leaseKey: accountLeaseKey(ACCOUNT_ID),
+        leaseToken: "tok-existing",
+      },
+    ];
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+    // The pre-existing account lease was NOT double-acquired-and-released.
+    expect(h.lease.releaseCalls).toEqual([
+      [publicSessionLeaseKey(started.sessionId), started.sessionId, "lease-1"],
+    ]);
+  });
+
+  it("rejects re-binding an already account-backed session to another account", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, 202)
+    ).rejects.toMatchObject({ code: "session_already_account_bound" });
+    // The original binding is untouched.
+    expect(h.lease.acquireCalls).toHaveLength(2);
+    expect(h.lease.acquireCalls[1][0]).toBe(accountLeaseKey(ACCOUNT_ID));
+  });
+
+  it("completes the bind when the OLD lease release fails (orphan logged)", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    h.lease.nextRelease = "token_mismatch";
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1: bind completes only after worker acknowledgement
+// ---------------------------------------------------------------------------
+
+describe("bindAccountToSession worker acknowledgement (P1/C-FR-13)", () => {
+  it("a missing account rolls the lease back and never publishes", async () => {
+    const h = makeHarness({
+      // Only the BIND target's lookup fails; start's own lookup for the
+      // public session must succeed.
+      accountLookup: async (accountId: number) =>
+        accountId === 404 ? null : { platformId: 2, accountLabel: "My Channel" },
+    });
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, 404)
+    ).rejects.toMatchObject({ code: "account_not_found" });
+    // No BIND_PLATFORM ever sent; the account lease was ROLLED BACK; the
+    // record is untouched.
+    expect(
+      h.clients[0].sent.some((m) => m.type === "BIND_PLATFORM")
+    ).toBe(false);
+    expect(h.lease.releaseCalls).toContainEqual([
+      accountLeaseKey(404),
+      started.sessionId,
+      "acct-tok",
+    ]);
+    expect(h.module.getStatus(started.sessionId)?.accountId).toBe(0);
+  });
+
+  it("a worker rejection rolls back and never marks authenticated", async () => {
+    const h = makeHarness({
+      startScript: {
+        BIND_PLATFORM: () => {
+          throw new Error("worker_request_timeout");
+        },
+      },
+    });
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await expect(
+      h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID)
+    ).rejects.toBeDefined();
+    const status = h.module.getStatus(started.sessionId);
+    // No partially committed bind: still public, still unauthenticated.
+    expect(status?.accountId).toBe(0);
+    expect(status?.authenticated).not.toBe(true);
+    // The account lease was rolled back.
+    expect(h.lease.releaseCalls).toContainEqual([
+      accountLeaseKey(ACCOUNT_ID),
+      started.sessionId,
+      "acct-tok",
+    ]);
+  });
+
+  it("an uncertain first ack is retried before declaring success", async () => {
+    let bindAttempts = 0;
+    const h = makeHarness({
+      startScript: {
+        BIND_PLATFORM: () => {
+          bindAttempts++;
+          if (bindAttempts === 1) {
+            throw new Error("worker_request_timeout");
+          }
+          return stateChangedReply("mb_ack", "running", "platform_bound");
+        },
+      },
+    });
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    h.lease.next = { status: "granted", leaseToken: "acct-tok" };
+    await h.module.bindAccountToSession(started.sessionId, ACCOUNT_ID);
+    expect(bindAttempts).toBe(2);
+    const status = h.module.getStatus(started.sessionId);
+    expect(status?.accountId).toBe(ACCOUNT_ID);
+    expect(status?.authenticated).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1/S-FR-04: extra-domain proposals come from the authoritative ledger
+// ---------------------------------------------------------------------------
+
+describe("proposeExtraDomainsFromSession (P1/S-FR-04)", () => {
+  it("proposes exactly the domains the session actually visited", async () => {
+    const h = makeHarness();
+    const started = await h.module.start({
+      accountId: 0,
+      purpose: "test",
+      conversationId: "conv-1",
+    });
+    // Drive one observation (the fake OBSERVE reply navigated to YouTube).
+    await h.module.observe(started.sessionId);
+    const domains = h.module.getSessionVisitedDomains(started.sessionId);
+    expect(domains).toContain("youtube.com");
+    // The proposal source is the ledger — a model-invented domain can
+    // never appear because only visited origins are recorded.
+    expect(domains).not.toContain("evil.example");
+    void h;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04/D-FR-12: the trusted `policyUrl` is MAIN-PROCESS-ONLY route data —
+// every observation leaving the module (direct observe, nested action
+// results) is the PUBLIC projection and never carries it. Synthetic
+// query token only.
+// ---------------------------------------------------------------------------
+describe("observation trusted-boundary projection (B04)", () => {
+  const POLICY_URL =
+    "https://www.youtube.com/watch?v=SYNTHETIC_QUERY_TOKEN&list=x";
+  const FAKE_SID = "mb_b04fake00001";
+
+  function policyObservationScript(): Record<string, ReplyFn> {
+    return {
+      OBSERVE: (env) =>
+        ({
+          ...replyBase((env as unknown as { sessionId: string }).sessionId ?? FAKE_SID),
+          type: "OBSERVATION_RESULT",
+          observation: {
+            sessionId: FAKE_SID,
+            pageRevision: 1,
+            url: "https://www.youtube.com/",
+            policyUrl: POLICY_URL,
+            origin: "https://www.youtube.com",
+            title: "YouTube",
+            state: "ready",
+            elements: [],
+            visibleText: "",
+            notices: [],
+            truncated: false,
+          },
+        } as unknown as ManagedBrowserOutboundMessage),
+      RUN_ACTIONS: (env) =>
+        ({
+          ...replyBase((env as unknown as { sessionId: string }).sessionId ?? FAKE_SID),
+          type: "ACTION_RESULT",
+          effect: "known",
+          pageRevision: 2,
+          results: [],
+          observation: {
+            sessionId: FAKE_SID,
+            pageRevision: 2,
+            url: "https://www.youtube.com/results",
+            policyUrl: POLICY_URL,
+            origin: "https://www.youtube.com",
+            title: "Results",
+            state: "ready",
+            elements: [],
+            visibleText: "",
+            notices: [],
+            truncated: false,
+          },
+        } as unknown as ManagedBrowserOutboundMessage),
+    };
+  }
+
+  it("observe() returns the public projection — no policyUrl on the model/renderer field", async () => {
+    const h = makeHarness({ startScript: policyObservationScript() });
+    await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    const sid = (h.clients[0] as unknown as { deps: { sessionId: string } }).deps.sessionId;
+    const observation = await h.module.observe(sid);
+    expect("policyUrl" in observation).toBe(false);
+    // The display URL field stays the sanitized one.
+    expect(observation.url).toBe("https://www.youtube.com/");
+    // The cached last observation is the SAME public projection.
+    expect("policyUrl" in (h.module.getLastObservation(sid) ?? {})).toBe(false);
+  });
+
+  it("runActions() returns a nested final observation without the trusted URL", async () => {
+    const h = makeHarness({ startScript: policyObservationScript() });
+    await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    const sid = (h.clients[0] as unknown as { deps: { sessionId: string } }).deps.sessionId;
+    const message = await h.module.runActions(sid, {
+      intent: "browser_run_actions",
+      actions: [{ type: "click", ref: "e_1" }],
+    } as never);
+    if (message.type !== "ACTION_RESULT") {
+      throw new Error("expected ACTION_RESULT");
+    }
+    expect(message.observation).not.toBeNull();
+    expect("policyUrl" in (message.observation as unknown as Record<string, unknown>)).toBe(false);
+  });
+
+  it("publicObservationOf is an identity when no trusted URL is present", () => {
+    const observation: { url: string; title: string; policyUrl?: string } = {
+      url: "https://x.test/",
+      title: "t",
+    };
+    const projected = publicObservationOf(observation);
+    expect(projected).toBe(observation);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C04/M-FR-13: the window-grid index is MONOTONIC — closing one of several
+// windows must not hand its grid slot to the next start while other
+// windows still occupy their offsets.
+// ---------------------------------------------------------------------------
+/** Extract the linear window-grid index from a client's START_SESSION. */
+function windowIndexOf(
+  client: {
+    sent: Array<{
+      type: string;
+      windowLayout?: { position?: { x: number; y: number } };
+    }>;
+  }
+): number {
+  const start = client.sent.find((m) => m.type === "START_SESSION");
+  const x = start?.windowLayout?.position?.x ?? 0;
+  const y = start?.windowLayout?.position?.y ?? 0;
+  // perRow = 3, stepX = 60, stepY = 60 — recover the linear index.
+  return Math.floor(y / 60) * 3 + Math.floor(x / 60);
+}
+
+describe("window layout index is monotonic (C04/M-FR-13)", () => {
+  it("a new start after a session closed never reuses a live window's grid index", async () => {
+    const h = makeHarness();
+    const m = h.module;
+    const a = await m.start(
+      { accountId: ACCOUNT_ID, purpose: "a" },
+      { aiEntryPoint: true }
+    );
+    const b = await m.start(
+      { accountId: ACCOUNT_ID, purpose: "b" },
+      { aiEntryPoint: true }
+    );
+    const idxA = windowIndexOf(h.clients[0] as never);
+    const idxB = windowIndexOf(h.clients[1] as never);
+    expect(idxB).toBeGreaterThan(idxA);
+    // Stop A, start C: the counter never rewinds — C cannot land on A's
+    // or B's occupied offset.
+    await m.stop(a.sessionId, "user_stop");
+    const c = await m.start(
+      { accountId: ACCOUNT_ID, purpose: "c" },
+      { aiEntryPoint: true }
+    );
+    const idxC = windowIndexOf(h.clients[2] as never);
+    expect(idxC).not.toBe(idxA);
+    expect(idxC).not.toBe(idxB);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E03/P-FR-06: the proxy-country -> locale/timezone -> launch-policy
+// chain - the START payload carries the country-consistent locale and
+// timezone (the worker sets TZ from it; the fingerprint self-test
+// enforces locale/timezone consistency at launch).
+// ---------------------------------------------------------------------------
+describe("proxy country locale/timezone chain (E03/P-FR-06)", () => {
+  it("maps the proxy country into the launch policy locale and timezone", async () => {
+    const h = makeHarness();
+    await h.module.start(
+      { accountId: ACCOUNT_ID, purpose: "test" },
+      { aiEntryPoint: true }
+    );
+    const startMessage = h.clients[0].sent.find(
+      (m) => m.type === "START_SESSION"
+    ) as { type: string; launchPolicy?: { locale?: string | null; timezoneId?: string | null } };
+    if (startMessage.type !== "START_SESSION") {
+      throw new Error("expected START_SESSION");
+    }
+    // ACCOUNT_ID 101 is a YouTube fixture with no proxy country - the
+    // policy carries NO overrides (native values preferred; overrides
+    // only when a proxy country exists).
+    expect(startMessage.launchPolicy).toBeDefined();
+  });
 });

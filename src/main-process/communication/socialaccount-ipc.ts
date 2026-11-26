@@ -12,6 +12,11 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+  SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
+  SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+  SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+  BROWSER_SITE_LIST,
 } from "@/config/channellist";
 import { SocialAccount } from "@/modules/socialaccount";
 import { getDefaultManagedBrowserCacheModule } from "@/modules/ManagedBrowserCacheModule";
@@ -23,9 +28,12 @@ import fs from "fs";
 import { SocialAccountDetailData } from "@/entityTypes/socialaccount-type";
 import { SocialPlatformList } from "@/config/generate";
 import { registerValidatedHandler } from "@/main-process/communication/_shared/registerValidatedHandler";
+import { noInputSchema } from "@/schemas/ipc/_shared/common";
 import {
   socialAccountListInputSchema,
   socialAccountByIdInputSchema,
+  socialAccountAiOptInInputSchema,
+  socialAccountAiOptInBulkSchema,
   socialPlatformListInputSchema,
   socialAccountSaveInputSchema,
 } from "@/schemas/ipc/socialAccount";
@@ -87,7 +95,7 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
       // throws on unknown platform - surface as status:false envelope.
       let platformId = 0;
       if (input.where) {
-        platformId = socialaccount.convertPlatform(input.where);
+        platformId = await socialaccount.convertPlatform(input.where);
       }
       // Original used page=10 default (likely a typo for 0); preserve to
       // avoid changing pagination behavior the frontend may rely on.
@@ -106,6 +114,102 @@ export function registerSocialAccountIpcHandlers(mainWindow: BrowserWindow) {
     async (input) => {
       const socialaccount = new SocialAccountController();
       return socialaccount.getAccountdetail(input.id);
+    }
+  );
+
+  // N08/S-FR-06: the site registry list — renderer selectors source
+  // platform names/ids from the AUTHORITATIVE registry (the static list
+  // is the renderer's fallback for legacy ids).
+  registerValidatedHandler(
+    BROWSER_SITE_LIST,
+    noInputSchema,
+    async () => {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const sites = await getDefaultBrowserSiteModule().listSites();
+      return {
+        sites: sites.map((site) => ({
+          id: site.siteId,
+          name: site.name,
+          registrableDomain: site.registrableDomain,
+        })),
+      };
+    }
+  );
+
+  // Q-01/R02: per-account AI opt-in — read (enabled omitted) or set.
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+    noInputSchema,
+    async () => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const pending = await new SocialAccountModule().listAccountsMissingOptIn();
+      return { pending };
+    }
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
+    socialAccountAiOptInBulkSchema,
+    async (input) => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const module = new SocialAccountModule();
+      // P04/Q-01: writes are CHUNKED and each chunk's prompted-marking
+      // follows its value writes — a failure reports WHICH ids remain
+      // unprocessed (the dialog stays open and retries) instead of a
+      // partial apply silently closing the prompt.
+      const CHUNK = 100;
+      const failedIds: number[] = [];
+      for (let i = 0; i < input.decisions.length; i += CHUNK) {
+        const chunk = input.decisions.slice(i, i + CHUNK);
+        try {
+          for (const decision of chunk) {
+            await module.setAiUseEnabled(decision.id, decision.enabled);
+          }
+          // Marking happens AFTER the value write so a declined account
+          // keeps ai_use_enabled false but is never asked again.
+          await module.markAiUsePrompted(chunk.map((d) => d.id));
+        } catch (err) {
+          console.error("[socialaccount] opt-in chunk failed:", err);
+          for (const decision of chunk) {
+            failedIds.push(decision.id);
+          }
+        }
+      }
+      return failedIds.length > 0
+        ? { ok: false, failedIds }
+        : { ok: true };
+    }
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+    socialAccountByIdInputSchema,
+    async (input) => {
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      return { enabled: await new SocialAccountModule().getAiUseEnabled(input.id) };
+    }
+  );
+
+  registerValidatedHandler(
+    SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+    socialAccountAiOptInInputSchema,
+    async (input) => {
+      if (input.enabled === undefined) {
+        throw new Error("enabled_required");
+      }
+      const { SocialAccountModule } = await import(
+        "@/modules/socialAccountModule"
+      );
+      await new SocialAccountModule().setAiUseEnabled(input.id, input.enabled);
+      return { ok: true };
     }
   );
 

@@ -236,6 +236,102 @@ function redactChatRequest(
   };
 }
 
+/**
+ * E01: derive the deterministic decision reply from the request's LAST
+ * message content. The decision envelope (goal/url/candidates) rides the
+ * user message; the planner call carries the PLAN ONCE marker.
+ */
+function browserDecisionContent(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>
+): string {
+  const last = [...messages].reverse().find(
+    (m) => typeof m.content === "string" && (m.content as string).length > 0
+  );
+  const text = typeof last?.content === "string" ? last.content : "";
+  if (text.includes("PLAN ONCE")) {
+    return JSON.stringify({
+      operation: "DONE",
+      target_id: null,
+      option_id: null,
+      key: null,
+      url: null,
+      text: JSON.stringify({
+        completion_criteria: [],
+        bindings: [{ field: "search", value: "supplier prices" }],
+        first_subgoal: "fill the search box and search",
+      }),
+    });
+  }
+  // The envelope carries the CURRENT page url - DONE once on /results.
+  const urlMatch = text.match(/"url"\s*:\s*"([^"]+)"/);
+  const currentUrl = urlMatch?.[1] ?? "";
+  if (currentUrl.includes("/results")) {
+    return JSON.stringify({
+      operation: "DONE",
+      target_id: null,
+      option_id: null,
+      key: null,
+      url: null,
+      text: null,
+    });
+  }
+  // Fill the FIRST textbox candidate; click the FIRST button candidate.
+  const candidatePattern = /"candidate_id"\s*:\s*"([^"]+)"[^}]*?"role"\s*:\s*"([^"]+)"[^}]*?"name"\s*:\s*"([^"]*)"/g;
+  let match: RegExpExecArray | null;
+  let textboxId: string | null = null;
+  let buttonId: string | null = null;
+  while ((match = candidatePattern.exec(text)) !== null) {
+    const [, id, role] = match;
+    if (textboxId === null && (role === "textbox" || role === "searchbox")) {
+      textboxId = id;
+    }
+    if (buttonId === null && role === "button") {
+      buttonId = id;
+    }
+  }
+  // A FILL already landed (recent action history) - CLICK the button
+  // next; otherwise fill the search box first.
+  const fillAlreadyLanded = text.includes('"operation": "FILL"') || text.includes('"operation":"FILL"');
+  if (buttonId !== null && fillAlreadyLanded) {
+    return JSON.stringify({
+      operation: "CLICK",
+      target_id: buttonId,
+      option_id: null,
+      key: null,
+      url: null,
+      text: null,
+    });
+  }
+  if (textboxId !== null && !fillAlreadyLanded) {
+    return JSON.stringify({
+      operation: "FILL",
+      target_id: textboxId,
+      option_id: null,
+      key: null,
+      url: null,
+      text: "supplier prices",
+    });
+  }
+  if (buttonId !== null) {
+    return JSON.stringify({
+      operation: "CLICK",
+      target_id: buttonId,
+      option_id: null,
+      key: null,
+      url: null,
+      text: null,
+    });
+  }
+  return JSON.stringify({
+    operation: "DONE",
+    target_id: null,
+    option_id: null,
+    key: null,
+    url: null,
+    text: null,
+  });
+}
+
 export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
   const controlToken = crypto.randomBytes(8).toString("hex");
   let scenario: FakeAiScenarioName = "stream-text";
@@ -503,6 +599,39 @@ export async function startFakeOpenAiServer(): Promise<FakeOpenAiController> {
           await sleep(6_000);
         }
         requestLog.push(redactChatRequest(req, rawBody, false));
+        // E01/D-AC-02/06/09: the BROWSER-DECISION scenario - the handler
+        // inspects the decision envelope in the request and returns the
+        // deterministic next action (plan -> fill the search box -> click
+        // Search -> DONE on the results page). Content-driven: the target
+        // candidate ids come from the OBSERVATION, never pre-scripted.
+        if (scenario === "browser-decision-stuck") {
+          // E01: the DECIDER keeps saying DONE while the criteria never
+          // verify - the runner must report partial, never success.
+          const decided = browserDecisionContent(parsedBody.messages);
+          const parsed = JSON.parse(decided) as { operation: string };
+          const forced = parsed.operation === "DONE"
+            ? decided
+            : JSON.stringify({
+                operation: "DONE",
+                target_id: null,
+                option_id: null,
+                key: null,
+                url: null,
+                text: null,
+              });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(completionResponse(forced, parsedBody.model)));
+          return;
+        }
+        if (scenario === "browser-decision") {
+          // E01: a bounded per-decision delay so the Stop-mid-run test
+          // can land its abort while the lanes are mid-flight.
+          await sleep(300);
+          const decisionContent = browserDecisionContent(parsedBody.messages);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(completionResponse(decisionContent, parsedBody.model)));
+          return;
+        }
         // G03: a queued canned body wins (reply-draft generation needs valid
         // reply JSON); otherwise the pre-existing default selection applies.
         const queued = nonStreamingQueue.shift();

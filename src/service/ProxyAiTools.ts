@@ -93,6 +93,10 @@ function summaryFromList(record: ProxyListEntity): SafeProxySummary | null {
   if (record.id === undefined || !record.host || !record.port) {
     return null;
   }
+  // A17/P-FR-07: the model carries the authoritative hasPassword flag —
+  // deriving presence from the forwarded password/pass fields can claim a
+  // configured proxy has NO password (the model's legacy rows store
+  // ciphertext the mapper cannot inspect).
   const input: SafeProxySummaryInput = {
     id: record.id,
     host: record.host,
@@ -106,7 +110,12 @@ function summaryFromList(record: ProxyListEntity): SafeProxySummary | null {
     status: record.status,
     googlePass: record.googlePass,
   };
-  return toSafeProxySummary(input);
+  const summary = toSafeProxySummary(input);
+  // The model's flag WINS over the derived presence (both directions).
+  if (typeof record.hasPassword === "boolean") {
+    return { ...summary, hasPassword: record.hasPassword };
+  }
+  return summary;
 }
 
 function basicStatusOf(

@@ -241,3 +241,249 @@ it("starts a public worker ready without navigating to YouTube or reading accoun
   expect(navigations.every((url) => url === "about:blank")).toBe(true);
   await session.dispose("user_stop");
 });
+
+// ---------------------------------------------------------------------------
+// F07: ACTION_RESULT carries the full step evidence
+// ---------------------------------------------------------------------------
+
+describe("ACTION_RESULT schema carries the full step evidence (F07)", () => {
+  const base = {
+    protocolVersion: 2,
+    sessionId: "mb_f07_schema01",
+    requestId: "req_f07_schema01",
+    sequence: 1,
+  };
+
+  function parse(value: unknown): { ok: boolean } {
+    const result = managedBrowserOutboundSchema().safeParse(value);
+    return { ok: result.success };
+  }
+
+  it("accepts stopCode and extracted on ACTION_RESULT", () => {
+    const parsed = parse({
+      ...base,
+      type: "ACTION_RESULT",
+      effect: "known",
+      pageRevision: 3,
+      results: [
+        {
+          actionIndex: 0,
+          type: "extract",
+          success: true,
+          errorCode: null,
+          elementFound: true,
+          urlAfter: null,
+        },
+      ],
+      stopCode: null,
+      extracted: [{ ref: "e_aaa", text: "widget price: 10" }],
+      observation: null,
+    });
+    expect(parsed.ok).toBe(true);
+    // A terminal stop code rides along too.
+    const stopped = parse({
+      ...base,
+      type: "ACTION_RESULT",
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "consecutive_failures",
+      observation: null,
+    });
+    expect(stopped.ok).toBe(true);
+  });
+
+  it("rejects unknown stop codes on ACTION_RESULT", () => {
+    const parsed = parse({
+      ...base,
+      type: "ACTION_RESULT",
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "mystery_stop",
+      observation: null,
+    });
+    expect(parsed.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B06: a post-action challenge is delivered as a HANDOFF-state observation
+// in the ACTION_RESULT — never as a ready page the runner could act on.
+// ---------------------------------------------------------------------------
+
+describe("B06 challenge ordering in runActions", () => {
+  const matchedEvidence: FingerprintSelfTestEvidence = {
+    browserVersion: "999.0.0.1",
+    browserMajor: 999,
+    userAgent:
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/999.0.0.1 Safari/537.36",
+    userAgentMajor: 999,
+    platform: "Linux x86_64",
+    language: "en-US",
+    languages: ["en-US"],
+    timezone: "Etc/UTC",
+    viewport: { width: 1365, height: 768 },
+    screen: { width: 1920, height: 1080 },
+    webdriver: false,
+  };
+
+  const clickRecord = {
+    obsId: "0",
+    tag: "button",
+    role: "button",
+    name: "Pay now",
+    inputType: null,
+    value: null,
+    disabled: false,
+    checked: null,
+    selected: null,
+    hrefOrigin: null,
+    hrefFull: null,
+    visible: true,
+  };
+
+  function makeChallengePage(): PuppeteerPageLike {
+    const handle = {
+      async click(): Promise<void> {
+        /* no-op */
+      },
+      async scrollIntoView(): Promise<void> {
+        /* no-op */
+      },
+      async isIntersectingViewport(): Promise<boolean> {
+        return true;
+      },
+      async evaluate<T>(script: unknown): Promise<T> {
+        const fnName = typeof script === "function" ? script.name : "";
+        if (fnName === "readElementDescriptor") {
+          return { role: "button", name: "Pay now" } as unknown as T;
+        }
+        if (fnName === "probeInputElementTypeFn") {
+          return null as unknown as T;
+        }
+        return undefined as unknown as T;
+      },
+      dispose(): Promise<void> {
+        return Promise.resolve();
+      },
+    };
+    return {
+      url: () => "https://www.shop.test/checkout",
+      goto: async () => undefined,
+      bringToFront: async () => undefined,
+      authenticate: () => undefined,
+      $: async () => null,
+      $$: async () => [handle],
+      evaluate: (async (script: unknown) => {
+        const src = typeof script === "string" ? script : String(script);
+        if (src.includes("navigator.userAgent")) {
+          return matchedEvidence;
+        }
+        if (src.includes("obsId")) {
+          return [clickRecord];
+        }
+        if (src.includes("document.title.slice")) {
+          return { title: "Checkout", text: "Pay now" };
+        }
+        // The challenge probe (probePageSignals) — a CAPTCHA landed after
+        // the click.
+        if (src.includes("innerText")) {
+          return {
+            title: "Security check",
+            text: "Please verify you are human to continue",
+            inputTypes: [],
+          };
+        }
+        return undefined;
+      }) as PuppeteerPageLike["evaluate"],
+    } as unknown as PuppeteerPageLike;
+  }
+
+  it("ACTION_RESULT observes state handoff and the challenge events follow", async () => {
+    const raw: string[] = [];
+    const page = makeChallengePage();
+    const fakeBrowser = {
+      pages: async () => [page],
+      newPage: async () => page,
+      close: async () => undefined,
+      defaultBrowserContext: (() => ({
+        setCookie: async () => undefined,
+        cookies: async () => [],
+      })) as unknown as PuppeteerBrowserLike["defaultBrowserContext"],
+      process: () => ({ pid: 4242 }),
+      on: () => undefined,
+    } as unknown as PuppeteerBrowserLike;
+    const session = new WorkerSession({
+      sessionId: "mb_b06-challenge-1",
+      sessionNonce: "b06-nonce-1",
+      send: (message) => {
+        raw.push(JSON.stringify(message));
+      },
+      launchBrowser: async () => fakeBrowser,
+    });
+    await session.startSession(
+      buildStartPayload({
+        platform: {
+          platformId: 5,
+          platformName: "Shop",
+          allowedDomainSuffixes: ["shop.test"],
+          loginUrl: "https://accounts.shop.test/login",
+          verificationUrl: "https://www.shop.test/",
+        },
+      })
+    );
+    raw.length = 0;
+    // Observe first: registers the button ref and reports the revision.
+    // Awaited — the worker session serializes commands, so runActions
+    // below must not race the registration.
+    await session.observe("req-b06-obs");
+    const observeRaw = raw.map((m) => JSON.parse(m) as Record<string, unknown>);
+    const observation = observeRaw.find((m) => m.type === "OBSERVATION_RESULT") as
+      | {
+          observation: {
+            pageRevision: number;
+            elements: Array<{ ref: string }>;
+          };
+        }
+      | undefined;
+    expect(observation).toBeDefined();
+    const ref = observation!.observation.elements[0]!.ref;
+    const pageRevision = observation!.observation.pageRevision;
+    raw.length = 0;
+
+    // Awaited: runActions resolves after the full message burst
+    // (ACTION_RESULT → CHALLENGE_DETECTED → HANDOFF_REQUIRED) is sent.
+    await session.runActions("req-b06-run", {
+      actions: [{ type: "click", ref, pageRevision }],
+    } as unknown as Extract<
+      ManagedBrowserInboundMessage,
+      { type: "RUN_ACTIONS" }
+    >["program"]);
+    const messages = raw.map(
+      (m) =>
+        managedBrowserOutboundSchema().safeParse(JSON.parse(m) as unknown)
+          .data as ManagedBrowserOutboundMessage & { requestId: string }
+    );
+    const resultIndex = messages.findIndex(
+      (m) =>
+        m.type === "ACTION_RESULT" &&
+        (m as unknown as { requestId: string }).requestId === "req-b06-run"
+    );
+    expect(resultIndex).toBeGreaterThanOrEqual(0);
+    const actionResult = messages[resultIndex] as unknown as {
+      requestId: string;
+      observation: { state: string } | null;
+    };
+    // B06: the result's observation is HANDOFF — not a ready page.
+    expect(actionResult.observation?.state).toBe("handoff");
+    const challengeIndex = messages.findIndex(
+      (m) => m.type === "CHALLENGE_DETECTED"
+    );
+    expect(challengeIndex).toBeGreaterThan(resultIndex);
+    expect(
+      messages.some((m) => m.type === "HANDOFF_REQUIRED")
+    ).toBe(true);
+    await session.stop("req-b06-stop", "test_done");
+  });
+});

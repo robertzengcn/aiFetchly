@@ -42,7 +42,7 @@ class FakeConnection implements MailboxActionConnection {
   async connect(): Promise<void> {}
   async logout(): Promise<void> {}
   close(): void {}
-  async list() {
+  async list(): Promise<Array<{ path: string; name: string; specialUse?: string }>> {
     this.calls.push({ kind: "list", args: [] });
     return [
       { path: "INBOX", name: "INBOX" },
@@ -50,26 +50,30 @@ class FakeConnection implements MailboxActionConnection {
       { path: "Sent", name: "Sent", specialUse: "\\Sent" },
     ];
   }
-  async search(query: Record<string, unknown>, options?: { uid?: boolean }) {
+  async search(query: Record<string, unknown>, options?: { uid?: boolean }): Promise<number[]> {
     this.calls.push({ kind: "search", args: [query, options] });
     return [];
   }
   async append(
     folder: string,
-    message: Buffer | string,
-    options?: { flags?: string[] }
-  ) {
+    _message: Buffer | string,
+    _options?: { flags?: string[] }
+  ): Promise<{ uid: number }> {
     this.calls.push({ kind: "append", args: [folder] });
     return { uid: 99 };
   }
-  async mailboxOpen(path: string) {
+  async mailboxOpen(path: string): Promise<{ uidValidity: bigint }> {
     this.calls.push({ kind: "mailboxOpen", args: [path] });
     const mailbox = this.state.mailboxes.get(path);
     if (!mailbox) throw new Error("Mailbox does not exist");
     this.currentMailbox = mailbox;
     return { uidValidity: BigInt(mailbox.uidValidity) };
   }
-  async fetchOne(seq: string | number, query: Record<string, unknown>, options?: { uid?: boolean }) {
+  async fetchOne(
+    seq: string | number,
+    query: Record<string, unknown>,
+    options?: { uid?: boolean }
+  ): Promise<({ flags?: Set<string>; source?: Buffer; uid?: number; query?: Record<string, unknown>; options?: { uid?: boolean } }) | false> {
     this.calls.push({ kind: "fetchOne", args: [seq, query, options] });
     const mailbox = this.currentMailbox;
     if (!mailbox) return false;
@@ -83,7 +87,15 @@ class FakeConnection implements MailboxActionConnection {
       options,
     };
   }
-  async messageMove(range: string | number, destination: string, options?: { uid?: boolean }) {
+  async messageMove(
+    range: string | number,
+    destination: string,
+    options?: { uid?: boolean }
+  ): Promise<
+    | { path: string; destination: string; uidValidity?: bigint | number | string; uidMap?: Map<number, number> }
+    | boolean
+    | undefined
+  > {
     this.calls.push({ kind: "messageMove", args: [range, destination, options] });
     if (this.state.moveError) throw this.state.moveError;
     const mailbox = this.currentMailbox;
@@ -188,7 +200,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
     const state = makeState();
     const connectionRef: { value: FakeConnection | null } = { value: null };
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: () => {
+      connectionFactory: (): MailboxActionConnection => {
         connectionRef.value = new FakeConnection(state);
         return connectionRef.value;
       },
@@ -230,7 +242,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
     const state = makeState();
     const holder: { value: FakeConnection | null } = { value: null };
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: () => {
+      connectionFactory: (): MailboxActionConnection => {
         const fake = new FakeConnection(state);
         fake.search = (async (query) => {
           fake.calls.push({ kind: "search", args: [query] });
@@ -278,13 +290,12 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
   it("searchUids reports capped only when the window was cut before the SEARCH end (R7-02)", async () => {
     const state = makeState();
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: () => {
+      connectionFactory: (): MailboxActionConnection => {
         const fake = new FakeConnection(state);
         fake.search = (async () => [1, 2, 3]) as unknown as FakeConnection["search"];
         return fake;
       },
     });
-    const connection = { value: null };
     // A window that reaches the END of the match list is NOT capped — even
     // at exactly the window size (R7-02: window size never lied about a
     // ceiling).
@@ -309,13 +320,12 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
   it("searchUids reports PROVIDER_REJECTED when the server cannot search", async () => {
     const state = makeState();
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: () => {
+      connectionFactory: (): MailboxActionConnection => {
         const fake = new FakeConnection(state);
         fake.search = (async () => false) as unknown as FakeConnection["search"];
         return fake;
       },
     });
-    const connection = { value: null };
     const result = await adapter.searchUids(config, "INBOX", { cap: 10 });
     expect(result.status).toBe("failed");
     if (result.status === "failed") expect(result.reasonCode).toBe("PROVIDER_REJECTED");

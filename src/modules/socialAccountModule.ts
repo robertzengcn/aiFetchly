@@ -2,6 +2,7 @@ import { SocialAccountModel } from "@/model/SocialAccount.model";
 import { log } from "@/modules/Logger";
 import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
 import { ProxyEntity } from "@/entity/Proxy.entity";
+import { createHash, createHmac } from "node:crypto";
 import { BaseModule } from "@/modules/baseModule";
 import {
   SocialAccountResponse,
@@ -126,11 +127,25 @@ export class SocialAccountModule extends BaseModule {
           const meta = await this.accountSessionService.getMetadata(account.id);
           const hasCookies = meta.hasCookies && meta.cookieCount > 0;
 
-          // Map social_type_id to platform name
-          const platform = SocialPlatformList.find(
-            (item) => item.id === account.social_type_id
-          );
-          const socialType = platform ? platform.name : "";
+          // Map social_type_id to platform name — the SITE REGISTRY is
+          // the source of truth (S-FR-06, registry-first): a registered
+          // site with the id supplies the display name; the static list
+          // is the fallback for legacy ids not in the registry.
+          const socialType = await (async () => {
+            const { getDefaultBrowserSiteModule } = await import(
+              "@/modules/BrowserSiteModule"
+            );
+            const site = await getDefaultBrowserSiteModule()
+              .getSite(account.social_type_id)
+              .catch(() => null);
+            if (site) {
+              return site.name;
+            }
+            const platform = SocialPlatformList.find(
+              (item) => item.id === account.social_type_id
+            );
+            return platform ? platform.name : "";
+          })();
 
           return {
             id: account.id,
@@ -192,7 +207,16 @@ export class SocialAccountModule extends BaseModule {
         name: account.name,
         phone: account.phone,
         email: account.email,
-        proxy: account.proxy || [],
+        // R09/P-FR-08: the proxy relation is projected to its PUBLIC
+        // fields — storage secrets (the password column) and internal
+        // columns never reach the renderer.
+        proxy: (account.proxy ?? []).map((row) => ({
+          id: row.id,
+          host: row.host,
+          port: row.port,
+          protocol: row.protocol,
+          user: row.user,
+        })),
       };
 
       return {
@@ -227,6 +251,49 @@ export class SocialAccountModule extends BaseModule {
       // }
       if (socialAccountData.social_type_id) {
         socialAccount.social_type_id = socialAccountData.social_type_id;
+        // B06/S-FR-06/A-FR-07: an EDIT that changes the platform is an
+        // explicit REBIND — the stale site_id used to survive the save,
+        // so sign-in matching (site_id OR social_type_id) matched the
+        // OLD site AND the new platform at once, and a password decrypt
+        // could trust the stale site. The site_id rebinds to the new
+        // platform's registry site, or to null when the registry has no
+        // site for it (the credential lookup's legacy fallback then
+        // resolves via social_type_id — which now matches the NEW
+        // platform).
+        if (socialAccountData.id) {
+          const existing = await this.socialAccountModel.findRowById(
+            socialAccountData.id
+          );
+          if (
+            existing &&
+            existing.social_type_id !== socialAccountData.social_type_id
+          ) {
+            const siteModule = (
+              await import("@/modules/BrowserSiteModule")
+            ).getDefaultBrowserSiteModule();
+            const newSite = await siteModule.getSite(
+              socialAccountData.social_type_id
+            );
+            socialAccount.site_id = newSite ? newSite.siteId : null;
+            // P06/S-FR-01: the platform change is an EXPLICIT identity
+            // transition — the OLD platform's stored credential and its
+            // cookie snapshot must not silently carry across (a YouTube
+            // password is useless — and dangerous — against a Facebook
+            // login). The user re-enters the credential for the new
+            // platform; sign-in refuses until then.
+            socialAccount.pass = "";
+            try {
+              await this.accountSessionService.clearAccountSession(
+                socialAccountData.id
+              );
+            } catch (err) {
+              console.error(
+                "[socialaccount] rebind cookie clear failed:",
+                err
+              );
+            }
+          }
+        }
       }
       // if (socialAccountData.social_type_url) {
       //     socialAccount.social_type_url = socialAccountData.social_type_url;
@@ -240,6 +307,13 @@ export class SocialAccountModule extends BaseModule {
       }
       socialAccount.status = socialAccountData.status;
       socialAccount.name = socialAccountData.name;
+      // P04/Q-01: a NEWLY CREATED account is not part of the one-time
+      // existing-account migration cohort — it is born prompted (the
+      // detail-page toggle is its consent surface), so it can never
+      // enter the pending prompt set.
+      if (!socialAccountData.id) {
+        socialAccount.ai_use_prompted = true;
+      }
       if (socialAccountData.phone) {
         socialAccount.phone = socialAccountData.phone;
       }
@@ -337,6 +411,46 @@ export class SocialAccountModule extends BaseModule {
   }
 
   /**
+   * N05/P-FR-03: after a successful sign-in THROUGH a proxy, link that
+   * proxy row to the account so later sessions reuse it. Idempotent —
+   * an existing link is left untouched.
+   */
+  public async linkProxyToAccount(
+    accountId: number,
+    proxyId: number
+  ): Promise<boolean> {
+    try {
+      const account = await this.socialAccountModel.getSocialAccountById(accountId);
+      if (!account) {
+        return false;
+      }
+      const existing = (account.proxy ?? []).some((row) => row.id === proxyId);
+      if (existing) {
+        return true;
+      }
+      const { ProxyModel } = await import("@/model/Proxy.model");
+      const { Token } = await import("@/modules/token");
+      const { USERSDBPATH } = await import("@/config/usersetting");
+      const proxyModel = new ProxyModel(
+        new Token().getValue(USERSDBPATH)
+      );
+      const proxyEntity = await proxyModel.getProxyById(proxyId);
+      if (!proxyEntity) {
+        return false;
+      }
+      await this.socialAccountModel.appendProxyLink(accountId, proxyId);
+      return true;
+    } catch (error) {
+      log.warn(
+        `[SocialAccountModule] proxy link failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return false;
+    }
+  }
+
+  /**
    * Get social accounts by status
    */
   public async getSocialAccountsByStatus(
@@ -356,5 +470,397 @@ export class SocialAccountModule extends BaseModule {
     return this.decryptPasses(
       await this.socialAccountModel.getSocialAccountsByPlatform(socialTypeId)
     );
+  }
+
+  /**
+   * A-FR-03/13: accounts usable for AI sign-in on a site. Matches by
+   * site_id first; falls back to the legacy social_type_id mapping (the
+   * seeded BrowserSite rows keep the platform IDs). Respects the per-account
+   * AI-use opt-in (Q-01) when `requireAiOptIn` is set.
+   */
+  public async getAccountsForSite(
+    siteId: number,
+    options?: { requireAiOptIn?: boolean; platformId?: number }
+  ): Promise<Array<{ id: number; user: string; name: string; hasPassword: boolean }>> {
+    await this.ensureConnection();
+    // T27: repository access lives in the Model layer.
+    const rows = await this.socialAccountModel.findRowsForSite(
+      siteId,
+      options?.platformId ?? siteId
+    );
+    const result: Array<{
+      id: number;
+      user: string;
+      name: string;
+      hasPassword: boolean;
+    }> = [];
+    for (const row of rows) {
+      if (options?.requireAiOptIn && !row.ai_use_enabled) {
+        continue;
+      }
+      result.push({
+        id: row.id,
+        user: row.user,
+        name: row.name,
+        hasPassword: Boolean(row.pass),
+      });
+    }
+    return result;
+  }
+
+  /**
+   * A-FR-07: the ONLY decrypting credential read used by sign-in. Returns
+   * the username + decrypted password ONLY when the stored site identity
+   * matches the CURRENT page's registrable domain — the caller derives that
+   * identity from the live page URL, never from the LLM.
+   */
+  /**
+   * F12: the credential read reports WHY it refused — a missing account, a
+   * missing site, a domain mismatch and a missing/undecryptable password
+   * are distinct outcomes; only the last one legitimately asks the user
+   * for a password through the card.
+   */
+  public async getCredentialForLogin(
+    accountId: number,
+    /** X1: the LIVE page hostname — suffix checks are hostname-exact,
+     * so host-specific allowlists (accounts.google.com) can match. */
+    currentHostname: string
+  ): Promise<
+    | { ok: true; username: string; password: string }
+    | {
+        ok: false;
+        reason:
+          | "account_not_found"
+          | "site_not_found"
+          | "domain_mismatch"
+          | "credential_unavailable";
+      }
+  > {
+    await this.ensureConnection();
+    // T27: repository access lives in the Model layer.
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      return { ok: false, reason: "account_not_found" };
+    }
+    // The account's site must match the page domain (fail closed).
+    // R21: legacy rows with site_id = null CANNOT skip the domain check —
+    // they are resolved via social_type_id (which maps to a seeded site).
+    let siteToCheck = account.site_id;
+    if (siteToCheck === null) {
+      siteToCheck = account.social_type_id;
+    }
+    const siteModule = (await import("@/modules/BrowserSiteModule"))
+      .getDefaultBrowserSiteModule();
+    const site = await siteModule.getSite(siteToCheck);
+    if (!site) {
+      return { ok: false, reason: "site_not_found" };
+    }
+    const { hostnameAllowedBySuffixes } =
+      await import("@/service/browserDecision/RegistrableDomain");
+    if (
+      !hostnameAllowedBySuffixes(
+        currentHostname,
+        site.allowedDomainSuffixes
+      )
+    ) {
+      return { ok: false, reason: "domain_mismatch" };
+    }
+    const password = await this.decryptPass(account.pass, account.id);
+    if (!password || !account.user) {
+      return { ok: false, reason: "credential_unavailable" };
+    }
+    return { ok: true, username: account.user, password };
+  }
+
+  /** R21/A-FR-06: update the password of an existing account (encrypted). */
+  public async updatePasswordForAccount(
+    accountId: number,
+    password: string
+  ): Promise<void> {
+    // F12: delegate to the Model layer (no direct repository access).
+    await this.ensureConnection();
+    const encrypted = await this.encryptPass(password);
+    if (encrypted) {
+      await this.socialAccountModel.updatePassword(accountId, encrypted);
+      // R08/A-FR-10: the credential was REPLACED — a prior wrong-
+      // credential block lifts with it.
+      await this.credentialReplaced(accountId);
+    }
+  }
+
+  /**
+   * R08/A-FR-10: the marker reason for a REJECTED SAVED credential — the
+   * cooldown does not expire for it; the block lifts only when the
+   * credential is REPLACED (updatePasswordForAccount clears it).
+   */
+  public static readonly WRONG_CREDENTIAL_SAVED_REASON =
+    "WRONG_CREDENTIAL_SAVED";
+
+  /**
+   * P03/A-FR-10: the KEYED credential-identity verifier - an HMAC over
+   * the credential value with the account encryption key (never a bare
+   * unkeyed hash of the password, which an attacker with DB read access
+   * could brute-force offline). Both the marker WRITE (credential
+   * service) and the COMPARE (cooldown check) derive the same value.
+   */
+  public static async credentialVerifierDigest(
+    password: string
+  ): Promise<string> {
+    const key = await userSecretKeyService.getKey();
+    return createHmac("sha256", key).update(password).digest("hex").slice(0, 32);
+  }
+
+  /** A-FR-10: record a failed automated sign-in (cooldown + UI reason). */
+  public async recordLoginFailure(
+    accountId: number,
+    reason: string,
+    options?: { siteId?: number; now?: Date }
+  ): Promise<void> {
+    await this.ensureConnection();
+    await this.socialAccountModel.updateLoginFailure(accountId, {
+      last_login_failure_at: options?.now ?? new Date(),
+      last_login_failure_reason: reason.slice(0, 64),
+      last_login_failure_site: options?.siteId ?? null,
+    });
+  }
+
+  /**
+   * R09/Q-01: the accounts the ONE-TIME opt-in prompt still owes a
+   * question — pre-feature rows created before the prompt existed.
+   */
+  public async listAccountsMissingOptIn(): Promise<
+    ReadonlyArray<{ id: number; user: string; name: string | null }>
+  > {
+    await this.ensureConnection();
+    const rows = await this.socialAccountModel.listAllRaw();
+    // P04/Q-01: the prompt is the ONE-TIME migration for the EXISTING
+    // cohort — an already-OPTED-IN row (consent given via the detail-page
+    // toggle before the prompt ran) must never re-enter the pending set
+    // (its prior consent is preserved), and a declined row never
+    // reappears either (it was prompted).
+    return rows
+      .filter(
+        (row) => row.ai_use_prompted !== true && row.ai_use_enabled !== true
+      )
+      .map((row) => ({ id: row.id, user: row.user, name: row.name ?? null }));
+  }
+
+  /**
+   * R09/Q-01: mark the accounts ASKED. Declining leaves ai_use_enabled
+   * false — sign-in refuses with account_not_eligible until a
+   * detail-page toggle opts the account in.
+   */
+  public async markAiUsePrompted(ids: readonly number[]): Promise<void> {
+    await this.ensureConnection();
+    for (const id of ids) {
+      const row = await this.socialAccountModel.findRowById(id);
+      if (!row || row.ai_use_prompted === true) {
+        continue;
+      }
+      await this.socialAccountModel.markAiUsePromptedRow(id);
+    }
+  }
+
+  /** A-FR-10: clear a prior failure after a successful sign-in. */
+  public async recordLoginFailureClear(accountId: number): Promise<void> {
+    await this.ensureConnection();
+    await this.socialAccountModel.updateLoginFailure(accountId, {
+      last_login_failure_at: null,
+      last_login_failure_reason: null,
+    });
+  }
+
+  /**
+   * R08/A-FR-10: a credential REPLACEMENT lifts the wrong-credential
+   * block — the saved password that was rejected is no longer the one
+   * that would be typed, so automated sign-in may try again.
+   */
+  public async credentialReplaced(accountId: number): Promise<void> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (
+      account?.last_login_failure_reason ===
+      SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON
+    ) {
+      await this.recordLoginFailureClear(accountId);
+    }
+  }
+
+  /** A-FR-10: cooldown check (1 automated attempt per account+site/window). */
+  public async isSignInCoolingDown(
+    accountId: number,
+    options?: { siteId?: number; cooldownMs?: number; now?: Date }
+  ): Promise<boolean> {
+    await this.ensureConnection();
+    const cooldownMs = options?.cooldownMs ?? 15 * 60_000;
+    const nowDate = options?.now ?? new Date();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account?.last_login_failure_at) {
+      return false;
+    }
+    // R08/A-FR-10: a REJECTED SAVED credential blocks while the STORED
+    // credential is still the exact rejected value — the marker carries
+    // the rejected value's digest, so a credential replacement
+    // automatically unblocks (a late rejection of a PRIOR value can
+    // never mark a newer credential). The block is account-wide: the
+    // saved credential is an account-level secret.
+    const failureReason = account.last_login_failure_reason ?? "";
+    if (failureReason === SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON) {
+      // P03: a LEGACY bare marker (recorded before the digest scheme)
+      // binds to NO known value — the conservative direction is to keep
+      // the cooldown until a replacement lifts it (credentialReplaced
+      // clears the exact bare marker).
+      return true;
+    }
+    if (failureReason.startsWith(SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON)) {
+      const markerDigest = failureReason.slice(
+        SocialAccountModule.WRONG_CREDENTIAL_SAVED_REASON.length + 1
+      );
+      const currentPassword = await this.decryptPass(
+        account.pass,
+        accountId
+      );
+      if (currentPassword === null || currentPassword === "") {
+        // No stored credential to compare — the block has nothing to
+        // bind to and does not persist.
+        return false;
+      }
+      // P03: the SAME keyed verifier the marker write used.
+      const currentDigest =
+        await SocialAccountModule.credentialVerifierDigest(currentPassword);
+      return markerDigest === currentDigest;
+    }
+    // A-FR-10: the window is per account AND SITE — a failure on site B
+    // never cools down attempts on site A.
+    if (
+      options?.siteId !== undefined &&
+      account.last_login_failure_site != null &&
+      account.last_login_failure_site !== options.siteId
+    ) {
+      return false;
+    }
+    const elapsed = nowDate.getTime() - account.last_login_failure_at.getTime();
+    return elapsed >= 0 && elapsed < cooldownMs;
+  }
+
+  // B10: per user+site SAVE SERIALIZATION — the credential card's
+  // read-then-write (findRowByUserAndSite → update/save) is a race window;
+  // two simultaneous card requests for the same account/site serialize
+  // here so both cannot pass the duplicate check.
+  private static readonly credentialSaveLocks = new Map<string, Promise<void>>();
+
+  private static async withCredentialSaveLock<T>(
+    key: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous =
+      SocialAccountModule.credentialSaveLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    SocialAccountModule.credentialSaveLocks.set(
+      key,
+      previous.then(() => gate)
+    );
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+
+  /** Save a credential submitted through the secure card (A-FR-06). */
+  public async saveSubmittedCredential(input: {
+    readonly siteId: number | null;
+    readonly platformId?: number;
+    readonly username: string;
+    readonly password: string;
+    readonly save: boolean;
+  }): Promise<number> {
+    if (!input.save) {
+      throw new Error("save_not_requested");
+    }
+    return await SocialAccountModule.withCredentialSaveLock(
+      `${input.username}::${input.siteId ?? input.platformId ?? 0}`,
+      async () => {
+        await this.ensureConnection();
+    const platformId = input.platformId ?? (input.siteId ?? 0);
+    // Q-01/R02: an existing account for the SAME user+site is UPDATED —
+    // the credential card never creates a duplicate of a disabled account;
+    // saving a credential IS the opt-in for that account.
+    const existing = await this.socialAccountModel.findRowByUserAndSite(
+      input.username,
+      input.siteId,
+      platformId
+    );
+    if (existing) {
+      const encrypted = await this.encryptPass(input.password);
+      if (encrypted === null) {
+        throw new Error("credential_unavailable");
+      }
+      // B10: password and opt-in write TOGETHER — an interruption between
+      // them can no longer leave a saved password with the opt-in off.
+      await this.socialAccountModel.updateCredentialWithOptIn(existing.id, {
+        encryptedPass: encrypted,
+        aiUseEnabled: true,
+      });
+      return existing.id;
+    }
+    const entity = new SocialAccountEntity();
+    entity.user = input.username;
+    entity.name = input.username;
+    entity.social_type_id = platformId;
+    entity.site_id = input.siteId;
+    entity.status = 1;
+    // R21/A-FR-06: the user checked "Save for future use" — enable the
+    // per-account AI-use opt-in so the credential is reusable.
+    entity.ai_use_enabled = true;
+    entity.pass = await this.encryptPass(input.password);
+    return await this.socialAccountModel.saveNewAccount(entity);
+    }
+  );
+  }
+
+  /**
+   * N06/S-FR-06: credential-FREE account metadata for the batch
+   * confirmation preview — site identity only, NEVER the stored
+   * password (getAccountDetail decrypts for the editor and must not be
+   * used by the preview path).
+   */
+  public async getAccountSiteMetadata(accountId: number): Promise<{
+    siteId: number;
+  } | null> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      return null;
+    }
+    const siteId = account.site_id ?? account.social_type_id;
+    return typeof siteId === "number" && siteId > 0 ? { siteId } : null;
+  }
+
+  /**
+   * Q-01/R02: per-account AI opt-in editing for EXISTING accounts — the
+   * only writer besides the credential card (which sets true on save).
+   */
+  public async setAiUseEnabled(accountId: number, enabled: boolean): Promise<void> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      throw new Error("account_not_found");
+    }
+    await this.socialAccountModel.updateAiUseEnabled(accountId, enabled);
+  }
+
+  /** Q-01/R02: read the per-account AI opt-in (detail page display). */
+  public async getAiUseEnabled(accountId: number): Promise<boolean> {
+    await this.ensureConnection();
+    const account = await this.socialAccountModel.findRowById(accountId);
+    if (!account) {
+      return false;
+    }
+    return Boolean(account.ai_use_enabled);
   }
 }

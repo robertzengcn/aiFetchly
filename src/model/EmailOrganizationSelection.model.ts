@@ -1,7 +1,6 @@
 import { Repository } from "typeorm";
 import { BaseDb } from "@/model/Basedb";
 import { EmailOrganizationSelectionEntity } from "@/entity/EmailOrganizationSelection.entity";
-import { log } from "@/modules/Logger";
 
 /**
  * Data access for frozen bulk selections (design §11). Rows are write-once:

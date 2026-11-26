@@ -332,7 +332,7 @@ describe("SystemSettingPage font scale stepper", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
+    window.localStorage?.clear();
     document.documentElement.style.fontSize = "";
     document.documentElement.style.removeProperty("--app-font-scale");
     vi.mocked(getSystemSettinglist).mockResolvedValue(fontScaleGroup("1"));
@@ -431,7 +431,7 @@ describe("SystemSettingPage chat font size", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
+    window.localStorage?.clear();
     document.documentElement.style.removeProperty("--app-chat-font-size");
     vi.mocked(getSystemSettinglist).mockResolvedValue(chatFontGroup("14"));
     vi.mocked(updateSystemSetting).mockResolvedValue(true);

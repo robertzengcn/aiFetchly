@@ -14,7 +14,20 @@
         data-testid="mb-session-proxy"
       >
         <v-icon size="x-small" aria-hidden="true">mdi-shield-outline</v-icon>
-        {{ t("managedBrowser.proxy_active") }}
+        {{
+          status.proxyHostLabel
+            ? `${t("managedBrowser.proxy_active")} · ${status.proxyHostLabel}${
+                status.proxyCountry ? ` (${status.proxyCountry})` : ""
+              }`
+            : t("managedBrowser.proxy_active")
+        }}
+      </span>
+      <span
+        v-if="!status.proxyActive"
+        class="mb-session-card__proxy mb-session-card__proxy--direct"
+        data-testid="mb-session-direct"
+      >
+        {{ t("managedBrowser.direct_traffic") }}
       </span>
       <span
         class="mb-session-card__state"
@@ -89,6 +102,31 @@
         </v-btn>
       </template>
       <template v-else>
+        <!-- R01/C-FR-10: the user EXPLICITLY requests focus — the only
+             sanctioned bringToFront path. -->
+        <v-btn
+          size="small"
+          variant="tonal"
+          data-testid="mb-btn-open-browser"
+          :disabled="busy || !status.sessionId"
+          @click="onOpenBrowser"
+        >
+          {{ t("managedBrowser.controls.open_browser") || "Open browser" }}
+        </v-btn>
+        <!-- R06/C-FR-10: a queued handoff badge — this card's dialog is
+             waiting while another task's dialog is up. -->
+        <v-chip
+          v-if="stateIsHandoffLike && !handoffDialogOpen && waitingCount > 0"
+          size="small"
+          color="warning"
+          variant="tonal"
+          data-testid="mb-handoff-queue-badge"
+        >
+          {{
+            t("managedBrowser.controls.handoff_queue_badge") ||
+            `${waitingCount} task(s) need you`
+          }}
+        </v-chip>
         <v-btn
           size="small"
           variant="tonal"
@@ -147,7 +185,8 @@
         :key="notice.eventId"
         :class="`mb-session-card__notice--${notice.severity}`"
       >
-        {{ t(`managedBrowser.notices.${notice.type}`) || notice.type }}
+        <!-- W06/M-FR-08: the notice NAMES the owning task when known. -->
+        {{ notice.taskLabel ? `${notice.taskLabel} · ` : '' }}{{ t(`managedBrowser.notices.${notice.type}`) || notice.type }}
       </li>
     </ul>
 
@@ -224,6 +263,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useHandoffDialogQueue } from "@/views/components/aiChatV2/handoffDialogQueue";
 import ManagedBrowserHandoffDialog from "@/views/components/aiChatV2/ManagedBrowserHandoffDialog.vue";
 import {
   approveBrowserAction,
@@ -265,6 +305,32 @@ const { t } = useI18n();
 const status = ref<SafeManagedBrowserStatus | null>(null);
 const busy = ref(false);
 const handoffDialogOpen = ref(false);
+// R06/C-FR-10: ONE handoff dialog across ALL cards — the others badge.
+const {
+  claim: claimHandoffDialog,
+  release: releaseHandoffDialog,
+  waitingCount,
+  onPromoted,
+} = useHandoffDialogQueue();
+/** R06: the session THIS card holds the dialog slot for (precise release). */
+const claimedSessionId = ref<string | null>(null);
+/**
+ * C04/C-FR-10: the queue PROMOTES this card — the handoff dialog opens
+ * the moment the slot is handed over (the previous holder released or
+ * ended), without waiting for a status refresh that may never come. The
+ * listener dies with the component.
+ */
+const releasePromotionListener = onPromoted("*", (sessionId: string) => {
+  if (
+    status.value?.sessionId === sessionId &&
+    stateIsHandoffLike.value &&
+    !handoffDismissed.value
+  ) {
+    handoffDialogOpen.value = true;
+    claimedSessionId.value = sessionId;
+  }
+});
+onBeforeUnmount(releasePromotionListener);
 /**
  * Sticky dismiss (FR-HANDOFF-CLOSE): when the user closes the handoff dialog
  * while the session stays in a handoff/login state, the periodic handoff
@@ -285,6 +351,7 @@ const recentNotices = ref<
     readonly eventId: string;
     readonly type: string;
     readonly severity: string;
+    readonly taskLabel: string | null;
   }>
 >([]);
 const progressLine = ref<string | null>(null);
@@ -390,6 +457,22 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!next || TERMINAL_STATES.has(next.state)) {
     if (next?.sessionId) {
       stoppedSessionIds.add(next.sessionId);
+      // R06/C-FR-10: the terminal status releases the handoff dialog slot
+      // (a dismissed-but-still-claimed session must not block the next
+      // task's dialog).
+      if (claimedSessionId.value === next.sessionId) {
+        releaseHandoffDialog(next.sessionId);
+        claimedSessionId.value = null;
+      }
+      // C04/C-FR-10: a sibling session's terminal event must NOT clear
+      // THIS card's displayed session — only a terminal status for the
+      // DISPLAYED session (or a null reset) tears the card down.
+      if (
+        status.value !== null &&
+        status.value.sessionId !== next.sessionId
+      ) {
+        return;
+      }
     }
     status.value = null;
     handoffDialogOpen.value = false;
@@ -416,8 +499,18 @@ function applyStatus(next: SafeManagedBrowserStatus | null): void {
   if (!stateIsHandoffLike.value) {
     handoffDismissed.value = false;
     handoffDialogOpen.value = false;
+    // R06: the slot frees for the next waiting session.
+    if (claimedSessionId.value !== null) {
+      releaseHandoffDialog(claimedSessionId.value);
+      claimedSessionId.value = null;
+    }
   } else {
-    handoffDialogOpen.value = !handoffDismissed.value;
+    // R06/C-FR-10: only ONE dialog app-wide — a card that cannot claim
+    // the slot keeps its receipt controls and shows the waiting badge.
+    const canOpen =
+      !handoffDismissed.value && claimHandoffDialog(next.sessionId);
+    claimedSessionId.value = canOpen ? next.sessionId : claimedSessionId.value;
+    handoffDialogOpen.value = canOpen;
     // Nothing identifiable stays visible while the user handles a login
     // or challenge — the thumbnail is cleared entering sensitive states.
     clearScreenshot();
@@ -443,6 +536,28 @@ async function run(action: () => Promise<unknown>): Promise<void> {
   } finally {
     busy.value = false;
   }
+}
+
+// R01/C-FR-10: the user requested focus — the only sanctioned path.
+async function onOpenBrowser(): Promise<void> {
+  const current = status.value;
+  if (!current) {
+    return;
+  }
+  await run(async () => {
+    const { focusBrowserWindow } = await import("@/views/api/managedBrowser");
+    const outcome = await focusBrowserWindow({
+      taskId: current.sessionId,
+      sessionId: current.sessionId,
+    });
+    if (!outcome.ok) {
+      // An honest failure: the window could not be raised.
+      progressLine.value =
+        outcome.reason === "focus_failed"
+          ? "window not focusable"
+          : (outcome.reason ?? "window not focusable");
+    }
+  });
 }
 
 async function onPauseAi(): Promise<void> {
@@ -480,6 +595,11 @@ function onHandoffDialogVisibility(value: boolean): void {
   handoffDialogOpen.value = value;
   if (!value && stateIsHandoffLike.value) {
     handoffDismissed.value = true;
+    // R06: a dismissed dialog frees the slot for the next waiting task.
+    if (claimedSessionId.value !== null) {
+      releaseHandoffDialog(claimedSessionId.value);
+      claimedSessionId.value = null;
+    }
   }
 }
 
@@ -597,12 +717,38 @@ onMounted(() => {
   });
   // GAP-08: structured chat notices — latest three, localized.
   unsubscribeNotices = onManagedBrowserChatNotice((notice) => {
+    // W06/M-FR-08: a notice is only shown on the card of the session it
+    // belongs to. Legacy notices without a sessionId still render; a
+    // notice published on a conversation that is neither the displayed
+    // session's owner nor its root conversation is another chat's
+    // business and never shows here.
+    const displayed = status.value;
+    if (displayed) {
+      if (
+        typeof notice.sessionId === "string" &&
+        notice.sessionId.length > 0 &&
+        notice.sessionId !== displayed.sessionId
+      ) {
+        return;
+      }
+      const noticeConversation = notice.conversationId ?? null;
+      if (
+        noticeConversation !== null &&
+        displayed.ownerConversationId !== null &&
+        displayed.rootConversationId !== null &&
+        noticeConversation !== displayed.ownerConversationId &&
+        noticeConversation !== displayed.rootConversationId
+      ) {
+        return;
+      }
+    }
     recentNotices.value = [
       ...recentNotices.value.filter((n) => n.eventId !== notice.eventId),
       {
         eventId: notice.eventId,
         type: notice.type,
         severity: notice.severity,
+        taskLabel: notice.taskLabel ?? null,
       },
     ].slice(-3);
   });
@@ -630,6 +776,13 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  // R06/C-FR-10: an unmounted card never holds the handoff dialog slot
+  // (the module-scope queue is shared app-wide; a leaked claim would
+  // block every future dialog).
+  if (claimedSessionId.value !== null) {
+    releaseHandoffDialog(claimedSessionId.value);
+    claimedSessionId.value = null;
+  }
   unsubscribeStatus?.();
   unsubscribeStatus = null;
   unsubscribeNotices?.();

@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // silence a later send_email_forward / move_email_to_trash / restore_email
 // call (PRD FR-12; the prompt-injection threat model).
 
-const tokenGetValue = vi.fn((key: string) => "");
+const tokenGetValue = vi.fn((_key: string): string => "");
 vi.mock("@/modules/token", () => ({
   Token: class {
     constructor() {

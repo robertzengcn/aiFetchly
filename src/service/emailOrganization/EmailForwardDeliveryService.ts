@@ -481,7 +481,7 @@ export class EmailForwardDeliveryService extends BaseModule {
       // outcome_unknown return and the catch's durable row keep carrying
       // it — the user's warning must not vanish on the unknown path.
       sentCopyComputed = true;
-      sentCopyStatus = await (async () => {
+      sentCopyStatus = await (async (): Promise<EmailSentCopyStatus> => {
         if (accepted.length === 0) return "not_requested";
         if (info.raw == null || info.raw.length === 0) {
           // R5-02: the submission was requested with a copy expectation and
@@ -815,12 +815,12 @@ function classifyRecipients(
 
 /** Builds the real nodemailer-backed sender with TLS-mode retry. */
 export function createOutboundSenderFactory(): ForwardSenderFactory {
-  return (param: SenderParam) => {
+  return (param: SenderParam): ForwardSender => {
     const session = new OutboundSmtpSession(
       param as unknown as ConstructorParameters<typeof OutboundSmtpSession>[0]
     );
     return {
-      async sendMail(options: SendMailOptions) {
+      async sendMail(options: SendMailOptions): Promise<SubmissionInfo> {
         const info = await session.sendMail(options);
         return {
           accepted: (info as { accepted?: ReadonlyArray<string | { address?: string }> }).accepted,

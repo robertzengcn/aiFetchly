@@ -1,0 +1,850 @@
+/**
+ * Privileged login-form filler (PRD §6.8 / A-FR-16..21; technical design §14).
+ *
+ * Runs in the browser worker. The password arrives inside a single
+ * FILL_LOGIN_FORM request and is wiped after use; results carry outcome +
+ * field stamps, never values.
+ *
+ * The page scripts below are REAL FUNCTIONS (not string-encoded function
+ * expressions): Puppeteer serializes a passed function and invokes it with
+ * the serializable argument, so the body always executes (T02).
+ *
+ * Layer A (hard rules, evaluated in-page immediately before input):
+ *   - the page is HTTPS;
+ *   - EVERY frame that receives a value — including the top frame — is on
+ *     one of the site's allowed domains;
+ *   - the password target is an HTMLInputElement with type === "password",
+ *     enabled, visible, and hit-testable;
+ *   - in login mode exactly ONE visible password input exists in the form.
+ *
+ * Layer B (verify the input landed where intended — T03/T04):
+ *   - the password target is REVALIDATED (type, enabled/readonly, visible,
+ *     hit-test, same-form identity) AFTER the username set, because page
+ *     input/change handlers can mutate or replace it synchronously;
+ *   - values set via the native value setter + input/change events; read
+ *     back LENGTH ONLY, per field;
+ *   - every OTHER input's length is compared independently (a prefilled
+ *     username cannot fail the fill, and equal-and-opposite changes cannot
+ *     evade detection); any unexpected change clears EVERY affected field;
+ *   - readback mismatch clears the touched fields before aborting;
+ *   - submit through the password field's own form (requestSubmit with
+ *     focus checks) — never a control outside the form.
+ */
+
+export interface LoginFillTarget {
+  readonly mode: "login" | "register";
+  readonly allowedDomainSuffixes: readonly string[];
+  readonly recipeStep: {
+    readonly usernameField: string | null;
+    readonly passwordField: string | null;
+    readonly submitVia: "form" | "enter";
+  } | null;
+  /** T21: top-level recipe fingerprints (used by the page function). */
+  readonly usernameField?: string | null;
+  readonly passwordField?: string | null;
+  readonly username: string;
+  readonly password: string;
+  /**
+   * F10: invoked before EVERY round — a user takeover mid-fill must
+   * stop further credential rounds from running.
+   */
+  readonly shouldAbort?: () => boolean;
+}
+
+export type LoginFillOutcome =
+  | "success"
+  | "wrong_credential"
+  | "challenge"
+  | "unknown";
+
+export interface LoginFillResult {
+  readonly outcome: LoginFillOutcome;
+  readonly reasonCode: string | null;
+  readonly filledFieldStamps: readonly string[];
+  /** T21: learned-recipe payload (form action + field fingerprints). */
+  readonly recipe?: {
+    formAction: string | null;
+    usernameField: string;
+    passwordField: string;
+  };
+}
+
+export interface LoginFillPageLike {
+  url(): string;
+  evaluate<T>(script: unknown, ...args: unknown[]): Promise<T>;
+}
+
+/**
+ * The fill body. Passed to page.evaluate as a FUNCTION with one
+ * serializable payload — never as a bare string expression (T02).
+ */
+export function fillLoginPageFunction(input: {
+  mode: "login" | "register";
+  allowedDomainSuffixes: string[];
+  username: string;
+  password: string;
+  submitVia: "form" | "enter";
+  /** T21: saved recipe field fingerprints (name/id/autocomplete). */
+  usernameField?: string | null;
+  passwordField?: string | null;
+  /** T21: the username round already submitted (two-step login step 2). */
+  usernameFilled?: boolean;
+}): {
+  ok: boolean;
+  reasonCode?: string | null;
+  stamps?: string[];
+  /** T21: form action for recipe learning. */
+  formAction?: string | null;
+  filledFields?: { username: string; password: string };
+  usernameOnlySubmitted?: boolean;
+} {
+  // B08: realm-safe type checks — a same-origin iframe's elements come
+  // from a DIFFERENT DOM realm; `el instanceof topWindow.Element` fails
+  // for them. Every check consults the element's own realm.
+  const isElementOfOwnRealm = (el: unknown): el is Element => {
+    if (!(el instanceof Element)) return false;
+    const frameElement = el as Element & {
+      ownerDocument?: { defaultView?: unknown };
+    };
+    const realmElement = (frameElement.ownerDocument?.defaultView as
+      | { Element?: unknown }
+      | undefined)?.Element;
+    return (
+      realmElement === undefined ||
+      el instanceof (realmElement as typeof Element)
+    );
+  };
+  const isNodeOfOwnRealm = (el: unknown): el is Node => {
+    if (!(el instanceof Node)) return false;
+    const frameNode = el as Node & { ownerDocument?: { defaultView?: unknown } };
+    const realmNode = (frameNode.ownerDocument?.defaultView as
+      | { Node?: unknown }
+      | undefined)?.Node;
+    return realmNode === undefined || el instanceof (realmNode as typeof Node);
+  };
+  const isHtmlInputOfOwnRealm = (el: unknown): el is HTMLInputElement => {
+    if (!(el instanceof HTMLInputElement)) return false;
+    const frameEl = el as HTMLInputElement & {
+      ownerDocument?: { defaultView?: unknown };
+    };
+    const realmInput = (frameEl.ownerDocument?.defaultView as
+      | { HTMLInputElement?: unknown }
+      | undefined)?.HTMLInputElement;
+    return (
+      realmInput === undefined ||
+      el instanceof (realmInput as typeof HTMLInputElement)
+    );
+  };
+  const isVisible = (el: Element): boolean => {
+    if (!isElementOfOwnRealm(el)) return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    // A-FR-16: visibility is judged by the element's OWN frame window —
+    // a same-origin iframe's form is laid out in that frame's viewport.
+    const win =
+      (el.ownerDocument?.defaultView as Window | null | undefined) ?? window;
+    const style = win.getComputedStyle(el);
+    return style.visibility !== "hidden" && style.display !== "none";
+  };
+  const hitTestable = (el: Element): boolean => {
+    // A-FR-16: hit-testing runs against the element's OWN document —
+    // frame-local coordinates resolve within the frame, not the top page.
+    const doc = el.ownerDocument ?? document;
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const top = doc.elementFromPoint(cx, cy);
+    return top === el || (isNodeOfOwnRealm(top) && el.contains(top));
+  };
+  const hostAllowed = (): boolean =>
+    input.allowedDomainSuffixes.some(
+      (suffix) =>
+        location.hostname === suffix ||
+        location.hostname.endsWith("." + suffix)
+    );
+  // A-FR-16: a same-site frame check — the frame must ALSO be on an
+  // allowed domain (never a cross-origin or off-domain frame).
+  const frameAllowed = (frame: HTMLIFrameElement): boolean => {
+    try {
+      const frameDoc = frame.contentDocument;
+      if (!frameDoc) return false; // cross-origin: inaccessible, skip
+      const frameHost = frameDoc.location?.hostname ?? "";
+      return input.allowedDomainSuffixes.some(
+        (suffix) =>
+          frameHost === suffix || frameHost.endsWith("." + suffix)
+      );
+    } catch {
+      return false;
+    }
+  };
+  const passwordSafe = (pw: HTMLInputElement): boolean =>
+    isHtmlInputOfOwnRealm(pw) &&
+    pw.type === "password" &&
+    !pw.disabled &&
+    !pw.readOnly &&
+    isVisible(pw) &&
+    hitTestable(pw);
+
+  // Layer A: page-level rules BEFORE anything is typed.
+  if (location.protocol !== "https:") {
+    return { ok: false, reasonCode: "insecure_page" };
+  }
+  // T03: the TOP frame is also an input frame — it must be on-domain.
+  if (!hostAllowed()) {
+    return { ok: false, reasonCode: "origin_mismatch" };
+  }
+
+  // F09: STABLE field identity for stamps and saved recipes — the
+  // per-observation data-mb-obs ordinal is not reusable across
+  // observations and must never become a recipe fingerprint.
+  const stampOf = (el: HTMLInputElement): string =>
+    el.name || el.id || (el.getAttribute("autocomplete") ?? "") || "unnamed";
+  const setNativeValue = (el: HTMLInputElement, value: string): void => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    setter?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  // A-FR-19: the KEYSTROKE fallback — some frameworks ignore programmatic
+  // value sets (no per-char input events, or a masked state binding).
+  // Focus is VERIFIED first (the secret must never be typed into a
+  // different field), then the value is entered via per-character
+  // insertText events and read back. Returns false when the focus check
+  // fails or the readback does not match — the caller clears and aborts.
+  const setViaKeystrokes = (
+    el: HTMLInputElement,
+    value: string
+  ): boolean => {
+    // A-FR-16: focus/execCommand run against the element's OWN document
+    // so same-site frame fields work identically.
+    const doc = el.ownerDocument ?? document;
+    el.focus();
+    if (doc.activeElement !== el) {
+      return false;
+    }
+    // Focus checks after each char would be per-char; the bounded version
+    // verifies focus, clears, enters via execCommand (real input events
+    // fire), and re-verifies the final value + that focus never moved.
+    // B08: setSelectionRange exists on text-like inputs only — email/tel
+    // inputs may throw in Chromium; typeof guard before the call.
+    const selection = (
+      el as unknown as { setSelectionRange?: (s: number, e: number) => void }
+    ).setSelectionRange;
+    if (typeof selection === "function") {
+      try {
+        selection.call(el, el.value.length, el.value.length);
+      } catch {
+        // Cursor placement is best-effort — typing proceeds without it.
+      }
+    }
+    // Guard: environments without execCommand (or engines that refuse
+    // insertText) fail the fallback honestly — the caller clears/aborts.
+    if (typeof doc.execCommand !== "function") {
+      return false;
+    }
+    const okInsert = doc.execCommand("insertText", false, value);
+    if (!okInsert) {
+      return false;
+    }
+    if (doc.activeElement !== el) {
+      return false;
+    }
+    return el.value === value;
+  };
+  // A-FR-19: set-with-fallback — native setter first; when the readback
+  // disagrees, ONE bounded keystroke attempt; a mismatch either way is
+  // the caller's abort condition.
+  const setValueWithFallback = (
+    el: HTMLInputElement,
+    value: string
+  ): boolean => {
+    setNativeValue(el, value);
+    if (el.value === value) {
+      return true;
+    }
+    setNativeValue(el, "");
+    return setViaKeystrokes(el, value);
+  };
+  const stamps: string[] = [];
+
+  // A-FR-16: forms come from the TOP document AND from SAME-SITE
+  // same-origin iframes on allowed domains (the login form may live in a
+  // frame). Cross-origin/off-domain frames are inaccessible and skipped.
+  const docs: Document[] = [document];
+  for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+    if (frameAllowed(frame)) {
+      const frameDoc = frame.contentDocument;
+      if (frameDoc) {
+        docs.push(frameDoc);
+      }
+    }
+  }
+  const forms: HTMLFormElement[] = docs.flatMap((doc) =>
+    Array.from(doc.querySelectorAll("form"))
+  );
+  // A-FR-16: the tamper snapshot covers EVERY scanned document — a frame
+  // input is as much a potential recipient as a top-page one.
+  const snapshotInputs = (): HTMLInputElement[] =>
+    docs.flatMap((doc) => Array.from(doc.querySelectorAll("input")));
+  const candidates: Array<{
+    form: HTMLFormElement;
+    passwordInput: HTMLInputElement;
+    usernameInput: HTMLInputElement;
+    passwordOnly?: boolean;
+  }> = [];
+  const matchByFingerprint = (
+    el: HTMLInputElement,
+    fingerprint: string | null | undefined
+  ): boolean => {
+    if (!fingerprint) return false;
+    const f = fingerprint.toLowerCase();
+    return (
+      el.name.toLowerCase() === f ||
+      el.id.toLowerCase() === f ||
+      (el.getAttribute("autocomplete") ?? "").toLowerCase() === f
+    );
+  };
+  const autocompleteIs = (
+    el: HTMLInputElement,
+    ...values: string[]
+  ): boolean => {
+    const a = (el.getAttribute("autocomplete") ?? "").toLowerCase();
+    return values.includes(a);
+  };
+  let registrationFormSeen = false;
+  for (const form of forms) {
+    const passwordInputs = Array.from(
+      form.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    ).filter((el) => isVisible(el));
+    if (passwordInputs.length === 0) continue;
+    if (input.mode === "login" && passwordInputs.length !== 1) {
+      return { ok: false, reasonCode: "ambiguous_password_field" };
+    }
+    // A-FR-20: autocomplete="new-password" marks a REGISTRATION form. In
+    // login mode the automated credential must never land in it — filling
+    // could CREATE an account. The form is skipped; when every candidate
+    // is a registration form the fill refuses outright.
+    if (
+      input.mode === "login" &&
+      autocompleteIs(passwordInputs[0]!, "new-password")
+    ) {
+      registrationFormSeen = true;
+      continue;
+    }
+    // T21: saved recipe first, deterministic detection second.
+    const eligibleUsernames = Array.from(
+      form.querySelectorAll<HTMLInputElement>(
+        'input[type="email"], input[type="text"], input[type="tel"]'
+      )
+    ).filter(
+      (el) => isVisible(el) && !el.disabled && !el.readOnly
+    );
+    // F09: prefer autocomplete="username" or "email" to avoid decoy
+    // search/text boxes that happen to appear first in the DOM.
+    const usernameInput =
+      eligibleUsernames.find((el) =>
+        matchByFingerprint(el, input.usernameField)
+      ) ??
+      eligibleUsernames.find((el) =>
+        autocompleteIs(el, "username", "email")
+      ) ??
+      eligibleUsernames[0];
+    // T21: two-step login — step 2 (password-only) pages are valid when
+    // the username was already submitted in a previous round.
+    if (!usernameInput && input.usernameFilled) {
+      candidates.push({
+        form,
+        passwordInput: passwordInputs[0]!,
+        usernameInput: null as unknown as HTMLInputElement,
+        passwordOnly: true,
+      });
+      continue;
+    }
+    if (!usernameInput) continue;
+    const passwordInput =
+      passwordInputs.find((el) =>
+        matchByFingerprint(el, input.passwordField)
+      ) ?? passwordInputs[0]!;
+    candidates.push({
+      form,
+      passwordInput,
+      usernameInput,
+    });
+  }
+  if (candidates.length === 0) {
+    // A-FR-20: every password-bearing form was a registration form —
+    // login mode refuses (never create an account implicitly).
+    if (registrationFormSeen) {
+      return { ok: false, reasonCode: "registration_form_detected" };
+    }
+    // T21: two-step login step 1 — a visible username input with NO
+    // password input: fill + submit, report so the orchestrator can run
+    // the password round on the next page (bounded, max 3 pages).
+    // F09: the SAME deterministic selection as the password-bearing
+    // branch — recipe fingerprint first, then autocomplete evidence;
+    // an earlier unrelated search form must never receive the
+    // credential, and equally eligible forms are refused.
+    const usernameOnly: Array<{
+      form: HTMLFormElement;
+      usernameInput: HTMLInputElement;
+    }> = [];
+    for (const form of forms) {
+      const hasPassword =
+        Array.from(form.querySelectorAll('input[type="password"]')).filter(
+          (el) => isVisible(el)
+        ).length > 0;
+      if (hasPassword) continue;
+      const eligible = Array.from(
+        form.querySelectorAll<HTMLInputElement>(
+          'input[type="email"], input[type="text"], input[type="tel"]'
+        )
+      ).filter(
+        (el) => isVisible(el) && !el.disabled && !el.readOnly
+      );
+      const usernameInput =
+        eligible.find((el) => matchByFingerprint(el, input.usernameField)) ??
+        eligible.find((el) => autocompleteIs(el, "username", "email")) ??
+        eligible[0];
+      if (!usernameInput) continue;
+      usernameOnly.push({ form, usernameInput });
+    }
+    if (usernameOnly.length === 0) {
+      return { ok: false, reasonCode: "form_not_found" };
+    }
+    if (usernameOnly.length > 1) {
+      const scoreOnly = (c: (typeof usernameOnly)[number]): number =>
+        (matchByFingerprint(c.usernameInput, input.usernameField) ? 4 : 0) +
+        (autocompleteIs(c.usernameInput, "username", "email") ? 2 : 0);
+      const best = Math.max(...usernameOnly.map(scoreOnly));
+      const tied = usernameOnly.filter((c) => scoreOnly(c) === best);
+      if (tied.length > 1) {
+        return { ok: false, reasonCode: "ambiguous_login_form" };
+      }
+      usernameOnly.length = 0;
+      usernameOnly.push(tied[0]!);
+    }
+    const only = usernameOnly[0]!;
+    // F09: a form already submitted in THIS document means the page
+    // never transitioned — never resubmit the same username form.
+    if (only.form.getAttribute("data-mb-submitted") === "1") {
+      return { ok: false, reasonCode: "two_step_no_transition" };
+    }
+    only.form.setAttribute("data-mb-submitted", "1");
+    // B08: the username-only branch uses the SAME verified fill — native
+    // setter, then the focus-verified keystroke fallback; a mismatch
+    // CLEARS the field and refuses (never submits a partially filled
+    // username forward).
+    if (!setValueWithFallback(only.usernameInput, input.username)) {
+      setNativeValue(only.usernameInput, "");
+      return {
+        ok: false,
+        reasonCode: "fill_readback_mismatch",
+        stamps: [stampOf(only.usernameInput)],
+      };
+    }
+    only.form.requestSubmit();
+    return {
+      ok: true,
+      reasonCode: null,
+      stamps: [stampOf(only.usernameInput)],
+      usernameOnlySubmitted: true,
+      formAction: only.form.getAttribute("action"),
+    };
+  }
+  // F09: multiple password-bearing forms never reduce to [0]. Score by
+  // recipe and autocomplete evidence; equally eligible forms are
+  // refused instead of guessed.
+  const scoreCandidate = (c: (typeof candidates)[number]): number => {
+    let score = 0;
+    if (c.usernameInput) {
+      if (matchByFingerprint(c.usernameInput, input.usernameField)) score += 4;
+      if (autocompleteIs(c.usernameInput, "username", "email")) score += 2;
+    }
+    if (matchByFingerprint(c.passwordInput, input.passwordField)) score += 4;
+    if (autocompleteIs(c.passwordInput, "current-password")) score += 1;
+    return score;
+  };
+  if (candidates.length > 1) {
+    const best = Math.max(...candidates.map(scoreCandidate));
+    const tied = candidates.filter((c) => scoreCandidate(c) === best);
+    if (tied.length > 1) {
+      return { ok: false, reasonCode: "ambiguous_login_form" };
+    }
+    candidates.length = 0;
+    candidates.push(tied[0]!);
+  }
+  const chosen = candidates[0]!;
+  const pw = chosen.passwordInput;
+
+  if (!passwordSafe(pw)) {
+    return { ok: false, reasonCode: "password_field_unsafe" };
+  }
+
+  // T04: per-input length snapshot (NOT a sum) — prefilled usernames and
+  // equal-and-opposite foreign changes are both detected.
+  const allInputs = snapshotInputs();
+  // F09: use element identity (not array indices) so newly inserted
+  // inputs after the snapshot are caught by the tamper check.
+  const inputSet = new Set(allInputs);
+  const lengthsBefore = new Map<Element, number>();
+  for (const el of allInputs) {
+    lengthsBefore.set(el, el.value.length);
+  }
+  const clearField = (el: HTMLInputElement): void => {
+    setNativeValue(el, "");
+  };
+  const clearTouched = (): void => {
+    if (chosen.usernameInput) {
+      clearField(chosen.usernameInput);
+    }
+    clearField(pw);
+  }
+
+  // --- Username (skipped on a two-step password-only page) -------------------
+  if (!chosen.passwordOnly) {
+    // A-FR-19: the native setter first, the VERIFIED keystroke fallback
+    // when the framework ignores the programmatic set.
+    if (!setValueWithFallback(chosen.usernameInput, input.username)) {
+      clearTouched();
+      return {
+        ok: false,
+        reasonCode: "fill_readback_mismatch",
+        stamps: [stampOf(chosen.usernameInput)],
+      };
+    }
+    stamps.push(stampOf(chosen.usernameInput));
+    if (chosen.usernameInput.value.length !== input.username.length) {
+      clearTouched();
+      return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+    }
+  }
+
+  // --- T03: REVALIDATE the password target AFTER the username set -----------
+  const pwAfterUsername = chosen.form.querySelector<HTMLInputElement>(
+    'input[type="password"]'
+  );
+  const sameNode = pwAfterUsername === pw;
+  const revalidated = [
+    sameNode,
+    chosen.passwordInput.type === "password",
+    !chosen.passwordInput.disabled,
+    !chosen.passwordInput.readOnly,
+    isVisible(chosen.passwordInput),
+    hitTestable(chosen.passwordInput),
+    // Same-form identity via the input's own form association (more
+    // reliable across engines than Node.contains).
+    chosen.passwordInput.form === chosen.form,
+  ];
+  if (revalidated.some((check) => !check)) {
+    void revalidated;
+    // The page handler replaced/toggled the password field — the credential
+    // must never land in the mutated target. Clear and abort.
+    if (chosen.usernameInput) {
+      clearField(chosen.usernameInput);
+    }
+    clearField(pw);
+    return { ok: false, reasonCode: "password_field_mutated", stamps };
+  }
+  // Login mode still requires exactly one visible password input.
+  if (
+    input.mode === "login" &&
+    !chosen.passwordOnly &&
+    Array.from(
+      chosen.form.querySelectorAll('input[type="password"]')
+    ).filter((el) => isVisible(el)).length !== 1
+  ) {
+    clearTouched();
+    return { ok: false, reasonCode: "ambiguous_password_field", stamps };
+  }
+
+  // --- Password ---------------------------------------------------------------
+  // A-FR-19: the native setter first, the VERIFIED keystroke fallback
+  // when the framework ignores the programmatic set.
+  if (!setValueWithFallback(pw, input.password)) {
+    clearTouched();
+    return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+  }
+  stamps.push(stampOf(pw));
+
+  // A-FR-16/A-AC-04: a show-password toggle may have flipped the field to
+  // text DURING the value dispatch — the secret must never rest in a
+  // visible field. Re-check and refuse (no submit) when it no longer
+  // masks.
+  if (pw.type !== "password") {
+    setNativeValue(pw, "");
+    return { ok: false, reasonCode: "password_field_visible", stamps };
+  }
+
+  // --- Layer B: per-field readback + independent tamper detection ------------
+  if (pw.value.length !== input.password.length) {
+    clearTouched();
+    return { ok: false, reasonCode: "fill_readback_mismatch", stamps };
+  }
+  // F09: recipient-set equality — an input REMOVED while the credential
+  // was being placed means the page mutated the form; submission must
+  // not proceed on a set we can no longer account for.
+  if (allInputs.some((el) => !el.isConnected)) {
+    clearTouched();
+    return { ok: false, reasonCode: "recipient_set_changed", stamps };
+  }
+  const lengthsAfter = snapshotInputs();
+  const tampered: HTMLInputElement[] = [];
+  for (const el of lengthsAfter) {
+    const before = lengthsBefore.get(el);
+    if (before === undefined) {
+      // F09: newly inserted input since the snapshot — a potential
+      // recipient injected by a page event handler.
+      if (isHtmlInputOfOwnRealm(el) && el.value.length > 0) {
+        tampered.push(el);
+      }
+      continue;
+    }
+    if (el.value.length === before) continue;
+    const isChosenUsername = el === chosen.usernameInput;
+    const isChosenPassword = el === pw;
+    if (isChosenUsername || isChosenPassword) continue;
+    if (isHtmlInputOfOwnRealm(el)) {
+      tampered.push(el);
+    }
+  }
+  // F09: sentinel-aware scan — LENGTH checks cannot catch a copied
+  // secret that replaced an equal-length placeholder. Any OTHER field
+  // holding the exact password value is a leaked recipient.
+  // A-FR-16: the sentinel scan covers every scanned document (frames too).
+  for (const el of docs.flatMap((doc) =>
+    Array.from(doc.querySelectorAll("input, textarea"))
+  )) {
+    if (el === pw) continue;
+    if (el === chosen.usernameInput && input.password === input.username) {
+      continue;
+    }
+    if (
+      (isHtmlInputOfOwnRealm(el) || el instanceof HTMLTextAreaElement) &&
+      el.value === input.password
+    ) {
+      tampered.push(el as HTMLInputElement);
+    }
+  }
+  if (tampered.length > 0) {
+    clearTouched();
+    for (const el of tampered) {
+      clearField(el);
+    }
+    return { ok: false, reasonCode: "unexpected_field_change", stamps };
+  }
+
+  // T21/A-AC-04: mark the credential fields so later observations report
+  // [credential] for their values — including show-password-toggled
+  // (type=text) fields the sanitizer alone would not mask.
+  if (chosen.usernameInput) {
+    chosen.usernameInput.setAttribute("data-mb-cred", "1");
+  }
+  pw.setAttribute("data-mb-cred", "1");
+
+  // --- Submit through the password field's own form (A-FR-18) ----------------
+  // B08: focus checks consult the element's OWN document (frame fields),
+  // and a FAILED focus check clears the credential and refuses — the
+  // enclosing result must never report ok:true with populated fields.
+  const submit = (): boolean => {
+    const pwDoc = pw.ownerDocument ?? document;
+    if (input.submitVia === "enter" || !pw.form) {
+      // Focus checks around submission (A-FR-19); requestSubmit is the
+      // trusted-path equivalent of pressing Enter inside the field.
+      pw.focus();
+      if (pwDoc.activeElement !== pw) {
+        return false; // focus stolen — refuse rather than submit blind
+      }
+    }
+    if (pw.form) {
+      pw.form.requestSubmit();
+    } else {
+      const frameWin = pw.ownerDocument?.defaultView ?? window;
+      pw.dispatchEvent(
+        new (frameWin as unknown as { KeyboardEvent: typeof KeyboardEvent })
+          .KeyboardEvent("keydown", { key: "Enter", bubbles: true })
+      );
+    }
+    return true;
+  };
+  const submitted = submit();
+  if (!submitted) {
+    clearTouched();
+    return { ok: false, reasonCode: "submit_focus_lost", stamps };
+  }
+  if (pw.ownerDocument?.activeElement === pw) {
+    pw.blur();
+  }
+
+  return {
+    ok: true,
+    reasonCode: null,
+    stamps,
+    // T21: fingerprint the fields we actually used so the recipe can be
+    // saved and reused next time.
+    formAction: chosen.form.getAttribute("action"),
+    filledFields: {
+      username: chosen.usernameInput
+        ? stampOf(chosen.usernameInput)
+        : (input.usernameField ?? "username"),
+      password: stampOf(pw),
+    },
+  };
+}
+
+/** Outcome probe — also a real function (T02). */
+export function loginOutcomeProbePageFunction(): {
+  passwordStillVisible: boolean;
+  onLoginPath: boolean;
+  errorText: string;
+  url: string;
+} {
+  const visible = (el: Element): boolean => {
+    if (!(el instanceof Element)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const passwordStillVisible = Array.from(
+    document.querySelectorAll('input[type="password"]')
+  ).some(visible);
+  const path = location.pathname.toLowerCase();
+  const onLoginPath = /login|signin|sign-in|auth|session/.test(path);
+  const errorRegion = document.querySelector(
+    '[class*="error" i], [role="alert"], [class*="alert" i]'
+  );
+  const errorText =
+    errorRegion && visible(errorRegion)
+      ? (errorRegion.textContent || "").trim().slice(0, 200)
+      : "";
+  return {
+    passwordStillVisible,
+    onLoginPath,
+    errorText,
+    url: location.href,
+  };
+}
+
+export class LoginFormFiller {
+  /**
+   * Fill + submit with the Layer A/B rules. The password never leaves this
+   * call; the returned stamps let the observation sanitizer mask the fields.
+   */
+  public async fill(
+    page: LoginFillPageLike,
+    target: LoginFillTarget
+  ): Promise<LoginFillResult> {
+    // T21/A-FR-21: bounded two-step login loop (max 3 pages). A
+    // username-only page is submitted, then the password round runs on
+    // the page that follows.
+    let fillResult: Awaited<ReturnType<typeof fillLoginPageFunction>> = {
+      ok: false,
+      reasonCode: "form_not_found",
+    };
+    let usernameFilled = false;
+    for (let round = 0; round < 3; round++) {
+      // F10: the takeover check runs before EVERY round — the entry
+      // guard alone cannot protect an already accepted multi-round
+      // login against a mid-fill takeover.
+      if (target.shouldAbort?.()) {
+        return {
+          outcome: "unknown",
+          reasonCode: "fill_aborted_user_control",
+          filledFieldStamps: [],
+        };
+      }
+      fillResult = await page.evaluate<
+        Awaited<ReturnType<typeof fillLoginPageFunction>>
+      >(fillLoginPageFunction, {
+        mode: target.mode,
+        allowedDomainSuffixes: [...target.allowedDomainSuffixes],
+        username: target.username,
+        password: target.password,
+        submitVia: target.recipeStep?.submitVia ?? "form",
+        // R20: recipe fingerprints must reach the page function.
+        usernameField: target.usernameField ?? target.recipeStep?.usernameField ?? null,
+        passwordField: target.passwordField ?? target.recipeStep?.passwordField ?? null,
+        usernameFilled,
+      });
+      if (!fillResult.ok) {
+        return {
+          outcome: "unknown",
+          reasonCode: fillResult.reasonCode ?? null,
+          filledFieldStamps: fillResult.stamps ?? [],
+        };
+      }
+      if (fillResult.usernameOnlySubmitted) {
+        usernameFilled = true;
+        // F09: wait for an ACTUAL transition (bounded) instead of a
+        // fixed sleep; a page that never transitions is caught by the
+        // in-page resubmission guard on the next round.
+        const urlBefore = page.url();
+        const waitDeadline = Date.now() + 4_000;
+        while (Date.now() < waitDeadline && page.url() === urlBefore) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        continue;
+      }
+      break; // full fill succeeded — proceed to outcome detection
+    }
+    if (fillResult.usernameOnlySubmitted) {
+      // All rounds were username-only: treat as challenge (2FA/flow change).
+      return {
+        outcome: "challenge",
+        reasonCode: "two_step_flow_incomplete",
+        filledFieldStamps: fillResult.stamps ?? [],
+      };
+    }
+
+    // Bounded outcome detection (A-FR-09): success is password field gone
+    // AND off the login path with no error text; wrong credential stays on
+    // the form with visible error; everything else hands off.
+    const deadline = Date.now() + 5_000;
+    let probe = await page.evaluate<
+      ReturnType<typeof loginOutcomeProbePageFunction>
+    >(loginOutcomeProbePageFunction);
+    while (Date.now() < deadline) {
+      if (!probe.passwordStillVisible && !probe.onLoginPath && !probe.errorText) {
+        return {
+          outcome: "success",
+          reasonCode: null,
+          filledFieldStamps: fillResult.stamps ?? [],
+          ...(fillResult.formAction !== undefined && fillResult.filledFields
+            ? {
+                recipe: {
+                  formAction: fillResult.formAction,
+                  usernameField: fillResult.filledFields.username,
+                  passwordField: fillResult.filledFields.password,
+                },
+              }
+            : {}),
+        };
+      }
+      if (probe.errorText) {
+        return {
+          outcome: "wrong_credential",
+          reasonCode: "wrong_password",
+          filledFieldStamps: fillResult.stamps ?? [],
+        };
+      }
+      if (!probe.passwordStillVisible && probe.onLoginPath) {
+        // Left the form but still on an auth path: likely 2FA/OTP.
+        return {
+          outcome: "challenge",
+          reasonCode: "challenge_2fa",
+          filledFieldStamps: fillResult.stamps ?? [],
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      probe = await page.evaluate<
+        ReturnType<typeof loginOutcomeProbePageFunction>
+      >(loginOutcomeProbePageFunction);
+    }
+    return {
+      outcome: "unknown",
+      reasonCode: "login_outcome_unknown",
+      filledFieldStamps: fillResult.stamps ?? [],
+    };
+  }
+}

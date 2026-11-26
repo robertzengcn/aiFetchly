@@ -190,3 +190,35 @@ describe("sanitizeNoticeArgs", () => {
     expect(sanitizeNoticeArgs(undefined)).toEqual({});
   });
 });
+
+// ---------------------------------------------------------------------------
+// A-FR-15: the sentinel scan — a notice argument carrying an internal
+// credential marker is REDACTED, never forwarded to the chat.
+// ---------------------------------------------------------------------------
+describe("BrowserChatNoticePublisher sentinel scan (A-FR-15)", () => {
+  it("redacts a __decrypt_failed__-style argument value", () => {
+    const notices: unknown[] = [];
+    const publisher = new BrowserChatNoticePublisher(
+      (notice) => notices.push(notice)
+    );
+    const notice = publisher.publish({
+      sessionId: "mb_sentinel000001",
+      conversationId: "conv-1",
+      type: "browser_crashed",
+      transitionNonce: "sentinel-1",
+      messageArgs: {
+        reasonCode: "__decrypt_failed__",
+        accountLabel: "My Channel",
+      },
+      requiresUserAction: false,
+    });
+    expect(notice).not.toBeNull();
+    const args = (notice as unknown as {
+      messageArgs: Record<string, string | number | boolean>;
+    }).messageArgs;
+    expect(args.reasonCode).toBe("[redacted]");
+    expect(args.accountLabel).toBe("My Channel");
+    // The serialized notice never carries the marker.
+    expect(JSON.stringify(notices)).not.toContain("__decrypt_failed__");
+  });
+});

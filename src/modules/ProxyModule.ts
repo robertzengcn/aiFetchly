@@ -1,4 +1,5 @@
 import { log } from "@/modules/Logger";
+import { ProxyCredentialCodec, PROXY_DECRYPT_FAILED_USER } from "@/modules/browserProxy/ProxyCredentialCodec";
 import { IProxyApi } from "./interface/IProxyApi";
 import { ProxyModel } from "@/model/Proxy.model";
 import {
@@ -131,6 +132,45 @@ export class ProxyModule extends BaseModule implements IProxyApi {
   }
 
   /**
+   * B10/P-FR-07: renderer-safe detail — hasPassword only, never the
+   * stored (or legacy plaintext) secret. Main-process consumers that need
+   * the at-rest value keep using getProxyDetail.
+   */
+  async getProxyDetailSafe(
+    id: number
+  ): Promise<CommonApiresp<ProxyEntityType & { hasPassword?: boolean }>> {
+    try {
+      const proxy = await this.proxyModel.getProxyById(id);
+      if (!proxy) {
+        return { status: false, code: 404, msg: "Proxy not found" };
+      }
+      const decrypted = await ProxyCredentialCodec.decryptForUse(proxy.pass);
+      return {
+        status: true,
+        code: 200,
+        msg: "Success",
+        data: {
+          id: proxy.id,
+          host: proxy.host,
+          port: proxy.port,
+          user: proxy.user,
+          hasPassword: Boolean(decrypted.password),
+          protocol: proxy.protocol,
+          country_code: proxy.country_code,
+          addtime: proxy.addtime,
+        },
+      };
+    } catch (error) {
+      return {
+        status: false,
+        code: 500,
+        msg:
+          error instanceof Error ? error.message : "Failed to get proxy details",
+      };
+    }
+  }
+
+  /**
    * Save or update a proxy entity
    */
   async saveProxy(entity: ProxyEntityType): Promise<SaveProxyResp> {
@@ -238,22 +278,30 @@ export class ProxyModule extends BaseModule implements IProxyApi {
    * remove-failed candidates) instead of one getProxyDetail round-trip per id.
    */
   async getProxiesByIds(ids: readonly number[]): Promise<ProxyEntityType[]> {
-    try {
-      const proxies = await this.proxyModel.findByIds(ids);
-      return proxies.map((proxy) => ({
-        id: proxy.id,
-        host: proxy.host,
-        port: proxy.port,
-        user: proxy.user,
-        pass: proxy.pass,
-        protocol: proxy.protocol,
-        country_code: proxy.country_code,
-        addtime: proxy.addtime,
-      }));
-    } catch (error) {
-      console.error("Failed to fetch proxies by ids:", error);
-      return [];
+    // T11: stored passes are FieldCipher ciphertext (P-FR-08) — the
+    // proxy_check path needs plaintext for upstream auth, decrypted in
+    // the main process only and never returned to the renderer/LLM.
+    const rows = await this.proxyModel.findByIds(ids);
+    const out: ProxyEntityType[] = [];
+    for (const row of rows) {
+      const decrypted = await ProxyCredentialCodec.decryptForUse(
+        row.pass ?? null
+      );
+      // E06/P-FR-04: a FAILED decrypt on a row that HAD a secret must not
+      // launch or check with an empty password. The row carries a
+      // structured failure marker: user = decrypt-failed sentinel so the
+      // check path reports an auth failure for this proxy only.
+      if (decrypted.password === null && row.pass) {
+        out.push({
+          ...row,
+          pass: "",
+          user: PROXY_DECRYPT_FAILED_USER,
+        });
+        continue;
+      }
+      out.push({ ...row, pass: decrypted.password ?? "" });
     }
+    return out;
   }
 
   /**

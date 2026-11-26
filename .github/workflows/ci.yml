@@ -49,7 +49,7 @@ jobs:
           echo "NODE_GYP_FORCE_PYTHON=${PYTHON_BIN}" >> "$GITHUB_ENV"
 
       - name: Install Linux system dependencies for native modules
-        # apt indexes can flake during runner-image migrations (exit 100
+        # P1: apt indexes flake during runner-image migrations (exit 100
         # "unable to locate package" on update or install). Strategy:
         #   1. skip entirely when the deps are already present;
         #   2. retry install up to 3x, tolerating `apt-get update`
@@ -265,9 +265,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "Memory/swap before:"; free -h
-          # Use a path the runner image does not pre-mount. Doubled from 4G to
-          # 8G after package-smoke runs lost the runner mid-packaging (memory
-          # starvation kills the runner agent process).
+          # Use a path the runner image does not pre-mount. P1: doubled
+          # from 4G to 8G after package-smoke runs lost the runner mid-packaging
+          # (memory starvation kills the runner agent process, not the build).
           sudo fallocate -l 8G /swapfile-ci
           sudo chmod 600 /swapfile-ci
           sudo mkswap /swapfile-ci >/dev/null
@@ -380,12 +380,29 @@ jobs:
       - name: Build E2E Electron artifacts (main + preload)
         run: yarn build:e2e
 
+      - name: Install Playwright Chromium (browser-fixture specs)
+        # The _electron specs drive the project's installed Electron binary;
+        # the browserSignIn fixture spec additionally drives a plain
+        # Chromium page against the local HTTPS fixture — its browser must
+        # be present.
+        run: npx playwright install chromium
+
       - name: Run Electron E2E under xvfb
-        # Playwright drives the project's installed Electron binary (no Chromium
-        # download). The renderer is served by the Vite dev server via the
-        # playwright.config.ts webServer.
+        # Playwright drives the project's installed Electron binary for the
+        # _electron specs; the browser fixture spec uses the Chromium
+    #    installed above. The renderer is served by the Vite dev server
+        # and the login fixture by the playwright.config.ts webServers.
         run: |
+          # P1: start the deterministic login fixture OUTSIDE playwright — a
+          # fixture crash then surfaces as failed tests (with artifacts)
+          # instead of aborting the whole run without any.
+          node test/e2e/fixtures/fakeLoginSiteBoot.mjs &
+          FIXTURE_PID=
+          sleep 2
           xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" yarn playwright test
+          EXIT=0
+          kill $FIXTURE_PID 2>/dev/null || true
+          exit $EXIT
 
       - name: Upload E2E diagnostics
         if: always()

@@ -1,0 +1,654 @@
+/**
+ * Agent task control (PRD §6.12; technical design §18).
+ *
+ * Owns the AGENT task state layer, separate from the browser control layer
+ * (which stays in ManagedBrowserModule as `handoff`/`user_login_in_progress`):
+ *
+ *   running | waiting_for_user | paused | cancelling
+ *   | completed | failed | cancelled | interrupted
+ *
+ * Every user takeover sets BOTH layers: the browser moves to user control
+ * (AI commands rejected) and the agent loop stops at a safe point via its
+ * control gate. Only the user's dialog action ends a takeover — no model can
+ * resume itself (C-FR-03/04). Time spent waiting for the user never counts
+ * against active-time budgets (C-FR-09/D-21).
+ */
+
+export type AgentTaskControlState =
+  | "running"
+  | "waiting_for_user"
+  | "paused"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted"
+  // W02/D-FR-09: a partial runner ending (verification miss, escalation,
+  // runtime exhausted) is its own terminal state — never rewritten failed.
+  | "partial";
+
+export interface UserIntervention {
+  readonly reason: string;
+  readonly startedAtEpochMs: number;
+  readonly durationMs: number | null;
+}
+
+export interface AgentTaskControlGate {
+  readonly state: AgentTaskControlState;
+  /**
+   * Resolves when the gate reopens (resume); rejects when the task is
+   * stopped/cancelled while paused. Checked at every safe point.
+   */
+  waitUntilOpen(signal: AbortSignal): Promise<void>;
+}
+
+export interface TaskControlRecord {
+  readonly taskId: string;
+  // A13: mutable — the runtime re-registers the control task against the
+  // CHILD conversation (the clock's pause lookup uses it).
+  conversationId: string;
+  state: AgentTaskControlState;
+  reason: string | null;
+  /** Accumulated active (non-waiting) time in ms. */
+  activeTimeMs: number;
+  /** Non-null while the clock is running (not waiting for the user). */
+  runningSinceEpochMs: number | null;
+  interventions: UserIntervention[];
+  openIntervention: { reason: string; startedAtEpochMs: number } | null;
+}
+
+const TERMINAL_STATES: ReadonlySet<AgentTaskControlState> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "partial",
+]);
+
+export class AgentTaskControlService {
+  private readonly tasks = new Map<string, TaskControlRecord>();
+  private readonly waiters = new Map<
+    string,
+    Set<{ resolve: () => void; reject: (error: Error) => void }>
+  >();
+  /** R04: per-task resume generation (incremented on resume). */
+  private readonly resumeGenerations = new Map<string, number>();
+  /**
+   * B13/C-FR-07 + C03: per-generation resume notes with SEPARATE delivery
+   * cursors — the runner consumes for its next decision, the outer loop
+   * delivers to the transcript per pause-wait exit. The runner consuming
+   * a note no longer steals it from the live outer model turn (the old
+   * single consume-once string raced whichever consumer ran first).
+   */
+  private readonly resumeNotes = new Map<
+    string,
+    Map<number, { text: string; consumedForDecision: boolean }>
+  >();
+  /** Legacy consume-once map kept for callers/tests on the old shape. */
+  private readonly resumeInstructions = new Map<string, string>();
+  private readonly now: () => number;
+  /** F06: lazy sweep enforcing the 60-minute pause/wait cap. */
+  private pauseCapSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
+
+  public register(
+    taskId: string,
+    conversationId: string
+  ): TaskControlRecord {
+    const existing = this.tasks.get(taskId);
+    if (existing) {
+      // A13/C-FR-09: the conversation id is UPDATED for an existing record
+      // — the batch collector registers the row against the root
+      // conversation, and the runtime re-registers it against the CHILD
+      // conversation when the loop starts; the runtime clock's pause
+      // lookup uses the child conversation, so the record must reflect it.
+      existing.conversationId = conversationId;
+      return existing;
+    }
+    const record: TaskControlRecord = {
+      taskId,
+      conversationId,
+      state: "running",
+      reason: null,
+      activeTimeMs: 0,
+      runningSinceEpochMs: this.now(),
+      interventions: [],
+      openIntervention: null,
+    };
+    this.tasks.set(taskId, record);
+    return record;
+  }
+
+  public get(taskId: string): TaskControlRecord | null {
+    return this.tasks.get(taskId) ?? null;
+  }
+
+  public getState(taskId: string): AgentTaskControlState | null {
+    return this.tasks.get(taskId)?.state ?? null;
+  }
+
+  /**
+   * N03/C-FR-09: does the given id resolve to a task currently in a user
+   * wait state (paused/waiting)? Used by the runtime clock to freeze the
+   * deadline on an EXPLICIT pause (the job registry alone misses it).
+   */
+  public isUserWaitState(taskIdOrConversationId: string): boolean {
+    for (const record of this.tasks.values()) {
+      if (
+        (record.taskId === taskIdOrConversationId ||
+          record.conversationId === taskIdOrConversationId) &&
+        isWaitingState(record.state)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public setState(
+    taskId: string,
+    state: AgentTaskControlState,
+    reason?: string
+  ): void {
+    const record = this.tasks.get(taskId);
+    if (!record) {
+      return;
+    }
+    // F07: failed/completed are FINAL — no failed→completed overwrites.
+    // A cancelled record may still be REFINED by the collector: Return-
+    // now pre-cancels a batch, and the real per-task outcome (interrupted
+    // with partial results / failed / completed with usable output)
+    // replaces the pre-cancellation mark. G05/C-FR-11: the interrupted
+    // refinement is REQUIRED — the batch result says partial and the
+    // control record must agree.
+    if (TERMINAL_STATES.has(record.state)) {
+      const refinementAllowed =
+        record.state === "cancelled" &&
+        (state === "failed" ||
+          state === "completed" ||
+          state === "interrupted" ||
+          // W02: a Return-now pre-cancellation can be refined to the real
+          // partial outcome (usable output landed before the abort).
+          state === "partial");
+      if (refinementAllowed) {
+        record.state = state;
+        record.reason = reason ?? record.reason;
+      } else if (state === record.state) {
+        record.reason = reason ?? record.reason;
+      }
+      return;
+    }
+    if (record.state !== state) {
+      // Active-time accounting (C-FR-09/D-21): the clock accumulates only
+      // while running; waits freeze it and never count against budgets.
+      const willWait = isWaitingState(state);
+      const becomesTerminal = TERMINAL_STATES.has(state);
+      if (record.runningSinceEpochMs !== null && (willWait || becomesTerminal)) {
+        record.activeTimeMs += this.now() - record.runningSinceEpochMs;
+        record.runningSinceEpochMs = null;
+      } else if (
+        record.runningSinceEpochMs === null &&
+        !willWait &&
+        !becomesTerminal
+      ) {
+        record.runningSinceEpochMs = this.now();
+      }
+      record.state = state;
+    }
+    record.reason = reason ?? record.reason;
+    if (TERMINAL_STATES.has(state)) {
+      this.resolveAllWaiters(taskId);
+      // F07: bounded retirement — a terminal task can never be waited on
+      // or resumed again, so its transient state is released.
+      this.waiters.delete(taskId);
+      this.resumeGenerations.delete(taskId);
+      this.resumeNotes.delete(taskId);
+      this.resumeInstructions.delete(taskId);
+    }
+  }
+
+  /**
+   * R04/M-FR-07: controlled REOPEN for a NEW execution on the SAME
+   * control id. The runner terminalizes the shared lane record at its
+   * terminal; a second execution (a queued lane retry, a re-invoked
+   * agent task) would otherwise fail the gate as task_completed forever.
+   * ONLY a terminal record reopens: state returns to running, the
+   * running clock restarts, and the resume generation bumps so stale
+   * proposals from the PRIOR execution can never be consumed.
+   */
+  public reopenForExecution(taskId: string): boolean {
+    const record = this.tasks.get(taskId);
+    if (!record || !TERMINAL_STATES.has(record.state)) {
+      return false;
+    }
+    // B01: a USER stop and a startup interrupted sweep are irreversible —
+    // a later execution on the same control id must never resurrect
+    // them. Only a runner-completed terminal state (completed/failed/
+    // partial) may reopen for a sequential execution.
+    if (record.state === "cancelled" || record.state === "interrupted") {
+      return false;
+    }
+    record.state = "running";
+    record.reason = null;
+    record.runningSinceEpochMs = this.now();
+    this.resumeGenerations.set(
+      taskId,
+      (this.resumeGenerations.get(taskId) ?? 0) + 1
+    );
+    return true;
+  }
+
+  /** Begin a user intervention (waiting_for_user reason, C-FR-12). */
+  public beginIntervention(taskId: string, reason: string): void {
+    const record = this.tasks.get(taskId);
+    if (!record) {
+      return;
+    }
+    // X4: a terminal record never opens interventions (the sweep timer
+    // would leak), and an explicit PAUSE keeps its own state — an
+    // intervention on a paused task must not downgrade it to
+    // waiting_for_user (the UI never shows "Paused by you" then).
+    if (TERMINAL_STATES.has(record.state)) {
+      return;
+    }
+    record.openIntervention = { reason, startedAtEpochMs: this.now() };
+    if (record.state !== "paused") {
+      this.setState(taskId, "waiting_for_user", reason);
+    }
+    this.ensurePauseCapSweep();
+  }
+
+  /**
+   * F06: the pause cap is SCHEDULED — a lazy sweep runs while any task
+   * is paused/waiting and stops itself when none remain.
+   */
+  private ensurePauseCapSweep(): void {
+    if (this.pauseCapSweepTimer) {
+      return;
+    }
+    const timer = setInterval(() => {
+      let pausable = 0;
+      for (const [taskId, record] of this.tasks) {
+        if (record.state === "paused" || record.state === "waiting_for_user") {
+          pausable++;
+          this.enforcePauseCap(taskId);
+        }
+      }
+      if (pausable === 0 && this.pauseCapSweepTimer) {
+        clearInterval(this.pauseCapSweepTimer);
+        this.pauseCapSweepTimer = null;
+      }
+    }, 30_000);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    this.pauseCapSweepTimer = timer;
+  }
+
+  /**
+   * End the open intervention (user acted or the window lapsed). B02: this
+   * ends the SPAN only — the caller decides the state transition. A normal
+   * wait release (approval/credential/picker reply) calls
+   * `releaseWaitForUser`; an expiry maps to interrupted; a user takeover
+   * keeps its pause until resume().
+   */
+  public endIntervention(taskId: string): void {
+    const record = this.tasks.get(taskId);
+    if (!record?.openIntervention) {
+      return;
+    }
+    record.interventions.push({
+      reason: record.openIntervention.reason,
+      startedAtEpochMs: record.openIntervention.startedAtEpochMs,
+      durationMs: this.now() - record.openIntervention.startedAtEpochMs,
+    });
+    record.openIntervention = null;
+  }
+
+  /**
+   * B02/D-FR-10a/C-FR-06: the EXPLICIT normal wait release — a resolved
+   * approval/credential/picker reply reopens the gate and returns the
+   * record to running. Unlike `resume` (a USER takeover release), the
+   * resume generation is NOT bumped: a pending action that predates the
+   * wait is re-dispatched, never discarded as stale. Only a
+   * waiting_for_user record releases; paused stays paused and terminal
+   * states are untouched.
+   */
+  public releaseWaitForUser(taskId: string): boolean {
+    const record = this.tasks.get(taskId);
+    if (!record || record.state !== "waiting_for_user") {
+      return false;
+    }
+    this.setState(taskId, "running");
+    this.resolveAllWaiters(taskId);
+    return true;
+  }
+
+  /**
+   * The per-task control gate (C-FR-05): closed while paused. Agent loops
+   * and the runner check it at safe points (before each model call, before
+   * each tool call, between actions of a running program).
+   */
+  public getGate(taskId: string): AgentTaskControlGate {
+    // P0-fix (lint): no-this-alias — arrow closures capture the class
+    // instance lexically instead of aliasing `this`.
+    const readRecord = (): TaskControlRecord | undefined =>
+      this.tasks.get(taskId);
+    return {
+      get state(): AgentTaskControlState {
+        return readRecord()?.state ?? "cancelled";
+      },
+      waitUntilOpen: async (signal: AbortSignal): Promise<void> => {
+        // N03: an ALREADY-aborted signal rejects immediately — the waiter
+        // is never added after the fact.
+        if (signal.aborted) {
+          throw new Error("task_cancelled");
+        }
+        const record = this.tasks.get(taskId);
+        if (!record) {
+          throw new Error("task_not_found");
+        }
+        if (TERMINAL_STATES.has(record.state)) {
+          throw new Error(`task_${record.state}`);
+        }
+        if (!isWaitingState(record.state)) {
+          return;
+        }
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = (): void => {
+            reject(new Error("task_cancelled"));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          let set = this.waiters.get(taskId);
+          if (!set) {
+            set = new Set();
+            this.waiters.set(taskId, set);
+          }
+          set.add({
+            resolve: () => {
+              signal.removeEventListener("abort", onAbort);
+              resolve();
+            },
+            reject: (error: Error) => {
+              signal.removeEventListener("abort", onAbort);
+              reject(error);
+            },
+          });
+        });
+      },
+    };
+  }
+
+  /** Resume from pause/waiting: reopens the gate (user-initiated only). */
+  public resume(taskId: string): boolean {
+    const record = this.tasks.get(taskId);
+    if (!record || TERMINAL_STATES.has(record.state)) {
+      return false;
+    }
+    this.setState(taskId, "running");
+    // R04/C-FR-06: increment the generation so runners discard proposals
+    // that were pending across the pause/resume boundary.
+    const generation = (this.resumeGenerations.get(taskId) ?? 0) + 1;
+    this.resumeGenerations.set(taskId, generation);
+    // C03: re-key PENDING notes (recorded while the gate was closed) to
+    // the generation that resume just opened — per-generation delivery.
+    const notes = this.resumeNotes.get(taskId);
+    if (notes && notes.has(Number.MAX_SAFE_INTEGER)) {
+      const pending = notes.get(Number.MAX_SAFE_INTEGER)!;
+      notes.delete(Number.MAX_SAFE_INTEGER);
+      notes.set(generation, pending);
+    }
+    this.resolveAllWaiters(taskId);
+    return true;
+  }
+
+  /** R04: the resume generation for a task (0 if never paused). */
+  public getResumeGeneration(taskId: string): number {
+    return this.resumeGenerations.get(taskId) ?? 0;
+  }
+
+  /**
+   * B13/C-FR-07: the instructions the user typed when resuming. The
+   * consuming loop (runner/sub-agent) folds them into its next decision
+   * input; they are consumed exactly once FOR THE DECISION — the note
+   * stays available for the transcript's per-generation delivery (C03).
+   * Recorded while the gate is still closed (the IPC calls this before
+   * resume()), so the note is PENDING until resume() re-keys it to the
+   * new generation.
+   */
+  public recordResumeInstructions(taskId: string, instructions: string): void {
+    const trimmed = instructions.trim();
+    if (trimmed.length === 0) {
+      return;
+    }
+    let notes = this.resumeNotes.get(taskId);
+    if (!notes) {
+      notes = new Map();
+      this.resumeNotes.set(taskId, notes);
+    }
+    if (notes.size >= 8) {
+      const oldest = Math.min(...notes.keys());
+      notes.delete(oldest);
+    }
+    notes.set(Number.MAX_SAFE_INTEGER, {
+      text: trimmed.slice(0, 2000),
+      consumedForDecision: false,
+    });
+    // Legacy single-slot shape for callers/tests still reading it.
+    this.resumeInstructions.set(taskId, trimmed.slice(0, 2000));
+  }
+
+  public consumeResumeInstructions(taskId: string): string | null {
+    const notes = this.resumeNotes.get(taskId);
+    if (!notes) {
+      // Legacy shape fallback.
+      const stored = this.resumeInstructions.get(taskId) ?? null;
+      if (stored !== null) {
+        this.resumeInstructions.delete(taskId);
+      }
+      return stored;
+    }
+    const pending: string[] = [];
+    for (const note of notes.values()) {
+      if (!note.consumedForDecision) {
+        note.consumedForDecision = true;
+        pending.push(note.text);
+      }
+    }
+    return pending.length > 0 ? pending.join(" ") : null;
+  }
+
+  /**
+   * C03/C-FR-07: NON-consuming read for the AGENT TRANSCRIPT, scoped by
+   * generation — the caller delivers every note for a generation newer
+   * than its last delivery exactly once. The runner's decision consume
+   * no longer hides the text from the live outer model turn.
+   */
+  public peekResumeInstructionsSince(
+    taskId: string,
+    lastDeliveredGeneration: number
+  ): { text: string; latestGeneration: number } | null {
+    const notes = this.resumeNotes.get(taskId);
+    if (!notes) {
+      // Legacy shape fallback: deliver the pending note once per call
+      // window (the caller's cursor prevents replay).
+      const legacy = this.resumeInstructions.get(taskId) ?? null;
+      return legacy !== null
+        ? { text: legacy, latestGeneration: lastDeliveredGeneration + 1 }
+        : null;
+    }
+    const texts: string[] = [];
+    let latest = lastDeliveredGeneration;
+    for (const [generation, note] of notes) {
+      // C03: a PENDING note (recorded before resume re-keys it) must
+      // never leak MAX_SAFE_INTEGER as a generation — clamp it to the
+      // CURRENT generation so the caller's cursor stays monotonic.
+      const effectiveGeneration =
+        generation === Number.MAX_SAFE_INTEGER
+          ? this.getResumeGeneration(taskId)
+          : generation;
+      if (effectiveGeneration > lastDeliveredGeneration) {
+        texts.push(note.text);
+        latest = Math.max(latest, effectiveGeneration);
+      }
+    }
+    return texts.length > 0
+      ? { text: texts.join(" "), latestGeneration: latest }
+      : null;
+  }
+
+  /**
+   * B03/C-FR-07: NON-consuming read for the AGENT TRANSCRIPT. The
+   * transcript entry and the runner's next decision input must BOTH see
+   * the same text — the runner's safe point is the single consumer that
+   * clears it (its decision is the last use; a second resume records
+   * fresh text and the cycle repeats without replaying the old one).
+   */
+  public peekResumeInstructions(taskId: string): string | null {
+    const notes = this.resumeNotes.get(taskId);
+    if (notes && notes.size > 0) {
+      const texts: string[] = [];
+      for (const note of notes.values()) {
+        texts.push(note.text);
+      }
+      return texts.join(" ");
+    }
+    return this.resumeInstructions.get(taskId) ?? null;
+  }
+
+  /** Stop: cancels every waiter (the loop fails fast, C-FR-04). */
+  public cancel(taskId: string, reason = "user_stop"): void {
+    this.setState(taskId, "cancelled", reason);
+    this.resolveAllWaiters(taskId);
+  }
+
+  /**
+   * C-FR-14/D-FR-10: the startup sweep — every non-terminal control
+   * record is marked interrupted (partial results; no automatic resume).
+   * In-memory records cannot survive a restart, but the invariant is
+   * enforced at IPC-registration time so a future persistence layer (or
+   * a stale in-process record) can never leave a task running across a
+   * startup.
+   */
+  public sweepNonTerminalToInterrupted(reason = "startup_sweep"): number {
+    let swept = 0;
+    for (const [taskId, record] of [...this.tasks.entries()]) {
+      if (!TERMINAL_STATES.has(record.state)) {
+        this.setState(taskId, "interrupted", reason);
+        this.resolveAllWaiters(taskId);
+        swept++;
+      }
+    }
+    return swept;
+  }
+
+  /**
+   * T24/C-FR-09: the 60-minute pause cap. A paused task past the cap is
+   * marked interrupted (partial results; no automatic resume).
+   */
+  public enforcePauseCap(taskId: string, capMs = 60 * 60_000): boolean {
+    const record = this.tasks.get(taskId);
+    if (
+      !record ||
+      // The cap covers both user-wait layers (C-FR-09): a user pause AND
+      // an agent-requested handoff/waiting state share the same ceiling.
+      (record.state !== "paused" && record.state !== "waiting_for_user") ||
+      record.openIntervention === null
+    ) {
+      return false;
+    }
+    // Uses the service's (injectable) clock so tests and real timers agree.
+    const pausedFor = this.now() - record.openIntervention.startedAtEpochMs;
+    if (pausedFor >= capMs) {
+      this.setState(taskId, "interrupted", "pause_cap_expired");
+      this.endIntervention(taskId);
+      this.resolveAllWaiters(taskId);
+      return true;
+    }
+    return false;
+  }
+
+  /** C-FR-11: return results now — cancel all tasks of a batch. */
+  public cancelBatch(batchId: string, reason = "batch_return_now"): number {
+    let cancelled = 0;
+    for (const taskId of [...this.tasks.keys()]) {
+      if (taskId.startsWith(`${batchId}:`)) {
+        this.cancel(taskId, reason);
+        cancelled++;
+      }
+    }
+    return cancelled;
+  }
+
+  /** Active elapsed ms excluding user waits (D-21). */
+  public activeTimeMs(taskId: string): number {
+    const record = this.tasks.get(taskId);
+    if (!record) {
+      return 0;
+    }
+    return (
+      record.activeTimeMs +
+      (record.runningSinceEpochMs !== null
+        ? this.now() - record.runningSinceEpochMs
+        : 0)
+    );
+  }
+
+  private resolveAllWaiters(taskId: string): void {
+    const set = this.waiters.get(taskId);
+    if (!set) {
+      return;
+    }
+    const record = this.tasks.get(taskId);
+    for (const waiter of set) {
+      if (record && TERMINAL_STATES.has(record.state)) {
+        waiter.reject(new Error(`task_${record.state}`));
+      } else {
+        waiter.resolve();
+      }
+    }
+    set.clear();
+    this.waiters.delete(taskId);
+  }
+}
+
+function isWaitingState(state: AgentTaskControlState): boolean {
+  return state === "waiting_for_user" || state === "paused" || state === "cancelling";
+}
+
+let defaultService: AgentTaskControlService | null = null;
+
+export function getDefaultAgentTaskControlService(): AgentTaskControlService {
+  if (!defaultService) {
+    defaultService = new AgentTaskControlService();
+  }
+  return defaultService;
+}
+
+/** Test seam. */
+export function setDefaultAgentTaskControlServiceForTest(
+  service: AgentTaskControlService | null
+): void {
+  defaultService = service;
+}
+
+// W06/M-FR-08: user-visible task labels per agent task. Notices published
+// for a sub-agent-owned browser session carry the label ("Browser task
+// 2/3") into the ROOT conversation. Bounded: labels are transient state
+// and the map is cleared at capacity.
+const agentTaskLabels = new Map<string, string>();
+const MAX_TASK_LABELS = 500;
+
+export function registerAgentTaskLabel(agentTaskId: string, label: string): void {
+  if (agentTaskLabels.size >= MAX_TASK_LABELS) {
+    agentTaskLabels.clear();
+  }
+  agentTaskLabels.set(agentTaskId, label);
+}
+
+export function getAgentTaskLabel(agentTaskId: string): string | null {
+  return agentTaskLabels.get(agentTaskId) ?? null;
+}

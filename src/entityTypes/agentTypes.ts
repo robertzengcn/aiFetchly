@@ -172,6 +172,21 @@ export interface RunAgentRequest {
   taskPacket: AgentTaskPacket;
   parentConversationId?: string;
   /**
+   * W06/M-FR-08: a user-visible label for this run ("Browser task 2/3").
+   * Registered with the agent task id and carried on user-wait notices
+   * published for sessions this agent owns. Absent runs fall back to the
+   * agent definition's display name.
+   */
+  taskLabel?: string;
+  /**
+   * B02/M-FR-08: ONE task identity — when the caller owns a user-visible
+   * control record (the batch card's `batchId:index` row), the runtime
+   * registers and gates the CONTROL SERVICE under THAT id, so user
+   * pause/take-over/stop and the loop's gate address the same record.
+   * Persisted task rows keep the internal agt id.
+   */
+  controlTaskId?: string;
+  /**
    * The parent agent's id. Used (with {@link parentConversationId}) to issue
    * inter-agent handoff grants so the parent can read the child's preserved
    * tool outputs (T15b). Absent for top-level / user-driven runs.
@@ -191,6 +206,14 @@ export interface RunAgentRequest {
 /** Result of one specialist agent run. */
 export interface AgentResult {
   agentTaskId: string;
+  /**
+   * N01/M-FR-08: the CONTROL task id the caller provided
+   * (RunAgentRequest.controlTaskId) — the identity sessions, handoff
+   * waits, and control records share. Null when the run used its own
+   * internal id. The batch collector validates session ownership and
+   * scopes cleanup against THIS id.
+   */
+  controlTaskId?: string;
   agentId: string;
   agentVersion: number;
   status: "completed" | "failed" | "cancelled" | "timeout" | "blocked";

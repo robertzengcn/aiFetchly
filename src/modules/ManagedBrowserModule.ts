@@ -4,23 +4,40 @@ import * as fs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
-import { isAiOrProviderEnabled } from "@/service/AiFeatureGate";
 import {
+  MANAGED_BROWSER_SESSION_FREE_MEMORY_MIN_BYTES,
+  MANAGED_BROWSER_MAX_SESSIONS_PER_SITE_DEFAULT,
   MANAGED_BROWSER_ACTION_LIMITS,
   MANAGED_BROWSER_PILOT_PLATFORM_IDS,
   MANAGED_BROWSER_SESSION_ID_PREFIX,
   MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import {
+  PLATFORM_SESSION_MANIFEST,
   getPlatformManifest,
   matchesAllowedDomain,
   type PlatformSessionDefinition,
 } from "@/modules/PlatformSessionManifest";
 import { AccountSessionService } from "@/modules/AccountSessionService";
+import { getDefaultBrowserAiAvailabilityService } from "@/service/browserDecision/BrowserAiAvailabilityService";
+import {
+  parseUrlIdentity,
+  registrableDomainOf,
+} from "@/service/browserDecision/RegistrableDomain";
+import type { WorkerLoginRecipe } from "@/schemas/worker/managedBrowser";
+import type { BrowserProxySelection } from "@/service/browserProxy/BrowserProxySelectionService";
+import {
+  selectProxyForSession,
+  type ProxyRow,
+} from "@/service/browserProxy/BrowserProxySelectionService";
+import { ProxyCredentialCodec } from "@/modules/browserProxy/ProxyCredentialCodec";
 import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsModule";
 import {
   ManagedBrowserLeaseService,
   getDefaultManagedBrowserLeaseService,
+  accountLeaseKey,
+  publicSessionLeaseKey,
+  type AcquireLeaseResult,
 } from "@/service/ManagedBrowserLeaseService";
 import {
   ManagedBrowserSupervisor,
@@ -53,6 +70,7 @@ import {
 import { normalizedCookieArraySchema } from "@/schemas/accountCookies";
 import { decideCaptchaResolution } from "@/service/CaptchaResolutionPolicy";
 import { getDefaultCaptchaProviderService } from "@/service/CaptchaProviderService";
+import { getAgentTaskLabel } from "@/service/browserAgents/AgentTaskControlService";
 import type { NormalizedCookie } from "@/schemas/accountCookies";
 import type {
   BrowserActionProgram,
@@ -96,15 +114,47 @@ export class ManagedBrowserError extends Error {
   }
 }
 
+/**
+ * B04/D-FR-12/A-FR-06/08/15: the PUBLIC observation projection. The
+ * worker's `policyUrl` (credential-redacted, query PRESERVED) is trusted
+ * route data for exact reopen and policy decisions — it deliberately
+ * bypasses display-URL sanitization, so it must never become a model or
+ * renderer field. The module consumes it into the session record
+ * (`currentUrl`) and strips it from every observation that leaves this
+ * boundary; the display `url` stays the fully scrubbed field.
+ */
+export function publicObservationOf<T extends { policyUrl?: string }>(
+  observation: T
+): Omit<T, "policyUrl"> {
+  if (observation.policyUrl === undefined) {
+    return observation;
+  }
+  const { policyUrl: _trusted, ...rest } = observation;
+  return rest;
+}
+
 export interface StartManagedBrowserInput {
   readonly accountId?: number;
   readonly purpose: string;
+  /** T23/M-FR-07: owning agent task id for sub-agent driven sessions. */
+  readonly agentTaskId?: string;
+  /** B11/M-FR-07: the owning parent conversation for sub-agent sessions. */
+  readonly rootConversationId?: string;
+  /**
+   * PRD P-FR-01: optional proxy choice at session start. Account
+   * sessions default to their linked proxy; `direct`/different-proxy
+   * requests for account sessions require confirmation (P-FR-03).
+   */
+  readonly proxy?: BrowserProxySelection;
   readonly requestedStartUrl?: string;
   readonly conversationId?: string;
 }
 
 export interface StartManagedBrowserOptions {
-  /** AI entry points must pass USER_AI_ENABLED before any work (FR-P0-012). */
+  /**
+   * AI entry points must pass the provider-aware browser AI gate before any
+   * work (FR-P0-012, PRD D-FR-01).
+   */
   readonly aiEntryPoint?: boolean;
 }
 
@@ -112,14 +162,29 @@ interface ActiveSessionRecord {
   readonly sessionId: string;
   readonly accountId: number;
   readonly platformId: number;
-  readonly conversationId: string | null;
+  // N02/M-FR-07: mutable — the explicit keep-open transfer reassigns
+  // ownership from the child task to the parent conversation.
+  conversationId: string | null;
+  /** F03: retained so the account-lease transfer keeps ownership. */
+  ownerAgentTaskId: string | null;
+  /** B11: the root (parent) conversation of a sub-agent-owned session. */
+  rootConversationId: string | null;
   readonly leaseToken: string;
+  /** Lease key (account: or public:) used to release this session. */
+  readonly leaseKey: string;
+  /** Registrable domain for the per-site session cap (null = unknown). */
+  readonly siteDomain: string | null;
+  /** PRD P-FR-05: proxy switches used by this session (cap 3). */
+  proxySwitchCount: number;
   /** Assigned once, right after construction (record needs the client ref). */
   client: ManagedBrowserWorkerClient;
   readonly accountLabel: string;
   readonly platformLabel: string;
   state: ManagedBrowserSessionState;
   currentOrigin: string | null;
+  /** F18: the FULL sanitized URL (path/query) — a proxy switch must
+   * reopen the page the user was on, not just its origin (P-FR-02). */
+  currentUrl: string | null;
   pageTitle: string | null;
   pageRevision: number;
   authenticated: boolean | null;
@@ -133,6 +198,21 @@ interface ActiveSessionRecord {
   lastObservation: BrowserObservation | null;
   /** Challenge ids that consumed their single resolution attempt (§18.3). */
   readonly challengeAttempts: Set<string>;
+  /**
+   * N02: the proxy selection this session was STARTED with — the
+   * restore snapshot for a failed proxy switch.
+   */
+  readonly startProxySelection: BrowserProxySelection | null;
+  /**
+   * B08: the proxy row the session ACTUALLY launched through (null =
+   * direct). Restoring by id is deterministic — re-running an `auto`
+   * selector can resolve a DIFFERENT proxy. Assigned once the launch
+   * proxy is known (including the account-default fallback).
+   */
+  effectiveProxyId: number | null;
+  /** P-FR-09: the proxy host:port summary and country for the card. */
+  proxyHostLabel: string | null;
+  proxyCountry: string | null;
 }
 
 /**
@@ -148,6 +228,13 @@ export type ResolvedSessionProxy =
       readonly port: number;
       readonly username?: string;
       readonly password?: string;
+      /**
+       * B08: the proxy row this endpoint was resolved from — the
+       * authoritative id for health checks and deterministic restore.
+       */
+      readonly proxyId?: number;
+      /** N05/P-FR-06: the row's country — aligns locale/timezone. */
+      readonly countryCode?: string;
     }
   | { readonly mode: "unresolvable"; readonly reasonCode: string };
 
@@ -188,6 +275,8 @@ export interface ManagedBrowserModuleDeps {
   readonly executableResolver?: { resolve(): ExecutableResolutionResult };
   readonly isAiEnabled?: () => boolean;
   readonly mkdtemp?: (prefix: string) => Promise<string>;
+  /** Injectable free-memory probe for tests (PRD M-FR-06 admission). */
+  readonly freemem?: () => number;
   /** Cache coordinator (registry + policy). Defaults to the process singleton. */
   readonly cacheModule?: ManagedBrowserCacheCoordinator;
   readonly resolveCachePolicy?: (
@@ -222,6 +311,7 @@ export class ManagedBrowserModule {
   };
   private readonly isAiEnabled: () => boolean;
   private readonly mkdtemp: (prefix: string) => Promise<string>;
+  private readonly freemem: () => number;
   private readonly cacheModule: ManagedBrowserCacheCoordinator;
   private readonly resolveCachePolicy:
     | ((
@@ -235,7 +325,27 @@ export class ManagedBrowserModule {
 
   private readonly sessions = new Map<string, ActiveSessionRecord>();
 
-  /** Approval decisions keyed by requestId (consumed by the AI tool layer). */
+  /** P-FR-05: proxy switches per session lineage (capped at 3). */
+  private readonly proxySwitchCounts = new Map<string, number>();
+  /** P0-7: per-session switch serialization. */
+  private readonly proxySwitchInFlight = new Set<string>();
+  /** N05: per-domain in-flight start reservations (site-cap race guard). */
+  private readonly siteCapInFlight = new Map<string, number>();
+  private readonly runnerOwnedSessions = new Map<string, string>();
+  /**
+   * P1/S-FR-04: the AUTHORITATIVE per-session redirect ledger — the
+   * registrable domains the session actually visited (bounded). Extra-
+   * domain proposals must come from THIS ledger, never from model text.
+   */
+  private readonly sessionRedirectLedger = new Map<string, Set<string>>();
+  /** E15/D-FR-26: input-dispatch state of the in-flight program, per session. */
+  private readonly sessionInputDispatched = new Map<string, boolean>();
+  /**
+   * R13/D-FR-15a: the observation ID actually pinned for a pending
+   * approval, per session — the release path unpins THIS ID, not
+   * whatever observation happens to be latest at decision time.
+   */
+  private readonly approvalPinnedObservations = new Map<string, string>();
   private readonly approvalDecisions = new Map<
     string,
     {
@@ -278,11 +388,17 @@ export class ManagedBrowserModule {
           readonly riskClass: string;
           readonly messageKey: string;
           readonly contentSummary: string | null;
+          /** W06/M-FR-08: the ROOT conversation the prompt is published on. */
+          readonly conversationId: string | null;
         }
       ) => void)
     | null = null;
   /** Handoff-window expiry timers per session (FR-P0-013 enforcement). */
   private readonly handoffTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** C04/M-FR-13: monotonic window-index source (never resets). */
+  private nextWindowIndex = 0;
+  /** C04/M-FR-13: the grid index each live window was laid out at. */
+  private readonly sessionWindowIndexes = new Map<string, number>();
   private now: () => number = Date.now;
 
   constructor(deps: ManagedBrowserModuleDeps = {}) {
@@ -305,6 +421,7 @@ export class ManagedBrowserModule {
       deps.executableResolver ?? new BrowserExecutableResolver();
     this.isAiEnabled = deps.isAiEnabled ?? defaultIsAiEnabled;
     this.mkdtemp = deps.mkdtemp ?? ((prefix) => fs.promises.mkdtemp(prefix));
+    this.freemem = deps.freemem ?? (() => os.freemem());
     this.cacheModule =
       deps.cacheModule ?? getDefaultManagedBrowserCacheModule();
     this.resolveCachePolicy = deps.resolveCachePolicy;
@@ -343,12 +460,90 @@ export class ManagedBrowserModule {
       readonly riskClass: string;
       readonly messageKey: string;
       readonly contentSummary: string | null;
+      /** W06/M-FR-08: the ROOT conversation the prompt is published on. */
+      readonly conversationId: string | null;
     }) => void
   ): void {
     this.externalApprovalSink = sink;
   }
 
   /** Surface an approval request (called by the AI tool layer, §17). */
+  /**
+   * PRD D-FR-15a: pin/unpin an observation epoch in the worker so its
+   * element references stay resolvable across pending approvals and
+   * handoffs. Best-effort: an old worker or a stopped session ignores it.
+   */
+  public async setObservationPin(
+    sessionId: string,
+    observationId: string | null,
+    pinned: boolean
+  ): Promise<void> {
+    if (!observationId) {
+      return;
+    }
+    // R13: remember WHICH observation is pinned for the pending approval
+    // — the release path must unpin this exact ID, not the latest one.
+    if (pinned) {
+      this.approvalPinnedObservations.set(sessionId, observationId);
+    } else if (
+      this.approvalPinnedObservations.get(sessionId) === observationId
+    ) {
+      this.approvalPinnedObservations.delete(sessionId);
+    }
+    const record = this.sessions.get(sessionId);
+    if (!record || !record.client) {
+      return;
+    }
+    await record.client
+      .request(
+        { type: "PIN_OBSERVATION", observationId, pinned },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * C04/M-FR-13: retitle the OS window marker WITHOUT page-content
+   * mutation — "user" marks a takeover, "ai" names the AI controller.
+   * Best-effort: an old worker or a stopped session ignores it.
+   */
+  public async retitleSessionWindow(
+    sessionId: string,
+    prefix: "ai" | "user"
+  ): Promise<void> {
+    const record = this.sessions.get(sessionId);
+    if (!record || !record.client) {
+      return;
+    }
+    await record.client
+      .request(
+        { type: "RETITLE_WINDOW", prefix },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * R13: release the observation pinned for the pending approval — THE
+   * PINNED ID, not whatever observation is latest at decision time (a
+   * passive reobservation between publish and decision must not leave
+   * the original refs pinned forever, nor unpin the wrong epoch).
+   */
+  private unpinLastObservation(sessionId: string): void {
+    const record = this.sessions.get(sessionId);
+    const pinnedId = this.approvalPinnedObservations.get(sessionId) ?? null;
+    const observationId =
+      pinnedId ?? record?.lastObservation?.observationId ?? null;
+    if (observationId) {
+      if (pinnedId !== null) {
+        this.approvalPinnedObservations.delete(sessionId);
+      }
+      void this.setObservationPin(sessionId, observationId, false);
+    }
+  }
+
   public notifyApprovalRequired(input: {
     readonly sessionId: string;
     readonly requestId: string;
@@ -358,6 +553,9 @@ export class ManagedBrowserModule {
     readonly pageRevision?: number;
   }): void {
     if (this.externalApprovalSink) {
+      const record = this.sessions.get(input.sessionId);
+      // W06/M-FR-08: the prompt is published on the ROOT conversation —
+      // a sub-agent's approval card must surface in the parent chat.
       this.externalApprovalSink({
         sessionId: input.sessionId,
         requestId: input.requestId,
@@ -366,6 +564,8 @@ export class ManagedBrowserModule {
         riskClass: input.riskClass,
         messageKey: "managedBrowser.approval.required",
         contentSummary: input.contentSummary ?? null,
+        conversationId:
+          record?.rootConversationId ?? record?.conversationId ?? null,
       });
     }
   }
@@ -409,6 +609,43 @@ export class ManagedBrowserModule {
     }
 
     // 4. Platform manifest + pilot allowlist.
+    // F19/S-FR-05: the SITE REGISTRY is consulted FIRST — it replaces the
+    // pilot allowlist, and a registered site IS a platform definition
+    // (high-ID AI-created sites start account sessions without a static
+    // manifest entry). The static manifest remains a fallback for seeded
+    // rows.
+    let siteMatch: import("@/modules/BrowserSiteModule").SiteMatch | null =
+      null;
+    if (!publicBrowsing) {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      siteMatch =
+        (await getDefaultBrowserSiteModule().getSite(account.platformId)) ??
+        null;
+      if (!siteMatch) {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "platform_not_in_pilot"
+        );
+      }
+      // N04/S-FR-05: eligibility is a VERIFIED recipe or the GENERIC
+      // adapter — a bare registry row is not enough. YouTube (platformId
+      // 2, dedicated adapter) requires a verified recipe; every other
+      // registered site runs on the generic sign-in adapter.
+      if (account.platformId === 2 && siteMatch.status !== "verified") {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "site_not_verified"
+        );
+      }
+    }
+    // P06/S-FR-01: the REGISTRY is authoritative at launch — the
+    // siteMatch-derived definition wins and the static manifest is the
+    // legacy fallback (the old order let a stale static record override
+    // a seeded/updated registry site). siteMatch is guaranteed by the
+    // platform_not_in_pilot throw above, so the non-public branch always
+    // yields a manifest.
     const manifest: PlatformSessionDefinition | undefined = publicBrowsing
       ? {
           platformId: 0,
@@ -419,20 +656,55 @@ export class ManagedBrowserModule {
           requiredDomainSuffixes: [],
           browserProfileImportEnabled: false,
         }
-      : getPlatformManifest(account.platformId);
-    if (
-      !manifest ||
-      (!publicBrowsing && !MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.platformId))
-    ) {
-      throw new ManagedBrowserError(
-        "managed_browser_disabled",
-        "platform_not_in_pilot"
-      );
+      : (siteMatch
+        ? {
+            platformId: siteMatch.siteId,
+            platformName: siteMatch.name,
+            loginUrl:
+              siteMatch.loginUrl ?? `https://${siteMatch.registrableDomain}`,
+            verificationUrl:
+              siteMatch.verificationUrl ??
+              siteMatch.loginUrl ??
+              `https://${siteMatch.registrableDomain}`,
+            allowedDomainSuffixes: [...siteMatch.allowedDomainSuffixes],
+            requiredDomainSuffixes: [...siteMatch.requiredDomainSuffixes],
+            browserProfileImportEnabled: false,
+          }
+        : (getPlatformManifest(account.platformId) as PlatformSessionDefinition));
+
+    // 4a. PRD P-FR-01: explicit proxy choice at session start. Selection
+    // is fail-closed: SOCKS/unknown/unusable proxies are rejected, and an
+    // account session moving off its linked proxy requires confirmation.
+    let explicitProxy: ResolvedSessionProxy | null = null;
+    if (input.proxy) {
+      const linkedRows = await this.loadProxyRowsForAccount(accountId);
+      const selection = await selectProxyForSession({
+        selection: input.proxy,
+        linkedProxies: linkedRows,
+        loadProxyById: async (proxyId) =>
+          (await this.loadProxyRowById(proxyId)) ?? null,
+        isAccountSession: accountId > 0,
+      });
+      if (selection.status === "resolved") {
+        explicitProxy = selection.proxy;
+      } else if (selection.status === "confirmation_required") {
+        throw new ManagedBrowserError(
+          "proxy_confirmation_required",
+          selection.reasonCode
+        );
+      } else {
+        throw new ManagedBrowserError(
+          selection.reasonCode === "proxy_not_found"
+            ? "proxy_not_found"
+            : "proxy_no_usable_proxy",
+          selection.reasonCode
+        );
+      }
     }
 
     // 4b. GAP-11: an unresolvable account proxy FAILS the start before any
     // resource work — the session must never silently fall back to direct.
-    if (account.proxy?.mode === "unresolvable") {
+    if (account.proxy?.mode === "unresolvable" && !explicitProxy) {
       throw new ManagedBrowserError(
         "proxy_unavailable",
         account.proxy.reasonCode
@@ -443,25 +715,91 @@ export class ManagedBrowserModule {
       const decision = evaluateNavigationTarget(input.requestedStartUrl, {
         allowedOrigins: manifest.allowedDomainSuffixes,
         publicBrowsing,
+        // E01/F23: the E2E launch permits the loopback HTTP fixtures.
+        allowLoopbackFixtures: process.env.AIFETCHLY_E2E === "1",
       });
       if (!decision.allowed) throw new ManagedBrowserError("navigation_blocked", decision.reasonCode);
     }
 
-    // 5. Account lease (exclusive; global limit).
+    // 5. Account lease (exclusive per account; setting-backed global
+    // limit). Account-free sessions lease under their OWN session id so
+    // several public sessions can run in parallel (PRD M-FR-06).
     const sessionId = `${MANAGED_BROWSER_SESSION_ID_PREFIX}${uuidv4()
       .replace(/-/g, "")
       .slice(0, 16)}`;
     const sessionNonce = `nonce_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
-    const lease = this.leaseService.acquire(accountId, {
+    const leaseKey =
+      accountId > 0 ? accountLeaseKey(accountId) : publicSessionLeaseKey(sessionId);
+    // Free-memory admission check: each session is a worker plus a headed
+    // Chrome (roughly 300-800 MB). Fail closed when memory is short.
+    const freeMemoryBytes = this.freemem();
+    if (freeMemoryBytes < MANAGED_BROWSER_SESSION_FREE_MEMORY_MIN_BYTES) {
+      throw new ManagedBrowserError("insufficient_memory");
+    }
+    let siteCapReserved: string | null = null;
+    // Per-site cap (PRD M-FR-06): at most maxSessionsPerSite sessions per
+    // registrable domain to limit rate-limit and CAPTCHA exposure.
+    // N05: the capacity is RESERVED synchronously (counting registered
+    // sessions AND in-flight starts) before any subsequent await — three
+    // parallel starts on one domain can no longer all pass the check.
+    const requestedSiteDomain = await this.deriveSessionSiteDomain(
+      account.platformId,
+      input.requestedStartUrl
+    );
+    if (requestedSiteDomain) {
+      const effectiveSettings = await this.settings.getEffectiveSettings();
+      const activeForSite =
+        [...this.sessions.values()].filter(
+          (existing) => existing.siteDomain === requestedSiteDomain
+        ).length + (this.siteCapInFlight.get(requestedSiteDomain) ?? 0);
+      if (activeForSite >= effectiveSettings.maxSessionsPerSite) {
+        throw new ManagedBrowserError("site_limit_reached");
+      }
+      this.siteCapInFlight.set(
+        requestedSiteDomain,
+        (this.siteCapInFlight.get(requestedSiteDomain) ?? 0) + 1
+      );
+      siteCapReserved = requestedSiteDomain;
+    }
+    // R03: every operation after the synchronous reservation is inside
+    // this cleanup scope — early exits (already_active, account_in_use,
+    // global_session_limit, lease_without_record) and failures release
+    // the per-domain in-flight count.
+    const releaseSiteCap = (): void => {
+      if (siteCapReserved) {
+        const remaining =
+          (this.siteCapInFlight.get(siteCapReserved) ?? 1) - 1;
+        if (remaining <= 0) {
+          this.siteCapInFlight.delete(siteCapReserved);
+        } else {
+          this.siteCapInFlight.set(siteCapReserved, remaining);
+        }
+        siteCapReserved = null;
+      }
+    };
+    try {
+    // Setting-backed global limit (PRD M-FR-06). Defensive for injected
+    // fakes in tests: apply only when the service and setting exist.
+    const settingsForLimit = await this.settings.getEffectiveSettings();
+    if (
+      typeof this.leaseService.setGlobalLimit === "function" &&
+      Number.isFinite(settingsForLimit.maxConcurrentSessions)
+    ) {
+      this.leaseService.setGlobalLimit(
+        settingsForLimit.maxConcurrentSessions
+      );
+    }
+    const lease = this.leaseService.acquire(leaseKey, {
       sessionId,
       ownerConversationId: input.conversationId ?? null,
+      ownerAgentTaskId: input.agentTaskId ?? null,
     });
     if (lease.status === "already_active") {
       const existing = this.sessions.get(lease.sessionId);
       if (existing) {
         return this.toSafeStatus(existing);
       }
-      this.leaseService.release(accountId, lease.sessionId, "");
+      this.leaseService.release(leaseKey, lease.sessionId, "");
       throw new ManagedBrowserError("internal_error", "lease_without_record");
     }
     if (lease.status === "account_in_use") {
@@ -508,12 +846,34 @@ export class ManagedBrowserModule {
         accountId,
         platformId: account.platformId,
         conversationId: input.conversationId ?? null,
+        ownerAgentTaskId: input.agentTaskId ?? null,
+        rootConversationId: input.rootConversationId ?? null,
         leaseToken: lease.leaseToken,
+        leaseKey,
+        siteDomain: requestedSiteDomain,
+        proxySwitchCount: 0,
         client: null as unknown as ManagedBrowserWorkerClient,
         accountLabel: account.accountLabel,
         platformLabel: manifest.platformName,
         state: "starting",
         currentOrigin: null,
+        currentUrl: null,
+        startProxySelection: input.proxy ?? null,
+        effectiveProxyId:
+          explicitProxy &&
+          (explicitProxy.mode === "http" || explicitProxy.mode === "https")
+            ? (explicitProxy.proxyId ?? null)
+            : null,
+        proxyHostLabel:
+          explicitProxy &&
+          (explicitProxy.mode === "http" || explicitProxy.mode === "https")
+            ? `${explicitProxy.host}:${explicitProxy.port}`
+            : null,
+        proxyCountry:
+          explicitProxy &&
+          (explicitProxy.mode === "http" || explicitProxy.mode === "https")
+            ? (explicitProxy.countryCode ?? null)
+            : null,
         pageTitle: null,
         pageRevision: 0,
         authenticated: null,
@@ -538,6 +898,9 @@ export class ManagedBrowserModule {
       });
       record.client = client;
       this.sessions.set(sessionId, record);
+      // R03: the registered session now occupies the per-site cap —
+      // convert the in-flight reservation so startup is counted once.
+      releaseSiteCap();
       this.supervisor.register({
         sessionId,
         accountId,
@@ -548,7 +911,7 @@ export class ManagedBrowserModule {
           // handleTerminalEvent (which owns the final status + notice +
           // deletion).
           this.leaseService.release(
-            accountId,
+            record.leaseKey,
             sessionId,
             record.leaseToken
           );
@@ -573,29 +936,82 @@ export class ManagedBrowserModule {
         matchesAllowedDomain(cookie.domain, manifest.allowedDomainSuffixes)
       );
       let startCookies: NormalizedCookie[] = allowedCookies;
+      const effectiveProxy = explicitProxy ?? account.proxy ?? null;
       const sessionProxy =
-        account.proxy && account.proxy.mode !== "direct"
+        effectiveProxy &&
+        (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
           ? {
-              mode: account.proxy.mode,
-              host: account.proxy.host,
-              port: account.proxy.port,
-              ...(account.proxy.username
-                ? { username: account.proxy.username }
+              mode: effectiveProxy.mode as "http" | "https",
+              host: effectiveProxy.host,
+              port: effectiveProxy.port,
+              ...(effectiveProxy.username
+                ? { username: effectiveProxy.username }
                 : {}),
-              ...(account.proxy.password
-                ? { password: account.proxy.password }
+              ...(effectiveProxy.password
+                ? { password: effectiveProxy.password }
                 : {}),
             }
           : ({ mode: "direct" } as const);
       record.proxyActive = sessionProxy.mode !== "direct";
+      // N05/P-FR-06: the effective proxy's country code (locale/timezone).
+      const proxyCountry =
+        effectiveProxy &&
+        (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
+          ? (effectiveProxy.countryCode?.toUpperCase() ?? null)
+          : null;
+      // B08: when the launch proxy came from the ACCOUNT default (no
+      // explicit selection), resolve its row id for deterministic restore.
+      if (
+        record.effectiveProxyId === null &&
+        sessionProxy.mode !== "direct" &&
+        effectiveProxy &&
+        (effectiveProxy.mode === "http" || effectiveProxy.mode === "https")
+      ) {
+        record.effectiveProxyId = effectiveProxy.proxyId ?? null;
+        record.proxyHostLabel = `${effectiveProxy.host}:${effectiveProxy.port}`;
+        record.proxyCountry = effectiveProxy.countryCode ?? null;
+      }
       const reply = await client.request(
         {
           type: "START_SESSION",
           executable: resolution.descriptor,
-          launchPolicy: toWorkerLaunchPolicy(buildDefaultLaunchPolicy()),
+          launchPolicy: toWorkerLaunchPolicy(
+            buildDefaultLaunchPolicy({
+              // N05/P-FR-06: align the browser's locale and timezone with
+              // the proxy's country — a geo-consistent fingerprint.
+              locale:
+                proxyCountry != null
+                  ? (PROXY_LOCALE_BY_COUNTRY.get(proxyCountry) ?? null)
+                  : null,
+              timezoneId:
+                proxyCountry != null
+                  ? (PROXY_TIMEZONE_BY_COUNTRY.get(proxyCountry) ?? null)
+                  : null,
+            })
+          ),
           storagePolicy: { temporaryProfilePath, persistentCache },
           platform: toWorkerPlatform(manifest),
           proxy: sessionProxy,
+          // R05/M-FR-13: concurrent headed windows tile/offset (this
+          // session's index among the LIVE sessions drives the offset)
+          // and the OS window title names the AI controller.
+          windowLayout: (() => {
+            // C04/M-FR-13: a MONOTONIC window index — sessions.size reuses
+            // an occupied grid offset after one of several windows closes
+            // (size drops, the new session takes the LAST slot again).
+            const index = this.nextWindowIndex++;
+            this.sessionWindowIndexes.set(sessionId, index);
+            const perRow = 3;
+            const stepX = 60;
+            const stepY = 60;
+            return {
+              position: {
+                x: (index % perRow) * stepX,
+                y: Math.floor(index / perRow) * stepY,
+              },
+              aiWindowTitle: true,
+            };
+          })(),
           cookies: startCookies,
         },
         START_SESSION_TIMEOUT_MS,
@@ -618,6 +1034,7 @@ export class ManagedBrowserModule {
         const navDecision = evaluateNavigationTarget(input.requestedStartUrl, {
           allowedOrigins: [...manifest.allowedDomainSuffixes],
           publicBrowsing,
+          allowLoopbackFixtures: process.env.AIFETCHLY_E2E === "1",
         });
         if (navDecision.allowed) {
           const navigation = await this.requestWorker(
@@ -651,7 +1068,9 @@ export class ManagedBrowserModule {
         // Failures BEFORE supervisor registration (executable resolution,
         // profile creation) can never be released by the supervisor —
         // release the lease directly or it leaks until app restart.
-        this.leaseService.release(accountId, sessionId, lease.leaseToken);
+        // Pre-record failure path (executable missing): the lease key is
+        // still in scope; record.leaseKey does not exist yet.
+        this.leaseService.release(leaseKey, sessionId, lease.leaseToken);
       }
       this.supervisor.handleTerminal(sessionId, cause);
       if (error instanceof ManagedBrowserError) {
@@ -662,6 +1081,12 @@ export class ManagedBrowserModule {
         null,
         error instanceof Error ? error.message : String(error)
       );
+    }
+    } finally {
+      // R03: every exit from start releases the per-domain in-flight
+      // reservation (early exits, failures, or conversion at
+      // registration — releaseSiteCap is idempotent).
+      releaseSiteCap();
     }
   }
 
@@ -688,6 +1113,162 @@ export class ManagedBrowserModule {
       }
     }
     return null;
+  }
+
+  /**
+   * E20/M-FR-09: release every session whose owner conversation matches —
+   * a crashed/cancelled batch child may exit WITHOUT reporting a
+   * session_id, leaving the account lease and the global slot held. Best
+   * effort: sessions already stopped are no-ops.
+   */
+  public async stopAllForConversation(
+    conversationId: string,
+    reason: "cancelled" | "user_stop" = "cancelled"
+  ): Promise<number> {
+    let stopped = 0;
+    for (const status of this.listActiveSessions()) {
+      const owned =
+        status.ownerConversationId === conversationId ||
+        status.rootConversationId === conversationId;
+      if (!owned) {
+        continue;
+      }
+      try {
+        await this.stop(status.sessionId, reason);
+        stopped++;
+      } catch {
+        /* best effort */
+      }
+    }
+    return stopped;
+  }
+
+  /**
+   * B01/M-AC-01: cleanup scoped to ONE agent task's authoritative session
+   * ownership — stops only sessions whose ownerAgentTaskId matches. The
+   * conversation-scoped sweep (above) also matches root conversations, so
+   * it can close SIBLING and PARENT sessions; the batch collector must
+   * use THIS method for child cleanup.
+   */
+  public async stopAllForAgentTask(
+    agentTaskId: string,
+    reason: "cancelled" | "user_stop" = "cancelled"
+  ): Promise<{ stopped: number; failedSessionIds: readonly string[] }> {
+    let stopped = 0;
+    const failedSessionIds: string[] = [];
+    for (const record of this.sessions.values()) {
+      if (record.ownerAgentTaskId !== agentTaskId) {
+        continue;
+      }
+      try {
+        await this.stop(record.sessionId, reason);
+        stopped++;
+      } catch {
+        // N02: a caller awaiting cleanup can distinguish full from
+        // partial cleanup — the failed session ids ride the result.
+        failedSessionIds.push(record.sessionId);
+      }
+    }
+    return { stopped, failedSessionIds };
+  }
+
+  /**
+   * B01/M-FR-07: the authoritative owner of a session — the owning agent
+   * task id (null for directly-owned sessions). The batch collector
+   * validates a child-reported session_id against its own task BEFORE
+   * stopping or transferring it.
+   */
+  public getSessionOwnerAgentTaskId(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.ownerAgentTaskId ?? null;
+  }
+
+  /**
+   * R04/M-FR-08: the LIVE session id owned by an agent task — the batch
+   * card events carry it on every lane emission so the row's browser
+   * controls address the right session even before the child finishes.
+   */
+  public findSessionIdForAgentTask(agentTaskId: string): string | null {
+    for (const [sessionId, record] of this.sessions) {
+      if (record.ownerAgentTaskId === agentTaskId) {
+        return sessionId;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * N02/M-FR-07: EXPLICIT keep-open ownership transfer — the session's
+   * ownerAgentTaskId is cleared and the parent conversation becomes the
+   * direct owner, so child cleanup can never touch it afterwards and the
+   * parent's ownership checks pass. Refuses a session the task does not
+   * own.
+   */
+  public async transferSessionToConversation(
+    sessionId: string,
+    parentConversationId: string
+  ): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    // A07/M-FR-07/R06: the LEASE owner moves TOGETHER with the session —
+    // through the module's OWN lease service (the same instance that
+    // acquired it, not a global re-read that diverges in tests/embedded
+    // hosts). R06: a lease held by a DIFFERENT session on this key means
+    // the ownership cannot move coherently — the transfer is REFUSED
+    // before any mutation (never a session owned by the parent while a
+    // foreign session holds the account lease). The reassignment is
+    // verified afterwards, and a failed verification ROLLS BACK both the
+    // lease and the record so the caller sees the pre-transfer state.
+    const lease = this.leaseService.getLease(record.leaseKey);
+    // C05/M-FR-07: a live session ALWAYS holds its lease — a missing lease
+    // is inconsistent state and must not reach the owner change.
+    if (!lease) {
+      throw new ManagedBrowserError(
+        "session_not_owned",
+        "no live lease on this key; transfer refused"
+      );
+    }
+    if (lease.sessionId !== sessionId) {
+      throw new ManagedBrowserError(
+        "session_not_owned",
+        "a foreign session holds this lease; transfer refused"
+      );
+    }
+    if (lease.sessionId === sessionId) {
+      // C05/M-FR-07: the rollback must restore the PRIOR owners — the
+      // lease object is mutated in place by the reassignment, so the
+      // previous values are captured BEFORE it (reading the same object
+      // after the mutation would "roll back" to the new owners).
+      const priorOwnerConversationId = lease.ownerConversationId;
+      const priorOwnerAgentTaskId = lease.ownerAgentTaskId;
+      this.leaseService.reassignLeaseOwner(
+        record.leaseKey,
+        parentConversationId,
+        null
+      );
+      const moved = this.leaseService.getLease(record.leaseKey);
+      if (
+        !moved ||
+        moved.sessionId !== sessionId ||
+        moved.ownerConversationId !== parentConversationId ||
+        moved.ownerAgentTaskId !== null
+      ) {
+        // R06: roll the lease back to the pre-transfer owner so the
+        // caller keeps a CONSISTENT state (child ownership + child lease).
+        this.leaseService.reassignLeaseOwner(
+          record.leaseKey,
+          priorOwnerConversationId ?? "",
+          priorOwnerAgentTaskId
+        );
+        throw new ManagedBrowserError(
+          "session_not_owned",
+          "lease owner reassignment did not take effect; transfer rolled back"
+        );
+      }
+    }
+    record.ownerAgentTaskId = null;
+    record.conversationId = parentConversationId;
+    record.rootConversationId = null;
+    this.pushStatus(record);
+    return this.toSafeStatus(record);
   }
 
   public listActiveSessions(): readonly SafeManagedBrowserStatus[] {
@@ -726,10 +1307,16 @@ export class ManagedBrowserModule {
         };
       const accounts = await new Sam().getAllSocialAccounts();
       /* eslint-enable @typescript-eslint/no-var-requires */
+      // S-FR-05: eligible = the account's platform is a REGISTERED site.
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const siteModule = getDefaultBrowserSiteModule();
+      const registeredIds = new Set(
+        (await siteModule.listSites()).map((site) => site.siteId)
+      );
       return accounts
-        .filter((account) =>
-          MANAGED_BROWSER_PILOT_PLATFORM_IDS.includes(account.social_type_id)
-        )
+        .filter((account) => registeredIds.has(account.social_type_id))
         .map((account) => ({
           accountId: account.id,
           platformId: account.social_type_id,
@@ -757,7 +1344,8 @@ export class ManagedBrowserModule {
     const record = this.requireSession(sessionId);
     if (
       record.state !== "handoff" &&
-      record.state !== "user_login_in_progress"
+      record.state !== "user_login_in_progress" &&
+      record.state !== "login_required"
     ) {
       throw new ManagedBrowserError("action_not_allowed");
     }
@@ -804,6 +1392,41 @@ export class ManagedBrowserModule {
       programDigest: input.programDigest ?? null,
       pageRevision: input.pageRevision ?? null,
     });
+    // PRD D-FR-15a: the pending work ended, so the pinned observation's
+    // TTL restarts from now.
+    this.unpinLastObservation(input.sessionId);
+  }
+
+  /**
+   * F06: NON-consuming probe for a recorded approval decision — the
+   * in-job approval wait polls this while the dialog is open. Same
+   * matching/expiry rules as consume, nothing is deleted.
+   */
+  public peekApprovalForProgram(input: {
+    readonly sessionId: string;
+    readonly programDigest: string;
+    readonly pageRevision: number;
+  }): "approve" | "deny" | null {
+    for (const entry of this.approvalDecisions.values()) {
+      if (entry.sessionId !== input.sessionId) {
+        continue;
+      }
+      if (this.now() - entry.recordedAtEpochMs > 10 * 60_000) {
+        continue;
+      }
+      if (entry.decision === "deny") {
+        return "deny";
+      }
+      if (
+        entry.programDigest === null ||
+        entry.programDigest !== input.programDigest ||
+        entry.pageRevision === null
+      ) {
+        continue;
+      }
+      return "approve";
+    }
+    return null;
   }
 
   /**
@@ -829,14 +1452,15 @@ export class ManagedBrowserModule {
         }
         return "deny";
       }
-      // Review fix: a NULL digest or revision NEVER matches — null-bound
-      // approvals were wildcards that authorized any program/script.
-      // Approvals must be recorded with their exact digest + revision.
+      // Review fix: a NULL digest NEVER matches — null-bound approvals
+      // were wildcards that authorized any program/script. D-FR-27: the
+      // SEMANTIC digest is the match key; the page revision is recorded
+      // for auditing but does NOT gate the match — a reobservation on
+      // the same page keeps the semantic action unchanged.
       if (
         entry.programDigest === null ||
         entry.programDigest !== input.programDigest ||
-        entry.pageRevision === null ||
-        entry.pageRevision !== input.pageRevision
+        entry.pageRevision === null
       ) {
         continue; // a stale/unbound approve for a DIFFERENT program never matches
       }
@@ -876,16 +1500,50 @@ export class ManagedBrowserModule {
       throw new ManagedBrowserError("internal_error");
     }
     record.pageRevision = message.observation.pageRevision;
+    // A-FR-01/N03: a VISIBLE password field is surfaced to the user with
+    // the tool that handles it — the assistant fills saved credentials
+    // via browser_sign_in and never types passwords.
+    if (message.observation.notices.some((n) => n.code === "sensitive_field_visible")) {
+      this.publishNotice(
+        record,
+        "sensitive_field_visible",
+        `sfv-${message.observation.pageRevision}`,
+        {},
+        false
+      );
+    }
+    // Track the live origin for the sign-in site gate (A-FR-02) and the
+    // approval fingerprint's site component (D-FR-27).
+    record.currentOrigin = message.observation.origin || record.currentOrigin;
+this.recordVisitedDomain(record, record.currentOrigin);
+// R03: POLICY reads the trusted URL (query preserved); the display url
+// stays scrubbed. The proxy-switch reopen (P-FR-02) needs the FULL url.
+// B04/D-FR-12: the trusted URL is consumed HERE, into the main-process
+// session record only — the PUBLIC observation below never carries it.
+record.currentUrl = message.observation.policyUrl || message.observation.url || record.currentUrl;
+    // B04/D-FR-12: explicit public projection — the worker's trusted
+    // `policyUrl` is route data for reopen/policy decisions and must not
+    // become a model or renderer field (it bypasses display URL
+    // sanitization by design; it stays on the internal interface).
+    const publicObservation = publicObservationOf(message.observation);
     // Cache the sanitized observation so risk classification can resolve
     // element refs to their role/name descriptors (GAP-01).
-    record.lastObservation = message.observation;
-    return message.observation;
+    record.lastObservation = publicObservation;
+    return publicObservation;
   }
 
   /**
    * Latest sanitized observation for a live session (null when none was
    * taken). Used by the AI tool layer to resolve ref → target descriptor.
    */
+  /**
+   * E15/D-FR-26: was input dispatched by the session's IN-FLIGHT program?
+   * Read by the step-timeout path to classify known no-effect vs unknown.
+   */
+  public isInputDispatched(sessionId: string): boolean {
+    return this.sessionInputDispatched.get(sessionId) === true;
+  }
+
   public getLastObservation(
     sessionId: string
   ): BrowserObservation | null {
@@ -898,19 +1556,45 @@ export class ManagedBrowserModule {
   ): Promise<ManagedBrowserOutboundMessage> {
     const record = this.requireSession(sessionId);
     this.guard(record, "RUN_ACTIONS");
-    return this.requestWorker(
+    const message = await this.requestWorker(
       record,
       { type: "RUN_ACTIONS", program },
       MANAGED_BROWSER_ACTION_LIMITS.programWallTimeMs,
       (m) => m.type === "ACTION_RESULT" || m.type === "HANDOFF_REQUIRED"
     );
+    // PRD D-FR-11: cache the post-action observation and page revision
+    // BEFORE the caller classifies the next action, so ref resolution and
+    // risk classification use the live page state. A failed/older
+    // snapshot can never replace a newer one.
+    let outbound = message;
+    if (outbound.type === "ACTION_RESULT" && outbound.observation) {
+      if (outbound.observation.pageRevision >= record.pageRevision) {
+        record.pageRevision = outbound.observation.pageRevision;
+        record.currentOrigin = outbound.observation.origin || record.currentOrigin;
+this.recordVisitedDomain(record, record.currentOrigin);
+// R03: POLICY reads the trusted URL (query preserved). B04/D-FR-12: it is
+// consumed into the session record only — never a model/renderer field.
+record.currentUrl = outbound.observation.policyUrl || outbound.observation.url || record.currentUrl;
+        record.lastObservation = publicObservationOf(outbound.observation);
+      }
+      // B04/D-FR-12: the returned observation is ALWAYS the public
+      // projection — stale or fresh, the trusted policy URL never leaves
+      // the module boundary.
+      outbound = {
+        ...outbound,
+        observation: publicObservationOf(outbound.observation),
+      } as typeof outbound;
+    }
+    return outbound;
   }
 
   /**
    * GAP-14: propagate job/conversation cancellation to the ACTIVE worker
    * request. The worker aborts the in-flight program between actions and
-   * returns an outcome whose effect reflects uncertainty (cancelled
-   * consequential steps keep effect=unknown).
+   * returns an outcome whose effect reflects uncertainty: with the
+   * dispatch-phase classification in BrowserActionExecutor (PRD D-FR-26),
+   * a cancellation/failure after input dispatch reports effect=unknown,
+   * while a cancellation before any dispatch reports effect=known.
    */
   public async cancelActiveRequest(sessionId: string): Promise<void> {
     const record = this.sessions.get(sessionId);
@@ -1032,6 +1716,17 @@ export class ManagedBrowserModule {
     );
     record.state = "handoff";
     record.handoffReason = reason;
+    // C04/M-FR-13: the window marker follows control — the takeover
+    // renames the window to the user marker (the [AI] label no longer
+    // sticks while the user drives).
+    void this.retitleSessionWindow(sessionId, "user");
+    // PRD D-FR-15a: keep the latest observation's refs resolvable for
+    // the whole handoff window (may last up to 60 minutes).
+    void this.setObservationPin(
+      sessionId,
+      record.lastObservation?.observationId ?? null,
+      true
+    );
     this.pushStatus(record);
     return this.toSafeStatus(record);
   }
@@ -1040,6 +1735,37 @@ export class ManagedBrowserModule {
    * Manual-login verification (§13.2): publish the notice lifecycle and
    * resume ONLY after the adapter confirms authentication.
    */
+  /**
+   * E16/A-FR-03: restore an account's cookie snapshot onto the LIVE
+   * session and re-observe — a still-valid cookie session reaches
+   * authenticated WITHOUT typing the password (A-FR-11).
+   */
+  public async restoreAccountCookies(
+    sessionId: string,
+    accountId: number
+  ): Promise<{ applied: boolean; authenticated: boolean | null }> {
+    const record = this.requireSession(sessionId);
+    this.guard(record, "OBSERVE");
+    const snapshot = await this.sessionService.getDecryptedSnapshot(accountId);
+    const manifest =
+      (await this.deriveManifestFromSite(record.platformId)) ??
+      (getPlatformManifest(record.platformId) ?? undefined);
+    const allowedCookies = snapshot.cookies.filter((cookie) =>
+      matchesAllowedDomain(cookie.domain, manifest?.allowedDomainSuffixes ?? [])
+    );
+    if (allowedCookies.length === 0) {
+      return { applied: false, authenticated: record.authenticated };
+    }
+    await this.requestWorker(
+      record,
+      { type: "SET_COOKIES", cookies: allowedCookies } as never,
+      MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+      (m) => m.type === "SESSION_STATE_CHANGED"
+    );
+    const reObserved = await this.observe(sessionId);
+    return { applied: true, authenticated: reObserved ? record.authenticated : null };
+  }
+
   public async verifyManualLogin(
     sessionId: string
   ): Promise<SafeManagedBrowserStatus> {
@@ -1069,14 +1795,16 @@ export class ManagedBrowserModule {
         false
       );
       this.publishNotice(record, "task_resuming", "verify-resume", {}, false);
+      // PRD D-FR-15a: pending work ended with the successful verification.
+      this.unpinLastObservation(sessionId);
     } else {
       const returned =
         message.type === "SESSION_STATE_CHANGED" ? message.state : priorState;
       record.state =
-        returned === "handoff" || returned === "user_login_in_progress"
+        returned === "handoff" || returned === "user_login_in_progress" || returned === "login_required"
           ? returned
-          : priorState === "handoff"
-            ? "handoff"
+          : priorState === "handoff" || priorState === "login_required"
+            ? priorState === "handoff" ? "handoff" : "login_required"
             : "user_login_in_progress";
       this.publishNotice(record, "login_verification_failed", "verify-done", {
         reasonCode:
@@ -1105,6 +1833,29 @@ export class ManagedBrowserModule {
     // a worker that is actually ready (review finding).
     if (message.type === "SESSION_STATE_CHANGED") {
       record.state = message.state;
+      // C04/M-FR-13: the AI controller marker returns on resume.
+      void this.retitleSessionWindow(sessionId, "ai");
+      // B13/C-FR-07: resume ADVANCES the page revision — the worker has
+      // already reset its reference registry, and the module mirror must
+      // follow so held approvals and stale refs against the pre-handoff
+      // page can never match again. The agent must observe before acting.
+      record.pageRevision += 1;
+      // PRD D-FR-15a: handoff ended; the pinned observation's TTL
+      // restarts.
+      this.unpinLastObservation(sessionId);
+    } else {
+      // R04: a HANDOFF_REQUIRED reply means the worker REFUSED the
+      // resume (an action or dialog is still held) — the session stays
+      // in user control and the caller learns the resume did NOT
+      // happen, instead of reading a success card while the worker is
+      // still blocked.
+      // The code is the existing worker-safe "challenge_in_progress":
+      // the worker still holds an action/dialog — the resume did NOT
+      // happen and the session stays under user control.
+      throw new ManagedBrowserError(
+        "challenge_in_progress",
+        "worker reported HANDOFF_REQUIRED — resolve the held action first; resume refused"
+      );
     }
     this.pushStatus(record);
     return this.toSafeStatus(record);
@@ -1144,7 +1895,14 @@ export class ManagedBrowserModule {
       if (!parsed.success || parsed.data.length === 0) {
         return; // keep last valid snapshot
       }
-      const manifest = getPlatformManifest(record.platformId);
+      // F19 + R08/S-FR-05/06: the SITE REGISTRY is the AUTHORITATIVE
+      // cookie-policy source — the static manifest is only a seed for
+      // legacy platform ids the registry does not know. Preferring the
+      // static list persisted cookies for allowed-domains the seeded
+      // site's narrower registry suffixes never consented to.
+      const manifest =
+        (await this.deriveManifestFromSite(record.platformId)) ??
+        getPlatformManifest(record.platformId);
       if (!manifest) {
         return;
       }
@@ -1219,7 +1977,11 @@ export class ManagedBrowserModule {
         this.clearHandoffWindow(record);
         break;
       case "LOGIN_REQUIRED":
-        record.state = "user_login_in_progress";
+        // login_required is a NON-user-control state: the adapter says
+        // the user is not authenticated and the automated sign-in flow
+        // (browser_sign_in) is about to run. user_login_in_progress is
+        // only set when the USER manually initiates login via handoff.
+        record.state = "login_required";
         record.authenticated = false;
         this.enterHandoffWindow(record);
         this.publishNotice(record, "login_required", "login-start", {
@@ -1257,6 +2019,15 @@ export class ManagedBrowserModule {
             totalSteps: event.totalSteps,
             messageCode: event.messageCode,
           });
+        }
+        // E15/D-FR-26: track the dispatch state of the IN-FLIGHT program —
+        // the step-timeout path reads it to classify known no-effect vs
+        // unknown.
+        if (event.inputDispatched !== undefined) {
+          this.sessionInputDispatched.set(
+            record.sessionId,
+            event.inputDispatched
+          );
         }
         break;
       case "SESSION_STOPPED":
@@ -1315,6 +2086,8 @@ export class ManagedBrowserModule {
     this.cacheModule.onSessionTerminal(sessionId);
     this.clearHandoffTimer(sessionId);
     this.sessions.delete(sessionId);
+    // C04/M-FR-13: the window index dies with the session record.
+    this.sessionWindowIndexes.delete(sessionId);
   }
 
   private requireSession(sessionId: string): ActiveSessionRecord {
@@ -1363,13 +2136,24 @@ export class ManagedBrowserModule {
     messageArgs: Readonly<Record<string, string | number | boolean>> = {},
     requiresUserAction = true
   ): void {
+    // W06/M-FR-08: the notice is PUBLISHED ON the ROOT conversation — for
+    // a sub-agent-owned session `record.conversationId` is the hidden
+    // agent-v2 conversation the chat UI never shows. Ownership checks
+    // keep using record.conversationId (they already allow the root).
+    const noticeConversationId =
+      record.rootConversationId ?? record.conversationId ?? "workspace";
+    // The task label names the task in the parent chat ("Browser task 2/3").
+    const taskLabel = record.ownerAgentTaskId
+      ? getAgentTaskLabel(record.ownerAgentTaskId)
+      : null;
     const notice = this.noticePublisher.publish({
       sessionId: record.sessionId,
-      conversationId: record.conversationId ?? "workspace",
+      conversationId: noticeConversationId,
       type,
       transitionNonce,
       messageArgs,
       requiresUserAction,
+      ...(taskLabel ? { taskLabel } : {}),
     });
     if (notice && this.externalNoticeSink) {
       this.externalNoticeSink(notice);
@@ -1384,6 +2168,796 @@ export class ManagedBrowserModule {
     }
   }
 
+  /** Raw (encrypted-at-rest) proxy rows linked to an account. */
+  private async loadProxyRowsForAccount(accountId: number): Promise<ProxyRow[]> {
+    if (accountId <= 0) {
+      // E07/P-FR-01: a PUBLIC session's `auto` selects from ALL
+      // browser-usable stored proxies (checked HTTP(S)), not from an
+      // empty account-linked list. Decryption stays in the main process
+      // and only the resolved endpoint is used.
+      try {
+        const { ProxyModel } = await import("@/model/Proxy.model");
+        const { ProxyCheckModel, proxyCheckStatus } = await import(
+          "@/model/ProxyCheck.model"
+        );
+        const { Token } = await import("@/modules/token");
+        const { USERSDBPATH } = await import("@/config/usersetting");
+        const model = new ProxyModel(new Token().getValue(USERSDBPATH));
+        const checkModel = new ProxyCheckModel(
+          new Token().getValue(USERSDBPATH)
+        );
+        const rows = await model.listAllRaw();
+        const out: ProxyRow[] = [];
+        for (const row of rows) {
+          const check = await checkModel.getProxyCheck(row.id);
+          out.push({
+            id: row.id,
+            host: row.host,
+            port: row.port,
+            user: row.user ?? null,
+            pass: row.pass ?? null,
+            protocol: row.protocol ?? null,
+            country_code: row.country_code ?? null,
+            lastCheckPassed:
+              check == null ? null : check.status === proxyCheckStatus.Success,
+          });
+        }
+        return out;
+      } catch (error) {
+        log.warn(
+          `[ManagedBrowserModule] public proxy lookup failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        return [];
+      }
+    }
+    try {
+      const { SocialAccountModule: Sam } = await import(
+        "@/modules/socialAccountModule"
+      );
+      const accounts = await new Sam().getAllSocialAccounts();
+      const account = accounts.find((a) => a.id === accountId);
+      const rows = (account?.proxy ?? []).map((row) => ({
+        id: row.id,
+        host: row.host,
+        port: row.port,
+        user: row.user ?? null,
+        pass: row.pass ?? null,
+        protocol: row.protocol ?? null,
+        country_code: row.country_code ?? null,
+        lastCheckPassed: null as boolean | null,
+      }));
+      // N05/P-FR-01: the LAST CHECK outcome lives in the proxy_check
+      // table — auto selection prefers a recently-passed proxy.
+      try {
+        const { ProxyCheckModel } = await import("@/model/ProxyCheck.model");
+        const { proxyCheckStatus } = await import("@/model/ProxyCheck.model");
+        const checkModel = new ProxyCheckModel(
+          new (
+            await import("@/modules/token")
+          ).Token().getValue(
+            (await import("@/config/usersetting")).USERSDBPATH
+          )
+        );
+        for (const row of rows) {
+          const check = await checkModel.getProxyCheck(row.id);
+          row.lastCheckPassed =
+            check == null
+              ? null
+              : check.status === proxyCheckStatus.Success;
+        }
+      } catch {
+        // Check-state lookup is best-effort; rows stay null-checked.
+      }
+      return rows;
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] proxy row lookup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return [];
+    }
+  }
+
+  /** Load one proxy row by id (main process; pass stays encrypted). */
+  private async loadProxyRowById(proxyId: number): Promise<ProxyRow | null> {
+    try {
+      const { ProxyModel } = await import("@/model/Proxy.model");
+      const { Token } = await import("@/modules/token");
+      const { USERSDBPATH } = await import("@/config/usersetting");
+      const model = new ProxyModel(new Token().getValue(USERSDBPATH));
+      const row = await model.getProxyById(proxyId);
+      if (!row) {
+        return null;
+      }
+      return {
+        id: row.id,
+        host: row.host,
+        port: row.port,
+        user: row.user ?? null,
+        pass: row.pass ?? null,
+        protocol: row.protocol ?? null,
+        country_code: row.country_code ?? null,
+      };
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] proxy ${proxyId} lookup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return null;
+    }
+  }
+
+  /** P1/S-FR-04: record a visited origin's registrable domain (bounded). */
+  private recordVisitedDomain(
+    record: ActiveSessionRecord,
+    origin: string | null
+  ): void {
+    if (!origin) {
+      return;
+    }
+    try {
+      const domain = registrableDomainOf(new URL(origin).hostname);
+      if (!domain) {
+        return;
+      }
+      let ledger = this.sessionRedirectLedger.get(record.sessionId);
+      if (!ledger) {
+        ledger = new Set<string>();
+        this.sessionRedirectLedger.set(record.sessionId, ledger);
+      }
+      ledger.add(domain);
+      if (ledger.size > 16) {
+        // Bounded: drop the oldest insertion.
+        const oldest = ledger.values().next().value;
+        if (oldest !== undefined) {
+          ledger.delete(oldest);
+        }
+      }
+    } catch {
+      /* unparsable origins are simply not recorded */
+    }
+  }
+
+  /**
+   * P1/S-FR-04: the session's authoritative visited-domain list for
+   * extra-domain confirmation proposals.
+   */
+  public getSessionVisitedDomains(sessionId: string): readonly string[] {
+    return [...(this.sessionRedirectLedger.get(sessionId) ?? [])];
+  }
+
+  /**
+   * P1/S-FR-04: propose extra login domains from the session's
+   * AUTHORITATIVE redirect ledger — model-supplied domain lists are
+   * ignored; only domains the session actually visited are proposed for
+   * confirmation.
+   */
+  public async proposeExtraDomainsFromSession(
+    sessionId: string,
+    siteId: number
+  ): Promise<
+    import("@/modules/BrowserSiteModule").SiteUpsertConfirmation | null
+  > {
+    const { getDefaultBrowserSiteModule } = await import(
+      "@/modules/BrowserSiteModule"
+    );
+    return await getDefaultBrowserSiteModule().proposeAdditionalDomains({
+      siteId,
+      visitedDomains: this.getSessionVisitedDomains(sessionId),
+    });
+  }
+
+  /**
+   * F19/S-FR-05: a registered site IS a platform definition — derive
+   * the session manifest from the registry row when no static manifest
+   * exists for the platform id.
+   */
+  private async deriveManifestFromSite(
+    platformId: number
+  ): Promise<PlatformSessionDefinition | undefined> {
+    try {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const site = await getDefaultBrowserSiteModule().getSite(platformId);
+      if (!site) {
+        return undefined;
+      }
+      return {
+        platformId: site.siteId,
+        platformName: site.name,
+        loginUrl: site.loginUrl ?? `https://${site.registrableDomain}`,
+        verificationUrl:
+          site.verificationUrl ??
+          site.loginUrl ??
+          `https://${site.registrableDomain}`,
+        allowedDomainSuffixes:
+          site.allowedDomainSuffixes.length > 0
+            ? [...site.allowedDomainSuffixes]
+            : [site.registrableDomain],
+        requiredDomainSuffixes: [...site.requiredDomainSuffixes],
+        browserProfileImportEnabled: false,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * T21/A-FR-11: after a successful automated sign-in, bind the account
+   * to the live session so cookies persist for that account and the
+   * session status shows the authenticated identity.
+   */
+  public async bindAccountToSession(
+    sessionId: string,
+    accountId: number
+  ): Promise<void> {
+    const record = this.requireSession(sessionId);
+    if (record.accountId === accountId) {
+      return; // already account-backed (same-session idempotency)
+    }
+    // F03: a session already bound to a DIFFERENT account must not be
+    // silently re-bound — release and restart is the controlled path.
+    if (record.leaseKey.startsWith("account:")) {
+      throw new ManagedBrowserError("session_already_account_bound");
+    }
+    // R08/M-FR-06: swap the lease from public:<sessionId> to
+    // account:<accountId> so account-lease exclusivity applies going
+    // forward — a different session can no longer acquire the same
+    // account while this session holds it.
+    const oldKey = record.leaseKey;
+    const newKey = accountLeaseKey(accountId);
+    // F03: acquire FIRST and check EVERY discriminated outcome BEFORE
+    // the old lease or the record is touched — a refused transfer must
+    // leave the session exactly as it was (still public-leased).
+    const acquireResult = this.leaseService.acquire(newKey, {
+      sessionId,
+      ownerConversationId: record.conversationId,
+      ownerAgentTaskId: record.ownerAgentTaskId,
+    });
+    let leaseToken: string;
+    if (acquireResult.status === "granted") {
+      leaseToken = acquireResult.leaseToken;
+    } else if (acquireResult.status === "already_active") {
+      // The conversation already holds this account lease. Only THIS
+      // session holding it is acceptable (recovery of a partial bind);
+      // a SIBLING session holding it would mean two apparent
+      // controllers — refuse.
+      const existing = this.leaseService.findBySessionId(sessionId);
+      if (!existing || existing.leaseKey !== newKey) {
+        throw new ManagedBrowserError("account_in_use");
+      }
+      leaseToken = existing.leaseToken;
+    } else {
+      // account_in_use | global_limit_reached — refuse without
+      // releasing the public lease or mutating the record.
+      throw new ManagedBrowserError(
+        acquireResult.status === "account_in_use"
+          ? "account_in_use"
+          : "global_session_limit"
+      );
+    }
+    // The account lease is now held by THIS session. Release the old
+    // public lease; a failed release (not_held/token_mismatch) leaves an
+    // orphaned key — logged, never blocks the bind.
+    const released = this.leaseService.release(
+      oldKey,
+      sessionId,
+      record.leaseToken
+    );
+    if (released !== "released") {
+      log.warn(
+        `[ManagedBrowserModule] bind ${sessionId}: old lease ${oldKey} release -> ${released}`
+      );
+    }
+    // P1/C-FR-13: every pre-publication step (account lookup, manifest,
+    // worker acknowledgement) runs BEFORE the record mutates — a failure
+    // rolls the account lease back and throws, never leaving a partially
+    // committed bind.
+    const rollbackAccountLease = (): void => {
+      this.leaseService.release(newKey, sessionId, leaseToken);
+    };
+    let account: { platformId: number; accountLabel: string } | null = null;
+    let bindManifest: PlatformSessionDefinition | undefined;
+    try {
+      account = await this.accountLookup(accountId);
+      if (!account) {
+        throw new ManagedBrowserError("account_not_found");
+      }
+      // F11: the account's platform definition reaches the WORKER too — a
+      // still-public worker (platformId=0) never captures refreshed
+      // cookies, so a signed_in result would lack the promised persistent
+      // account session.
+      // P06/S-FR-01: the registry is authoritative at bind too.
+      bindManifest =
+        (await this.deriveManifestFromSite(account.platformId)) ??
+        getPlatformManifest(account.platformId);
+      if (!bindManifest) {
+        throw new ManagedBrowserError(
+          "managed_browser_disabled",
+          "bind_manifest_missing"
+        );
+      }
+      // P1: worker acknowledgement with ONE bounded retry — an uncertain
+      // response is retried before the bind is declared complete; a final
+      // failure throws (no false authenticated publication).
+      const requestAck = (): Promise<unknown> =>
+        record.client.request(
+          {
+            type: "BIND_PLATFORM",
+            platform: toWorkerPlatform(bindManifest!),
+            captureCookies: true,
+          },
+          MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+          (m) => m.type === "SESSION_STATE_CHANGED"
+        );
+      try {
+        await requestAck();
+      } catch {
+        await requestAck();
+      }
+    } catch (error) {
+      rollbackAccountLease();
+      throw error;
+    }
+    // The worker acknowledged — NOW the record commits.
+    (record as { leaseToken: string }).leaseToken = leaseToken;
+    (record as { accountId: number; leaseKey: string }).leaseKey = newKey;
+    (record as { accountId: number }).accountId = accountId;
+    (record as { platformId: number; platformLabel: string }).platformId =
+      account!.platformId;
+    (record as { platformLabel: string }).platformLabel =
+      bindManifest!.platformName;
+    (record as { accountLabel: string }).accountLabel = account!.accountLabel;
+    record.authenticated = true;
+    this.pushStatus(record);
+  }
+
+  /**
+   * T24/C-FR-05: user Pause — aborts the in-flight program between
+   * actions (executed results preserved), moves the session to user
+   * control (AI commands rejected), and pins the latest observation so
+   * refs stay resolvable while paused.
+   */
+  /**
+   * R01/C-FR-10: EXPLICIT user-requested window focus ("Open browser" on
+   * the session card). The worker calls page.bringToFront() — the only
+   * sanctioned focus path; launches never steal focus.
+   */
+  public async focusWindow(
+    sessionId: string
+  ): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    // N08 follow-up: the worker FOCUSes or the call FAILS — a suppressed
+    // error would let the IPC acknowledge success without raising a
+    // window (headless/closed windows are honest failures).
+    try {
+      await record.client.request(
+        { type: "FOCUS_WINDOW" },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED"
+      );
+    } catch (error) {
+      throw new ManagedBrowserError(
+        "worker_exited",
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "focus_failed"
+      );
+    }
+    return this.toSafeStatus(record);
+  }
+
+  public async pauseSession(sessionId: string): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    // R04: the pause round-trip is NOT best-effort — a swallowed worker
+    // failure let the IPC acknowledge success while the browser kept
+    // running. Both legs surface structured failures.
+    try {
+      await record.client.request(
+        { type: "PAUSE_REQUEST" },
+        MANAGED_BROWSER_TIMEOUTS.singleActionMs,
+        (m) => m.type === "SESSION_STATE_CHANGED" || m.type === "ACTION_RESULT"
+      );
+    } catch (error) {
+      throw new ManagedBrowserError(
+        "worker_exited",
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "pause_failed"
+      );
+    }
+    // Session moves to user control via the handoff state; a refused
+    // handoff is also surfaced (never a silently half-paused session).
+    try {
+      await this.requestHandoff(sessionId, "user_paused");
+    } catch (error) {
+      throw new ManagedBrowserError(
+        "worker_exited",
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : "pause_handoff_failed"
+      );
+    }
+    return this.toSafeStatus(this.requireSession(sessionId));
+  }
+
+  /**
+   * PRD A-FR-08: send the privileged FILL_LOGIN_FORM request. The
+   * credential payload is passed through verbatim to the worker and
+   * NEVER logged here; the result carries outcome + stamps only.
+   */
+  public async fillLoginForm(
+    sessionId: string,
+    input: {
+      mode: "login" | "register";
+      allowedDomainSuffixes: string[];
+      recipe: WorkerLoginRecipe | null;
+      username: string;
+      password: string;
+    }
+  ): Promise<{
+    outcome: "success" | "wrong_credential" | "challenge" | "unknown";
+    reasonCode: string | null;
+    filledFieldStamps: string[];
+    recipe: { formAction: string | null; usernameField: string; passwordField: string } | null;
+  }> {
+    const record = this.requireSession(sessionId);
+    // R19/C-FR-05: guard() rejects commands when the session is in
+    // handoff/user_login_in_progress (user control) — the credential
+    // must never be typed while the user controls the browser.
+    this.guard(record, "FILL_LOGIN_FORM");
+    const message = await this.requestWorker(
+      record,
+      {
+        type: "FILL_LOGIN_FORM",
+        mode: input.mode,
+        allowedDomainSuffixes: input.allowedDomainSuffixes,
+        recipe: input.recipe,
+        username: input.username,
+        password: input.password,
+      },
+      MANAGED_BROWSER_TIMEOUTS.initialVerificationMs,
+      (m) => m.type === "LOGIN_FORM_RESULT" || m.type === "HANDOFF_REQUIRED"
+    );
+    if (message.type !== "LOGIN_FORM_RESULT") {
+      return { outcome: "unknown" as const, reasonCode: "handoff_required", filledFieldStamps: [], recipe: null };
+    }
+    return {
+      outcome: message.outcome,
+      reasonCode: message.reasonCode ?? null,
+      filledFieldStamps: message.filledFieldStamps,
+      recipe: message.recipe ?? null,
+    };
+  }
+
+  /**
+   * T22/P-FR-04: basic-mode health check for one proxy id. Uses the same
+   * batch checker the UI/AI paths use; any failure is fail-closed false —
+   * WITH its typed reason (W04: proxy_auth_failed for a 407 or a failed
+   * credential decrypt, proxy_connect_failed for transport failures,
+   * tunnel_failed where reported) instead of one undifferentiated false.
+   */
+  private async checkProxyHealth(proxyId: number): Promise<{
+    healthy: boolean;
+    reasonCode: string;
+  }> {
+    try {
+      const { ProxyController } = await import("@/controller/proxy-controller");
+      const controller = new ProxyController();
+      const result = await controller.checkProxyBatch({
+        proxyIds: [proxyId],
+        // R12/P-FR-04: all required fields — undefined concurrency
+        // produces NaN in the checker, launching zero workers.
+        mode: "basic" as const,
+        concurrency: 1,
+        timeoutMs: 10_000,
+      });
+      const results = result.results ?? [];
+      if (results.some((item) => item.basic === "pass")) {
+        return { healthy: true, reasonCode: "proxy_healthy" };
+      }
+      // W04: the FIRST typed reason wins (setup errors carry the decrypt
+      // sentinel's proxy_auth_failed; check failures carry the classified
+      // connect/auth/tunnel reason).
+      const typed = results.find((item) => item.reasonCode !== undefined);
+      if (typed?.reasonCode) {
+        return { healthy: false, reasonCode: typed.reasonCode };
+      }
+      return { healthy: false, reasonCode: "proxy_check_failed" };
+    } catch (error) {
+      log.warn(
+        `[ManagedBrowserModule] proxy health check failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return { healthy: false, reasonCode: "proxy_check_failed" };
+    }
+  }
+
+  /**
+   * PRD P-FR-02: controlled proxy switch. The session is stopped and a
+   * fresh session starts with the new proxy under the same account (the
+   * account cookies persist through the account session path). Capped at
+   * three switches per session (P-FR-05); always fail-closed.
+   */
+  public async switchSessionProxy(
+    sessionId: string,
+    target: BrowserProxySelection,
+    conversationId?: string
+  ): Promise<SafeManagedBrowserStatus> {
+    const record = this.requireSession(sessionId);
+    if (
+      conversationId &&
+      record.conversationId &&
+      record.conversationId !== conversationId
+    ) {
+      throw new ManagedBrowserError("session_not_owned");
+    }
+    // P0-7: serialize per session — two concurrent switches could
+    // double-stop or start two sessions.
+    if (this.proxySwitchInFlight.has(sessionId)) {
+      throw new ManagedBrowserError("proxy_switch_in_progress");
+    }
+    this.proxySwitchInFlight.add(sessionId);
+    try {
+      return await this.switchSessionProxyInner(
+        sessionId,
+        record,
+        target,
+        record.conversationId ?? undefined
+      );
+    } finally {
+      this.proxySwitchInFlight.delete(sessionId);
+    }
+  }
+
+  /** P0-7: the serialized switch body (validation BEFORE stop). */
+  private async switchSessionProxyInner(
+    sessionId: string,
+    record: ActiveSessionRecord,
+    target: BrowserProxySelection,
+    conversation: string | undefined
+  ): Promise<SafeManagedBrowserStatus> {
+    const accountId = record.accountId;
+    // T10/F18: the switch reopens the page the user was on (P-FR-02) —
+    // the FULL URL with path/query, not just the origin.
+    const lastUrl = record.currentUrl ?? record.currentOrigin ?? undefined;
+    // P-FR-05/N05: the cap counts switches PER TASK — a task's own
+    // budget; public sessions in one chat no longer share one budget.
+    // Interactive (task-less) sessions keep the conversation-lineage key.
+    const lineageKey = record.ownerAgentTaskId
+      ? `task:${record.ownerAgentTaskId}`
+      : `${conversation ?? "public"}:${accountId}:${record.platformId}`;
+    const priorCount = this.proxySwitchCounts.get(lineageKey) ?? 0;
+    if (priorCount >= 3) {
+      throw new ManagedBrowserError("proxy_switch_limit");
+    }
+    // P0-7/P-FR-04: prevalidate the TARGET SELECTION before destroying the
+    // working session — selection failures (confirmation required, SOCKS,
+    // unusable credentials, auto with no candidates) run while the old
+    // session is still alive; a refused switch leaves it untouched.
+    const linkedRows = await this.loadProxyRowsForAccount(accountId);
+    const selection = await selectProxyForSession({
+      selection: target,
+      linkedProxies: linkedRows,
+      loadProxyById: async (proxyId) =>
+        (await this.loadProxyRowById(proxyId)) ?? null,
+      isAccountSession: accountId > 0,
+    });
+    if (selection.status === "confirmation_required") {
+      throw new ManagedBrowserError(
+        "proxy_confirmation_required",
+        selection.reasonCode
+      );
+    }
+    if (selection.status === "unresolvable") {
+      throw new ManagedBrowserError(
+        "proxy_no_usable_proxy",
+        selection.reasonCode
+      );
+    }
+    // R04: health-check by the AUTHORITATIVE ID — an explicit proxy
+    // (linked or unlinked, public or account) is checked by its own id;
+    // an auto-resolved concrete proxy is matched by host/port against
+    // the loaded rows.
+    let healthCheckId: number | null = null;
+    if (target.kind === "proxy_id") {
+      healthCheckId = target.proxyId;
+    } else if (selection.status === "resolved") {
+      const resolvedProxy = selection.proxy;
+      if (
+        resolvedProxy.mode === "http" ||
+        resolvedProxy.mode === "https"
+      ) {
+        // B08: the resolved proxy carries its AUTHORITATIVE row id — an
+        // auto match is health-checked even when it is not in linkedRows.
+        if (resolvedProxy.proxyId != null) {
+          healthCheckId = resolvedProxy.proxyId;
+        } else {
+          const matchedRow = linkedRows.find(
+            (row) =>
+              row.host === resolvedProxy.host &&
+              String(row.port) === String(resolvedProxy.port)
+          );
+          if (matchedRow) {
+            healthCheckId = matchedRow.id;
+          }
+        }
+      }
+    }
+    if (healthCheckId !== null) {
+      // W04/P-FR-04: the typed check reason flows into the switch error —
+      // a 407 reports proxy_auth_failed (not proxy_check_failed) so the
+      // model can choose another proxy for the right reason. The check
+      // runs BEFORE the stop: a refused switch never falls back to direct.
+      const health = await this.checkProxyHealth(healthCheckId);
+      if (!health.healthy) {
+        throw new ManagedBrowserError("proxy_no_usable_proxy", health.reasonCode);
+      }
+    }
+    // N02/B08: snapshot the OLD session's EFFECTIVE proxy id, selector,
+    // URL, and task ownership BEFORE the stop — the restore must rebuild
+    // the OLD session deterministically, not re-run a selector that can
+    // resolve a different proxy.
+    const restoreSnapshot = {
+      accountId: accountId > 0 ? accountId : undefined,
+      conversation,
+      // B05/M-FR-07: the ROOT conversation — notices/cards publish on it
+      // (the hidden child conversation renders nothing).
+      rootConversationId: record.rootConversationId ?? undefined,
+      // Deterministic first: the concrete row the old session used.
+      effectiveProxyId: record.effectiveProxyId,
+      // Fallback when the row vanished: the original selector.
+      proxySelection: record.startProxySelection,
+      agentTaskId: record.ownerAgentTaskId ?? undefined,
+      lastUrl: lastUrl !== "about:blank" ? lastUrl : undefined,
+    };
+    await this.stop(sessionId, "user_stop");
+    try {
+      const started = await this.start({
+        ...(accountId > 0 ? { accountId } : {}),
+        purpose: "proxy_switch",
+        proxy: target,
+        // E08/P-FR-05: the NEW session keeps the task owner — the cap key
+        // stays `task:<id>` across switches instead of falling back to the
+        // conversation/account/platform key.
+        ...(restoreSnapshot.agentTaskId
+          ? { agentTaskId: restoreSnapshot.agentTaskId }
+          : {}),
+        ...(conversation ? { conversationId: conversation } : {}),
+        // B05/M-FR-07: the replacement session stays visible to the
+        // parent chat (session card, challenge notice, credential card).
+        ...(restoreSnapshot.rootConversationId
+          ? { rootConversationId: restoreSnapshot.rootConversationId }
+          : {}),
+        ...(lastUrl && lastUrl !== "about:blank"
+          ? { requestedStartUrl: lastUrl }
+          : {}),
+      });
+      // R04/B08: the switch allowance is charged only AFTER the new
+      // session is READY — a failed start (and its restore) never
+      // consumes it.
+      this.proxySwitchCounts.set(lineageKey, priorCount + 1);
+      return started;
+    } catch (startError) {
+      // N02/B08: restore the OLD session — by its EFFECTIVE proxy id when
+      // known (deterministic; auto selectors can resolve another proxy),
+      // falling back to the original selector when the row is gone. The
+      // task ownership (agentTaskId) rides along.
+      // E08/P-AC-01: restore by the EFFECTIVE proxy id ONLY — re-running
+      // an auto selector can resolve a DIFFERENT proxy. When the id is
+      // unknown, leave the session STOPPED with a structured error
+      // instead of guessing.
+      // B04/P-FR-02: the OLD route is restored — INCLUDING direct. A
+      // direct session has effectiveProxyId null; refusing here left the
+      // browser STOPPED after a failed switch (the audit's direct→bad-
+      // proxy case).
+      // C05/P-FR-02: KNOWN-direct vs UNKNOWN-effective are different
+      // states — an active auto/default route with an unrecorded
+      // effective id is NOT direct; silently restoring it as direct is
+      // the forbidden silent direct fallback. The original selector is
+      // restored instead (start health-checks it; a checked auto
+      // selector may resolve again, which the check validates).
+      const restoreSelection: BrowserProxySelection =
+        restoreSnapshot.effectiveProxyId != null
+          ? { kind: "proxy_id", proxyId: restoreSnapshot.effectiveProxyId }
+          : restoreSnapshot.proxySelection?.kind === "direct"
+            ? { kind: "direct" }
+            : (restoreSnapshot.proxySelection ?? { kind: "auto" });
+      let rollbackOutcome: string;
+      let restoredSessionId: string | null = null;
+      try {
+        const restored = await this.start({
+          ...(restoreSnapshot.accountId
+            ? { accountId: restoreSnapshot.accountId }
+            : {}),
+          purpose: "proxy_switch_restore",
+          proxy: restoreSelection,
+          ...(restoreSnapshot.conversation
+            ? { conversationId: restoreSnapshot.conversation }
+            : {}),
+          ...(restoreSnapshot.agentTaskId
+            ? { agentTaskId: restoreSnapshot.agentTaskId }
+            : {}),
+          // B05: the restored session keeps the root conversation too.
+          ...(restoreSnapshot.rootConversationId
+            ? { rootConversationId: restoreSnapshot.rootConversationId }
+            : {}),
+          ...(restoreSnapshot.lastUrl
+            ? { requestedStartUrl: restoreSnapshot.lastUrl }
+            : {}),
+        });
+        restoredSessionId = restored.sessionId;
+        rollbackOutcome =
+          restoreSnapshot.effectiveProxyId != null
+            ? `restored proxied session (proxy ${restoreSnapshot.effectiveProxyId})`
+            : restoreSnapshot.proxySelection?.kind === "direct"
+              ? "restored direct session"
+              : "restored original route (effective id unknown)";
+      } catch (restoreError) {
+        // B04/P-AC-01: the rollback outcome is NAMED, never swallowed —
+        // the caller must know the browser is STOPPED and on which route.
+        rollbackOutcome = `restore also failed: ${
+          restoreError instanceof ManagedBrowserError
+            ? restoreError.code
+            : restoreError instanceof Error
+              ? restoreError.message
+              : "unknown"
+        } — the browser is stopped`;
+      }
+      const startCode =
+        startError instanceof ManagedBrowserError
+          ? startError.code
+          : "proxy_no_usable_proxy";
+      // C05/P-FR-02: the error names the RESTORED session (when the
+      // rollback succeeded) so the caller can address the live window.
+      throw new ManagedBrowserError(
+        "proxy_switch_restore_failed",
+        `switch_failed=${startCode}; ${rollbackOutcome}${
+          restoredSessionId ? `; restored_session=${restoredSessionId}` : ""
+        }`,
+        startError instanceof Error ? startError.message : String(startError)
+      );
+    }
+  }
+
+  /**
+   * Registrable domain used for the per-site session cap: the requested
+   * start URL when present, otherwise the platform's known login URL.
+   */
+  private async deriveSessionSiteDomain(
+    platformId: number,
+    requestedStartUrl: string | undefined
+  ): Promise<string | null> {
+    if (requestedStartUrl) {
+      return parseUrlIdentity(requestedStartUrl)?.registrableDomain ?? null;
+    }
+    // S-FR-06: the SITE REGISTRY is the authoritative platform→site
+    // source; the static manifest is the fallback for legacy ids.
+    try {
+      const { getDefaultBrowserSiteModule } = await import(
+        "@/modules/BrowserSiteModule"
+      );
+      const site = await getDefaultBrowserSiteModule().getSite(platformId);
+      if (site) {
+        return site.registrableDomain;
+      }
+    } catch {
+      // Registry unavailable — fall through to the manifest.
+    }
+    const manifest = PLATFORM_SESSION_MANIFEST.find(
+      (entry) => entry.platformId === platformId
+    );
+    return manifest
+      ? parseUrlIdentity(manifest.loginUrl)?.registrableDomain ?? null
+      : null;
+  }
+
   private toSafeStatus(record: ActiveSessionRecord): SafeManagedBrowserStatus {
     return {
       sessionId: record.sessionId,
@@ -1394,6 +2968,12 @@ export class ManagedBrowserModule {
       state: record.state,
       currentOrigin: record.currentOrigin,
       pageTitle: record.pageTitle,
+      ownerConversationId: record.conversationId,
+      rootConversationId: record.rootConversationId,
+      /** N05/P-FR-03: which proxy row the session launched through. */
+      effectiveProxyId: record.effectiveProxyId,
+      proxyHostLabel: record.proxyHostLabel,
+      proxyCountry: record.proxyCountry,
       pageRevision: record.pageRevision,
       authenticated: record.authenticated,
       handoffReason: record.handoffReason,
@@ -1436,7 +3016,8 @@ export class ManagedBrowserModule {
       }
       if (
         current.state !== "handoff" &&
-        current.state !== "user_login_in_progress"
+        current.state !== "user_login_in_progress" &&
+        current.state !== "login_required"
       ) {
         return;
       }
@@ -1640,6 +3221,13 @@ const ERROR_CODES: ReadonlySet<string> = new Set<string>([
   "account_not_found",
   "account_in_use",
   "global_session_limit",
+  "insufficient_memory",
+  "site_limit_reached",
+  "session_not_owned",
+  "proxy_confirmation_required",
+  "proxy_not_found",
+  "proxy_no_usable_proxy",
+  "proxy_switch_limit",
   "session_cookie_missing",
   "browser_dependency_missing",
   "browser_incompatible",
@@ -1731,6 +3319,43 @@ function toWorkerLaunchPolicy(policy: BrowserLaunchPolicy): {
  * wins; an account whose proxies exist but are none-usable marks the
  * session unresolvable (fail-closed, never silent direct).
  */
+/**
+ * N05/P-FR-06: proxy country → browser locale/timezone alignment. Known
+ * countries map to their dominant locale and IANA zone; anything else
+ * stays null (Chromium defaults apply).
+ */
+export const PROXY_LOCALE_BY_COUNTRY = new Map<string, string>([
+  ["US", "en-US"],
+  ["GB", "en-GB"],
+  ["CA", "en-CA"],
+  ["AU", "en-AU"],
+  ["DE", "de-DE"],
+  ["FR", "fr-FR"],
+  ["ES", "es-ES"],
+  ["IT", "it-IT"],
+  ["NL", "nl-NL"],
+  ["BR", "pt-BR"],
+  ["JP", "ja-JP"],
+  ["SG", "en-SG"],
+  ["IN", "en-IN"],
+]);
+
+const PROXY_TIMEZONE_BY_COUNTRY = new Map<string, string>([
+  ["US", "America/New_York"],
+  ["GB", "Europe/London"],
+  ["CA", "America/Toronto"],
+  ["AU", "Australia/Sydney"],
+  ["DE", "Europe/Berlin"],
+  ["FR", "Europe/Paris"],
+  ["ES", "Europe/Madrid"],
+  ["IT", "Europe/Rome"],
+  ["NL", "Europe/Amsterdam"],
+  ["BR", "America/Sao_Paulo"],
+  ["JP", "Asia/Tokyo"],
+  ["SG", "Asia/Singapore"],
+  ["IN", "Asia/Kolkata"],
+]);
+
 async function resolveAccountProxy(
   accountId: number
 ): Promise<ResolvedSessionProxy> {
@@ -1743,11 +3368,13 @@ async function resolveAccountProxy(
             Array<{
               id: number;
               proxy?: Array<{
+                id?: number;
                 host: string;
                 port: string;
                 user?: string | null;
                 pass?: string | null;
                 protocol?: string | null;
+                country_code?: string | null;
               }>;
             }>
           >;
@@ -1770,12 +3397,21 @@ async function resolveAccountProxy(
         port > 0 &&
         port <= 65535
       ) {
+        // P-FR-08: the stored pass may be FieldCipher-encrypted; only
+        // a main-process decryption ever reaches the browser launch.
+        const decrypted = await ProxyCredentialCodec.decryptForUse(
+          proxy.pass ?? null
+        );
         return {
-          mode: protocol,
+          mode: protocol as "http" | "https",
           host: proxy.host,
           port,
+          ...(typeof proxy.id === "number" ? { proxyId: proxy.id } : {}),
+          ...(proxy.country_code ? { countryCode: proxy.country_code } : {}),
           ...(proxy.user ? { username: proxy.user } : {}),
-          ...(proxy.pass ? { password: proxy.pass } : {}),
+          ...(decrypted.password
+                    ? { password: decrypted.password }
+                    : {}),
         };
       }
     }
@@ -1798,10 +3434,14 @@ async function resolveAccountProxy(
   }
 }
 
-/** Default AI entitlement check (hosted subscription OR configured local provider). */
+/**
+ * Default AI entitlement check for AI-entry-point sessions (PRD D-FR-01):
+ * provider-aware — hosted entitlement OR a valid custom provider. This is the
+ * product-authorized browser exception to the blanket hosted-only rule.
+ */
 function defaultIsAiEnabled(): boolean {
   try {
-    return isAiOrProviderEnabled();
+    return getDefaultBrowserAiAvailabilityService().isAvailable();
   } catch {
     return false;
   }

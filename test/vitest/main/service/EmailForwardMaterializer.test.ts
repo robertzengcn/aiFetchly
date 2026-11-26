@@ -5,13 +5,13 @@ import {
 } from "@/service/emailOrganization/EmailForwardMaterializer";
 import type {
   EmailMailboxAdapter,
+  FolderListResult,
   FullSourceResult,
   MailboxCapabilityProbe,
   MailboxLocation,
-  FolderListResult,
   MoveResult,
   PresenceResult,
-  ServerSearchInput,
+  SentCopyAppendResult,
   ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationArtifactBackend } from "@/service/emailOrganization/EmailOrganizationArtifactStore";
@@ -27,10 +27,10 @@ class StubAdapter implements EmailMailboxAdapter {
   setSource(source: FullSourceResult): void {
     this.source = source;
   }
-  async listFolders() {
+  async listFolders(): Promise<FolderListResult> {
     return { status: "listed" as const, folders: [] };
   }
-  async probeCapabilities() {
+  async probeCapabilities(): Promise<MailboxCapabilityProbe> {
     return { moveCapability: true, folders: [], reasonCode: null, sanitizedError: null };
   }
   async fetchFullSource(_c: unknown, location: MailboxLocation): Promise<FullSourceResult> {
@@ -48,7 +48,7 @@ class StubAdapter implements EmailMailboxAdapter {
   async searchUids(): Promise<ServerSearchResult> {
     return { status: "listed", candidates: [], capped: false };
   }
-  async appendSent() {
+  async appendSent(): Promise<SentCopyAppendResult> {
     return { status: "skipped" as const, reason: "no_sent_folder" };
   }
 }

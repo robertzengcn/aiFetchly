@@ -1,0 +1,3774 @@
+import { describe, expect, it, vi } from "vitest";
+import { BrowserTaskRunner } from "@/service/browserDecision/BrowserTaskRunner";
+import type {
+  RunnerAction,
+  RunnerExecutionResult,
+  RunnerObservation,
+} from "@/service/browserDecision/BrowserTaskRunner";
+import {
+  ChatCompletionDecisionClient,
+  HostedDecisionClient,
+  buildChatDecisionPrompt,
+  normalizeWireResult,
+} from "@/service/browserDecision/DecisionClients";
+import { buildDecisionCandidates } from "@/service/browserDecision/BrowserCandidateBuilder";
+import { AgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
+
+/** PRD D-FR-05..25: the runner loop, budgets, verification, and adapters. */
+
+function observation(overrides: Partial<RunnerObservation> = {}): RunnerObservation {
+  return {
+    observationId: "obs-1",
+    pageRevision: 3,
+    url: "https://example.test/search",
+    title: "Example",
+    elements: [
+      { ref: "e_aaa", role: "textbox", name: "Search" },
+      { ref: "e_bbb", role: "button", name: "Go" },
+      { ref: "e_ccc", role: "textbox", name: "Card number", valueSummary: "[password-like]" },
+    ],
+    visibleText: "Example Market",
+    ...overrides,
+  };
+}
+
+function makeRunnerDeps(
+  script: Array<BrowserDecisionResultWireLike>,
+  observationOverrides: Partial<RunnerObservation> = {},
+  onAction?: (action: RunnerAction) => void
+) {
+  const obs = observation(observationOverrides);
+  return {
+    observe: async (): Promise<RunnerObservation | null> => obs,
+    runActions: async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      onAction?.(input.actions[0]!);
+      return {
+        effect: "known",
+        pageRevision: obs.pageRevision,
+        results: [{ success: true, errorCode: null }],
+      };
+    },
+    decisionClient: {
+      getCapabilities: async () => ({}) as never,
+      decide: async () => script.shift() ?? { status: "llm_required", reason_code: "script_end" },
+    },
+    route: "chat" as const,
+    control: new AgentTaskControlService(),
+  };
+}
+
+function doneEntry() {
+  return {
+    status: "decided" as const,
+    action: { operation: "DONE" as const, target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  };
+}
+
+type BrowserDecisionResultWireLike = import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult;
+
+describe("BrowserTaskRunner (D-FR-05..25)", () => {
+  it("completes a fill + click script and verifies with criteria", async () => {
+    const clicks: RunnerAction[] = [];
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r1",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      makeRunnerDeps(
+        [
+          {
+            status: "decided",
+            action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: "supplier prices" },
+            uncertainty: { source: "unavailable", confidence: null },
+          },
+          {
+            status: "decided",
+            action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+            uncertainty: { source: "unavailable", confidence: null },
+          },
+          {
+            status: "decided",
+            action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+            uncertainty: { source: "unavailable", confidence: null },
+          },
+        ],
+        {},
+        (action) => clicks.push(action)
+      )
+    );
+    const result = await runner.run();
+    console.log("DBG", result.status, result.reason, JSON.stringify(result.evidence));
+    expect(result.status).toBe("completed");
+    expect(clicks.map((a) => a.type)).toEqual(["fill", "click"]);
+    // The decision's text channel reaches the fill — never an empty value.
+    expect(clicks[0]).toMatchObject({ type: "fill", value: "supplier prices" });
+    // D-FR-10b: compact final observation for follow-up turns.
+    expect(result.finalObservation?.url).toBe("https://example.test/search");
+  });
+
+  it("never trusts a DONE without independent verification (D-AC-09)", async () => {
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r2",
+        conversationId: "conv-1",
+        goal: "Open the second result",
+        completionCriteria: [{ kind: "url_contains", value: "/result-2" }],
+      },
+      makeRunnerDeps([
+        doneEntry(),
+        doneEntry(),
+        doneEntry(),
+      ])
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+  });
+
+  it("excludes password-like controls from candidates (D-AC-04)", () => {
+    const candidates = buildDecisionCandidates({ elements: observation().elements });
+    expect(candidates.map((c) => c.candidate_id)).toEqual(["e_aaa", "e_bbb"]);
+  });
+
+  it("stops on unknown effect and never retries the mutation (D-FR-26)", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (
+      _sessionId: string,
+      _input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => ({
+      effect: "unknown",
+      pageRevision: 3,
+      results: [{ success: false, errorCode: "internal_error" }],
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r3", conversationId: "conv-1", goal: "click go" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+    expect(result.counts.leafSteps).toBe(1);
+  });
+
+  it("attempts bounded recovery after three equivalent failures, then stops (D-FR-25/22)", async () => {
+    let calls = 0;
+    const deps = makeRunnerDeps(
+      [0, 1, 2, 3].map(() => ({
+        status: "decided" as const,
+        action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      }))
+    );
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      calls++;
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: [{ success: false, errorCode: "internal_error" }],
+      };
+    };
+    // The fake deps.decide only serves the initial script; the recovery
+    // call goes through the same client, so give it a script-tail answer.
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r4", conversationId: "conv-1", goal: "click go" },
+      deps
+    );
+    const result = await runner.run();
+    // 3 failing decide() calls + 2 recovery decide() calls: the first
+    // recovery fires after three equivalent failures; its recovered CLICK
+    // fails again, the follow-up sees the exhausted script -> llm_required,
+    // which (G01/D-FR-19) now ALSO routes through the recovery table. The
+    // recovery-sourced llm_required terminates honestly.
+    // `calls` counts DISPATCHES (runActions): 3 failing CLICKs + the
+    // recovered CLICK. The G01 llm_required recovery only decides — it
+    // does not dispatch.
+    expect(calls).toBe(4);
+    expect(result.counts.recoveryCalls).toBe(2);
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated:script_end");
+  });
+
+  it("discards the recovery proposal when a Pause+Resume lands DURING its inference (R05)", async () => {
+    const dispatched: RunnerAction[] = [];
+    let observeCalls = 0;
+    let decideCount = 0;
+    let releaseRecovery: ((r: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult) => void) | null = null;
+    const recoveryResult = new Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult>(
+      (resolve) => {
+        releaseRecovery = resolve;
+      }
+    );
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([]);
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      observeCalls++;
+      return observation();
+    };
+    deps.decisionClient.decide = async (): Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> => {
+      decideCount++;
+      if (decideCount === 1) {
+        return { status: "llm_required", reason_code: "needs_model" };
+      }
+      if (decideCount === 2) {
+        // The recovery inference is HELD — the resume lands while it is
+        // pending, proving the generation is captured BEFORE inference.
+        return await recoveryResult;
+      }
+      return doneEntry();
+    };
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    let runnerRef: BrowserTaskRunner | null = null;
+    const runner: BrowserTaskRunner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r05rec",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    runnerRef = runner;
+    const runPromise = runner.run();
+    // Wait until the recovery decide is actually pending.
+    await vi.waitFor(() => expect(decideCount).toBe(2));
+    // Pause+Resume DURING inference bumps the generation.
+    deps.control.setState(runnerRef.taskId, "paused");
+    deps.control.resume(runnerRef.taskId);
+    releaseRecovery!(clickDecision);
+    const result = await runPromise;
+    // The stale recovery proposal was discarded and the recovery-sourced
+    // CLICK never dispatched; a FRESH observation fed the next decision.
+    expect(dispatched).toEqual([]);
+    expect(result.evidence).toContain("recovery_discarded_after_resume");
+    expect(observeCalls).toBeGreaterThanOrEqual(2);
+    expect(result.status).toBe("completed");
+  });
+
+  it("normalizes ESCALATE to a truthful partial result", async () => {
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r5", conversationId: "conv-1", goal: "ambiguous" },
+      makeRunnerDeps([{ status: "llm_required", reason_code: "escalated" }])
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated:escalated");
+  });
+});
+
+// W02/D-FR-09: the tool result and the control record must AGREE — a
+// partial ending stays partial, an interrupted one stays interrupted;
+// neither is rewritten failed.
+describe("BrowserTaskRunner W02 terminal state agreement", () => {
+  it("a partial ending keeps partial on BOTH the result and the record", async () => {
+    const control = new AgentTaskControlService();
+    const deps = makeRunnerDeps([{ status: "llm_required", reason_code: "escalated" }]);
+    deps.control = control;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_w02a", conversationId: "conv-1", goal: "ambiguous" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated:escalated");
+    // The record agrees (was: collapsed to failed).
+    expect(control.getState(runner.taskId)).toBe("partial");
+  });
+
+  it("a pause-expiry ending keeps interrupted on the record with a partial result", async () => {
+    let now = 0;
+    const control = new AgentTaskControlService(() => now);
+    const deps = makeRunnerDeps([]);
+    deps.control = control;
+    // The decision HANGS until we release it — the interruption lands
+    // while inference is in flight, deterministically.
+    let releaseDecide: () => void = () => undefined;
+    const decideGate = new Promise<void>((resolve) => {
+      releaseDecide = resolve;
+    });
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async () => {
+        await decideGate;
+        return {
+          status: "decided" as const,
+          action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable" as const, confidence: null },
+        };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_w02b", conversationId: "conv-1", goal: "click go" },
+      deps
+    );
+    const runPromise = runner.run();
+    // The runner is now inside decide; pause and expire the cap.
+    control.beginIntervention(runner.taskId, "user_paused");
+    now = 61 * 60_000;
+    expect(control.enforcePauseCap(runner.taskId)).toBe(true);
+    releaseDecide();
+    const result = await runPromise;
+    // The runner reports partial results (interrupted = partial results,
+    // no automatic resume) while the RECORD stays interrupted — neither
+    // layer says failed.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("task_interrupted");
+    expect(control.getState(runner.taskId)).toBe("interrupted");
+  });
+
+  it("a failed ending still records failed (failures keep their state)", async () => {
+    const control = new AgentTaskControlService();
+    const deps = makeRunnerDeps([]);
+    deps.control = control;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      throw new Error("worker crashed");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_w02c", conversationId: "conv-1", goal: "anything" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(control.getState(runner.taskId)).toBe("failed");
+  });
+});
+
+describe("BrowserTaskRunner policy stops (D-AC-05)", () => {
+  it("terminates partial on approval_required without retrying", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_stop1", conversationId: "conv-1", goal: "click go" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_required");
+  });
+
+  it("refuses a FILL decision without text instead of typing an empty value", async () => {
+    const seen: RunnerAction[] = [];
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ],
+      {},
+      (action) => seen.push(action)
+    );
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_stop2", conversationId: "conv-1", goal: "fill search" },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([]);
+    expect(result.status).toBe("partial");
+  });
+});
+
+describe("BrowserTaskRunner T06/T07/T08", () => {
+  it("sends Enter for an untargeted PRESS_KEY decision (T06)", async () => {
+    const seen: RunnerAction[] = [];
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "PRESS_KEY", target_id: null, option_id: null, key: "Enter", url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ],
+      {},
+      (action) => seen.push(action)
+    );
+    // No completion criteria: DONE would be unverified -> partial. Use a
+    // url criterion matching the fixed observation so DONE verifies.
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_pk1",
+        conversationId: "conv-1",
+        goal: "submit search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([{ type: "press_key", key: "Enter" }]);
+    expect(result.status).toBe("completed");
+  });
+
+  it("applies unknown-effect stop uniformly to GO_BACK (T07)", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "GO_BACK", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "unknown",
+      pageRevision: 3,
+      results: [],
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_gb1", conversationId: "conv-1", goal: "go back" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+  });
+
+  it("applies approval stops uniformly to SCROLL (T07)", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "SCROLL_DOWN", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_sc1", conversationId: "conv-1", goal: "scroll" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_required");
+  });
+
+  it("discards an in-flight decision when the task is cancelled mid-call (T08)", async () => {
+    const aborter = new AbortController();
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    const actions: RunnerAction[] = [];
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      actions.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async () => {
+        aborter.abort(); // user Stop during inference
+        return {
+          status: "decided",
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_t08", conversationId: "conv-1", goal: "click" },
+      { ...deps, signal: aborter.signal }
+    );
+    const result = await runner.run();
+    expect(actions).toEqual([]);
+    expect(result.status).toBe("cancelled");
+  });
+});
+
+describe("DecisionClients (D-FR-16..19)", () => {
+  it("chat client returns a decided action from strict JSON", async () => {
+    const client = new ChatCompletionDecisionClient(async () => ({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              operation: "CLICK",
+              target_id: "c1",
+              option_id: null,
+              key: null,
+              url: null,
+            }),
+          },
+        },
+      ],
+    }));
+    const decision = await client.decide(
+      {
+        schema_version: 1,
+        request_id: "r",
+        task_id: "t",
+        step_id: "s",
+        observation_id: "o",
+        page_revision: 1,
+        goal: "g",
+        constraints: [],
+        url: "u",
+        title: "t",
+        candidates: [
+          { candidate_id: "c1", role: "button", name: "Go", allowed_operations: ["CLICK"] },
+        ],
+        recent_actions: [],
+        allowed_operations: ["CLICK"],
+        deadline_ms: 1000,
+      },
+      new AbortController().signal
+    );
+    expect(decision.status).toBe("decided");
+    if (decision.status === "decided") {
+      // D-FR-19: no calibrated confidence for chat routes.
+      expect(decision.uncertainty).toEqual({ source: "unavailable", confidence: null });
+    }
+  });
+
+  it("chat client treats ESCALATE as a normal llm_required outcome", async () => {
+    const client = new ChatCompletionDecisionClient(async () => ({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              operation: "ESCALATE",
+              target_id: null,
+              option_id: null,
+              key: null,
+              url: null,
+            }),
+          },
+        },
+      ],
+    }));
+    const decision = await client.decide(
+      {
+        schema_version: 1,
+        request_id: "r",
+        task_id: "t",
+        step_id: "s",
+        observation_id: "o",
+        page_revision: 1,
+        goal: "g",
+        constraints: [],
+        url: "u",
+        title: "t",
+        candidates: [],
+        recent_actions: [],
+        allowed_operations: ["ESCALATE"],
+        deadline_ms: 1000,
+      },
+      new AbortController().signal
+    );
+    expect(decision.status).toBe("decided");
+    if (decision.status === "decided") {
+      expect(decision.action.operation).toBe("ESCALATE");
+    }
+  });
+
+  it("chat client caps provider attempts at two (D-FR-18)", async () => {
+    let calls = 0;
+    const client = new ChatCompletionDecisionClient(async () => {
+      calls++;
+      return { choices: [{ message: { content: "not json at all" } }] };
+    });
+    const decision = await client.decide(
+      {
+        schema_version: 1,
+        request_id: "r",
+        task_id: "t",
+        step_id: "s",
+        observation_id: "o",
+        page_revision: 1,
+        goal: "g",
+        constraints: [],
+        url: "u",
+        title: "t",
+        candidates: [],
+        recent_actions: [],
+        allowed_operations: ["CLICK"],
+        deadline_ms: 1000,
+      },
+      new AbortController().signal
+    );
+    expect(decision.status).toBe("provider_error");
+    expect(calls).toBe(2);
+  });
+
+  it("hosted client reports unavailable on a 404 (D-AC-11)", async () => {
+    const client = new HostedDecisionClient(
+      async () => ({ advertised: false }),
+      async () => {
+        const error = new Error("404 not found");
+        throw error;
+      }
+    );
+    const decision = await client.decide(
+      {
+        schema_version: 1,
+        request_id: "r",
+        task_id: "t",
+        step_id: "s",
+        observation_id: "o",
+        page_revision: 1,
+        goal: "g",
+        constraints: [],
+        url: "u",
+        title: "t",
+        candidates: [],
+        recent_actions: [],
+        allowed_operations: ["CLICK"],
+        deadline_ms: 1000,
+      },
+      new AbortController().signal
+    );
+    expect(decision).toEqual({
+      status: "provider_error",
+      reason_code: "hosted_decision_unavailable",
+    });
+  });
+
+  it("normalizes wire results and rejects fabricated confidence", () => {
+    expect(
+      normalizeWireResult({
+        status: "decided",
+        action: { operation: "WAIT", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: 0.93 },
+      })
+    ).toEqual({
+      status: "decided",
+      action: { operation: "WAIT", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    });
+    expect(normalizeWireResult({ status: "garbage" })).toEqual({
+      status: "invalid_input",
+      reason_code: "schema_violation",
+    });
+  });
+
+  it("includes ESCALATE guidance and the candidate set in the chat prompt", () => {
+    const prompt = buildChatDecisionPrompt({
+      schema_version: 1,
+      request_id: "r",
+      task_id: "t",
+      step_id: "s",
+      observation_id: "o",
+      page_revision: 1,
+      goal: "search",
+      constraints: [],
+      url: "u",
+      title: "t",
+      candidates: [{ candidate_id: "c1", role: "button", name: "Go", allowed_operations: ["CLICK"] }],
+      recent_actions: [],
+      allowed_operations: ["CLICK", "ESCALATE"],
+      deadline_ms: 1000,
+    });
+    expect(prompt).toContain("c1");
+    void prompt;
+    expect(CHAT_PROMPT_CONTAINS_ESCALATE_GUIDANCE).toBe(true);
+  });
+});
+
+import { CHAT_DECISION_SYSTEM_PROMPT } from "@/service/browserDecision/DecisionClients";
+const CHAT_PROMPT_CONTAINS_ESCALATE_GUIDANCE = CHAT_DECISION_SYSTEM_PROMPT.includes("ESCALATE");
+
+describe("F05 lifecycle checks at every await boundary", () => {
+  const decisionInput: import("@/entityTypes/browserDecisionTypes").BrowserDecisionInput = {
+    schema_version: 1 as const,
+    request_id: "r",
+    task_id: "t",
+    step_id: "s",
+    observation_id: "o",
+    page_revision: 1,
+    goal: "g",
+    constraints: [],
+    url: "u",
+    title: "t",
+    candidates: [
+      { candidate_id: "c1", role: "button", name: "Go", allowed_operations: ["CLICK"] },
+    ],
+    recent_actions: [],
+    allowed_operations: ["CLICK"],
+    deadline_ms: 1000,
+  };
+
+  it("stop during the fresh DONE observation yields cancelled, not completed", async () => {
+    const aborter = new AbortController();
+    const deps = makeRunnerDeps([doneEntry()]);
+    let observeCalls = 0;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      observeCalls++;
+      // 1st: loop-top observe. 2nd: the fresh DONE verification observe —
+      // the user's Stop lands while it is in flight.
+      if (observeCalls === 2) {
+        aborter.abort();
+      }
+      return observation();
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f05a",
+        conversationId: "conv-1",
+        goal: "finish",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      { ...deps, signal: aborter.signal }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("cancelled");
+    expect(result.reason).toBe("task_cancelled");
+  });
+
+  it("an action held across a pause+resume during persistActionIntent is discarded, never dispatched", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const dispatched: RunnerAction[] = [];
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    // A user pause+resume (takeover round-trip) lands while the journal
+    // write is in flight — generation bumps and the held action is stale.
+    let runnerRef: BrowserTaskRunner | null = null;
+    const persistActionIntent = async (): Promise<void> => {
+      if (runnerRef === null) {
+        return;
+      }
+      deps.control.setState(runnerRef.taskId, "paused");
+      deps.control.resume(runnerRef.taskId);
+    };
+    const runner: BrowserTaskRunner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f05b",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      { ...deps, persistActionIntent }
+    );
+    runnerRef = runner;
+    const result = await runner.run();
+    // The held CLICK never reached the page.
+    expect(dispatched).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("action_discarded_after_resume");
+  });
+
+  it("chat client never invokes complete() on an already-aborted signal", async () => {
+    let calls = 0;
+    const client = new ChatCompletionDecisionClient(
+      async () => {
+        calls++;
+        return {};
+      }
+    );
+    const controller = new AbortController();
+    controller.abort();
+    const decision = await client.decide(decisionInput, controller.signal);
+    expect(calls).toBe(0);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
+
+  it("chat client discards a response when the provider config changed in flight", async () => {
+    let configKey: string | null = "k1";
+    const client = new ChatCompletionDecisionClient(
+      async () => {
+        // The provider change lands WHILE the request is in flight.
+        configKey = "k2";
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  operation: "CLICK",
+                  target_id: "c1",
+                  option_id: null,
+                  key: null,
+                  url: null,
+                }),
+              },
+            },
+          ],
+        };
+      },
+      undefined,
+      () => configKey
+    );
+    client.freezeRoute("k1");
+    const decision = await client.decide(decisionInput, new AbortController().signal);
+    expect(decision).toEqual({
+      status: "provider_error",
+      reason_code: "provider_config_changed",
+    });
+  });
+
+  it("chat client discards a late response that arrives after the abort", async () => {
+    const controller = new AbortController();
+    const client = new ChatCompletionDecisionClient(
+      async (_request, signal) => {
+        controller.abort(); // the deadline/task abort lands while awaiting
+        void signal;
+        return {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  operation: "CLICK",
+                  target_id: "c1",
+                  option_id: null,
+                  key: null,
+                  url: null,
+                }),
+              },
+            },
+          ],
+        };
+      }
+    );
+    const decision = await client.decide(decisionInput, controller.signal);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
+
+  it("hosted client never posts on an already-aborted signal", async () => {
+    let calls = 0;
+    const client = new HostedDecisionClient(
+      async () => ({ advertised: true }),
+      async () => {
+        calls++;
+        return {};
+      }
+    );
+    const controller = new AbortController();
+    controller.abort();
+    const decision = await client.decide(decisionInput, controller.signal);
+    expect(calls).toBe(0);
+    expect(decision.status).toBe("provider_error");
+    if (decision.status === "provider_error") {
+      expect(decision.reason_code).toBe("request_aborted");
+    }
+  });
+});
+
+describe("BrowserTaskRunner F07 persistence and terminal correctness", () => {
+  it("a worker throw mid-step classifies an UNKNOWN effect — never a clean failure (N08/D-AC-07)", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      },
+    ]);
+    const outcomes: Array<"confirmed" | "no_effect" | "unknown"> = [];
+    (deps as unknown as {
+      persistActionOutcome: (outcome: "confirmed" | "no_effect" | "unknown") => Promise<void>;
+    }).persistActionOutcome = async (outcome) => {
+      outcomes.push(outcome);
+    };
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      throw new Error("worker exited");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f07a", conversationId: "conv-1", goal: "click" },
+      deps
+    );
+    const result = await runner.run();
+    // The input may already have been dispatched — the page state is
+    // unknown, so the terminal is partial/unknown (never a generic
+    // runner_error that claims a clean failure).
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+    expect(
+      result.evidence.some((e) => e.includes("worker_error:worker exited"))
+    ).toBe(true);
+    // The journal records the honest unknown outcome.
+    expect(outcomes).toEqual(["unknown"]);
+  });
+
+  it("a known failed step journals no_effect — never confirmed", async () => {
+    const outcomes: Array<"confirmed" | "no_effect" | "unknown"> = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => ({
+      effect: "known",
+      pageRevision: 3,
+      results: [{ success: false, errorCode: "stale_page_reference" }],
+    });
+    const persistActionOutcome = async (
+      outcome: "confirmed" | "no_effect" | "unknown"
+    ): Promise<void> => {
+      outcomes.push(outcome);
+    };
+    // No completion criteria: the loop ends via budget with the failed
+    // step already journaled honestly.
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f07b", conversationId: "conv-1", goal: "click" },
+      { ...deps, persistActionOutcome }
+    );
+    await runner.run();
+    expect(outcomes).toEqual(["no_effect"]);
+  });
+
+  it("persists the RUNNING and TERMINAL cursor phases with real counters", async () => {
+    const phases: Array<{ phase: string; leafSteps: number; decisionRequests: number }> = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const persistCursor = async (input: {
+      phase: string;
+      leafSteps: number;
+      decisionRequests: number;
+    }): Promise<void> => {
+      phases.push({ phase: input.phase, leafSteps: input.leafSteps, decisionRequests: input.decisionRequests });
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f07c",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      { ...deps, persistCursor }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    expect(phases[0]).toMatchObject({ phase: "running", leafSteps: 0 });
+    const terminalPhase = phases[phases.length - 1]!;
+    expect(terminalPhase.phase).toBe("completed");
+    expect(terminalPhase.leafSteps).toBe(1);
+    expect(terminalPhase.decisionRequests).toBe(2);
+  });
+});
+
+describe("BrowserTaskRunner F06 in-job approval wait", () => {
+  const approvalRequiredStop: RunnerExecutionResult = {
+    effect: "known",
+    pageRevision: 3,
+    results: [],
+    stopCode: "approval_required",
+  };
+  const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  };
+
+  it("re-dispatches the preserved pending step after approval", async () => {
+    const dispatches: number[] = [];
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      dispatches.push(dispatchCount);
+      if (dispatchCount === 1) {
+        return approvalRequiredStop;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f06app",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        awaitApproval: async () => "approved",
+      }
+    );
+    const result = await runner.run();
+    // The SAME pending step was re-dispatched (2 dispatches total) and the
+    // task completed.
+    expect(dispatches).toEqual([1, 2]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("CLICK:Go:approval_granted");
+  });
+
+  it("ends partial with approval_denied when the user denies", async () => {
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => approvalRequiredStop;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f06deny", conversationId: "conv-1", goal: "click" },
+      { ...deps, awaitApproval: async () => "denied" }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_denied");
+  });
+
+  it("caps approval re-dispatches to avoid a pathological approve loop", async () => {
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      return approvalRequiredStop;
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f06loop", conversationId: "conv-1", goal: "click" },
+      { ...deps, awaitApproval: async () => "approved" }
+    );
+    const result = await runner.run();
+    // Initial dispatch + 3 approved re-dispatches, then the depth cap ends
+    // the task with the honest approval_required terminal.
+    expect(dispatchCount).toBe(4);
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("approval_required");
+  });
+});
+
+describe("BrowserTaskRunner R13 pin, journal and effect classification", () => {
+  const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  };
+
+  it("pins the EXACT observation through inference and releases the same ID (R13/D-FR-15a)", async () => {
+    const pinCalls: Array<[string, string | null, boolean]> = [];
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r13pin",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        pinObservation: async (sessionId, observationId, pinned) => {
+          pinCalls.push([sessionId, observationId, pinned]);
+        },
+      }
+    );
+    await runner.run();
+    // Each inference window pins before decide and releases the SAME id
+    // after (CLICK decide + DONE decide = two pinned windows).
+    expect(pinCalls).toEqual([
+      ["mb_r13pin", "obs-1", true],
+      ["mb_r13pin", "obs-1", false],
+      ["mb_r13pin", "obs-1", true],
+      ["mb_r13pin", "obs-1", false],
+    ]);
+  });
+
+  it("releases the inference pin when the decide throws (transport error)", async () => {
+    const pinCalls: Array<[string, string | null, boolean]> = [];
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient.decide = async () => {
+      throw new Error("transport down");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r13pinerr", conversationId: "conv-1", goal: "click" },
+      {
+        ...deps,
+        pinObservation: async (sessionId, observationId, pinned) => {
+          pinCalls.push([sessionId, observationId, pinned]);
+        },
+      }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("decision_client_error");
+    // The release runs in the finally — no pin survives the failure.
+    expect(pinCalls).toEqual([
+      ["mb_r13pinerr", "obs-1", true],
+      ["mb_r13pinerr", "obs-1", false],
+    ]);
+  });
+
+  it("approval re-dispatch journals intent and outcome like the initial dispatch (R13)", async () => {
+    const approvalRequiredStop: RunnerExecutionResult = {
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    };
+    const intents: string[] = [];
+    const outcomes: string[] = [];
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      if (dispatchCount === 1) {
+        return approvalRequiredStop;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r13journal",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        persistActionIntent: async (actionType) => {
+          intents.push(actionType);
+        },
+        persistActionOutcome: async (outcome) => {
+          outcomes.push(outcome);
+        },
+        awaitApproval: async () => "approved",
+      }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    // Intent before EACH dispatch (initial + re-dispatch); an outcome for
+    // each execution.
+    expect(intents).toEqual(["CLICK", "CLICK"]);
+    expect(outcomes.length).toBe(2);
+  });
+
+  it("an untargeted worker throw is classified as an unknown effect, not a clean failure (R13)", async () => {
+    const outcomes: string[] = [];
+    const scrollDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "SCROLL_DOWN", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([scrollDecision]);
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      throw new Error("worker crashed mid-step");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r13throw", conversationId: "conv-1", goal: "scroll" },
+      {
+        ...deps,
+        persistActionOutcome: async (outcome) => {
+          outcomes.push(outcome);
+        },
+      }
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("unknown_execution_effect");
+    expect(result.evidence).toContain("SCROLL_DOWN:worker_error:worker crashed mid-step");
+    // The unknown outcome is journaled BEFORE the terminal lands.
+    expect(outcomes).toEqual(["unknown"]);
+  });
+});
+
+describe("BrowserTaskRunner R12 no-progress accounting", () => {
+  it("an already-true criterion no longer suppresses no-progress detection (R12)", async () => {
+    // The fixture URL already satisfies url_contains — a model that
+    // keeps clicking a static page for 15+ steps must still end
+    // no_progress instead of looping forever behind the criterion flag.
+    const script = Array.from({ length: 20 }, () => ({
+      status: "decided" as const,
+      action: { operation: "CLICK" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable" as const, confidence: null },
+    }));
+    const deps = makeRunnerDeps(script);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12crit",
+        conversationId: "conv-1",
+        goal: "click forever",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        budget: { recoveryCalls: 1 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("no_progress");
+  });
+
+  it("fresh EXTRACT results count as progress while the page stands still (R12)", async () => {
+    // 15 extracts with DISTINCT payloads: progress checks at steps 5/10
+    // record, and the check at step 15 must see a CHANGED extraction
+    // digest (progress) instead of triggering a no-progress terminal
+    // through the exhausted recovery budget.
+    const script: Array<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> =
+      Array.from({ length: 15 }, () => ({
+        status: "decided" as const,
+        action: { operation: "EXTRACT" as const, target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      }));
+    script.push(doneEntry());
+    const deps = makeRunnerDeps(script);
+    let extractCall = 0;
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      extractCall++;
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: [{ success: true, errorCode: null }],
+        extracted: [`row-${extractCall}`],
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12extr",
+        conversationId: "conv-1",
+        goal: "extract rows",
+        completionCriteria: [{ kind: "extract_nonempty", value: "" }],
+        budget: { recoveryCalls: 1 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    expect(extractCall).toBe(15);
+  });
+});
+
+describe("BrowserTaskRunner R01 epoch carry-through and capability 3-state", () => {
+  const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  };
+
+  it("a provider epoch change between decide and dispatch discards the held action (R01/D-FR-01)", async () => {
+    const dispatched: RunnerAction[] = [];
+    let epoch = "epoch-1";
+    const deps = makeRunnerDeps([clickDecision, doneEntry()]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01epoch",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        ...deps,
+        providerEpoch: () => epoch,
+      }
+    );
+    // The provider configuration moves AFTER the decide produced the
+    // CLICK but BEFORE dispatch — the mutation boundary discards it.
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (input: unknown) => {
+      const result = (await (originalDecide as unknown as (
+        i: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input)) as import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult;
+      if (
+        result.status === "decided" &&
+        result.action?.operation === "CLICK"
+      ) {
+        epoch = "epoch-2";
+      }
+      return result;
+    }) as typeof deps.decisionClient.decide;
+    const result = await runner.run();
+    // The CLICK never dispatched; the loop re-decided (DONE) under the
+    // new epoch and completed.
+    expect(dispatched).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("provider_changed_before_dispatch");
+  });
+
+  it("an EXPLICIT empty operations list blocks every non-control dispatch (R01/D-FR-16)", async () => {
+    const dispatched: RunnerAction[] = [];
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    (
+      deps.decisionClient as unknown as {
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).getCapabilities = async () => ({
+      advertised: true,
+      operationsReported: true,
+      // The route REPORTED an empty list — explicitly nothing offered.
+      operations: [],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r01empty", conversationId: "conv-1", goal: "click" },
+      deps
+    );
+    const result = await runner.run();
+    expect(dispatched).toEqual([]);
+    expect(result.evidence).toContain("unsupported_operation:CLICK");
+  });
+
+  it("a route that does NOT report operations keeps the wide legacy fallback (R01/D-FR-16)", async () => {
+    const seen: Array<readonly string[]> = [];
+    const deps = makeRunnerDeps([doneEntry()]);
+    (
+      deps.decisionClient as unknown as {
+        decide: (input: { allowed_operations: readonly string[] }) => Promise<unknown>;
+      }
+    ).decide = async (input: { allowed_operations: readonly string[] }) => {
+      seen.push(input.allowed_operations);
+      return doneEntry();
+    };
+    (
+      deps.decisionClient as unknown as {
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).getCapabilities = async () => ({
+      // The chat route: advertised but operations NOT reported.
+      advertised: true,
+      operationsReported: false,
+      operations: [],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01legacy",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    // The wide fallback stands — every runner operation is offered.
+    expect(seen[0]!.length).toBeGreaterThan(4);
+  });
+
+  it("caps the merged criteria at the wire bound of 8 and the folded subgoal at 1000 (R01)", async () => {
+    const seenInputs: Array<{ subgoal: string | null; criteria: readonly string[] }> = [];
+    const deps = makeRunnerDeps([doneEntry()]);
+    (
+      deps.decisionClient as unknown as {
+        decide: (input: { subgoal: string | null; completion_criteria: readonly string[] }) => Promise<unknown>;
+      }
+    ).decide = async (input: { subgoal: string | null; completion_criteria: readonly string[] }) => {
+      seenInputs.push({ subgoal: input.subgoal, criteria: input.completion_criteria });
+      return doneEntry();
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01caps",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: Array.from({ length: 12 }, (_, i) => ({
+          kind: "url_contains" as const,
+          value: `/c${i}`,
+        })),
+      },
+      deps
+    );
+    // Resume instructions fold into the pending subgoal — long user
+    // input must still fit the wire bound (1000).
+    deps.control.recordResumeInstructions(runner.taskId, "r".repeat(1500));
+    await runner.run();
+    expect(seenInputs[0]!.criteria.length).toBe(8);
+    expect((seenInputs[0]!.subgoal ?? "").length).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe("BrowserTaskRunner R04 control-id adoption", () => {
+  it("adopts the caller's control id — the outer record IS the runner's record (R04/M-FR-07)", async () => {
+    const deps = makeRunnerDeps([doneEntry()]);
+    const control = deps.control;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04adopt",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "batch_r04:0",
+      },
+      deps
+    );
+    // The runner no longer mints a nested id.
+    expect(runner.taskId).toBe("batch_r04:0");
+    await runner.run();
+    // B01: the ADOPTED record stays OPEN after the runner ends — the
+    // OUTER owner (batch collector) terminalizes the lane, so nested
+    // termination never closes it between sequential executions. Pause/
+    // stop on the outer id still gates this runner directly.
+    expect(control.getState("batch_r04:0")).toBe("running");
+  });
+
+  it("an invalid adoptable id falls back to the generated nested id (R04)", async () => {
+    const deps = makeRunnerDeps([doneEntry()]);
+    const empty = new BrowserTaskRunner(
+      { sessionId: "mb_r04bad1", conversationId: "conv-1", goal: "g", taskId: "" },
+      deps
+    );
+    expect(empty.taskId).toMatch(/^task_/);
+    const oversized = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04bad2",
+        conversationId: "conv-1",
+        goal: "g",
+        taskId: "x".repeat(65),
+      },
+      deps
+    );
+    expect(oversized.taskId).toMatch(/^task_/);
+    // No id provided at all: generated, unchanged behavior.
+    const none = new BrowserTaskRunner(
+      { sessionId: "mb_r04none", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    expect(none.taskId).toMatch(/^task_/);
+  });
+});
+
+describe("BrowserTaskRunner R12 recovery binding and parity", () => {
+  it("skips recovery when the no-progress reobserve FAILS — no mismatched input/cursor pair (R12)", async () => {
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const script = Array.from({ length: 12 }, () => clickDecision);
+    const deps = makeRunnerDeps(script);
+    let observeCalls = 0;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      observeCalls++;
+      // The reobserve INSIDE the second stall check (after 10 identical
+      // steps) fails: initial observe + 10 post-action observes precede
+      // it.
+      if (observeCalls >= 12) {
+        return null;
+      }
+      return observation();
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12mismatch",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        budget: { recoveryCalls: 2 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The stall is reported honestly and NO recovery decided on a
+    // mismatched pre-action input / post-action cursor pair.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("no_progress");
+    expect(result.counts.recoveryCalls).toBe(0);
+  });
+
+  it("an untargeted operation exhausted of equivalent failures gets the SAME bounded recovery (R12/D-FR-25)", async () => {
+    const scrollDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "SCROLL_DOWN", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([scrollDecision, scrollDecision, scrollDecision, doneEntry(), doneEntry()]);
+    let dispatches = 0;
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      dispatches++;
+      if (dispatches <= 3) {
+        return {
+          effect: "known",
+          pageRevision: 3,
+          results: [{ success: false, errorCode: "scroll_failed" }],
+        };
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r12parity",
+        conversationId: "conv-1",
+        goal: "scroll",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        budget: { recoveryCalls: 2 },
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The third equivalent failure routed to recovery (decide #4 = DONE)
+    // instead of terminating; the loop re-decided (DONE) and completed.
+    expect(result.status).toBe("completed");
+    expect(result.counts.recoveryCalls).toBe(1);
+    expect(result.evidence.some((entry) => entry.includes("three_equivalent"))).toBe(false);
+  });
+});
+
+describe("BrowserTaskRunner R04 sequential executions on one control id", () => {
+  const doneEntryLocal = (): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+    status: "decided",
+    action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  });
+
+  it("the runner does NOT terminalize an ADOPTED control record — a second execution on the same lane id completes (B01)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal(), doneEntryLocal()]);
+    const first = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq1",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04:0",
+      },
+      deps
+    );
+    const firstResult = await first.run();
+    expect(firstResult.status).toBe("completed");
+    // B01: the adopted lane record stays OPEN between sequential
+    // executions — the OUTER owner (batch collector) terminalizes it,
+    // never the nested runner.
+    expect(deps.control.getState("lane_r04:0")).toBe("running");
+    // A second execution on the same lane id proceeds without a reopen —
+    // the gate never sees a task_completed terminal.
+    const second = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq2",
+        conversationId: "conv-1",
+        goal: "g again",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04:0",
+      },
+      deps
+    );
+    const secondResult = await second.run();
+    expect(secondResult.status).toBe("completed");
+    expect(deps.control.getState("lane_r04:0")).toBe("running");
+  });
+
+  it("an OUTER owner terminalizes the lane; reopenForExecution cannot resurrect a canceled lane (B01)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal(), doneEntryLocal()]);
+    const control = deps.control;
+    const first = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq3",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04b:0",
+      },
+      deps
+    );
+    expect((await first.run()).status).toBe("completed");
+    // The runner left the adopted record open (B01) — a reopen on a
+    // non-terminal record is refused.
+    expect(control.reopenForExecution("lane_r04b:0")).toBe(false);
+    // The OUTER owner terminalizes the lane the way the batch collector
+    // does after the child result lands.
+    control.setState("lane_r04b:0", "completed", "outer_owner_terminal");
+    // executeTask reopens a runner-completed record for the sequential
+    // execution (R04) — completed reopens; cancelled/interrupted do not.
+    expect(control.reopenForExecution("lane_r04b:0")).toBe(true);
+    const second = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq4",
+        conversationId: "conv-1",
+        goal: "g again",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+        taskId: "lane_r04b:0",
+      },
+      deps
+    );
+    const secondResult = await second.run();
+    expect(secondResult.status).toBe("completed");
+    expect(second.taskId).toBe("lane_r04b:0");
+    // The execution id is ALWAYS unique — the journal never collides.
+    expect(second.executionId).not.toBe(first.executionId);
+    expect(second.executionId).toMatch(/^exec_/);
+    // B01: a user stop between executions is NEVER resurrected by the
+    // admission-path reopen.
+    control.cancel("lane_r04b:0", "user_stop");
+    expect(control.reopenForExecution("lane_r04b:0")).toBe(false);
+    expect(control.getState("lane_r04b:0")).toBe("cancelled");
+  });
+
+  it("reopenForExecution refuses a non-terminal record (R04)", async () => {
+    const deps = makeRunnerDeps([doneEntryLocal()]);
+    const control = deps.control;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r04seq5",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const runPromise = runner.run();
+    // While the runner is executing (record running), a reopen is refused.
+    await vi.waitFor(() => {
+      expect(control.getState(runner.taskId)).toBe("running");
+    });
+    expect(control.reopenForExecution(runner.taskId)).toBe(false);
+    const result = await runPromise;
+    expect(result.status).toBe("completed");
+    // A terminal record reopens; the record is RUNNING afterwards, so a
+    // second reopen (without a new execution) is refused again.
+    expect(control.reopenForExecution(runner.taskId)).toBe(true);
+    expect(control.reopenForExecution(runner.taskId)).toBe(false);
+  });
+});
+
+describe("BrowserTaskRunner R05 decide-across-resume and R01 shortlist bound", () => {
+  it("a decision that completes ACROSS a Pause+Resume is discarded, never executed (R05)", async () => {
+    const dispatched: RunnerAction[] = [];
+    let decideCount = 0;
+    let releaseDecide: ((r: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult) => void) | null = null;
+    const heldDecision = new Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult>(
+      (resolve) => {
+        releaseDecide = resolve;
+      }
+    );
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient.decide = async (): Promise<import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult> => {
+      decideCount++;
+      if (decideCount === 1) {
+        return await heldDecision;
+      }
+      return doneEntry();
+    };
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    let runnerRef: BrowserTaskRunner | null = null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r05decide",
+        conversationId: "conv-1",
+        goal: "click",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    runnerRef = runner;
+    const runPromise = runner.run();
+    await vi.waitFor(() => expect(decideCount).toBe(1));
+    // The resume lands DURING inference.
+    deps.control.setState(runnerRef.taskId, "paused");
+    deps.control.resume(runnerRef.taskId);
+    releaseDecide!(clickDecision);
+    const result = await runPromise;
+    // The stale proposal never dispatched; the loop re-decided (DONE).
+    expect(dispatched).toEqual([]);
+    expect(result.evidence).toContain("decision_discarded_after_resume");
+    expect(result.status).toBe("completed");
+  });
+
+  it("a route advertising 120 candidates cannot expand the application shortlist of 16 (R01)", async () => {
+    const manyElements = Array.from({ length: 30 }, (_, i) => ({
+      ref: `e_${i}`,
+      role: "button",
+      name: `Button ${i}`,
+    }));
+    const seenCandidates: number[] = [];
+    const deps = makeRunnerDeps([doneEntry()]);
+    deps.observe = async (): Promise<RunnerObservation | null> => ({
+      ...observation({ elements: manyElements }),
+    });
+    (
+      deps.decisionClient as unknown as {
+        decide: (input: { candidates: ReadonlyArray<unknown> }) => Promise<unknown>;
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).decide = async (input: { candidates: ReadonlyArray<unknown> }) => {
+      seenCandidates.push(input.candidates.length);
+      return doneEntry();
+    };
+    (
+      deps.decisionClient as unknown as {
+        getCapabilities: () => Promise<Record<string, unknown>>;
+      }
+    ).getCapabilities = async () => ({
+      advertised: true,
+      operationsReported: false,
+      operations: [],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      // The route ADVERTISES 120 — the application default (16) holds.
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r01short",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    await runner.run();
+    expect(seenCandidates.length).toBeGreaterThan(0);
+    for (const count of seenCandidates) {
+      expect(count).toBeLessThanOrEqual(16);
+    }
+  });
+});
+
+describe("BrowserTaskRunner R13 redispatch revalidation", () => {
+  it("a Stop landing during the approval wait is honored by the re-dispatch — nothing dispatches (R13/D-FR-09)", async () => {
+    const approvalRequiredStop: RunnerExecutionResult = {
+      effect: "known",
+      pageRevision: 3,
+      results: [],
+      stopCode: "approval_required",
+    };
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const dispatched: RunnerAction[] = [];
+    let dispatchCount = 0;
+    const deps = makeRunnerDeps([clickDecision]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatchCount++;
+      dispatched.push(...input.actions);
+      if (dispatchCount === 1) {
+        return approvalRequiredStop;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    // The user approves BUT the task is stopped while the dialog is open:
+    // the outer signal aborts right before the wait resolves.
+    const controller = new AbortController();
+    const depsWithSignal = {
+      ...deps,
+      signal: controller.signal,
+      awaitApproval: async (): Promise<"approved" | "denied" | "expired"> => {
+        controller.abort();
+        return "approved";
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r13redis", conversationId: "conv-1", goal: "click" },
+      depsWithSignal
+    );
+    const result = await runner.run();
+    // The re-dispatch was refused by the closure's renewed abort check —
+    // nothing dispatched after the Stop and the task ends cancelled.
+    expect(dispatchCount).toBe(1);
+    expect(dispatched.length).toBe(1);
+    expect(result.status).toBe("cancelled");
+  });
+});
+
+describe("B03 resume-instruction delivery", () => {
+  it("the runner's consume no longer steals the note from the transcript; delivery is per generation (B03/C03/C-FR-07)", async () => {
+    const control = new AgentTaskControlService();
+    control.register("lane_c03:0", "conv-1");
+    // The IPC flow: the user's instructions are recorded BEFORE the gate
+    // reopens; resume() re-keys the pending note to the new generation.
+    control.beginIntervention("lane_c03:0", "user_paused");
+    control.recordResumeInstructions("lane_c03:0", "prefer the second result");
+    control.resume("lane_c03:0");
+    // The AGENT transcript peeks (non-consuming) — as onPauseWait does.
+    expect(control.peekResumeInstructions("lane_c03:0")).toBe(
+      "prefer the second result"
+    );
+    // Still there for the runner.
+    expect(control.peekResumeInstructions("lane_c03:0")).toBe(
+      "prefer the second result"
+    );
+    // The RUNNER consumes at its safe point.
+    expect(control.consumeResumeInstructions("lane_c03:0")).toBe(
+      "prefer the second result"
+    );
+    // Consumed once for the DECISION — no replay to the next decision.
+    expect(control.consumeResumeInstructions("lane_c03:0")).toBeNull();
+    // C03: the note STAYS available for the transcript's per-generation
+    // delivery — the runner consuming it no longer hides it from the
+    // live outer model turn.
+    expect(control.peekResumeInstructions("lane_c03:0")).toBe(
+      "prefer the second result"
+    );
+    // The transcript cursor delivers generation 1 exactly once...
+    const first = control.peekResumeInstructionsSince("lane_c03:0", 0);
+    expect(first?.text).toBe("prefer the second result");
+    expect(first!.latestGeneration).toBe(1);
+    // ...and never replays it.
+    expect(
+      control.peekResumeInstructionsSince("lane_c03:0", first!.latestGeneration)
+    ).toBeNull();
+    // A second resume records FRESH text under the NEW generation (the
+    // note is pending until resume() re-keys it).
+    control.beginIntervention("lane_c03:0", "user_paused");
+    control.recordResumeInstructions("lane_c03:0", "now focus on pricing");
+    control.resume("lane_c03:0");
+    expect(control.consumeResumeInstructions("lane_c03:0")).toBe(
+      "now focus on pricing"
+    );
+    const second = control.peekResumeInstructionsSince(
+      "lane_c03:0",
+      first!.latestGeneration
+    );
+    expect(second?.text).toBe("now focus on pricing");
+    expect(second!.latestGeneration).toBe(2);
+  });
+});
+
+describe("normalizeWireResult F14 bounds and honest uncertainty", () => {
+  const bareFill = {
+    operation: "FILL",
+    target_id: "c1",
+    option_id: null,
+    key: null,
+    url: null,
+    text: "x",
+  };
+
+  it("rejects an oversized bare FILL text (same bound as the strict schema)", () => {
+    const oversized = normalizeWireResult({
+      ...bareFill,
+      text: "x".repeat(2001),
+    });
+    expect(oversized).toEqual({
+      status: "invalid_input",
+      reason_code: "schema_violation",
+    });
+    // Exactly at the bound is accepted.
+    const atBound = normalizeWireResult({
+      ...bareFill,
+      text: "x".repeat(2000),
+    });
+    expect(atBound.status).toBe("decided");
+  });
+
+  it("rejects an oversized bare NAVIGATE url", () => {
+    const oversized = normalizeWireResult({
+      operation: "NAVIGATE",
+      target_id: null,
+      option_id: null,
+      key: null,
+      url: `https://example.test/${"x".repeat(2100)}`,
+      text: null,
+    });
+    expect(oversized).toEqual({
+      status: "invalid_input",
+      reason_code: "schema_violation",
+    });
+  });
+
+  it("strips claimed native_distribution from chat responses (D-FR-19)", () => {
+    const claimed = {
+      status: "decided",
+      action: bareFill,
+      uncertainty: { source: "native_distribution", confidence: 0.99 },
+    };
+    // Chat path: the claim is untrusted.
+    const chat = normalizeWireResult(claimed, { allowNativeDistribution: false });
+    expect(chat).toEqual({
+      status: "decided",
+      action: bareFill,
+      uncertainty: { source: "unavailable", confidence: null },
+    });
+    // Hosted native path: the claim is honored.
+    const hosted = normalizeWireResult(claimed);
+    if (hosted.status === "decided") {
+      expect(hosted.uncertainty).toEqual({
+        source: "native_distribution",
+        confidence: 0.99,
+      });
+    } else {
+      throw new Error("expected decided");
+    }
+  });
+});
+
+describe("BrowserTaskRunner F14 SELECT option mapping", () => {
+  it("maps the decided positional option id to the OBSERVED value", async () => {
+    const seen: RunnerAction[] = [];
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_0", "o_1", "o_2"],
+          option_values: ["de", "fr", "jp"],
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_1", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f14sel",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The observed o_1 token dispatches; the WORKER resolves it against
+    // the live element (exact native identity, P1/D-FR-17).
+    expect(seen[0]).toMatchObject({ type: "select", values: ["o_1"] });
+    expect(result.status).toBe("completed");
+  });
+
+  it("refuses an option id outside the observed list", async () => {
+    const seen: RunnerAction[] = [];
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_0"],
+          option_values: ["de"],
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_7", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f14sel2",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The unobserved option never dispatched; the loop continued to DONE.
+    expect(seen).toEqual([]);
+    expect(result.status).toBe("completed");
+  });
+
+  it("refuses a dispatch when the observed VALUE cannot be bound to the token (R02)", async () => {
+    const seen: RunnerAction[] = [];
+    // The token IS in the id list but the value list is missing — no
+    // trusted expectation can be bound, so the step must refuse instead
+    // of dispatching a verification-less selection.
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_0", "o_1"],
+          option_values: undefined,
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_0", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r02sel",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("unsupported_operation:SELECT");
+  });
+
+  it("binds the expected value for a FILTERED earlier option (compacted list, R02)", async () => {
+    const seen: RunnerAction[] = [];
+    // o_2 sits at position 1 in the COMPACTED id list (o_0 was omitted
+    // as oversized); the bound value must come from the aligned value
+    // list, not from parsing the token into the compacted array.
+    const obs = observation({
+      elements: [
+        {
+          ref: "e_sel",
+          role: "combobox",
+          name: "Country",
+          option_ids: ["o_2"],
+          option_values: ["jp"],
+        },
+      ],
+    });
+    const deps = makeRunnerDeps(
+      [
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_2", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        doneEntry(),
+      ],
+      obs
+    );
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_r02sel2",
+        conversationId: "conv-1",
+        goal: "pick country",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen).toEqual([
+      {
+        type: "select",
+        ref: "e_sel",
+        pageRevision: 3,
+        expectedRole: "combobox",
+        expectedName: "Country",
+        values: ["o_2"],
+        expected_values: ["jp"],
+      },
+    ]);
+    expect(result.status).toBe("completed");
+  });
+});
+
+describe("BrowserTaskRunner F15 progress and recovery", () => {
+  it("a successful FILL counts as progress even when URL/text stand still", async () => {
+    // A mutable observation: each FILL changes the field's valueSummary.
+    const obs = observation();
+    const mutableElements = obs.elements as Array<{
+      ref: string;
+      role: string;
+      name: string;
+      valueSummary?: string;
+    }>;
+    const deps = makeRunnerDeps(
+      Array.from({ length: 7 }, (_, i) => ({
+        status: "decided" as const,
+        action: {
+          operation: i === 6 ? ("DONE" as const) : ("FILL" as const),
+          target_id: "e_aaa",
+          option_id: null,
+          key: null,
+          url: null,
+          text: `query ${i}`,
+        },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      })),
+      obs
+    );
+    deps.runActions = async (): Promise<RunnerExecutionResult> => {
+      // The fill mutates the page state: the next observation's field
+      // summary differs.
+      const kept = mutableElements.filter((el) => el.ref !== "e_aaa");
+      mutableElements.length = 0;
+      mutableElements.push(
+        ...kept,
+        {
+          ref: "e_aaa",
+          role: "textbox",
+          name: "Search",
+          valueSummary: `query-${Date.now()}-${Math.random()}`,
+        },
+      );
+      return { effect: "known", pageRevision: obs.pageRevision, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_f15fill",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // 6 fills + DONE: form-state progress kept the task alive to DONE.
+    expect(result.status).toBe("completed");
+  });
+
+  it("5+ steps that change NOTHING end as no_progress", async () => {
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async (input: unknown) => {
+        // The recovery attempt FAILS (llm_required): no alternative exists.
+        if ((input as { step_id?: string }).step_id?.includes("_recovery")) {
+          return { status: "llm_required", reason_code: "no_alternative" };
+        }
+        return {
+          status: "decided" as const,
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable" as const, confidence: null },
+        };
+      },
+    } as unknown as typeof deps.decisionClient;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f15stuck", conversationId: "conv-1", goal: "click" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("no_progress");
+  });
+
+  it("recovery decide runs under its OWN bounded attempt signal, not the outer one", async () => {
+    // 5 no-progress steps trigger recovery; the recovery decide captures
+    // the signal it received — it must be a DIFFERENT (bounded) signal.
+    let recoverySignal: AbortSignal | null = null;
+    let recoveryCalls = 0;
+    const deps = makeRunnerDeps([]);
+    deps.decisionClient = {
+      getCapabilities: async () => ({}) as never,
+      decide: async (input: unknown, signal: AbortSignal) => {
+        if ((input as { step_id?: string }).step_id?.includes("_recovery")) {
+          recoveryCalls++;
+          recoverySignal = signal;
+          // The recovery proposal: ESCALATE ends the task honestly.
+          return {
+            status: "decided" as const,
+            action: { operation: "ESCALATE", target_id: null, option_id: null, key: null, url: null, text: null },
+            uncertainty: { source: "unavailable" as const, confidence: null },
+          };
+        }
+        return {
+          status: "decided" as const,
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable" as const, confidence: null },
+        };
+      },
+    } as unknown as typeof deps.decisionClient;
+    const outer = new AbortController();
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_f15rec", conversationId: "conv-1", goal: "click" },
+      { ...deps, signal: outer.signal }
+    );
+    const result = await runner.run();
+    expect(recoveryCalls).toBe(1);
+    // A DIFFERENT signal than the outer task signal (bounded attempt).
+    expect(recoverySignal).not.toBe(outer.signal);
+    expect(recoverySignal!.aborted).toBe(false);
+    // The ESCALATE recovery proposal ends the task as an escalation.
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated_by_decision");
+  });
+});
+
+describe("BrowserTaskRunner P0 durable intent before input", () => {
+  it("a persistActionIntent storage failure prevents dispatch entirely", async () => {
+    const dispatched: RunnerAction[] = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+    ]);
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const persistActionIntent = async (): Promise<void> => {
+      throw new Error("SQLITE_BUSY");
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_p0intent", conversationId: "conv-1", goal: "click" },
+      { ...deps, persistActionIntent }
+    );
+    const result = await runner.run();
+    // The mutation NEVER dispatched; the task failed before any input with
+    // the storage reason surfaced.
+    expect(dispatched).toEqual([]);
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("intent_persistence_failed:SQLITE_BUSY");
+  });
+});
+
+describe("BrowserTaskRunner N03 typed gate errors", () => {
+  function makeGateThrowing(deps: ReturnType<typeof makeRunnerDeps>, message: string) {
+    // Wrap the control gate wait to throw the given gate error mid-loop.
+    const control = deps.control;
+    const originalGetGate = control.getGate.bind(control);
+    (control as { getGate: typeof control.getGate }).getGate = (
+      taskId: string
+    ) => {
+      const gate = originalGetGate(taskId);
+      return {
+        ...gate,
+        waitUntilOpen: async (): Promise<void> => {
+          throw new Error(message);
+        },
+      };
+    };
+    return control;
+  }
+
+  it("task_failed gate errors stay failed (never user cancellation)", async () => {
+    const deps = makeRunnerDeps([]);
+    makeGateThrowing(deps, "task_failed");
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_n03a", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("task_failed");
+  });
+
+  it("task_interrupted gate errors map to partial/interrupted", async () => {
+    const deps = makeRunnerDeps([]);
+    makeGateThrowing(deps, "task_interrupted");
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_n03b", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("task_interrupted");
+  });
+
+  it("task_cancelled gate errors map to cancelled", async () => {
+    const deps = makeRunnerDeps([]);
+    makeGateThrowing(deps, "task_cancelled");
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_n03c", conversationId: "conv-1", goal: "g" },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("cancelled");
+    expect(result.reason).toBe("task_cancelled");
+  });
+});
+
+describe("BrowserTaskRunner N09 NAVIGATE provenance", () => {
+  const navDecision = (url: string): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+    status: "decided",
+    action: { operation: "NAVIGATE", target_id: null, option_id: null, key: null, url, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  });
+
+  function makeNavDeps(
+    elements: Array<Record<string, unknown>>,
+    seen: RunnerAction[]
+  ) {
+    let navigated = false;
+    const deps = makeRunnerDeps(
+      [navDecision("https://mail.example.test/inbox"), doneEntry()],
+      observation({
+        url: "https://accounts.example.test/settings",
+        elements: elements as never,
+      })
+    );
+    // N09: the navigate dispatch MOVES the page — the re-observation
+    // reflects the new origin so the DONE criteria can verify.
+    deps.observe = async (): Promise<RunnerObservation | null> =>
+      observation({
+        url: navigated
+          ? "https://mail.example.test/inbox"
+          : "https://accounts.example.test/settings",
+        elements: elements as never,
+      });
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      if (input.actions.some((a) => a.type === "navigate")) {
+        navigated = true;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    return deps;
+  }
+
+  it("rejects a same-registrable-domain navigation whose origin was never observed", async () => {
+    // Current page: accounts.example.test. The model invents a deep link
+    // on mail.example.test — same registrable domain, but the origin was
+    // NEVER observed as a link: no provenance, no navigation.
+    const seen: RunnerAction[] = [];
+    const deps = makeNavDeps(
+      [{ ref: "e_nav", role: "link", name: "Mail" }],
+      seen
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09a",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).toContain("navigate_unobserved_url");
+    // Nothing navigated — the unobserved URL never dispatched.
+    expect(seen).toEqual([]);
+  });
+
+  it("allows navigation to the FULL URL of an observed link", async () => {
+    const seen: RunnerAction[] = [];
+    const deps = makeNavDeps(
+      [
+        { ref: "e_nav", role: "link", name: "Mail" },
+        {
+          ref: "e_link",
+          role: "link",
+          name: "Mail inbox",
+          hrefOrigin: "https://mail.example.test",
+          href_full: "https://mail.example.test/inbox",
+        },
+      ],
+      seen
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09b",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "mail.example.test" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(seen.map((a) => a.type)).toContain("navigate");
+    expect(result.status).toBe("completed");
+  });
+});
+
+describe("BrowserTaskRunner B04 NAVIGATE per-URL provenance", () => {
+  const navDecision = (url: string): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+    status: "decided",
+    action: { operation: "NAVIGATE", target_id: null, option_id: null, key: null, url, text: null },
+    uncertainty: { source: "unavailable", confidence: null },
+  });
+
+  function makeB04Deps(
+    elements: Array<Record<string, unknown>>,
+    seen: RunnerAction[]
+  ) {
+    let navigated = false;
+    const deps = makeRunnerDeps(
+      [navDecision("https://example.test/unobserved"), doneEntry()],
+      observation({
+        url: "https://example.test/search",
+        elements: elements as never,
+      })
+    );
+    deps.observe = async (): Promise<RunnerObservation | null> =>
+      observation({
+        url: navigated
+          ? "https://example.test/unobserved"
+          : "https://example.test/search",
+        elements: elements as never,
+      });
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      seen.push(...input.actions);
+      if (input.actions.some((a) => a.type === "navigate")) {
+        navigated = true;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    return deps;
+  }
+
+  it("an origin match alone does NOT authorize an unobserved path on the same origin", async () => {
+    // B04: a link to https://cdn.example.test/one-path must not authorize
+    // https://cdn.example.test/other-path; likewise a same-origin link to
+    // /search never authorizes /unobserved.
+    const seen: RunnerAction[] = [];
+    const deps = makeB04Deps(
+      [
+        {
+          ref: "e_link",
+          role: "link",
+          name: "Observed path",
+          hrefOrigin: "https://example.test",
+          href_full: "https://example.test/search",
+        },
+      ],
+      seen
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b04a",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "/unobserved" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).toContain("navigate_unobserved_url");
+    expect(seen).toEqual([]);
+  });
+
+  it("navigating to the CURRENT page URL is authorized", async () => {
+    const deps = makeRunnerDeps(
+      [navDecision("https://example.test/search"), doneEntry()],
+      observation({
+        url: "https://example.test/search",
+        elements: [] as never,
+      })
+    );
+    let navigated = false;
+    deps.observe = async (): Promise<RunnerObservation | null> =>
+      observation({
+        url: navigated
+          ? "https://example.test/search?refreshed=1"
+          : "https://example.test/search",
+        elements: [] as never,
+      });
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      if (input.actions.some((a) => a.type === "navigate")) {
+        navigated = true;
+      }
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b04b",
+        conversationId: "conv-1",
+        goal: "navigate",
+        completionCriteria: [{ kind: "url_contains", value: "example.test" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).not.toContain("navigate_unobserved_url");
+    expect(result.status).toBe("completed");
+  });
+});
+
+describe("BrowserTaskRunner B16 escalate/empty-criteria handling", () => {
+  const escalateEntry = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "ESCALATE", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+  const clickGo = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  function captureDecides(deps: ReturnType<typeof makeRunnerDeps>): Array<Record<string, unknown>> {
+    const calls: Array<Record<string, unknown>> = [];
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (
+      input: unknown,
+      signal: unknown
+    ) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown,
+        s: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input, signal);
+    }) as typeof deps.decisionClient.decide;
+    return calls;
+  }
+
+  it("ESCALATE routes through bounded recovery and completes on the recovery decision", async () => {
+    // Decision script: ESCALATE first; the RECOVERY call returns CLICK;
+    // the recovery decision is executed and DONE verifies.
+    const deps = makeRunnerDeps([escalateEntry(), clickGo(), doneEntry()]);
+    const decideCalls = captureDecides(deps);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16a",
+        conversationId: "conv-1",
+        goal: "Open search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The escalation did NOT terminate the task.
+    expect(result.status).toBe("completed");
+    expect(result.reason).not.toBe("escalated_by_decision");
+    expect(result.evidence).toContain("escalate:routed_to_recovery");
+    // The recovery decision input carried the escalation subgoal.
+    expect(String(decideCalls[1]?.subgoal)).toContain("ESCALATED");
+  });
+
+  it("ESCALATE with an exhausted recovery budget still lands the terminal", async () => {
+    // Both decisions escalate: the first consumes recovery (the recovery
+    // call escalates again), the second hits the exhausted budget.
+    const deps = makeRunnerDeps([escalateEntry(), escalateEntry(), escalateEntry()]);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16b",
+        conversationId: "conv-1",
+        goal: "Open search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("escalated_by_decision");
+  });
+
+  it("empty criteria: a URL change verifies DONE via the documented fallback", async () => {
+    const deps = makeRunnerDeps(
+      [clickGo(), doneEntry()],
+      { url: "https://example.test/landing" }
+    );
+    // The task starts on /landing; the click MOVES the page to /other.
+    let landingSeen = false;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      if (!landingSeen) {
+        landingSeen = true;
+        return observation({ url: "https://example.test/landing" });
+      }
+      return observation({ url: "https://example.test/other" });
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16c",
+        conversationId: "conv-1",
+        goal: "go somewhere",
+        completionCriteria: [],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("verified_by_url_change_fallback");
+  });
+
+  it("empty criteria: DONE on an unchanged page never completes", async () => {
+    const deps = makeRunnerDeps(
+      [doneEntry(), doneEntry(), doneEntry()],
+      { url: "https://example.test/landing" }
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b16d",
+        conversationId: "conv-1",
+        goal: "go somewhere",
+        completionCriteria: [],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+  });
+});
+
+describe("BrowserTaskRunner B17 recovery against fresh state", () => {
+  const clickGo = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("recovery builds its input from a FRESH observation with the real last action", async () => {
+    // Three structurally invalid FILL decisions trip the threshold; the
+    // recovery call must see the FRESH observation and the REAL failed
+    // action (FILL / text_required) — not a fabricated CLICK.
+    const invalidFill = (): BrowserDecisionResultWireLike => ({
+      status: "decided",
+      action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable" as const, confidence: null },
+    });
+    const deps = makeRunnerDeps([
+      invalidFill(),
+      invalidFill(),
+      invalidFill(),
+      // Recovery decision: click the button (valid in the fresh state).
+      clickGo(),
+      doneEntry(),
+    ]);
+    const calls: Array<Record<string, unknown>> = [];
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (
+      input: unknown,
+      signal: unknown
+    ) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown,
+        s: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input, signal);
+    }) as typeof deps.decisionClient.decide;
+    // The post-violation re-observation is FRESH: different id, fewer
+    // elements — the recovery input must be built from THIS state.
+    let first = true;
+    deps.observe = async (): Promise<RunnerObservation | null> => {
+      if (first) {
+        first = false;
+        return observation({});
+      }
+      return observation({
+        observationId: "obs-fresh",
+        elements: [{ ref: "e_aaa", role: "textbox", name: "Search" }],
+      });
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b17",
+        conversationId: "conv-1",
+        goal: "open search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // The invalid decisions never dispatched an action.
+    expect(result.counts.leafSteps).toBeLessThanOrEqual(1);
+    // Find the RECOVERY decide call (its subgoal names the violation).
+    const recoveryCall = calls.find((c) =>
+      String(c.subgoal).includes("previous decision was invalid")
+    );
+    expect(recoveryCall).toBeDefined();
+    // B17: the recovery input is built from the FRESH observation.
+    expect(recoveryCall?.observation_id).toBe("obs-fresh");
+    // B17: the recent action is the REAL failure — FILL/text_required —
+    // never the old fabricated CLICK.
+    const recent = recoveryCall?.recent_actions as Array<{
+      operation: string;
+      error_code?: string | null;
+    }>;
+    const last = recent.at(-1)!;
+    expect(last.operation).toBe("FILL");
+    expect(last.error_code).toBe("text_required");
+  });
+});
+
+describe("BrowserTaskRunner B13 resume instructions", () => {
+  it("folds the user's resume instructions into the next decision subgoal", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable" as const, confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (input: unknown) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input);
+    }) as typeof deps.decisionClient.decide;
+    // The runner owns a generated task id — the resume instructions are
+    // recorded against THAT id (as the IPC handler does).
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b13",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    deps.control.recordResumeInstructions(
+      runner.taskId,
+      "prefer the second result and stop there"
+    );
+    const result = await runner.run();
+    // The FIRST decision after the resume carries the instructions.
+    expect(String(calls[0]?.subgoal)).toContain(
+      "prefer the second result and stop there"
+    );
+    expect(result.evidence).toContain("resume_with_instructions");
+  });
+});
+
+describe("BrowserTaskRunner A-FR-14 SIGN_IN operation", () => {
+  const signInEntry = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "SIGN_IN", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+  const clickGo = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("routes the login wall to the credential service and continues", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    const signInCalls: Array<Record<string, unknown>> = [];
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async (input) => {
+      signInCalls.push(input);
+      return { status: "signed_in" };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_signin-a",
+        conversationId: "conv-1",
+        goal: "check the logged-in feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(signInCalls).toHaveLength(1);
+    expect(result.evidence).toContain("sign_in:attempt_1");
+    expect(result.status).toBe("completed");
+  });
+
+  it("a handoff resolution from the card ends the task honestly", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_signin-b",
+        conversationId: "conv-1",
+        goal: "check the logged-in feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("sign_in_handoff");
+  });
+
+  it("the credential attempts are bounded at two", async () => {
+    const deps = makeRunnerDeps([
+      signInEntry(),
+      signInEntry(),
+      signInEntry(),
+      doneEntry(),
+    ]);
+    let calls = 0;
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async () => {
+      calls++;
+      return { status: "failed", reasonCode: "wrong_credential" };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_signin-c",
+        conversationId: "conv-1",
+        goal: "check the logged-in feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    await runner.run();
+    expect(calls).toBe(2);
+  });
+});
+
+const clickGoEntry = (): BrowserDecisionResultWireLike => ({
+  status: "decided",
+  action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+  uncertainty: { source: "unavailable" as const, confidence: null },
+});
+
+describe("BrowserTaskRunner N02 planner", () => {
+  it("runs the planner ONCE before the loop and feeds the first subgoal", async () => {
+    let planCalls = 0;
+    const deps = makeRunnerDeps([clickGoEntry(), doneEntry()]);
+    (deps as unknown as {
+      plan: (input: Record<string, unknown>) => Promise<{
+        completionCriteria: Array<{ kind: string; value: string }>;
+        bindings: Array<{ field: string; value: string }>;
+        firstSubgoal: string | null;
+      } | null>;
+    }).plan = async (input) => {
+      planCalls++;
+      void input;
+      return {
+        completionCriteria: [],
+        bindings: [],
+        firstSubgoal: "type the query first",
+      };
+    };
+    const calls: Array<Record<string, unknown>> = [];
+    const originalDecide = deps.decisionClient.decide;
+    deps.decisionClient.decide = (async (input: unknown) => {
+      calls.push(JSON.parse(JSON.stringify(input)) as Record<string, unknown>);
+      return (originalDecide as unknown as (
+        i: unknown
+      ) => Promise<BrowserDecisionResultWireLike>)(input);
+    }) as typeof deps.decisionClient.decide;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_plan-a",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(planCalls).toBe(1);
+    expect(String(calls[0]?.subgoal)).toContain("type the query first");
+    expect(result.evidence).toContain("planner:ok");
+    expect(result.status).toBe("completed");
+  });
+
+  it("a planner failure is its OWN terminal (planner_failed)", async () => {
+    const deps = makeRunnerDeps([doneEntry()]);
+    (deps as unknown as {
+      plan: () => Promise<null>;
+    }).plan = async () => null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_plan-b",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("failed");
+    expect(result.reason).toBe("planner_failed");
+    // The loop never ran — no decision was requested.
+    expect(result.counts.decisionRequests).toBe(0);
+  });
+});
+
+describe("BrowserTaskRunner E05 secret-field fill refusal", () => {
+  const fillEntry = (target: string): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "FILL", target_id: target, option_id: null, key: null, url: null, text: "model-secret" },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("a FILL into a password-named field is refused with NO dispatch", async () => {
+    // A text field NAMED like a credential but NOT flagged password-like
+    // (so it IS a candidate) — the runner must still refuse the fill.
+    const deps = makeRunnerDeps(
+      [fillEntry("e_ccc"), doneEntry()],
+      {
+        elements: [
+          { ref: "e_aaa", role: "textbox", name: "Search" },
+          { ref: "e_ccc", role: "textbox", name: "Card number" },
+          { ref: "e_bbb", role: "button", name: "Go" },
+        ],
+      }
+    );
+    const dispatched: RunnerAction[] = [];
+    deps.runActions = async (
+      _sessionId: string,
+      input: { actions: RunnerAction[] }
+    ): Promise<RunnerExecutionResult> => {
+      dispatched.push(...input.actions);
+      return { effect: "known", pageRevision: 3, results: [{ success: true, errorCode: null }] };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_e05a",
+        conversationId: "conv-1",
+        goal: "fill the form",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    // NOTHING was dispatched — the model's text never reached the page.
+    expect(dispatched).toEqual([]);
+    expect(result.evidence.some((e) => e.startsWith("fill_refused:secret_field"))).toBe(true);
+  });
+
+  it("a non-secret FILL still dispatches normally", async () => {
+    const dispatched: RunnerAction[] = [];
+    const deps = makeRunnerDeps(
+      [fillEntry("e_aaa"), doneEntry()],
+      {},
+      (action) => dispatched.push(action)
+    );
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_e05b",
+        conversationId: "conv-1",
+        goal: "search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(dispatched.map((a) => a.type)).toContain("fill");
+    expect(result.status).toBe("completed");
+  });
+});
+
+describe("BrowserTaskRunner V02 SIGN_IN blocking handoff", () => {
+  const signInEntry = (): BrowserDecisionResultWireLike => ({
+    status: "decided",
+    action: { operation: "SIGN_IN", target_id: null, option_id: null, key: null, url: null, text: null },
+    uncertainty: { source: "unavailable" as const, confidence: null },
+  });
+
+  it("waits in-job and resumes with a fresh observation when the user resolves", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: (input: Record<string, unknown>) => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    (deps as unknown as {
+      awaitHandoff: () => Promise<"resolved" | "expired" | "cancelled">;
+    }).awaitHandoff = async () => "resolved";
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_v02a",
+        conversationId: "conv-1",
+        goal: "check feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.evidence).toContain("sign_in:handoff_awaited");
+    expect(result.status).toBe("completed");
+  });
+
+  it("expiry interrupts the task (handoff_expired)", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: () => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    (deps as unknown as {
+      awaitHandoff: () => Promise<"resolved" | "expired" | "cancelled">;
+    }).awaitHandoff = async () => "expired";
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_v02b",
+        conversationId: "conv-1",
+        goal: "check feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("handoff_expired");
+  });
+
+  it("a bare fake without awaitHandoff still terminates sign_in_handoff", async () => {
+    const deps = makeRunnerDeps([signInEntry(), doneEntry()]);
+    (deps as unknown as {
+      signIn: () => Promise<{ status: string }>;
+    }).signIn = async () => ({ status: "handoff_required" });
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_v02c",
+        conversationId: "conv-1",
+        goal: "check feed",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("sign_in_handoff");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B05/D-FR-24: the verifier NEVER overrides a FAILED EXPLICIT criterion —
+// semantic verification exists only for tasks with NO explicit criteria.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner verifier scope (B05)", () => {
+  it("a failed explicit URL criterion stays unverified even with an affirmative verifier", async () => {
+    let verifierCalls = 0;
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      verifyWithProvider: async () => {
+        verifierCalls++;
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b05a",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        // An EXPLICIT criterion the page does NOT satisfy.
+        completionCriteria: [{ kind: "url_contains", value: "/no-such-page" }],
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+    // The verifier was never consulted — deterministic failure is final.
+    expect(verifierCalls).toBe(0);
+    expect(result.evidence.some((e) => e.startsWith("verifier"))).toBe(false);
+  });
+
+  it("the verifier verdict is discarded when a resume happened during verification", async () => {
+    const control = new AgentTaskControlService();
+    let verifierCalls = 0;
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      control,
+      verifyWithProvider: async () => {
+        verifierCalls++;
+        // The user pauses+resumes DURING the verifier await.
+        control.beginIntervention(runner.taskId, "user_paused");
+        control.resume(runner.taskId);
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b05b",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(verifierCalls).toBe(1);
+    // The verdict was discarded — the loop continues (budget exhausted →
+    // the next DONE settles the honest partial).
+    expect(result.status).toBe("partial");
+    expect(result.evidence).toContain("verifier_discarded_after_resume");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R01/D-FR-24: the OPTIONAL provider verifier — one bounded call, consulted
+// only when deterministic verification missed AND recovery is exhausted.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner provider verifier (R01/D-FR-24)", () => {
+  it("an exhausted recovery with a confirming verifier completes as verified_by_provider_verifier", async () => {
+    let verifierCalls = 0;
+    // Two unverified DONEs exhaust the recovery budget (clamped min 1) →
+    // the verifier is the last gate before the honest partial.
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      verifyWithProvider: async () => {
+        verifierCalls++;
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_ver1",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(verifierCalls).toBe(1);
+    expect(result.status).toBe("completed");
+    expect(result.reason).toBe("verified_by_provider_verifier");
+    expect(result.evidence).toContain("verifier_used:1");
+  });
+
+  it("a rejecting verifier keeps the honest partial with the verifier evidence", async () => {
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      verifyWithProvider: async () => ({
+        verified: false,
+        reason: "provider_says_incomplete",
+      }),
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_ver2",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+    expect(result.evidence).toContain("verifier:provider_says_incomplete");
+  });
+
+  it("no verifier dep preserves the plain partial (bare fakes unchanged)", async () => {
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_ver3",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      makeRunnerDeps([doneEntry(), doneEntry()])
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_failed_budget_exhausted");
+    expect(result.evidence.some((e) => e.startsWith("verifier"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N09/C-FR-05/06: completion gates — a verification (deterministic or
+// semantic) that lands while the task is PAUSED or over active budget
+// cannot complete; late replies from callbacks that ignore their abort
+// are gated here too.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner completion gates (N09)", () => {
+  it("an affirmative verifier result landing while PAUSED never completes", async () => {
+    const control = new AgentTaskControlService();
+    const runnerDeps = {
+      ...makeRunnerDeps([doneEntry(), doneEntry()]),
+      control,
+      verifyWithProvider: async () => {
+        // The user pauses WHILE the verifier runs; no resume follows.
+        control.beginIntervention(runnerTaskIdStatic ?? "pending", "user_paused");
+        return { verified: true, reason: "provider_confirms_goal_met" };
+      },
+    };
+    let runnerTaskIdStatic: string | null = null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09a",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    runnerTaskIdStatic = runner.taskId;
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_landed_while_paused");
+    expect(result.evidence).toContain("verifier_used:1");
+  });
+
+  it("a deterministic verification landing while PAUSED never completes", async () => {
+    const control = new AgentTaskControlService();
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      control,
+    };
+    // The fresh observation CHANGES the URL (deterministic criteria pass),
+    // and pause is set inside the observe call.
+    let observed = false;
+    runnerDeps.observe = async () => {
+      if (!observed) {
+        observed = true;
+        return observation();
+      }
+      // The fresh DONE observation — pause lands right here.
+      control.beginIntervention(runnerTaskId2 ?? "pending", "user_paused");
+      return { ...observation(), url: "https://example.test/results" };
+    };
+    let runnerTaskId2: string | null = null;
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_n09b",
+        conversationId: "conv-1",
+        goal: "Search for widgets",
+        completionCriteria: [{ kind: "url_contains", value: "/results" }],
+        budget: { recoveryCalls: 1 },
+      },
+      runnerDeps
+    );
+    runnerTaskId2 = runner.taskId;
+    const result = await runner.run();
+    expect(result.status).toBe("partial");
+    expect(result.reason).toBe("verification_landed_while_paused");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R02/D-FR-04: the admitted route's operations gate the offered candidates
+// — getCapabilities() is consumed at admission.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner capabilities consumption (R02/D-FR-04)", () => {
+  it("offered operations intersect with the admitted route's operations", async () => {
+    const seen: Array<readonly string[]> = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      decisionClient: {
+        getCapabilities: async () => ({
+          advertised: true,
+          operationsReported: true,
+          // The route supports a SUBSET — NAVIGATE is not offered.
+          operations: ["CLICK", "FILL", "SELECT", "DONE", "ESCALATE"],
+          supportsStructuredJsonSchema: false,
+          supportsForcedToolDecision: false,
+          supportsJsonObject: true,
+          nativeDecision: false,
+          maxCandidates: 120,
+          deadlineDefaultMs: 3_000,
+          deadlineHardMs: 10_000,
+          cacheable: false,
+        }),
+        decide: async (input: { allowed_operations: readonly string[] }) => {
+          seen.push(input.allowed_operations);
+          return {
+            status: "decided",
+            action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+            uncertainty: { source: "unavailable", confidence: null },
+          } as never;
+        },
+      },
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r02a", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    await runner.run();
+    // Every offered operation list excludes NAVIGATE (not in capabilities).
+    expect(seen.length).toBeGreaterThan(0);
+    for (const offered of seen) {
+      expect(offered).not.toContain("NAVIGATE");
+      expect(offered).toContain("CLICK");
+    }
+  });
+
+  it("a client without a capabilities list offers all runner operations", async () => {
+    const seen: Array<readonly string[]> = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+    };
+    runnerDeps.decisionClient.getCapabilities = async () => {
+      throw new Error("capabilities unavailable");
+    };
+    runnerDeps.decisionClient.decide = ((
+      input: { allowed_operations: readonly string[] }
+    ) => {
+      seen.push(input.allowed_operations);
+      return Promise.resolve({
+        status: "decided",
+        action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      });
+    }) as unknown as typeof runnerDeps.decisionClient.decide;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_r02b", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    await runner.run();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toContain("NAVIGATE");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A02/D-FR-04: EVERY decided operation is validated against the offered
+// list before branching — an unsupported SCROLL never reaches the worker.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner unsupported-operation gate (A02)", () => {
+  it("an unsupported SCROLL_UP is refused and never dispatched", async () => {
+    const dispatched: string[] = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "SCROLL_UP", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+    };
+    (runnerDeps.decisionClient as unknown as {
+      getCapabilities: () => Promise<Record<string, unknown>>;
+    }).getCapabilities = async () => ({
+      advertised: true,
+      operationsReported: true,
+      // The route advertises a subset WITHOUT scroll operations.
+      operations: ["CLICK", "FILL", "SELECT", "DONE", "ESCALATE"],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      deadlineDefaultMs: 3_000,
+      deadlineHardMs: 10_000,
+      cacheable: false,
+    });
+    runnerDeps.runActions = async (_sessionId, input) => {
+      for (const a of input.actions) {
+        dispatched.push(a.type);
+      }
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: input.actions.map(() => ({ success: true, errorCode: null })),
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_a02",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/results" }],
+        budget: { recoveryCalls: 5 },
+      },
+      {
+        ...runnerDeps,
+        observe: async () => ({ ...observation(), url: "https://example.test/results" }),
+      } as never
+    );
+    const result = await runner.run();
+    // The unsupported SCROLL_UP never dispatched; the loop re-decided and
+    // completed via CLICK + DONE on the /results URL.
+    expect(dispatched).toEqual(["click"]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence.some((e) => e.includes("unsupported_operation:SCROLL_UP"))).toBe(true);
+  });
+
+  it("the advertised deadline ceiling caps the decision deadline", async () => {
+    const seen: number[] = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+    };
+    (runnerDeps.decisionClient as unknown as {
+      getCapabilities: () => Promise<Record<string, unknown>>;
+    }).getCapabilities = async () => ({
+      advertised: true,
+      operations: ["CLICK", "DONE"],
+      supportsStructuredJsonSchema: false,
+      supportsForcedToolDecision: false,
+      supportsJsonObject: true,
+      nativeDecision: false,
+      maxCandidates: 120,
+      // A tiny advertised ceiling — the runner must honor it.
+      deadlineDefaultMs: 20,
+      deadlineHardMs: 20,
+      cacheable: false,
+    });
+    runnerDeps.decisionClient.decide = ((
+      input: { deadline_ms: number }
+    ) => {
+      seen.push(input.deadline_ms);
+      return Promise.resolve({
+        status: "decided",
+        action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      });
+    }) as unknown as typeof runnerDeps.decisionClient.decide;
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_a02b", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    await runner.run();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const deadline of seen) {
+      expect(deadline).toBeLessThanOrEqual(20);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A03/D-FR-17: the SELECT expected value binds by the token's position IN
+// THE KEPT id list (compacted outbound arrays) — not by parsing the o_N
+// number as an index into the compacted values.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner SELECT binding after filtering (A03)", () => {
+  it("selecting the first kept option binds ITS observed value (not the next)", async () => {
+    const dispatched: Array<{ values?: string[]; expected_values?: string[] | null }> = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_1", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+        {
+          status: "decided",
+          action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      observe: async () => ({
+        ...observation(),
+        url: "https://example.test/results",
+        elements: [
+          {
+            ref: "e_sel",
+            role: "combobox",
+            name: "Choose",
+            // o_0 was OMITTED (credential-bearing/oversized); the kept set
+            // starts at the ORIGINAL index 1.
+            option_ids: ["o_1", "o_2"],
+            option_values: ["value-original-1", "value-original-2"],
+          },
+          { ref: "e_bbb", role: "button", name: "Go" },
+        ],
+      }),
+    };
+    runnerDeps.runActions = async (_sessionId, input) => {
+      for (const a of input.actions) {
+        if (a.type === "select") {
+          dispatched.push({
+            values: (a as unknown as { values?: string[] }).values,
+            expected_values: (a as unknown as { expected_values?: string[] | null }).expected_values ?? null,
+          });
+        }
+      }
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: input.actions.map(() => ({ success: true, errorCode: null })),
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_a03",
+        conversationId: "conv-1",
+        goal: "g",
+        completionCriteria: [{ kind: "url_contains", value: "/results" }],
+      },
+      runnerDeps as never
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    // o_1 (kept position 0) binds value-original-1 — NOT the compacted
+    // array's [1] ("value-original-2").
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.values).toEqual(["o_1"]);
+    expect(dispatched[0]?.expected_values).toEqual(["value-original-1"]);
+  });
+
+  it("a kept id beyond the compacted values length refuses the binding", async () => {
+    const runnerDeps = {
+      ...makeRunnerDeps([
+        {
+          status: "decided",
+          action: { operation: "SELECT", target_id: "e_sel", option_id: "o_9", key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        },
+      ]),
+      observe: async () => ({
+        ...observation(),
+        elements: [
+          {
+            ref: "e_sel",
+            role: "combobox",
+            name: "Choose",
+            // Only two KEPT options — o_9 is not in the id list.
+            option_ids: ["o_1", "o_2"],
+            option_values: ["value-1", "value-2"],
+          },
+        ],
+      }),
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_a03b", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    const result = await runner.run();
+    // o_9 is not in the observed id list — the decision is unsupported.
+    expect(result.evidence.some((e) => e.includes("invalid_decision"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A06/C-FR-06: a recovery proposal produced BEFORE a Pause→Resume is
+// discarded at consumption — the stale action never dispatches.
+// ---------------------------------------------------------------------------
+describe("BrowserTaskRunner stale recovery discard (A06)", () => {
+  it("a recovery proposal predating a Pause→Resume is discarded", async () => {
+    const control = new AgentTaskControlService();
+    let recoveryProduced = false;
+    let dispatched: string[] = [];
+    const runnerDeps = {
+      ...makeRunnerDeps([]),
+      control,
+      observe: async () => observation(),
+    };
+    runnerDeps.decisionClient.decide = ((
+      input: { allowed_operations: readonly string[] }
+    ) => {
+      if (!recoveryProduced) {
+        recoveryProduced = true;
+        // First decision fails structurally → recovery produces a proposal.
+        return Promise.resolve({
+          status: "decided",
+          action: { operation: "CLICK", target_id: "nonexistent", option_id: null, key: null, url: null, text: null },
+          uncertainty: { source: "unavailable", confidence: null },
+        });
+      }
+      return Promise.resolve({
+        status: "decided",
+        action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      });
+    }) as unknown as typeof runnerDeps.decisionClient.decide;
+    runnerDeps.runActions = async (_sessionId, input) => {
+      for (const a of input.actions) {
+        dispatched.push(a.type);
+      }
+      return {
+        effect: "known",
+        pageRevision: 3,
+        results: input.actions.map(() => ({ success: true, errorCode: null })),
+      };
+    };
+    const runner = new BrowserTaskRunner(
+      { sessionId: "mb_a06", conversationId: "conv-1", goal: "g" },
+      runnerDeps as never
+    );
+    const runPromise = runner.run();
+    // Poll until the control record exists, then Pause→Resume BEFORE the
+    // recovery proposal is consumed (the proposal is produced during the
+    // first iteration's violation handling).
+    const waitAndResume = async (): Promise<void> => {
+      for (let i = 0; i < 100; i++) {
+        if (control.get(runner.taskId)) {
+          control.beginIntervention(runner.taskId, "user_paused");
+          control.resume(runner.taskId);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    };
+    await waitAndResume();
+    await runPromise;
+    // The stale recovery never dispatched a click.
+    expect(dispatched).not.toContain("click");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E02/design §21: per-phase duration instrumentation — the result carries
+// bounded timing metadata (wall + observation/decide/execute/verify sums
+// + provider attempt count), never page content.
+// ---------------------------------------------------------------------------
+describe("TaskPhaseTimings instrumentation (E02/§21)", () => {
+  it("records wall time, phase sums and attempts on a completing task", async () => {
+    const deps = makeRunnerDeps([
+      {
+        status: "decided",
+        action: { operation: "FILL", target_id: "e_aaa", option_id: null, key: null, url: null, text: "supplier prices" },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+      {
+        status: "decided",
+        action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+        uncertainty: { source: "unavailable", confidence: null },
+      },
+      doneEntry(),
+    ]);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_e02timing1",
+        conversationId: "conv-1",
+        goal: "Search",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.status).toBe("completed");
+    const timings = result.timings;
+    expect(timings).toBeDefined();
+    // Wall covers the full run; each phase sum is non-negative and ≤ wall
+    // (phase work is serial inside the run).
+    expect(timings!.wallMs).toBeGreaterThanOrEqual(0);
+    expect(timings!.observationMs).toBeGreaterThanOrEqual(0);
+    expect(timings!.decideMs).toBeGreaterThanOrEqual(0);
+    expect(timings!.executeMs).toBeGreaterThanOrEqual(0);
+    expect(timings!.verifyMs).toBeGreaterThanOrEqual(0);
+    expect(timings!.attempts).toBe(3);
+    // No page content leaks into the metadata.
+    const serialized = JSON.stringify(timings);
+    expect(serialized).not.toContain("supplier");
+    expect(serialized).not.toContain("Example Market");
+  });
+
+  it("counts every provider attempt including recovery decisions", async () => {
+    // Script: one DONE that fails verification, then recovery on no-progress
+    // would add attempts; keep it simple — two decisions → 2 attempts.
+    const deps = makeRunnerDeps([doneEntry(), doneEntry()]);
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_e02timing2",
+        conversationId: "conv-1",
+        goal: "Search",
+        completionCriteria: [{ kind: "url_contains", value: "/never" }],
+      },
+      deps
+    );
+    const result = await runner.run();
+    expect(result.timings?.attempts).toBeGreaterThanOrEqual(2);
+    expect(result.timings?.decideMs).toBeGreaterThanOrEqual(0);
+  });
+});

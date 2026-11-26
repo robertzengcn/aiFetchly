@@ -22,7 +22,13 @@ export function currentProviderConfigVersion(): number {
   return providerConfigVersion;
 }
 
+/** Opaque key form consumed by keyed catalog loads. A12: the key embeds a
+ * per-process random suffix so a persisted revision string from a previous
+ * process can never equal a current one (the counter restarts at zero on
+ * restart, which would otherwise make a stale stored revision match). */
+const processEpochSuffix = `p${Math.random().toString(36).slice(2, 10)}`;
+
 /** Opaque key form consumed by keyed catalog loads. */
 export function providerConfigKey(): string {
-  return `provider-config:v${providerConfigVersion}`;
+  return `provider-config:v${providerConfigVersion}:${processEpochSuffix}`;
 }

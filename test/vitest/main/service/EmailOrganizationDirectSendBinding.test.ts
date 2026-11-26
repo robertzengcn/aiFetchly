@@ -83,14 +83,14 @@ function makeDeps(state: HarnessState): DirectSendBindingDeps {
     readMessage: async (id) => state.messages.get(id) ?? null,
     countBySender: async (_account, fromAddress) =>
       state.senderCounts.get(`${_account}:${fromAddress.toLowerCase()}`) ?? 0,
-    readOperation: async (operationId) => {
+    readOperation: async (operationId): ReturnType<DirectSendBindingDeps["readOperation"]> => {
       const kind = state.operationKinds.get(operationId);
       return kind
-        ? { kind, operationId, emailServiceId: 900 }
+        ? ({ kind, operationId, emailServiceId: 900 } as unknown as ReturnType<DirectSendBindingDeps["readOperation"]> extends Promise<infer R> ? R : never)
         : null;
     },
     findRestorableTrashOperationIds: async () => state.restorableIds,
-    findOpenDraftsForConversation: async (conversationId) => {
+    findOpenDraftsForConversation: async (conversationId): ReturnType<DirectSendBindingDeps["findOpenDraftsForConversation"]> => {
       if (conversationId !== CONVERSATION) return [];
       return [...state.drafts.values()].filter(
         (draft) => draft.conversationId === CONVERSATION

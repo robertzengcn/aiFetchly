@@ -1,4 +1,5 @@
 import * as nodeFs from "node:fs/promises";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 import * as nodeCrypto from "node:crypto";
 import type {
   ManagedBrowserCacheInboundMessage,
@@ -24,7 +25,7 @@ import { CacheEvictionPlanner } from "@/childprocess/managed-browser-cache/Cache
  */
 
 export interface CacheMessageBase {
-  readonly protocolVersion: 1;
+  readonly protocolVersion: typeof MANAGED_BROWSER_PROTOCOL_VERSION;
   readonly requestId: string;
   readonly sequence: number;
 }

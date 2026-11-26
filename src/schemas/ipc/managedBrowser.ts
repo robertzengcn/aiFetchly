@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { browserProxySelectionSchema } from "@/schemas/aiTools/browserProxy";
 import { lazySchema } from "@/utils/lazySchema";
 import { MANAGED_BROWSER_CACHE_DEFAULTS } from "@/config/managedBrowser";
 
@@ -35,6 +36,10 @@ export const managedBrowserStartInputSchema = lazySchema(() =>
     purpose: z.string().min(1).max(300),
     requestedStartUrl: z.string().url().max(2048).optional(),
     conversationId: z.string().min(1).max(96).optional(),
+    // R10/P-FR-01/09: the RENDERER can choose the session's proxy route —
+    // ids only (never host/port/credentials), the SAME wire shape the
+    // model tool accepts.
+    proxy: browserProxySelectionSchema().optional(),
   })
 );
 
@@ -148,6 +153,39 @@ export const managedBrowserUpdateSettingsInputSchema = lazySchema(() =>
         .max(MANAGED_BROWSER_CACHE_DEFAULTS.maxMaxSizeMb)
         .optional(),
       clearCacheOnExit: z.boolean().optional(),
+      // M-FR-06: the concurrent-session cap rides the same patch.
+      maxConcurrentSessions: z.number().int().min(1).max(5).optional(),
+      signInEnabled: z.boolean().optional(),
+      siteUpsertEnabled: z.boolean().optional(),
+      proxySwitchEnabled: z.boolean().optional(),
+      parallelAgentsEnabled: z.boolean().optional(),
+      browserDecisionEnabled: z.boolean().optional(),
+      // N01/design 5.3 + R01/D-FR-18: the decision-route patch (merged
+      // into the versioned store; includes probed chat capabilities).
+      decisionRoute: z
+        .strictObject({
+          mode: z.enum(["follow_chat", "native_profile"]).optional(),
+          chatDecisionModel: z.string().max(200).nullable().optional(),
+          batchSubAgentModel: z.string().max(200).nullable().optional(),
+          nativeProfile: z
+            .strictObject({
+              displayName: z.string().min(1).max(100),
+              baseUrl: z.string().url().max(500),
+              model: z.string().min(1).max(200),
+              apiKeyRef: z.enum(["chat", "none"]),
+            })
+            .nullable()
+            .optional(),
+          requestTimeoutMs: z.number().int().min(1).max(10_000).nullable().optional(),
+          chatCapabilities: z
+            .strictObject({
+              structuredJsonSchema: z.boolean(),
+              forcedToolDecision: z.boolean(),
+            })
+            .nullable()
+            .optional(),
+        })
+        .optional(),
     })
     .refine((v) => Object.keys(v).length > 0, {
       message: "at least one preference is required",

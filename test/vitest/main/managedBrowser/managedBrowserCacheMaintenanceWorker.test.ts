@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -30,7 +31,7 @@ let worker: ManagedBrowserCacheMaintenanceWorker;
 
 function makeBase(requestId: string): CacheMessageBase {
   sequence += 1;
-  return { protocolVersion: 1, requestId, sequence };
+  return { protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION, requestId, sequence };
 }
 
 function buildWorker(
@@ -77,7 +78,7 @@ describe("handleScanScope", () => {
     worker = buildWorker();
     const scopePath = await seedScope(TOKEN_A, 64);
     await worker.handleScanScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0001",
       sequence: 1,
       type: "SCAN_SCOPE",
@@ -103,7 +104,7 @@ describe("handleScanScope", () => {
     sent = [];
     worker = buildWorker();
     await worker.handleScanScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0002",
       sequence: 1,
       type: "SCAN_SCOPE",
@@ -129,7 +130,7 @@ describe("handleScanScope", () => {
     const linkToken = "b".repeat(24);
     await symlink(outside, path.join(managedRoot, linkToken));
     await worker.handleScanScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0003",
       sequence: 1,
       type: "SCAN_SCOPE",
@@ -151,7 +152,7 @@ describe("handleScanScope", () => {
     sent = [];
     worker = buildWorker();
     await worker.handleScanScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0004",
       sequence: 1,
       type: "SCAN_SCOPE",
@@ -178,7 +179,7 @@ describe("handleDeleteQueuedScope", () => {
     await writeFile(path.join(queuePath, "data.bin"), "x".repeat(128), "utf8");
 
     await worker.handleDeleteQueuedScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0005",
       sequence: 1,
       type: "DELETE_QUEUED_SCOPE",
@@ -204,7 +205,7 @@ describe("handleDeleteQueuedScope", () => {
     sent = [];
     worker = buildWorker();
     await worker.handleDeleteQueuedScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0006",
       sequence: 1,
       type: "DELETE_QUEUED_SCOPE",
@@ -233,7 +234,7 @@ describe("handleDeleteQueuedScope", () => {
     const queuePath = path.join(managedRoot, "deleting", "del-busy000001");
     await mkdir(queuePath, { recursive: true });
     await worker.handleDeleteQueuedScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0007",
       sequence: 1,
       type: "DELETE_QUEUED_SCOPE",
@@ -255,7 +256,7 @@ describe("handleDeleteQueuedScope", () => {
     sent = [];
     worker = buildWorker();
     await worker.handleDeleteQueuedScope({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0008",
       sequence: 1,
       type: "DELETE_QUEUED_SCOPE",
@@ -288,7 +289,7 @@ describe("two-phase eviction planning", () => {
       "utf8"
     );
     await worker.handlePlanEviction({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0009",
       sequence: 1,
       type: "PLAN_EVICTION",
@@ -310,7 +311,7 @@ describe("two-phase eviction planning", () => {
     expect(planMessage.result.entries[0].scopeToken).toBe("c".repeat(24));
 
     worker.handleCancelBeforeDelete({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0010",
       sequence: 2,
       type: "CANCEL_BEFORE_DELETE",
@@ -324,7 +325,7 @@ describe("two-phase eviction planning", () => {
 
     // Second cancel: unknown plan — not an error.
     worker.handleCancelBeforeDelete({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0011",
       sequence: 3,
       type: "CANCEL_BEFORE_DELETE",
@@ -341,7 +342,7 @@ describe("two-phase eviction planning", () => {
     sent = [];
     worker = buildWorker();
     await worker.handlePlanEviction({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0012",
       sequence: 1,
       type: "PLAN_EVICTION",
@@ -367,7 +368,7 @@ describe("handleShutdown", () => {
     sent = [];
     worker = buildWorker();
     worker.handleShutdown({
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId: "req-test-0013",
       sequence: 1,
       type: "SHUTDOWN",

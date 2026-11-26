@@ -56,11 +56,23 @@ export type ManagedBrowserErrorCode =
   | "account_not_found"
   | "account_in_use"
   | "global_session_limit"
+  | "insufficient_memory"
+  | "site_limit_reached"
+  | "session_not_owned"
+  | "proxy_confirmation_required"
+  | "proxy_not_found"
+  | "proxy_no_usable_proxy"
+  | "proxy_switch_limit"
   | "session_cookie_missing"
   | "browser_dependency_missing"
   | "browser_incompatible"
   | "fingerprint_mismatch"
   | "proxy_unavailable"
+  // N05/P-FR-04: structured proxy failure reasons (surfaced instead of a
+  // generic internal_error; classification in BrowserActionExecutor).
+  | "proxy_connect_failed"
+  | "proxy_auth_failed"
+  | "tunnel_failed"
   | "navigation_blocked"
   | "authentication_required"
   | "challenge_requires_handoff"
@@ -69,6 +81,8 @@ export type ManagedBrowserErrorCode =
   | "challenge_provider_timeout"
   | "challenge_resolution_failed"
   | "stale_page_reference"
+  | "element_disabled"
+  | "element_occluded"
   | "action_not_allowed"
   | "user_has_control"
   | "challenge_in_progress"
@@ -84,6 +98,7 @@ export type ManagedBrowserErrorCode =
   | "worker_exited"
   | "cancelled"
   | "stop_timeout"
+  | "stop_timeout_no_dispatch"
   | "cookie_refresh_failed"
   | "cookie_persistence_failed"
   | "cache_disabled"
@@ -93,7 +108,11 @@ export type ManagedBrowserErrorCode =
   | "cache_path_invalid"
   | "cache_maintenance_failed"
   | "cache_limit_invalid"
-  | "internal_error";
+  | "internal_error"
+  | "stale_select_option"
+  | "session_already_account_bound"
+  | "proxy_switch_in_progress"
+  | "proxy_switch_restore_failed";
 
 /** Bounded reason codes for user handoff (technical design §18). */
 export type ManagedBrowserHandoffReason =
@@ -109,7 +128,7 @@ export type ManagedBrowserHandoffReason =
   | "destructive_action_unclear"
   | "repeated_action_failure"
   | "user_requested"
-  | "challenge_unresolved";
+  | "challenge_unresolved" | "user_paused";
 
 // ---------------------------------------------------------------------------
 // Browser executable and fingerprint
@@ -221,6 +240,21 @@ export interface SafeManagedBrowserStatus {
   readonly platformLabel: string;
   readonly state: ManagedBrowserSessionState;
   readonly currentOrigin: string | null;
+  readonly ownerConversationId: string | null;
+  /**
+   * B11/M-FR-07: the ROOT (parent) conversation of a sub-agent-owned
+   * session — the parent may drive/read the session and take over after
+   * the task ends. Null for directly-owned sessions.
+   */
+  readonly rootConversationId: string | null;
+  /**
+   * N05/P-FR-03: the proxy ROW the session launched through (an opaque
+   * id — never credentials). Null for direct sessions.
+   */
+  readonly effectiveProxyId: number | null;
+  /** P-FR-09: session-card proxy labels — host:port and country, no creds. */
+  readonly proxyHostLabel: string | null;
+  readonly proxyCountry: string | null;
   readonly pageTitle: string | null;
   readonly pageRevision: number;
   readonly authenticated: boolean | null;
@@ -238,6 +272,7 @@ export interface SafeManagedBrowserStatus {
 
 export type BrowserChatNoticeType =
   | "login_required"
+  | "sensitive_field_visible"
   | "login_verifying"
   | "login_verified"
   | "login_verification_failed"
@@ -258,11 +293,20 @@ export type BrowserChatNoticeType =
 export interface SafeBrowserChatNotice {
   readonly eventId: string;
   readonly sessionId: string;
+  /**
+   * W06/M-FR-08: the conversation the notice is PUBLISHED ON — the ROOT
+   * (parent) conversation for sub-agent-owned sessions, so a challenge
+   * or login notice surfaces in the chat the user actually sees. Null
+   * only for legacy sinks.
+   */
+  readonly conversationId?: string | null;
   readonly type: BrowserChatNoticeType;
   readonly messageKey: string;
   readonly severity: "info" | "warning" | "success" | "error";
   readonly requiresUserAction: boolean;
   readonly createdAt: string;
+  /** W06/M-FR-08: the owning batch task's label ("Browser task 2/3"). */
+  readonly taskLabel?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +320,56 @@ export interface EffectiveManagedBrowserSettings {
   readonly cacheMaxBytes: number;
   readonly clearCacheOnExit: boolean;
   readonly disabledReasonCode: string | null;
+  /** PRD M-FR-06: setting-backed concurrent-session cap (1..5). */
+  readonly maxConcurrentSessions: number;
+  /** PRD M-FR-06: per-registrable-domain session cap. */
+  readonly maxSessionsPerSite: number;
+  /** T25/T29: per-feature kill switches (all default ON). */
+  readonly signInEnabled: boolean;
+  readonly siteUpsertEnabled: boolean;
+  readonly proxySwitchEnabled: boolean;
+  readonly parallelAgentsEnabled: boolean;
+  readonly browserDecisionEnabled: boolean;
+  /**
+   * N01/design §5.3: the versioned browser DECISION route settings
+   * (additive). `mode` is `follow_chat` by default; `native_profile` is
+   * ONLY used when an explicit profile with a usable credential is
+   * configured — native support is never inferred.
+   */
+  readonly decisionRoute: {
+    readonly version: 1;
+    readonly mode: "follow_chat" | "native_profile";
+    /** Optional real model id at the user's chat endpoint. */
+    readonly chatDecisionModel: string | null;
+    /**
+     * R04/M-FR-12: the sub-agent model for batch lanes (a custom provider
+     * must own this model); null runs the definition's default model.
+     */
+    readonly batchSubAgentModel: string | null;
+    readonly nativeProfile: {
+      readonly displayName: string;
+      readonly baseUrl: string;
+      readonly model: string;
+      /** Which stored credential the user explicitly selected. */
+      readonly apiKeyRef: "chat" | "none";
+    } | null;
+    readonly requestTimeoutMs: number | null;
+    /**
+     * R01/D-FR-18: the chat endpoint's OUTPUT capabilities as probed by
+     * the settings connection test — null until probed (conservative
+     * legacy behavior). Reported separately from native decisions.
+     */
+    readonly chatCapabilities: {
+      readonly structuredJsonSchema: boolean;
+      readonly forcedToolDecision: boolean;
+      /**
+       * B04/D-AC-08: the provider epoch the flags were probed under —
+       * flags from a different revision are never applied (conservative
+       * legacy behavior until the endpoint is re-probed).
+       */
+      readonly providerRevision: string | null;
+    } | null;
+  };
 }
 
 /** Renderer-safe cache status (approximate sizes only, no paths/URLs). */
@@ -309,6 +403,14 @@ export interface BrowserElementSummary {
   readonly checked?: boolean;
   readonly selected?: boolean;
   readonly hrefOrigin?: string;
+  /** B04: the full normalized link URL — NAVIGATE provenance per URL. */
+  readonly hrefFull?: string;
+  /** D-FR-13: focused/dialog control — the shortlist orders by it. */
+  readonly priority?: boolean;
+  /** F14: observed SELECT options (positional o_N ids + labels/values). */
+  readonly option_ids?: string[];
+  readonly option_labels?: string[];
+  readonly option_values?: string[];
 }
 
 /** Safe page notice attached to an observation (code-driven, never page text). */
@@ -323,10 +425,18 @@ export interface BrowserNotice {
 }
 
 export interface BrowserObservation {
+  /** Opaque per-snapshot identity (PRD D-FR-15a). */
+  observationId: string;
   readonly sessionId: string;
   readonly pageRevision: number;
   /** Sanitized URL: credentials stripped; query/fragment redacted. */
   readonly url: string;
+  /**
+   * R03: the TRUSTED policy URL — the exact filled credential is
+   * redacted but the query/fragment is PRESERVED. Main-process internal
+   * use only (policy decisions, exact reopen); never rendered.
+   */
+  readonly policyUrl?: string;
   readonly origin: string;
   readonly title: string;
   readonly state: "ready" | "loading" | "dialog" | "handoff";

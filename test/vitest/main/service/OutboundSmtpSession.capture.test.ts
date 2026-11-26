@@ -35,10 +35,29 @@ function jsonTransporter(): Transporter {
   return nodemailer.createTransport({ jsonTransport: true });
 }
 
+function respondToSmtpCommand(line: string, socket: net.Socket, commands: string[]): boolean {
+  commands.push(line);
+  const verb = line.slice(0, 4).toUpperCase();
+  if (verb === "EHLO" || verb === "HELO") {
+    socket.write("250-loopback\r\n250 8BITMIME\r\n");
+  } else if (verb === "MAIL" || verb === "RCPT") {
+    socket.write("250 OK\r\n");
+  } else if (verb === "DATA") {
+    socket.write("354 End data with <CR><LF>.<CR><LF>\r\n");
+    return true;
+  } else if (verb === "QUIT") {
+    socket.write("221 Bye\r\n");
+    socket.end();
+  } else {
+    socket.write("250 OK\r\n");
+  }
+  return false;
+}
+
 describe("R5-02 — production SMTP session raw capture", () => {
   it("captures the compiled MIME through the stream plugin and the factory returns it", async () => {
     const session = new OutboundSmtpSession(makeParam() as never, {
-      transporterFactory: () => jsonTransporter(),
+      transporterFactory: (): ReturnType<typeof jsonTransporter> => jsonTransporter(),
     });
     const info = await session.sendMail({
       from: "ops@example.test",
@@ -56,7 +75,7 @@ describe("R5-02 — production SMTP session raw capture", () => {
 
   it("a fresh send never observes the previous attempt's bytes", async () => {
     const session = new OutboundSmtpSession(makeParam() as never, {
-      transporterFactory: () => jsonTransporter(),
+      transporterFactory: (): ReturnType<typeof jsonTransporter> => jsonTransporter(),
     });
     await session.sendMail({ from: "a@b.test", to: "c@d.test", subject: "one", text: "first body" });
     expect(session.capturedRawMessage()!.toString("utf8")).toContain("first body");
@@ -83,7 +102,7 @@ describe("R5-02 — production SMTP session raw capture", () => {
         replyTo: null,
       } as unknown as SenderParam,
       {
-        transporterFactory: (mode) => {
+        transporterFactory: (mode): ReturnType<typeof jsonTransporter> => {
           builtModes.push(mode);
           if (firstCall) {
             firstCall = false;
@@ -91,7 +110,7 @@ describe("R5-02 — production SMTP session raw capture", () => {
             // implicit-TLS/STARTTLS mismatch does (secure=true + 465).
             const failing = jsonTransporter();
             const originalSend = failing.sendMail.bind(failing);
-            failing.sendMail = (async (options: unknown) => {
+            failing.sendMail = (async (_options: unknown) => {
               const error = new Error("WRONG_VERSION_NUMBER");
               throw error;
             }) as typeof failing.sendMail;
@@ -137,22 +156,7 @@ describe("R5-02 — production SMTP session raw capture", () => {
             }
             continue;
           }
-          commands.push(line);
-          const verb = line.slice(0, 4).toUpperCase();
-          if (verb === "EHLO" || verb === "HELO") {
-            socket.write("250-loopback\r\n250 8BITMIME\r\n");
-          } else if (verb === "MAIL" || verb === "RCPT") {
-            socket.write("250 OK\r\n");
-          } else if (verb === "DATA") {
-            dataMode = true;
-            socket.write("354 End data with <CR><LF>.<CR><LF>\r\n");
-          } else if (verb === "QUIT") {
-            socket.write("221 Bye\r\n");
-            socket.end();
-            return;
-          } else {
-            socket.write("250 OK\r\n");
-          }
+          dataMode = respondToSmtpCommand(line, socket, commands);
         }
       });
     });

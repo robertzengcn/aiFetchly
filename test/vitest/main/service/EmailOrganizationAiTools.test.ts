@@ -7,8 +7,8 @@ import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
 
 const aiEnabled = { value: true };
 vi.mock("@/service/AiFeatureGate", () => ({
-  ensureHostedAiEnabled: () => Promise.resolve(aiEnabled.value),
-  isAiEnabled: () => aiEnabled.value,
+  ensureHostedAiEnabled: (): Promise<boolean> => Promise.resolve(aiEnabled.value),
+  isAiEnabled: (): boolean => aiEnabled.value,
 }));
 
 const moveTrash = vi.fn();
@@ -67,13 +67,13 @@ describe("R16 — entitlement gate before parsing (review)", () => {
   });
 
   for (const [name, call] of [
-    ["move_email_to_trash", () => moveEmailToTrash({}, baseContext)],
-    ["send_email_forward", () => sendEmailForward({ draft_id: 1, revision_id: 1 }, baseContext)],
-    ["restore_email", () => restoreEmail({ operation_id: "op-12345678" }, baseContext)],
+    ["move_email_to_trash", (): Promise<unknown> => moveEmailToTrash({}, baseContext)],
+    ["send_email_forward", (): Promise<unknown> => sendEmailForward({ draft_id: 1, revision_id: 1 }, baseContext)],
+    ["restore_email", (): Promise<unknown> => restoreEmail({ operation_id: "op-12345678" }, baseContext)],
   ] as const) {
     it(`returns AI_DISABLED before any work for ${name} when AI is off`, async () => {
       aiEnabled.value = false;
-      const result = await call();
+      const result = (await call()) as { success: boolean; code?: string };
       expect(result.success).toBe(false);
       if (!result.success) expect(result.code).toBe("AI_DISABLED");
       expect(moveTrash).not.toHaveBeenCalled();

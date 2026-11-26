@@ -14,8 +14,6 @@ import ja from "@/views/lang/ja";
 
 const ENGLISH = (en as unknown as Record<string, Record<string, unknown>>).emailOrganization as Record<string, unknown>;
 
-type LocaleTree = Record<string, string | Record<string, string>>;
-
 function flattenKeys(
   tree: Record<string, unknown>,
   prefix = ""

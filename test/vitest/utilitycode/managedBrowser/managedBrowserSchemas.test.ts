@@ -19,7 +19,8 @@ import {
 import { MANAGED_BROWSER_ACTION_LIMITS } from "@/config/managedBrowser";
 
 const base = {
-  protocolVersion: 1,
+  // F01: the wire contract is protocol v2.
+  protocolVersion: 2,
   sessionId: "mb_7f2abc123def",
   requestId: "req-0001",
   sequence: 0,
@@ -115,7 +116,7 @@ describe("worker inbound schema", () => {
   it("rejects a wrong protocol version", () => {
     const result = managedBrowserInboundSchema().safeParse({
       ...validStartSession,
-      protocolVersion: 2,
+      protocolVersion: 1, // v1 is the retired contract
     });
     expect(result.success).toBe(false);
   });
@@ -193,7 +194,7 @@ describe("browser action program schema", () => {
 describe("worker outbound schema", () => {
   it("accepts WORKER_READY without a prior session sequence dependency", () => {
     const result = managedBrowserOutboundSchema().safeParse({
-      protocolVersion: 1,
+      protocolVersion: 2,
       type: "WORKER_READY",
       sessionId: "mb_7f2abc123def",
       requestId: "evt-boot",
@@ -228,7 +229,7 @@ describe("worker outbound schema", () => {
 
   it("rejects a heartbeat with an invalid lag bucket", () => {
     const result = managedBrowserOutboundSchema().safeParse({
-      protocolVersion: 1,
+      protocolVersion: 2,
       type: "WORKER_HEARTBEAT",
       sessionId: "mb_7f2abc123def",
       requestId: "evt-hb",
@@ -248,6 +249,82 @@ describe("worker outbound schema", () => {
       message: "x".repeat(301),
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("B04/B05 observation element provenance and option bounds", () => {
+  const observationMessage = (element: Record<string, unknown>): unknown => ({
+    protocolVersion: 2,
+    type: "OBSERVATION_RESULT",
+    sessionId: "mb_7f2abc123def",
+    requestId: "evt-obs",
+    sequence: 3,
+    observation: {
+      sessionId: "mb_7f2abc123def",
+      observationId: "obs_1",
+      pageRevision: 2,
+      url: "https://www.example.test/login",
+      origin: "https://www.example.test",
+      title: "Example",
+      state: "ready",
+      elements: [element],
+      visibleText: "hello",
+      notices: [{ code: "untrusted_content" }],
+      truncated: false,
+    },
+  });
+
+  it("B05: an option value between 201 and 512 characters parses (pipeline parity)", () => {
+    // The collector bounds option values at 512 and the select action's
+    // expected_values allow 512 — the wire bound MUST match, or one long
+    // option value silently drops the whole observation.
+    const longValue = "v".repeat(300);
+    const result = managedBrowserOutboundSchema().safeParse(
+      observationMessage({
+        ref: "e_0",
+        role: "combobox",
+        name: "country",
+        disabled: false,
+        option_ids: ["o_0"],
+        option_labels: ["Very long label"],
+        option_values: [longValue],
+        href_full: "https://www.example.test/login",
+      })
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("B05: an option value over the 512 bound is still rejected", () => {
+    const result = managedBrowserOutboundSchema().safeParse(
+      observationMessage({
+        ref: "e_0",
+        role: "combobox",
+        name: "country",
+        disabled: false,
+        option_values: ["v".repeat(513)],
+      })
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it("B04: the full link URL rides the element summary", () => {
+    const result = managedBrowserOutboundSchema().safeParse(
+      observationMessage({
+        ref: "e_1",
+        role: "link",
+        name: "Inbox",
+        disabled: false,
+        hrefOrigin: "https://mail.example.test",
+        href_full: "https://mail.example.test/inbox?folder=3#top",
+      })
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const element = (result.data as {
+        observation: { elements: Array<{ href_full?: string }> };
+      }).observation.elements[0]!;
+      expect(element.href_full).toBe("https://mail.example.test/inbox?folder=3#top");
+    }
   });
 });
 

@@ -10,9 +10,10 @@ import type {
   FullSourceResult,
   MailboxCapabilityProbe,
   MailboxFolderInfo,
-  MailboxLocation,
   MoveResult,
   PresenceResult,
+  SentCopyAppendResult,
+  ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 
@@ -56,10 +57,10 @@ class CountingFakeAdapter implements EmailMailboxAdapter {
   async checkMessagePresent(): Promise<PresenceResult> {
     return { status: "present" };
   }
-  async searchUids() {
+  async searchUids(): Promise<ServerSearchResult> {
     return { status: "listed" as const, candidates: [], capped: false };
   }
-  async appendSent() {
+  async appendSent(): Promise<SentCopyAppendResult> {
     return { status: "skipped" as const, reason: "no_sent_folder" };
   }
 }

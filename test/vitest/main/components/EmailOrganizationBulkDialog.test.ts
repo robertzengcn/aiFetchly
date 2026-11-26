@@ -94,7 +94,7 @@ function previewFixture(): SelectionPreviewDto {
   };
 }
 
-function mountDialog() {
+function mountDialog(): ReturnType<typeof mount> {
   return mount(BulkDialog, {
     props: { modelValue: true, emailServiceId: 7 },
     global: {

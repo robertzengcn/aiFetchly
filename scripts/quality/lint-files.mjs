@@ -180,7 +180,7 @@ const resultFiles = new Set(results.map((r) => path.resolve(repoRoot, r.filePath
 const ignoredStubs = [];
 for (const r of results) {
   if (r.messages.some((m) => m.ruleId === null && /File ignored/.test(m.message))) {
-    ignoredStubs.push(path.relative(repoRoot, r.filePath));
+    ignoredStubs.push(path.relative(repoRoot, r.filePath).split(path.sep).join('/'));
   }
   r.messages = r.messages.filter(
     (m) => !(m.ruleId === null && /File ignored/.test(m.message))

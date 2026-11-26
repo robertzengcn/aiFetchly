@@ -24,8 +24,8 @@ vi.mock("@/views/api/emailorganization", () => ({
   listEmailOrganizationOperations: mocks.listEmailOrganizationOperations,
 }));
 vi.mock("vue-router", () => ({
-  useRoute: () => ({ params: { id: routeId.value }, query: {} }),
-  useRouter: () => ({ push: vi.fn() }),
+  useRoute: (): { params: { id: string }; query: Record<string, unknown> } => ({ params: { id: routeId.value }, query: {} }),
+  useRouter: (): { push: ReturnType<typeof vi.fn> } => ({ push: vi.fn() }),
 }));
 
 import Detail from "@/views/pages/emailreceive/detail.vue";
@@ -83,7 +83,7 @@ const detailRow = {
   bodyHtmlSanitized: '<p>hi <img src="https://x.test/p.png"></p>',
 };
 
-function mountDetail() {
+function mountDetail(): ReturnType<typeof mount> {
   return mount(Detail, {
     global: {
       plugins: [i18n],

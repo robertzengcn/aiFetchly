@@ -116,6 +116,57 @@ export const settinggroupInit: Array<SystemSettingGroupdf> = [
         type: "input",
       },
       {
+        type: "number",
+        key: "managed-browser-max-concurrent-sessions",
+        value: "3",
+        description: "managed-browser-max-concurrent-sessions-description",
+      },
+      {
+        type: "number",
+        key: "managed-browser-max-sessions-per-site",
+        value: "2",
+        description: "managed-browser-max-sessions-per-site-description",
+      },
+      {
+        type: "toggle",
+        key: "managed-browser-sign-in-enabled",
+        value: "1",
+        description: "managed-browser-sign-in-enabled-description",
+      },
+      {
+        type: "toggle",
+        key: "managed-browser-site-upsert-enabled",
+        value: "1",
+        description: "managed-browser-site-upsert-enabled-description",
+      },
+      {
+        type: "toggle",
+        key: "managed-browser-proxy-switch-enabled",
+        value: "1",
+        description: "managed-browser-proxy-switch-enabled-description",
+      },
+      {
+        type: "toggle",
+        key: "managed-browser-parallel-agents-enabled",
+        value: "1",
+        description: "managed-browser-parallel-agents-enabled-description",
+      },
+      {
+        type: "toggle",
+        key: "managed-browser-decision-enabled",
+        value: "1",
+        description: "managed-browser-decision-enabled-description",
+      },
+      {
+        // P01/E01: the decision-route row is SEEDED - a fresh install
+        // must be able to persist the route (and the capability probe
+        // flags) without a setting_row_missing failure.
+        key: MANAGED_BROWSER_SETTING_KEYS.decisionRoute,
+        value: "{\"version\":1,\"mode\":\"follow_chat\",\"chatDecisionModel\":null,\"batchSubAgentModel\":null,\"nativeProfile\":null,\"requestTimeoutMs\":null,\"chatCapabilities\":null}",
+        description: "managed-browser-decision-route-description",
+        type: "input",
+      },
+      {
         key: "managed-browser-2captcha-non-login",
         value: "0",
         description: "managed-browser-2captcha-non-login-description",

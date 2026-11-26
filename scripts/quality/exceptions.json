@@ -295,6 +295,23 @@
       ]
     },
     {
+      "path": "scripts/patch-deepmerge.js",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 68,
+          "column": 12,
+          "maxComplexity": 29
+        }
+      ],
+      "maxComplexity": 29,
+      "maxTotalComplexity": 29
+    },
+    {
       "path": "scripts/patch-extract-zip.js",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 1,
@@ -402,62 +419,62 @@
       "maxTotalComplexity": 429,
       "functions": [
         {
-          "line": 1107,
+          "line": 1118,
           "column": 11,
           "maxComplexity": 20
         },
         {
-          "line": 1338,
+          "line": 1349,
           "column": 18,
           "maxComplexity": 67
         },
         {
-          "line": 1611,
+          "line": 1622,
           "column": 9,
           "maxComplexity": 73
         },
         {
-          "line": 1957,
+          "line": 1968,
           "column": 9,
           "maxComplexity": 23
         },
         {
-          "line": 2211,
+          "line": 2287,
           "column": 11,
           "maxComplexity": 24
         },
         {
-          "line": 2379,
+          "line": 2455,
           "column": 17,
           "maxComplexity": 18
         },
         {
-          "line": 2657,
+          "line": 2733,
           "column": 18,
           "maxComplexity": 46
         },
         {
-          "line": 2928,
+          "line": 3004,
           "column": 18,
           "maxComplexity": 21
         },
         {
-          "line": 3219,
+          "line": 3295,
           "column": 11,
           "maxComplexity": 34
         },
         {
-          "line": 3366,
+          "line": 3442,
           "column": 11,
           "maxComplexity": 18
         },
         {
-          "line": 3409,
+          "line": 3485,
           "column": 11,
           "maxComplexity": 20
         },
         {
-          "line": 3562,
+          "line": 3638,
           "column": 18,
           "maxComplexity": 65
         }
@@ -519,8 +536,8 @@
       "reason": "Legacy complexity: 7 over-threshold function(s) (worst 99, total 265) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 107,
-      "maxTotalComplexity": 273,
+      "maxComplexity": 117,
+      "maxTotalComplexity": 283,
       "functions": [
         {
           "line": 948,
@@ -545,15 +562,15 @@
         {
           "line": 1698,
           "column": 33,
-          "maxComplexity": 107
+          "maxComplexity": 117
         },
         {
-          "line": 2295,
+          "line": 2424,
           "column": 69,
           "maxComplexity": 17
         },
         {
-          "line": 2404,
+          "line": 2533,
           "column": 16,
           "maxComplexity": 17
         }
@@ -2017,6 +2034,23 @@
       ]
     },
     {
+      "path": "src/entityTypes/emailMarketingAiTypes.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "maxComplexity": 17,
+      "maxTotalComplexity": 17,
+      "functions": [
+        {
+          "line": 146,
+          "column": 17,
+          "maxComplexity": 17
+        }
+      ],
+      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31"
+    },
+    {
       "path": "src/entityTypes/emailSearchTaskProxy-type.ts",
       "ruleId": "@typescript-eslint/no-unused-vars",
       "maxCount": 1,
@@ -2163,7 +2197,7 @@
           "maxComplexity": 20
         },
         {
-          "line": 2837,
+          "line": 2882,
           "column": 16,
           "maxComplexity": 31
         }
@@ -2919,6 +2953,40 @@
       "expiresOn": "2027-01-31"
     },
     {
+      "path": "src/model/EmailMessageLocation.model.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 86,
+          "column": 71,
+          "maxComplexity": 31
+        }
+      ],
+      "maxComplexity": 31,
+      "maxTotalComplexity": 31
+    },
+    {
+      "path": "src/model/EmailOrganizationOperation.model.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 375,
+          "column": 9,
+          "maxComplexity": 22
+        }
+      ],
+      "maxComplexity": 22,
+      "maxTotalComplexity": 22
+    },
+    {
       "path": "src/model/EmailReplyDraft.model.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 3,
@@ -2939,7 +3007,7 @@
           "maxComplexity": 28
         },
         {
-          "line": 1562,
+          "line": 1612,
           "column": 54,
           "maxComplexity": 44
         }
@@ -4967,6 +5035,14 @@
     },
     {
       "path": "src/modules/TaskExecutorService.ts",
+      "ruleId": "@typescript-eslint/explicit-function-return-type",
+      "maxCount": 1,
+      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31"
+    },
+    {
+      "path": "src/modules/TaskExecutorService.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "maxCount": 4,
       "reason": "Legacy explicit any: 4 at the 2026-10-23 baseline; count pinned — new any blocks; re-pinned at the 2026-10-26 dev merge",
@@ -5021,8 +5097,8 @@
       "reason": "Legacy complexity: 2 over-threshold function(s) (worst 36, total 61) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 36,
-      "maxTotalComplexity": 61,
+      "maxComplexity": 38,
+      "maxTotalComplexity": 74,
       "functions": [
         {
           "line": 251,
@@ -5032,7 +5108,7 @@
         {
           "line": 492,
           "column": 17,
-          "maxComplexity": 25
+          "maxComplexity": 38
         }
       ]
     },
@@ -5794,8 +5870,8 @@
       "reason": "Legacy complexity: 3 over-threshold function(s) (worst 68, total 100) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 68,
-      "maxTotalComplexity": 100,
+      "maxComplexity": 70,
+      "maxTotalComplexity": 102,
       "functions": [
         {
           "line": 242,
@@ -5805,10 +5881,10 @@
         {
           "line": 307,
           "column": 9,
-          "maxComplexity": 68
+          "maxComplexity": 70
         },
         {
-          "line": 1059,
+          "line": 1084,
           "column": 17,
           "maxComplexity": 16
         }
@@ -5847,15 +5923,20 @@
     {
       "path": "src/service/AIChatErrorMapper.ts",
       "ruleId": "sonarjs/cognitive-complexity",
-      "maxCount": 1,
+      "maxCount": 2,
       "reason": "Legacy complexity: 1 over-threshold function(s) (worst 33, total 33) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 36,
-      "maxTotalComplexity": 36,
+      "maxTotalComplexity": 53,
       "functions": [
         {
-          "line": 339,
+          "line": 189,
+          "column": 17,
+          "maxComplexity": 17
+        },
+        {
+          "line": 360,
           "column": 17,
           "maxComplexity": 36
         }
@@ -6121,56 +6202,56 @@
       "path": "src/service/AIChatQueryLoop.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 10,
-      "maxComplexity": 805,
-      "maxTotalComplexity": 1085,
+      "maxComplexity": 844,
+      "maxTotalComplexity": 1131,
       "functions": [
         {
-          "line": 850,
+          "line": 851,
           "column": 17,
           "maxComplexity": 41
         },
         {
-          "line": 1929,
+          "line": 1930,
           "column": 17,
           "maxComplexity": 16
         },
         {
-          "line": 2186,
+          "line": 2187,
           "column": 18,
           "maxComplexity": 18
         },
         {
-          "line": 2349,
+          "line": 2350,
           "column": 10,
           "maxComplexity": 19
         },
         {
-          "line": 2466,
+          "line": 2467,
           "column": 18,
-          "maxComplexity": 805
+          "maxComplexity": 844
         },
         {
-          "line": 5762,
+          "line": 5847,
           "column": 17,
           "maxComplexity": 31
         },
         {
-          "line": 6140,
+          "line": 6227,
           "column": 17,
           "maxComplexity": 44
         },
         {
-          "line": 6481,
+          "line": 6572,
           "column": 11,
           "maxComplexity": 44
         },
         {
-          "line": 6616,
+          "line": 6707,
           "column": 17,
-          "maxComplexity": 44
+          "maxComplexity": 51
         },
         {
-          "line": 6949,
+          "line": 7072,
           "column": 17,
           "maxComplexity": 23
         }
@@ -6329,13 +6410,13 @@
       "expiresOn": "2027-01-31",
       "functions": [
         {
-          "line": 363,
+          "line": 365,
           "column": 17,
-          "maxComplexity": 49
+          "maxComplexity": 51
         }
       ],
-      "maxComplexity": 49,
-      "maxTotalComplexity": 49
+      "maxComplexity": 51,
+      "maxTotalComplexity": 51
     },
     {
       "path": "src/service/AIChatTurnQueueService.ts",
@@ -7181,12 +7262,263 @@
       ]
     },
     {
+      "path": "src/service/emailOrganization/EmailForwardDeliveryService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 170,
+          "column": 9,
+          "maxComplexity": 98
+        }
+      ],
+      "maxComplexity": 98,
+      "maxTotalComplexity": 98
+    },
+    {
+      "path": "src/service/emailOrganization/EmailForwardDraftService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 219,
+          "column": 9,
+          "maxComplexity": 20
+        }
+      ],
+      "maxComplexity": 20,
+      "maxTotalComplexity": 20
+    },
+    {
+      "path": "src/service/emailOrganization/EmailForwardMaterializer.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 100,
+          "column": 9,
+          "maxComplexity": 34
+        }
+      ],
+      "maxComplexity": 34,
+      "maxTotalComplexity": 34
+    },
+    {
+      "path": "src/service/emailOrganization/EmailMailboxActionService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 5,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 109,
+          "column": 17,
+          "maxComplexity": 31
+        },
+        {
+          "line": 637,
+          "column": 17,
+          "maxComplexity": 23
+        },
+        {
+          "line": 891,
+          "column": 17,
+          "maxComplexity": 45
+        },
+        {
+          "line": 1084,
+          "column": 17,
+          "maxComplexity": 28
+        },
+        {
+          "line": 1494,
+          "column": 17,
+          "maxComplexity": 28
+        }
+      ],
+      "maxComplexity": 45,
+      "maxTotalComplexity": 155
+    },
+    {
+      "path": "src/service/emailOrganization/EmailOrganizationArtifactStore.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 117,
+          "column": 9,
+          "maxComplexity": 25
+        }
+      ],
+      "maxComplexity": 25,
+      "maxTotalComplexity": 25
+    },
+    {
+      "path": "src/service/emailOrganization/EmailOrganizationCapabilityService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 36,
+          "column": 9,
+          "maxComplexity": 29
+        }
+      ],
+      "maxComplexity": 29,
+      "maxTotalComplexity": 29
+    },
+    {
+      "path": "src/service/emailOrganization/EmailOrganizationDirectSendBinding.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 43,
+          "column": 23,
+          "maxComplexity": 46
+        }
+      ],
+      "maxComplexity": 46,
+      "maxTotalComplexity": 46
+    },
+    {
+      "path": "src/service/emailOrganization/EmailOrganizationIntentResolver.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 3,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 389,
+          "column": 17,
+          "maxComplexity": 18
+        },
+        {
+          "line": 616,
+          "column": 17,
+          "maxComplexity": 18
+        },
+        {
+          "line": 660,
+          "column": 17,
+          "maxComplexity": 40
+        }
+      ],
+      "maxComplexity": 40,
+      "maxTotalComplexity": 76
+    },
+    {
+      "path": "src/service/emailOrganization/EmailOrganizationSearchService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 200,
+          "column": 17,
+          "maxComplexity": 84
+        }
+      ],
+      "maxComplexity": 84,
+      "maxTotalComplexity": 84
+    },
+    {
+      "path": "src/service/emailOrganization/EmailOrganizationSelectionService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 92,
+          "column": 9,
+          "maxComplexity": 31
+        }
+      ],
+      "maxComplexity": 31,
+      "maxTotalComplexity": 31
+    },
+    {
+      "path": "src/service/emailOrganization/ImapEmailMailboxAdapter.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 314,
+          "column": 9,
+          "maxComplexity": 23
+        }
+      ],
+      "maxComplexity": 23,
+      "maxTotalComplexity": 23
+    },
+    {
+      "path": "src/service/EmailOrganizationAiTools.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 417,
+          "column": 23,
+          "maxComplexity": 44
+        }
+      ],
+      "maxComplexity": 44,
+      "maxTotalComplexity": 44
+    },
+    {
       "path": "src/service/emailReceive/EmailReceiveSyncService.ts",
       "ruleId": "@typescript-eslint/explicit-function-return-type",
       "maxCount": 1,
       "reason": "Reviewed migration (F14): explicit return types became a blocking rule on 2026-10-24; 1 pre-existing violation(s) on this file are pinned — annotate new or moved functions; the count may only shrink; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
+    },
+    {
+      "path": "src/service/emailReceive/EmailReceiveSyncService.ts",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 269,
+          "column": 17,
+          "maxComplexity": 25
+        }
+      ],
+      "maxComplexity": 25,
+      "maxTotalComplexity": 25
     },
     {
       "path": "src/service/emailReceive/EmailReplyDetectionService.ts",
@@ -7292,7 +7624,7 @@
       "maxTotalComplexity": 19,
       "functions": [
         {
-          "line": 410,
+          "line": 415,
           "column": 23,
           "maxComplexity": 19
         }
@@ -7351,25 +7683,30 @@
     {
       "path": "src/service/emailReply/EmailReplyDeliveryService.ts",
       "ruleId": "sonarjs/cognitive-complexity",
-      "maxCount": 3,
+      "maxCount": 4,
       "reason": "Legacy complexity: 3 over-threshold function(s) (worst 31, total 77) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 31,
-      "maxTotalComplexity": 81,
+      "maxTotalComplexity": 97,
       "functions": [
         {
-          "line": 112,
+          "line": 114,
           "column": 17,
           "maxComplexity": 30
         },
         {
-          "line": 434,
+          "line": 436,
           "column": 9,
           "maxComplexity": 31
         },
         {
-          "line": 1375,
+          "line": 896,
+          "column": 17,
+          "maxComplexity": 16
+        },
+        {
+          "line": 1430,
           "column": 17,
           "maxComplexity": 20
         }
@@ -8982,12 +9319,12 @@
       "maxTotalComplexity": 67,
       "functions": [
         {
-          "line": 390,
+          "line": 399,
           "column": 9,
           "maxComplexity": 32
         },
         {
-          "line": 662,
+          "line": 671,
           "column": 9,
           "maxComplexity": 35
         }
@@ -9128,7 +9465,7 @@
       "maxTotalComplexity": 30,
       "functions": [
         {
-          "line": 337,
+          "line": 354,
           "column": 17,
           "maxComplexity": 30
         }
@@ -9766,13 +10103,13 @@
       "reason": "Legacy complexity: 1 over-threshold function(s) (worst 33, total 33) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 33,
-      "maxTotalComplexity": 33,
+      "maxComplexity": 35,
+      "maxTotalComplexity": 35,
       "functions": [
         {
-          "line": 311,
+          "line": 339,
           "column": 3,
-          "maxComplexity": 33
+          "maxComplexity": 35
         }
       ]
     },
@@ -10768,52 +11105,52 @@
       "maxTotalComplexity": 468,
       "functions": [
         {
-          "line": 1498,
+          "line": 1504,
           "column": 16,
           "maxComplexity": 24
         },
         {
-          "line": 1751,
+          "line": 1757,
           "column": 24,
           "maxComplexity": 16
         },
         {
-          "line": 2107,
+          "line": 2113,
           "column": 10,
           "maxComplexity": 28
         },
         {
-          "line": 2850,
+          "line": 2856,
           "column": 10,
           "maxComplexity": 19
         },
         {
-          "line": 4217,
+          "line": 4223,
           "column": 67,
           "maxComplexity": 23
         },
         {
-          "line": 4582,
+          "line": 4588,
           "column": 9,
           "maxComplexity": 22
         },
         {
-          "line": 5112,
+          "line": 5118,
           "column": 10,
           "maxComplexity": 19
         },
         {
-          "line": 5230,
+          "line": 5236,
           "column": 18,
           "maxComplexity": 93
         },
         {
-          "line": 5655,
+          "line": 5661,
           "column": 34,
           "maxComplexity": 180
         },
         {
-          "line": 6109,
+          "line": 6115,
           "column": 37,
           "maxComplexity": 44
         }
@@ -11619,6 +11956,23 @@
       "expiresOn": "2027-01-31"
     },
     {
+      "path": "src/views/pages/emailreceive/detail.vue",
+      "ruleId": "sonarjs/cognitive-complexity",
+      "maxCount": 1,
+      "reason": "Reviewed for dev branch merge into feature/browser-decision-acceleration; pre-existing complexity preserved from dev",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31",
+      "functions": [
+        {
+          "line": 331,
+          "column": 10,
+          "maxComplexity": 30
+        }
+      ],
+      "maxComplexity": 30,
+      "maxTotalComplexity": 30
+    },
+    {
       "path": "src/views/pages/emailreceive/list.vue",
       "ruleId": "@typescript-eslint/explicit-function-return-type",
       "maxCount": 2,
@@ -12124,7 +12478,7 @@
       "maxTotalComplexity": 21,
       "functions": [
         {
-          "line": 515,
+          "line": 705,
           "column": 61,
           "maxComplexity": 21
         }
@@ -12536,18 +12890,18 @@
       "expiresOn": "2027-01-31",
       "functions": [
         {
-          "line": 572,
+          "line": 576,
           "column": 14,
           "maxComplexity": 18
         },
         {
-          "line": 1395,
+          "line": 1399,
           "column": 20,
-          "maxComplexity": 17
+          "maxComplexity": 23
         }
       ],
-      "maxComplexity": 18,
-      "maxTotalComplexity": 35
+      "maxComplexity": 23,
+      "maxTotalComplexity": 41
     },
     {
       "path": "src/views/utils/accessibility.ts",
@@ -12934,18 +13288,18 @@
       "reason": "Legacy complexity: 2 over-threshold function(s) (worst 23, total 40) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 23,
-      "maxTotalComplexity": 40,
+      "maxComplexity": 33,
+      "maxTotalComplexity": 56,
       "functions": [
         {
-          "line": 135,
+          "line": 153,
           "column": 14,
           "maxComplexity": 23
         },
         {
-          "line": 243,
+          "line": 261,
           "column": 14,
-          "maxComplexity": 17
+          "maxComplexity": 33
         }
       ]
     },
@@ -15254,13 +15608,13 @@
       "reason": "Legacy complexity: 1 over-threshold function(s) (worst 23, total 23) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 23,
-      "maxTotalComplexity": 23,
+      "maxComplexity": 25,
+      "maxTotalComplexity": 25,
       "functions": [
         {
           "line": 35,
           "column": 10,
-          "maxComplexity": 23
+          "maxComplexity": 25
         }
       ]
     },
@@ -16231,6 +16585,14 @@
       "ruleId": "@typescript-eslint/explicit-function-return-type",
       "maxCount": 3,
       "reason": "Reviewed migration (F14): explicit return types became a blocking rule on 2026-10-24; 3 pre-existing violation(s) on this file are pinned — annotate new or moved functions; the count may only shrink; re-pinned at the 2026-10-26 dev merge",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31"
+    },
+    {
+      "path": "test/vitest/main/modules/BackgroundScheduler.cronOverlap.test.ts",
+      "ruleId": "@typescript-eslint/explicit-function-return-type",
+      "maxCount": 4,
+      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -17273,6 +17635,14 @@
       "ruleId": "@typescript-eslint/explicit-function-return-type",
       "maxCount": 9,
       "reason": "Reviewed migration (F14): explicit return types became a blocking rule on 2026-10-24; 9 pre-existing violation(s) on this file are pinned — annotate new or moved functions; the count may only shrink; re-pinned at the 2026-10-26 dev merge",
+      "owner": "maintainer",
+      "expiresOn": "2027-01-31"
+    },
+    {
+      "path": "test/vitest/main/service/AIChatQueryLoopRetrievalBudgetGuard.test.ts",
+      "ruleId": "@typescript-eslint/explicit-function-return-type",
+      "maxCount": 12,
+      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -19087,47 +19457,6 @@
       ],
       "maxComplexity": 26,
       "maxTotalComplexity": 26
-    },
-    {
-      "path": "src/entityTypes/emailMarketingAiTypes.ts",
-      "ruleId": "sonarjs/cognitive-complexity",
-      "maxCount": 1,
-      "maxComplexity": 17,
-      "maxTotalComplexity": 17,
-      "functions": [
-        {
-          "line": 146,
-          "column": 17,
-          "maxComplexity": 17
-        }
-      ],
-      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
-      "owner": "maintainer",
-      "expiresOn": "2027-01-31"
-    },
-    {
-      "path": "src/modules/TaskExecutorService.ts",
-      "ruleId": "@typescript-eslint/explicit-function-return-type",
-      "maxCount": 1,
-      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
-      "owner": "maintainer",
-      "expiresOn": "2027-01-31"
-    },
-    {
-      "path": "test/vitest/main/modules/BackgroundScheduler.cronOverlap.test.ts",
-      "ruleId": "@typescript-eslint/explicit-function-return-type",
-      "maxCount": 4,
-      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
-      "owner": "maintainer",
-      "expiresOn": "2027-01-31"
-    },
-    {
-      "path": "test/vitest/main/service/AIChatQueryLoopRetrievalBudgetGuard.test.ts",
-      "ruleId": "@typescript-eslint/explicit-function-return-type",
-      "maxCount": 12,
-      "reason": "Pre-existing debt recorded at the 2026-11-16 test-merge tree (test branch integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing and related suites). Ceilings/annotations are re-pinned per merge policy; refactoring is scheduled separately and must not be attempted inside the merge.",
-      "owner": "maintainer",
-      "expiresOn": "2027-01-31"
     }
   ]
 }

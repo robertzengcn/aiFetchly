@@ -27,13 +27,6 @@ import { assertCleanTeardown } from "../support/assertions";
 import { startFakeImapServer } from "../fixtures/fakeImapServer";
 import type { LaunchedApp } from "../fixtures/electronApp";
 
-interface FailureEnvelope {
-  status: boolean;
-  msg?: string;
-  data: null;
-  code?: string;
-}
-
 const IMAP_UID_VALIDITY = 424242;
 const SENDER = "e2e-org-sender@example.com";
 const IMAP_PASS = "e2e-plaintext-pass";

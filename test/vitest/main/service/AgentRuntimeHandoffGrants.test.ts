@@ -161,12 +161,15 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
     constructor(deps: unknown) {
       capturedLoopDeps = deps as CapturedLoopDeps;
     }
-    async run(loopInput: { conversationId?: string }) {
+    async run(loopInput: {
+      conversationId?: string;
+      ownerAgentId?: string;
+    }) {
       capturedAgentConversationId = loopInput?.conversationId ?? null;
       // Simulate an externalized oversized result: seed a real output owned by
-      // the runtime's conversation, then report its receipt so the terminal
-      // grant step runs. Mirrors the production loop externalizing under the
-      // agent's own conversation id.
+      // the runtime's conversation AND the agent task id (M-FR-02: outputs are
+      // owned by the agent TASK, and the terminal grant must present the same
+      // identity), then report its receipt so the terminal grant step runs.
       if (
         fakeLoopExternalize &&
         capturedAgentConversationId &&
@@ -178,7 +181,7 @@ vi.mock("@/service/AIChatQueryLoop", () => ({
           capturedLoopDeps.toolResultModule,
           capturedLoopDeps.toolResultStorage,
           capturedAgentConversationId,
-          "agent-handoff"
+          loopInput?.ownerAgentId ?? "agent-handoff"
         );
         await capturedLoopDeps.saveToolResultReceipt({
           conversationId: capturedAgentConversationId,

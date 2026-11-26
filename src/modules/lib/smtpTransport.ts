@@ -177,7 +177,8 @@ export class OutboundSmtpSession {
   ) {
     this.transporterFactory =
       options?.transporterFactory ??
-      ((mode: SmtpTlsMode) => createOutboundSmtpTransporter(this.param, mode));
+      ((mode: SmtpTlsMode): Transporter =>
+        createOutboundSmtpTransporter(this.param, mode));
     this.transporter = this.createTransporter("configured");
   }
 

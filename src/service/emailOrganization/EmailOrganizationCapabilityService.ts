@@ -1,4 +1,3 @@
-import { log } from "@/modules/Logger";
 import { BaseModule } from "@/modules/baseModule";
 import { EmailServiceModule } from "@/modules/emailServiceModule";
 import type {

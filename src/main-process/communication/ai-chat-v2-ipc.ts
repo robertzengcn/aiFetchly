@@ -1811,6 +1811,20 @@ async function handleClearConversation(
     } catch (err) {
       console.error("[ai-chat-v2] clearConversationPlanState failed:", err);
     }
+    // R06/M-FR-09: retained managed-browser sessions belong to this
+    // conversation — clearing it closes them (leases released with the
+    // stop path) instead of leaking live browsers for a deleted chat.
+    try {
+      const { getDefaultManagedBrowserModule } = await import(
+        "@/modules/ManagedBrowserModule"
+      );
+      await getDefaultManagedBrowserModule().stopAllForConversation(
+        conversationId,
+        "user_stop"
+      );
+    } catch (err) {
+      log.error("[ai-chat-v2] retained browser cleanup failed:", err);
+    }
     return ok({ deleted });
   } catch (err) {
     return denied(userSafeError(err));
@@ -1865,6 +1879,37 @@ async function handleClearAll(): Promise<
     }
     void bulkClearedIds;
     const module = new AIChatV2Module();
+    // C05/M-FR-09: Clear All also closes every retained managed-browser
+    // session (keep-open transfers made them conversation-owned; a
+    // deleted chat history must not leak live browsers). EVERY stop is
+    // attempted — one failure never skips the rest — and unresolved
+    // state is reported instead of silently leaked.
+    try {
+      const { getDefaultManagedBrowserModule } = await import(
+        "@/modules/ManagedBrowserModule"
+      );
+      const browserModule = getDefaultManagedBrowserModule();
+      const failedSessionIds: string[] = [];
+      for (const session of browserModule.listActiveSessions()) {
+        try {
+          await browserModule.stop(session.sessionId, "user_stop");
+        } catch (stopErr) {
+          failedSessionIds.push(session.sessionId);
+          log.error(
+            `[ai-chat-v2] clear-all retained session stop failed (${session.sessionId}):`,
+            stopErr
+          );
+        }
+      }
+      if (failedSessionIds.length > 0) {
+        log.error(
+          "[ai-chat-v2] clear-all left sessions unresolved:",
+          failedSessionIds.join(",")
+        );
+      }
+    } catch (err) {
+      log.error("[ai-chat-v2] clear-all retained browser cleanup failed:", err);
+    }
     const deleted = await module.clearAllV2History();
     return ok({ deleted });
   } catch (err) {

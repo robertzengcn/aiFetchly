@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { lazySchema } from "@/utils/lazySchema";
-import { normalizedCookieSchema } from "@/schemas/accountCookies";
+import { normalizedCookieSchema, normalizedCookieArraySchema } from "@/schemas/accountCookies";
 import {
   MANAGED_BROWSER_ACTION_LIMITS,
   MANAGED_BROWSER_MESSAGE_LIMITS,
@@ -116,11 +116,12 @@ const proxyConfigSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
-const handoffReasonSchema = z.enum([
+export const handoffReasonSchema = z.enum([
   "login_required",
   "login_expired",
   "captcha_sensitive_flow",
   "mfa_prompt",
+  "user_paused",
   "passkey_prompt",
   "password_field",
   "recovery_flow",
@@ -162,6 +163,9 @@ const errorCodeSchema = z.enum([
   "browser_incompatible",
   "fingerprint_mismatch",
   "proxy_unavailable",
+  "proxy_connect_failed",
+  "proxy_auth_failed",
+  "tunnel_failed",
   "navigation_blocked",
   "authentication_required",
   "challenge_requires_handoff",
@@ -170,6 +174,8 @@ const errorCodeSchema = z.enum([
   "challenge_provider_timeout",
   "challenge_resolution_failed",
   "stale_page_reference",
+  "element_disabled",
+  "element_occluded",
   "action_not_allowed",
   "user_has_control",
   "challenge_in_progress",
@@ -185,6 +191,7 @@ const errorCodeSchema = z.enum([
   "worker_exited",
   "cancelled",
   "stop_timeout",
+  "stop_timeout_no_dispatch",
   "cookie_refresh_failed",
   "cookie_persistence_failed",
   "cache_disabled",
@@ -194,7 +201,20 @@ const errorCodeSchema = z.enum([
   "cache_path_invalid",
   "cache_maintenance_failed",
   "cache_limit_invalid",
+  "insufficient_memory",
+  "site_limit_reached",
+  "session_not_owned",
+  "proxy_confirmation_required",
+  "proxy_not_found",
+  "proxy_no_usable_proxy",
+  "proxy_switch_limit",
   "internal_error",
+  "session_already_account_bound",
+  "proxy_switch_in_progress",
+  "proxy_switch_restore_failed",
+  // B07: a SELECT resolution that fails against the live options BEFORE
+  // any input is dispatched — proven no-effect (runner reobserves).
+  "stale_select_option",
 ]);
 
 const challengeKindSchema = z.enum([
@@ -342,6 +362,11 @@ export const leafBrowserActionSchema = z.discriminatedUnion("type", [
     expectedRole: z.string().min(1).max(48).optional(),
     expectedName: z.string().max(200).optional(),
     values: z.array(z.string().max(512)).min(1).max(32),
+    // N09/D-FR-17: the OBSERVED values bound at decision time — the
+    // worker verifies the live option value still matches before
+    // selecting (options reordering/changing after the observation
+    // fails the step instead of silently choosing another option).
+    expected_values: z.array(z.string().max(512)).min(1).max(32).optional(),
   }),
   z.strictObject({
     type: z.literal("press_key"),
@@ -477,8 +502,39 @@ const startSessionMessageSchema = z.strictObject({
   storagePolicy: storagePolicySchema,
   platform: platformDefinitionSchema,
   proxy: proxyConfigSchema.nullable(),
+  /**
+   * R05/M-FR-13: concurrent-window layout — the position offset (and the
+   * AI title marker flag) computed by the module from the live session
+   * count, so two headed windows never stack on the same origin.
+   */
+  windowLayout: z
+    .strictObject({
+      position: z.object({ x: z.number().int(), y: z.number().int() }),
+      aiWindowTitle: z.boolean(),
+    })
+    .optional(),
   /** SECRET payload: allowlisted, domain-filtered cookies. */
   cookies: z.array(normalizedCookieSchema).max(3000),
+});
+
+const bindPlatformMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("BIND_PLATFORM"),
+  /**
+   * F11: after a public→account bind the session adopts the account's
+   * platform definition — the worker re-targets its adapter and cookie
+   * capture policy instead of staying platformId=0 (public), where
+   * captureAndSendRefreshedCookies is a no-op.
+   */
+  platform: platformDefinitionSchema,
+  /** Whether to immediately capture+send refreshed cookies. */
+  captureCookies: z.boolean(),
+});
+
+const setCookiesMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("SET_COOKIES"),
+  cookies: normalizedCookieArraySchema.max(500),
 });
 
 const observeMessageSchema = z.strictObject({
@@ -508,6 +564,15 @@ const resumeHandoffMessageSchema = z.strictObject({
   type: z.literal("RESUME_HANDOFF"),
 });
 
+// C04/M-FR-13: retitle the OS window marker WITHOUT mutating page content
+// beyond the document.title label — "ai" names the AI controller, "user"
+// marks a takeover (the [AI] marker no longer sticks after takeover).
+const retitleWindowMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("RETITLE_WINDOW"),
+  prefix: z.enum(["ai", "user"]),
+});
+
 const verifyManualLoginMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("VERIFY_MANUAL_LOGIN"),
@@ -519,10 +584,70 @@ const cancelRequestMessageSchema = z.strictObject({
   targetRequestId: requestIdSchema.nullable(),
 });
 
+/**
+ * PRD D-FR-15a: pin/unpin an observation epoch so its element refs stay
+ * resolvable across pending approvals, decisions, and handoffs.
+ */
+/**
+ * T24/C-FR-05: user Pause — aborts the in-flight program between actions
+ * with executed results preserved; the session moves to user control.
+ */
+const pauseRequestMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("PAUSE_REQUEST"),
+});
+
+const pinObservationMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("PIN_OBSERVATION"),
+  observationId: z.string().min(1).max(64),
+  pinned: z.boolean(),
+});
+
+/**
+ * R01/C-FR-10: EXPLICIT user-requested window focus ("Open browser" on
+ * the session card) — the ONLY sanctioned bringToFront path. Launches
+ * never steal focus; this command exists precisely because the user
+ * asked for it.
+ */
+const focusWindowMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("FOCUS_WINDOW"),
+});
+
 const stopSessionMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("STOP_SESSION"),
   reason: z.enum(["user_stop", "cancelled", "shutdown", "error"]),
+});
+
+/**
+ * PRD A-FR-16..21: privileged login-form fill. The password travels
+ * ONLY inside this single request and is wiped after use; results carry
+ * outcome stamps, never values.
+ */
+const loginRecipeStepSchema = z.strictObject({
+  usernameField: z.string().max(128).nullable(),
+  passwordField: z.string().max(128).nullable(),
+  submitVia: z.enum(["form", "enter"]),
+});
+
+const loginRecipeSchema = z.strictObject({
+  version: z.literal(1),
+  formAction: z.string().max(2048).nullable(),
+  steps: z.array(loginRecipeStepSchema).min(1).max(3),
+});
+
+export type WorkerLoginRecipe = z.infer<typeof loginRecipeSchema>;
+
+const fillLoginFormMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("FILL_LOGIN_FORM"),
+  mode: z.enum(["login", "register"]),
+  allowedDomainSuffixes: z.array(z.string().min(1).max(253)).max(16),
+  recipe: loginRecipeSchema.nullable(),
+  username: z.string().min(1).max(256),
+  password: z.string().min(1).max(1024),
 });
 
 const evaluateScriptMessageSchema = z.strictObject({
@@ -540,14 +665,21 @@ const evaluateScriptMessageSchema = z.strictObject({
 
 export const managedBrowserInboundSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
+  setCookiesMessageSchema,
     startSessionMessageSchema,
+    bindPlatformMessageSchema,
     observeMessageSchema,
     runActionsMessageSchema,
     captureScreenshotMessageSchema,
     beginHandoffMessageSchema,
     resumeHandoffMessageSchema,
+    retitleWindowMessageSchema,
     verifyManualLoginMessageSchema,
     cancelRequestMessageSchema,
+    pauseRequestMessageSchema,
+    focusWindowMessageSchema,
+    pinObservationMessageSchema,
+    fillLoginFormMessageSchema,
     stopSessionMessageSchema,
     evaluateScriptMessageSchema,
   ])
@@ -575,12 +707,29 @@ const elementSummarySchema = z.strictObject({
   checked: z.boolean().optional(),
   selected: z.boolean().optional(),
   hrefOrigin: z.string().max(512).optional(),
+  // B04: full normalized link URL for per-URL NAVIGATE provenance.
+  href_full: z.string().max(2048).optional(),
+  // D-FR-13: focused/dialog control — the candidate shortlist orders by it.
+  priority: z.boolean().optional(),
+  // F14: observed SELECT options — ids are positional (o_N), labels
+  // and values are the sanitized page-authored strings.
+  option_ids: z.array(z.string().max(8)).max(20).optional(),
+  option_labels: z.array(z.string().max(200)).max(20).optional(),
+  // B05: the bound MUST match the collector (512) and the select action's
+  // expected_values (512) — a tighter limit here silently drops the whole
+  // observation when one option value exceeds it.
+  option_values: z.array(z.string().max(512)).max(20).optional(),
 });
 
 const observationSchema = z.strictObject({
   sessionId: sessionIdSchema,
+  /** Opaque per-snapshot identity (PRD D-FR-15a/27); stable per epoch. */
+  observationId: z.string().min(1).max(64),
   pageRevision: z.number().int().positive(),
   url: z.string().max(2048),
+  // R03: the trusted policy URL (credential redacted, query preserved) —
+  // main-process internal use only.
+  policyUrl: z.string().max(2048).optional(),
   origin: z.string().max(512),
   title: z.string().max(300),
   state: z.enum(["ready", "loading", "dialog", "handoff"]),
@@ -674,8 +823,23 @@ const actionProgressMessageSchema = z.strictObject({
   ]),
   completedSteps: z.number().int().nonnegative(),
   totalSteps: z.number().int().positive().nullable(),
+  // E15/D-FR-26: input dispatched by the in-flight program?
+  inputDispatched: z.boolean().optional(),
   messageCode: z.string().min(1).max(64),
 });
+
+// F07: the executor's stop codes ride on ACTION_RESULT so the main
+// process can finalize honestly without losing the step evidence.
+const actionStopCodeSchema = z.enum([
+  "completed",
+  "cancelled",
+  "consecutive_failures",
+  "limit_exceeded",
+  "stale_page_reference",
+  "navigation_blocked",
+  "handoff_required",
+  "unknown_effect",
+]);
 
 const actionResultMessageSchema = z.strictObject({
   ...messageBase,
@@ -694,6 +858,9 @@ const actionResultMessageSchema = z.strictObject({
       })
     )
     .max(MANAGED_BROWSER_ACTION_LIMITS.maxActionsPerProgram),
+  stopCode: actionStopCodeSchema.nullable(),
+  // F07: EXTRACT payloads reach the runner's completion criteria.
+  extracted: z.array(z.unknown()).max(20).optional(),
   observation: observationSchema.nullable(),
 });
 
@@ -754,6 +921,24 @@ const sessionStoppedMessageSchema = z.strictObject({
   reasonCode: z.string().min(1).max(64).nullable(),
 });
 
+/** A-FR-08/09: outcome of the privileged login fill. No values, ever. */
+const loginFormResultMessageSchema = z.strictObject({
+  ...messageBase,
+  type: z.literal("LOGIN_FORM_RESULT"),
+  outcome: z.enum(["success", "wrong_credential", "challenge", "unknown"]),
+  reasonCode: z.string().max(64).nullable(),
+  /** Stamps of the fields the filler touched ([credential] masking). */
+  filledFieldStamps: z.array(z.string().max(128)).max(16),
+  /** T21: learned-recipe payload on success (no values, fingerprints only). */
+  recipe: z
+    .strictObject({
+      formAction: z.string().max(2048).nullable(),
+      usernameField: z.string().max(128),
+      passwordField: z.string().max(128),
+    })
+    .nullable(),
+});
+
 const evaluateScriptResultMessageSchema = z.strictObject({
   ...messageBase,
   type: z.literal("EVALUATE_SCRIPT_RESULT"),
@@ -798,6 +983,7 @@ export const managedBrowserOutboundSchema = lazySchema(() =>
     screenshotResultMessageSchema,
     handoffRequiredMessageSchema,
     challengeDetectedMessageSchema,
+    loginFormResultMessageSchema,
     refreshedCookiesMessageSchema,
     sessionStoppedMessageSchema,
     evaluateScriptResultMessageSchema,

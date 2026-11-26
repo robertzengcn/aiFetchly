@@ -45,6 +45,20 @@ import {
   resolvePackagedWorkerPath,
   buildPackagedWorkerEnv,
 } from "@/utils/packagedWorkerPath";
+import { classifyProxyError } from "@/service/browserProxy/BrowserProxySelectionService";
+import { PROXY_DECRYPT_FAILED_USER } from "@/modules/browserProxy/ProxyCredentialCodec";
+
+/**
+ * W04/P-FR-04: structured CONNECT outcome. The failure detail (407,
+ * timeout, socket error) is carried for typed classification instead of
+ * collapsing every failure into one boolean.
+ */
+interface HttpConnectOutcome {
+  readonly ok: boolean;
+  /** null on success; otherwise the failure detail for classification. */
+  readonly failureReason: string | null;
+}
+
 export class ProxyController {
   //import proxy from csv file
   // public async importProxyfile(filename: string) {
@@ -103,7 +117,7 @@ export class ProxyController {
     password?: string,
     testUrl = "https://httpbin.org/ip",
     timeout = 5000
-  ): Promise<boolean> {
+  ): Promise<HttpConnectOutcome> {
     return new Promise((resolve) => {
       const options: any = {
         host: proxyHost,
@@ -127,21 +141,33 @@ export class ProxyController {
           log.info(
             `HTTP proxy socket error after connect: ${socketError.message}`
           );
-          resolve(false);
+          resolve({ ok: false, failureReason: socketError.message });
         });
         socket.end();
-        resolve(res.statusCode === 200);
+        if (res.statusCode === 200) {
+          resolve({ ok: true, failureReason: null });
+        } else {
+          // W04/P-FR-04: a 407 is an AUTH failure — carried as a typed
+          // message so downstream classification reports proxy_auth_failed.
+          resolve({
+            ok: false,
+            failureReason:
+              res.statusCode === 407
+                ? "407 proxy authentication required"
+                : `proxy CONNECT status ${res.statusCode}`,
+          });
+        }
       });
 
       req.on("error", (error) => {
         log.info(`HTTP proxy error: ${error.message}`);
-        resolve(false);
+        resolve({ ok: false, failureReason: error.message });
       });
 
       req.on("timeout", () => {
         log.info(`HTTP proxy timeout after ${timeout}ms`);
         req.destroy();
-        resolve(false);
+        resolve({ ok: false, failureReason: "connect timeout" });
       });
 
       req.end();
@@ -156,7 +182,7 @@ export class ProxyController {
     password?: string,
     testUrl = "https://httpbin.org/ip",
     timeout = 5000
-  ): Promise<boolean> {
+  ): Promise<HttpConnectOutcome> {
     return new Promise((resolve) => {
       const options: any = {
         host: proxyHost,
@@ -180,21 +206,32 @@ export class ProxyController {
           log.info(
             `SOCKS proxy socket error after connect: ${socketError.message}`
           );
-          resolve(false);
+          resolve({ ok: false, failureReason: socketError.message });
         });
         socket.end();
-        resolve(res.statusCode === 200);
+        if (res.statusCode === 200) {
+          resolve({ ok: true, failureReason: null });
+        } else {
+          // W04/P-FR-04: typed auth/connect distinction (same as HTTP).
+          resolve({
+            ok: false,
+            failureReason:
+              res.statusCode === 407
+                ? "407 proxy authentication required"
+                : `proxy CONNECT status ${res.statusCode}`,
+          });
+        }
       });
 
       req.on("error", (error) => {
         log.info(`SOCKS proxy error: ${error.message}`);
-        resolve(false);
+        resolve({ ok: false, failureReason: error.message });
       });
 
       req.on("timeout", () => {
         log.info(`SOCKS proxy timeout after ${timeout}ms`);
         req.destroy();
-        resolve(false);
+        resolve({ ok: false, failureReason: "connect timeout" });
       });
 
       req.end();
@@ -211,14 +248,14 @@ export class ProxyController {
         throw new Error("protocol is required");
       }
 
-      let isValid = false;
+      let outcome: HttpConnectOutcome;
 
       if (proxyEntity.protocol.includes("http")) {
         // For HTTP/HTTPS proxies, use CONNECT method
         log.info(
           `Checking HTTP proxy: ${proxyEntity.host}:${proxyEntity.port}`
         );
-        isValid = await this.checkHttpProxy(
+        outcome = await this.checkHttpProxy(
           proxyEntity.host,
           proxyEntity.port,
           proxyEntity.user,
@@ -231,7 +268,7 @@ export class ProxyController {
         log.info(
           `Checking SOCKS proxy: ${proxyEntity.host}:${proxyEntity.port}`
         );
-        isValid = await this.checkSocksProxy(
+        outcome = await this.checkSocksProxy(
           proxyEntity.host,
           proxyEntity.port,
           proxyEntity.user,
@@ -243,12 +280,20 @@ export class ProxyController {
         throw new Error("protocol is not valid");
       }
 
-      if (isValid) {
+      if (outcome.ok) {
         log.info(`Proxy ${proxyEntity.host}:${proxyEntity.port} is valid`);
         return { status: true, msg: "", data: true };
       } else {
-        log.info(`Proxy ${proxyEntity.host}:${proxyEntity.port} is invalid`);
-        return { status: false, msg: "proxy check failure", data: false };
+        // W04/P-FR-04: the typed failure detail (407, timeout, connect
+        // error) flows in msg for downstream classification.
+        log.info(
+          `Proxy ${proxyEntity.host}:${proxyEntity.port} is invalid: ${outcome.failureReason ?? "unknown"}`
+        );
+        return {
+          status: false,
+          msg: outcome.failureReason ?? "proxy check failure",
+          data: false,
+        };
       }
     } catch (error) {
       let message = "";
@@ -592,6 +637,19 @@ export class ProxyController {
     }
     for (const id of targetIds) {
       const proxy = proxyById.get(id);
+      // W04/P-FR-04: a row whose password could NOT be decrypted (the
+      // getProxiesByIds sentinel) is failed with proxy_auth_failed WITHOUT
+      // launching the checker — checking with an empty password is a
+      // doomed, misleading run.
+      if (proxy && proxy.user === PROXY_DECRYPT_FAILED_USER) {
+        setupErrors.push({
+          proxyId: id,
+          basic: "failure",
+          reasonCode: "proxy_auth_failed",
+          error: "proxy_password_decrypt_failed",
+        });
+        continue;
+      }
       if (proxy && proxy.host && proxy.port && proxy.protocol) {
         detailed.push({ id, proxy });
       } else {
@@ -624,6 +682,9 @@ export class ProxyController {
               ? { googlePass: result.googlePass }
               : {}),
             ...(result.error !== undefined ? { error: result.error } : {}),
+            ...(result.reasonCode !== undefined
+              ? { reasonCode: result.reasonCode }
+              : {}),
           });
         }
         const internal: ProxyCheckItemInternal = {
@@ -633,6 +694,9 @@ export class ProxyController {
             ? { googlePass: result.googlePass }
             : {}),
           ...(result.error !== undefined ? { error: result.error } : {}),
+          ...(result.reasonCode !== undefined
+            ? { reasonCode: result.reasonCode }
+            : {}),
         };
         return internal;
       }
@@ -666,6 +730,7 @@ export class ProxyController {
       basic?: "pass" | "failure";
       googlePass?: "pass" | "fail";
       error?: string;
+      reasonCode?: string;
     };
     const result: MutableCheckItem = { proxyId };
 
@@ -685,6 +750,13 @@ export class ProxyController {
           );
         } else {
           result.basic = "failure";
+          // W04/P-FR-04: the typed failure detail (407 auth, connect
+          // error, timeout) is classified instead of collapsing to one
+          // boolean — the switch reports WHY the proxy is unusable.
+          if (res.msg) {
+            result.error = res.msg;
+          }
+          result.reasonCode = classifyProxyError(res.msg ?? "");
           await this.proxyCheckdb.updateProxyCheck(
             proxyId,
             proxyCheckStatus.Failure
@@ -694,6 +766,7 @@ export class ProxyController {
         result.basic = "failure";
         result.error =
           error instanceof Error ? error.message : "basic check failed";
+        result.reasonCode = classifyProxyError(result.error);
         await this.proxyCheckdb.updateProxyCheck(
           proxyId,
           proxyCheckStatus.Failure

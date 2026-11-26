@@ -231,6 +231,14 @@ export interface SkillExecutionContext {
   /** Server-assigned tool call ID for correlating request/response. */
   readonly toolCallId: string;
 
+  /**
+   * C-FR-09: the ToolJobRegistry job id when this execution runs as a
+   * managed-async job. Tools that block waiting for the user (credential
+   * cards, handoffs) mark the job waiting_for_user so the parent's poll
+   * deadline excludes the wait.
+   */
+  readonly jobId?: string;
+
   /** Arguments from the LLM's tool_call event. */
   readonly args?: Record<string, unknown>;
 
@@ -347,6 +355,14 @@ export interface SkillExecutionContext {
    * silently merged into it.
    */
   readonly ownerAgentId?: string;
+
+  /**
+   * B11/M-FR-07: trusted ROOT (parent) conversation id for sub-agent
+   * executions, supplied by the engine — never tool arguments. Browser
+   * sessions started by a sub-agent record it so the parent chat can
+   * drive/take over that session.
+   */
+  readonly rootConversationId?: string;
 
   /**
    * Persisted outbound-email intent decision id for this turn. Null when no

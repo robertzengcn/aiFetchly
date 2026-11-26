@@ -135,7 +135,9 @@ export class EmailReceivedMessageModule extends BaseModule {
   }
 
   /** Organization search over stored rows (PRD FR-17 local mode). */
-  async searchForOrganization(input: Parameters<EmailReceivedMessageModel["searchForOrganization"]>[0]) {
+  async searchForOrganization(
+    input: Parameters<EmailReceivedMessageModel["searchForOrganization"]>[0]
+  ): Promise<ReturnType<EmailReceivedMessageModel["searchForOrganization"]>> {
     try {
       await this.ensureConnection();
       return await this.messageModel.searchForOrganization(input);

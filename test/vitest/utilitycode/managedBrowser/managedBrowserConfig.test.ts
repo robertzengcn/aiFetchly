@@ -19,7 +19,8 @@ import {
 
 describe("managed-browser config defaults", () => {
   it("pins the worker protocol version", () => {
-    expect(MANAGED_BROWSER_PROTOCOL_VERSION).toBe(1);
+    // F01: the wire contract is protocol v2.
+    expect(MANAGED_BROWSER_PROTOCOL_VERSION).toBe(2);
   });
 
   it("defaults to a single concurrent managed session", () => {

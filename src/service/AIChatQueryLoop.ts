@@ -390,6 +390,7 @@ export class AIChatSteeringRoundLimitError extends Error {
  * floor is the absolute minimum interval regardless of decay or a tiny
  * registry pollMinIntervalMs.
  */
+const ASYNC_POLL_DEADLINE_GRACE_MS = 2_000;
 const ASYNC_POLL_BACKOFF_START_MS = 5_000;
 const ASYNC_POLL_BACKOFF_GROWTH = 1.5;
 const ASYNC_POLL_BACKOFF_MAX_MS = 15_000;
@@ -2619,6 +2620,90 @@ export class AIChatQueryLoop {
       let steeringApplied = false;
 
       for (let round = input.startRound; ; round += 1) {
+        // W07/C-FR-05/06: the per-task control gate is consulted BEFORE the
+        // model request is sent. A pause issued before the request does not
+        // send it; a stop aborts the turn (cancelled result). A response
+        // already in flight finishes — none of its tool calls then act (the
+        // executeTool wrapper returns paused results per call).
+        if (input.onBeforeModelRound) {
+          // C03: the verdict may be async (the runtime delivers a resume
+          // note into the transcript first) — awaiting a sync value is a
+          // no-op.
+          const gateVerdict = await input.onBeforeModelRound();
+          if (gateVerdict === "cancel") {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              // No model content has been produced for this round — the
+              // request was never sent (or the gate stopped it before it).
+              partialContent: "",
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
+            };
+          }
+          // R01/C-FR-04: a PAUSE waits on the caller's resume gate IN the
+          // loop — the job stays alive and resumes safe work when the user
+          // reopens the gate (no further tokens are spent while waiting;
+          // the request was never sent). A rejected wait (cancelled/
+          // interrupted) ends the turn cancelled as before. Without the
+          // hook the legacy end-paused behavior applies.
+          if (gateVerdict === "pause" && input.onPauseWait) {
+            try {
+              await input.onPauseWait(input.abortController.signal);
+              // N03: gate reopened — re-run the round-top checks WITHOUT
+              // consuming a round (the for-increment is cancelled by the
+              // decrement; no request occurred during the pause).
+              round -= 1;
+              continue;
+            } catch (waitError) {
+              // A wait rejected with task_cancelled is a REAL user
+              // cancel; only interrupted/expired waits map to blocked.
+              const waitMessage =
+                waitError instanceof Error
+                  ? waitError.message
+                  : String(waitError);
+              return {
+                type: "cancelled",
+                conversationId: input.conversationId,
+                assistantMessageId: input.assistantMessageId,
+                partialContent: "",
+                toolCatalogState: catalogActive
+                  ? snapshotToolCatalogState(
+                      discoveredToolNames,
+                      announcedDeferredNames
+                    )
+                  : undefined,
+                // N03: an EXPIRED pause (interrupted) is distinguishable
+              // from both a cancel and a still-blocked pause.
+              ...(waitMessage === "task_cancelled"
+                ? {}
+                : { agentTaskPaused: true, agentTaskInterrupted: waitMessage === "task_interrupted" }),
+              };
+            }
+          }
+          if (gateVerdict === "pause") {
+            return {
+              type: "cancelled",
+              conversationId: input.conversationId,
+              assistantMessageId: input.assistantMessageId,
+              partialContent: "",
+              toolCatalogState: catalogActive
+                ? snapshotToolCatalogState(
+                    discoveredToolNames,
+                    announcedDeferredNames
+                  )
+                : undefined,
+              // W07: distinguishes a PAUSED turn from a user cancel —
+              // the agent runtime maps this to blocked, not cancelled.
+              agentTaskPaused: true,
+            };
+          }
+        }
         if (round >= maxToolRounds) {
           // Slice 2 Unit 4 (FR-05/07, §7.1): when the completion policy is
           // on and this turn is enrolled, consult the controller before the
@@ -6066,6 +6151,8 @@ export class AIChatQueryLoop {
               // shutdown) reaches the actual underlying tool work instead of
               // only relabelling the registry entry (FR-36, design §17.2).
               signal: handle.signal,
+              // C-FR-09: lets the tool mark the job waiting_for_user.
+              jobId: handle.jobId,
               // Authoritative managed-async deadline (HOST-07). Epoch rides
               // the observable contract; the monotonic anchor drives clocks (H5).
               deadlineEpochMs,
@@ -6210,6 +6297,7 @@ export class AIChatQueryLoop {
         args: call.arguments,
         model: input.request.model,
         signal: handle.signal,
+        jobId: handle.jobId,
         deadlineEpochMs: meta.deadlineEpochMs,
         deadlinePerfMs: meta.deadlinePerfMs,
         executionId,
@@ -6217,6 +6305,9 @@ export class AIChatQueryLoop {
         sourceUserMessageId: input.sourceUserMessageId,
         intentDecisionId: input.intentDecisionId,
         ownerAgentId: input.ownerAgentId,
+        // B11/M-FR-07: the root (parent) conversation rides the tool
+        // context so browser sessions started by a sub-agent record it.
+        rootConversationId: input.rootConversationId,
         outboundAuthorization: meta.outboundAuthorization,
         skipPermissionCheck: call.name === OUTBOUND_EMAIL_DRAFT_TOOL,
         emitProgress: (event) => {
@@ -6632,7 +6723,7 @@ export class AIChatQueryLoop {
     // H5: expiry is decided on the MONOTONIC clock anchored when the job was
     // admitted (`deadlinePerfMs`); a wall-clock change can never extend or
     // truncate the job. `deadlineAt` (epoch) survives only for display.
-    const deadlinePerfAt =
+    let deadlinePerfAt =
       deadlinePerfMs ??
       performance.now() +
         Math.min(deadlineMs ?? ASYNC_POLL_MAX_MS, ASYNC_POLL_MAX_MS);
@@ -6715,7 +6806,18 @@ export class AIChatQueryLoop {
     );
 
     // eslint-disable-next-line no-constant-condition -- poll loop; all exits are explicit returns inside
-    while (true) {
+    // PRD C-FR-09: time while the job (or any child task) reports
+    // waiting_for_user/paused is EXCLUDED from the poll deadline. The
+    // deadline is frozen while waiting and extended by the waited amount
+    // on resume, so a 45-minute handoff never trips ASYNC_POLL_MAX_MS.
+    let userWaitSincePerfMs: number | null = null;
+    // C03/C-FR-09: one grace window before expiry — the batch watchdog
+    // flags a user wait on a 1s interval, so a wait that STARTED just
+    // before the deadline may not be flagged yet at the exact deadline
+    // tick. The grace gives it time to land; a confirmed wait then
+    // extends the deadline through the normal freeze path.
+    let deadlineGraceTaken = false;
+    for (;;) {
       // B07: wake on the EXACT deadline, not up to one tick (15 s) late —
       // the poll interval is only a backstop; the absolute deadline governs
       // the longest wait between wakes. The §10.3 backoff interval
@@ -6744,6 +6846,27 @@ export class AIChatQueryLoop {
         );
       }
 
+      // Freeze the deadline while the user is being waited for: the
+      // wait state is read through the non-accounting probe so the
+      // backoff/rate-limit bookkeeping is unaffected.
+      const userWait = registry.isWaitingForUser(jobId);
+      if (userWait.waiting) {
+        userWaitSincePerfMs = userWaitSincePerfMs ?? performance.now();
+      } else if (userWaitSincePerfMs !== null) {
+        deadlinePerfAt += performance.now() - userWaitSincePerfMs;
+        userWaitSincePerfMs = null;
+        // C03: a flagged wait just extended the deadline — the NEXT
+        // deadline approach gets a fresh grace window (the watchdog
+        // latency race re-opens every time).
+        deadlineGraceTaken = false;
+      }
+
+      if (performance.now() >= deadlinePerfAt && !deadlineGraceTaken) {
+        // C03/C-FR-09: first arrival at the deadline grants ONE grace
+        // window (watchdog flag latency) before the turn expires.
+        deadlineGraceTaken = true;
+        deadlinePerfAt += ASYNC_POLL_DEADLINE_GRACE_MS;
+      }
       if (performance.now() >= deadlinePerfAt) {
         // PRD §11.8: expiry must CANCEL the job and stop its browser before
         // returning — never tell the model to retry while the original

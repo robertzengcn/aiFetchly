@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 
 import {
   ManagedBrowserCacheWorkerClient,
@@ -84,7 +85,7 @@ function makeHarness(autoReady = true): Harness {
           worker.emit(
             "message",
             JSON.stringify({
-              protocolVersion: 1,
+              protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
               requestId: "evt-cache-worker-ready",
               sequence: 1,
               type: "WORKER_READY",
@@ -117,7 +118,7 @@ function replyTo(
     throw new Error("nothing posted");
   }
   const message = {
-    protocolVersion: 1,
+    protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
     requestId: request.requestId,
     sequence: worker.posted.length + 1,
     type,
@@ -248,7 +249,7 @@ describe("ManagedBrowserCacheWorkerClient", () => {
     worker.emit(
       "message",
       JSON.stringify({
-        protocolVersion: 1,
+        protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
         requestId: request.requestId,
         sequence: 0,
         type: "SCAN_SCOPE_RESULT",
@@ -332,7 +333,7 @@ describe("ManagedBrowserCacheWorkerClient", () => {
     worker.emit(
       "message",
       JSON.stringify({
-        protocolVersion: 1,
+        protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
         requestId: request.requestId,
         sequence: 99,
         type: "SHUTDOWN_ACK",

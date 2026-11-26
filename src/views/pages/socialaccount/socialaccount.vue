@@ -8,6 +8,8 @@
     <div class="tables_page">
       <SocialaccountTable />
     </div>
+    <!-- R09/Q-01: the ONE-TIME existing-account opt-in prompt. -->
+    <AiOptInPromptDialog />
   </AppPageShell>
 </template>
 <script setup lang="ts">
@@ -15,6 +17,7 @@
 import { ref, onMounted } from 'vue';
 import AppPageShell from '@/views/components/pageTemplates/AppPageShell.vue';
 import SocialaccountTable from '@/views/pages/socialaccount/widgets/SocialaccountTable.vue'
+import AiOptInPromptDialog from '@/views/pages/socialaccount/AiOptInPromptDialog.vue';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const dialog = ref(false);
 

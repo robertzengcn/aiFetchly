@@ -21,9 +21,11 @@ import {
 import {
   isSensitiveInputType,
   redactSecrets,
+  redactTrustedSecrets,
 } from "@/childprocess/managed-browser/ResultSanitizer";
+import { sanitizeUrlForReport } from "@/childprocess/managed-browser/NavigationPolicy";
 import {
-  READ_ELEMENT_DESCRIPTOR_SCRIPT,
+  readElementDescriptor,
   type LiveElementDescriptor,
 } from "@/childprocess/managed-browser/BrowserObservationService";
 
@@ -97,6 +99,7 @@ export interface BrowserProgramOutcome {
     | "stale_page_reference"
     | "navigation_blocked"
     | "handoff_required"
+    | "unknown_effect"
     | null;
   /** Structured handoff reason when stopCode is handoff_required. */
   readonly handoffReason?: string;
@@ -110,11 +113,153 @@ export interface ExecuteProgramOptions {
   readonly shouldCancel: () => boolean;
   readonly now?: () => number;
   readonly navigateTimeoutMs?: number;
+  /**
+   * E13/D-FR-16: URL keys (origin+path+query+fragment) observed as link
+   * hrefs — a NAVIGATE in the accelerated path must target one of these
+   * or the current page; an unobserved path on an allowed host is
+   * rejected.
+   */
+  readonly observedUrlKeys?: ReadonlySet<string>;
+  readonly currentPageKey?: string | null;
+  /**
+   * E15/D-FR-26: the executor sets this flag the moment a mutating input
+   * call is INVOKED (click/type/select/press/goto). The module's
+   * step-timeout path reads it to classify the timeout as known no-effect
+   * vs unknown.
+   */
+  readonly dispatchFlag?: { inputDispatched: boolean };
+  /** E15: per-leaf progress hook (module-side dispatch tracking). */
+  readonly onLeaf?: (info: { inputDispatched: boolean }) => void;
 }
 
 type StopCode = NonNullable<BrowserProgramOutcome["stopCode"]>;
 
 const POLL_INTERVAL_MS = 250;
+
+// F02: real page functions so Puppeteer binds the element handle.
+function probeInputElementTypeFn(el: HTMLInputElement): string | null {
+  if (!el || el.tagName !== 'INPUT') return null;
+  const type = (el.getAttribute('type') || 'text').toLowerCase();
+  const auto = el.getAttribute('autocomplete') || '';
+  if (type === 'password') return 'password';
+  if (/one-time-code|otp/i.test(auto)) return 'otp';
+  if (/cc-number/i.test(auto)) return 'card';
+  if (/passkey|webauthn/i.test(auto)) return 'passkey';
+  return type;
+}
+
+function clearElementValueFn(el: HTMLInputElement): void {
+  el.value = '';
+}
+
+function clearElementWithEventFn(el: HTMLInputElement): void {
+  el.value = '';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * P1/D-FR-17 + R02: validate AND commit the selection in ONE page-side
+ * pass. Positional o_N tokens resolve against the LIVE select's options
+ * and the selection is applied BY INDEX — the exact native option
+ * identity survives duplicate values (select-by-value would always pick
+ * the first equal option) — and the DOM cannot change between
+ * validation and commit because both run in the same function.
+ * N09: the LIVE option value must still match the value OBSERVED when
+ * the decision was made; a stale throw happens BEFORE any mutation —
+ * a proven no-effect failure the runner can reobserve from.
+ */
+export function selectOptionsByIdentityFn(
+  el: HTMLSelectElement,
+  values: string[],
+  expectedValues: string[] | null
+): { ok: boolean; selectedValues: string[] } {
+  const indexes: number[] = [];
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i];
+    const match = /^o_(\d+)$/.exec(value);
+    if (!match) {
+      // Non-positional value: resolve by value, still verified against
+      // the expected binding when one exists.
+      const expected = expectedValues?.[i];
+      const option = Array.from(el.options ?? []).find(
+        (o) => o.value === value
+      );
+      if (!option) {
+        throw new Error("stale_select_option");
+      }
+      if (
+        expected !== undefined &&
+        expected !== null &&
+        option.value !== expected
+      ) {
+        throw new Error("stale_select_option");
+      }
+      indexes.push(Array.prototype.indexOf.call(el.options, option));
+      continue;
+    }
+    indexes.push(Number(match[1]));
+  }
+  // Validate EVERY option before mutating anything.
+  for (let i = 0; i < indexes.length; i++) {
+    const option = el.options?.[indexes[i]];
+    if (!option) {
+      throw new Error("stale_select_option");
+    }
+    // R02/D-FR-17: a DISABLED option (or one inside a disabled optgroup)
+    // can never take the selection — refusing is a proven no-effect, not
+    // a silent skip.
+    const group = option.parentElement;
+    if (
+      option.disabled === true ||
+      (group !== null &&
+        group.tagName === 'OPTGROUP' &&
+        (group as HTMLOptGroupElement).disabled === true)
+    ) {
+      throw new Error("option_disabled");
+    }
+    const expected = expectedValues?.[i];
+    if (
+      expected !== undefined &&
+      expected !== null &&
+      option.value !== expected
+    ) {
+      throw new Error("stale_select_option");
+    }
+  }
+  // Commit by index. R02/D-FR-17: the action semantics are REPLACE —
+  // a multi-select ends up with EXACTLY the requested options selected
+  // (the previous ADDS behavior left earlier selections in place, so a
+  // requested second value kept the first); a single-select picks the
+  // resolved one.
+  if (el.multiple) {
+    for (const option of Array.from(el.options)) {
+      option.selected = false;
+    }
+    for (const idx of indexes) {
+      el.options[idx].selected = true;
+    }
+  } else {
+    el.selectedIndex = indexes[0];
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return {
+    ok: true,
+    selectedValues: indexes.map((idx) => el.options?.[idx]?.value ?? ''),
+  };
+}
+
+function extractElementDataFn(el: Element): {
+  tag: string | null;
+  text: string;
+  href: string | null;
+} {
+  return {
+    tag: el.tagName ? el.tagName.toLowerCase() : null,
+    text: ((el as HTMLElement).innerText || (el as HTMLInputElement).value || '').slice(0, 2000),
+    href: el.tagName === 'A' ? ((el as HTMLAnchorElement).origin || null) : null,
+  };
+}
 
 export class BrowserActionExecutor {
   public async executeProgram(
@@ -209,7 +354,10 @@ export class BrowserActionExecutor {
       if (!outcome.success) {
         run.consecutiveFailures++;
         if (outcome.effectUnknown) {
+          // PRD D-FR-26: an unknown effect stops the program immediately
+          // later mutations must not run on top of an unverified state.
           run.effectUnknown = true;
+          return "unknown_effect";
         }
         if (outcome.stopCode) {
           return outcome.stopCode;
@@ -289,13 +437,26 @@ export class BrowserActionExecutor {
     stopCode?: StopCode;
     handoffReason?: string;
   }> {
+    // PRD D-FR-26: classify the failure phase. Once an input event may
+    // have been dispatched, a thrown error is effectUnknown: the page
+    // state can no longer be proven unchanged, so the action is never
+    // reported as a known no-effect failure.
+    const dispatch = { inputSent: false };
+    const bumpDispatch = (): void => {
+      dispatch.inputSent = true;
+      if (options.dispatchFlag) {
+        options.dispatchFlag.inputDispatched = true;
+      }
+      options.onLeaf?.({ inputDispatched: true });
+    };
     try {
       switch (action.type) {
         case "navigate":
-          return await this.doNavigate(action.url, options);
+          return await this.doNavigate(action.url, options, dispatch);
         case "click":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
+            bumpDispatch();
             await entry.element.click({ timeout: 5_000 });
             return { success: true };
           });
@@ -303,7 +464,8 @@ export class BrowserActionExecutor {
           return await this.withElement(action, options, async (entry) => {
             const inputType = await this.probeInputType(entry.element);
             if (inputType && isSensitiveInputType(inputType)) {
-              // Credential-like fields always force user handoff.
+              // Credential-like fields always force user handoff. This
+              // fails BEFORE any dispatch: a known no-effect failure.
               return {
                 success: false,
                 errorCode: "challenge_requires_handoff" as const,
@@ -312,18 +474,64 @@ export class BrowserActionExecutor {
               };
             }
             await entry.element.scrollIntoView();
-            // Clear then type with trusted input events; never echo the value.
-            await entry.element.evaluate("((el) => { el.value = ''; })");
+            // Clear then type with trusted input events; never echo the
+            // value. Clearing already mutates the field, so dispatch
+            // begins here: a later failure (partial typing, detach) is
+            // an unknown effect.
+            bumpDispatch();
+            await entry.element.evaluate(clearElementValueFn);
             await entry.element.type(action.value, { delay: 10 });
             return { success: true };
           });
         case "select":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
-            await entry.element.select(...action.values);
+            // P1/D-FR-17 + R02: validate AND commit in ONE page-side
+            // pass — the selection is applied BY INDEX (exact native
+            // identity; equal-valued options stay distinguishable) and
+            // the DOM cannot change between validation and commit.
+            // The evaluate is the first possible mutation, so inputSent
+            // covers it; a stale throw happens BEFORE the mutation and
+            // stays a PROVEN no-effect failure (effectUnknown: false)
+            // the runner reobserves from instead of halting on
+            // unknown_execution_effect.
+            bumpDispatch();
+            try {
+              await entry.element.evaluate<{ ok: boolean; selectedValues: string[] }>(
+                selectOptionsByIdentityFn,
+                action.values,
+                action.expected_values ?? null
+              );
+            } catch (error) {
+              if (
+                error instanceof Error &&
+                error.message.includes("stale_select_option")
+              ) {
+                return {
+                  success: false,
+                  errorCode: "stale_select_option" as const,
+                  effectUnknown: false,
+                };
+              }
+              // R02: a disabled requested option can never take the
+              // selection — the throw happens BEFORE any mutation, a
+              // proven no-effect the runner reobserves from.
+              if (
+                error instanceof Error &&
+                error.message.includes("option_disabled")
+              ) {
+                return {
+                  success: false,
+                  errorCode: "element_disabled" as const,
+                  effectUnknown: false,
+                };
+              }
+              throw error;
+            }
             return { success: true };
           });
         case "press_key":
+          bumpDispatch();
           await options.page.keyboard.press(action.key);
           return { success: true };
         case "scroll":
@@ -342,6 +550,7 @@ export class BrowserActionExecutor {
         case "hover":
           return await this.withElement(action, options, async (entry) => {
             await entry.element.scrollIntoView();
+            bumpDispatch();
             await entry.element.hover();
             return { success: true };
           });
@@ -359,20 +568,22 @@ export class BrowserActionExecutor {
               };
             }
             await entry.element.scrollIntoView();
-            await entry.element.evaluate(
-              "((el) => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); })"
-            );
+            bumpDispatch();
+            await entry.element.evaluate(clearElementWithEventFn);
             return { success: true };
           });
         case "go_back":
+          bumpDispatch();
           await options.page.evaluate("(() => history.back())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
         case "go_forward":
+          bumpDispatch();
           await options.page.evaluate("(() => history.forward())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
         case "reload":
+          bumpDispatch();
           await options.page.evaluate("(() => location.reload())()");
           options.registry.reset(options.registry.currentRevision + 1);
           return { success: true };
@@ -397,17 +608,21 @@ export class BrowserActionExecutor {
           return { success: false, errorCode: "action_not_allowed" };
       }
     } catch {
+      // Pre-dispatch failures (target resolution, stale refs, validation,
+      // read-only actions) are proven no-effect. Anything that threw
+      // after input dispatch is classified unknown (design section 7.3).
       return {
         success: false,
         errorCode: "internal_error",
-        effectUnknown: false,
+        effectUnknown: dispatch.inputSent,
       };
     }
   }
 
   private async doNavigate(
     url: string,
-    options: ExecuteProgramOptions
+    options: ExecuteProgramOptions,
+    dispatch: { inputSent: boolean }
   ): Promise<{
     success: boolean;
     errorCode?: ManagedBrowserErrorCode;
@@ -423,12 +638,71 @@ export class BrowserActionExecutor {
         stopCode: "navigation_blocked",
       };
     }
-    await options.page.goto(url, {
-      timeout:
-        options.navigateTimeoutMs ??
-        MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
-      waitUntil: "domcontentloaded",
-    });
+    // E13/D-FR-16 (defense in depth): the worker gate authorizes a
+    // navigation only against the CURRENT page or an OBSERVED link URL —
+    // an unobserved path on an allowed host is rejected even when the
+    // origin matches. Accelerated (non-public) sessions only.
+    if (
+      !options.navigation.publicBrowsing &&
+      options.observedUrlKeys !== undefined
+    ) {
+      try {
+        const u = new URL(url);
+        const key = `${u.origin}${u.pathname}${u.search}${u.hash}`;
+        const currentPage = options.currentPageKey ?? null;
+        const observed = options.observedUrlKeys.has(key);
+        const samePage = currentPage !== null && key === currentPage;
+        if (!observed && !samePage) {
+          return {
+            success: false,
+            errorCode: "navigation_blocked",
+            stopCode: "navigation_blocked",
+          };
+        }
+      } catch {
+        return {
+          success: false,
+          errorCode: "navigation_blocked",
+          stopCode: "navigation_blocked",
+        };
+      }
+    }
+    // A navigation that started but failed is an unknown effect (7.3).
+    dispatch.inputSent = true;
+    if (options.dispatchFlag) {
+      options.dispatchFlag.inputDispatched = true;
+    }
+    // R13/D-FR-26: the navigation dispatch fires the SAME per-leaf
+    // progress update as every other mutating command (bumpDispatch
+    // semantics) — a crash after the goto started is classified as
+    // dispatched, never pre-dispatch.
+    options.onLeaf?.({ inputDispatched: true });
+    try {
+      await options.page.goto(url, {
+        timeout:
+          options.navigateTimeoutMs ??
+          MANAGED_BROWSER_TIMEOUTS.navigationActionMs,
+        waitUntil: "domcontentloaded",
+      });
+    } catch (error) {
+      // N05/P-FR-04: a Chromium proxy failure surfaces as a TYPED proxy
+      // error (proxy_connect_failed / proxy_auth_failed / tunnel_failed)
+      // instead of a generic internal_error. The navigation already
+      // started, so the effect stays unknown (7.3). The classifier is
+      // LOCAL to the worker bundle: importing the main-process proxy
+      // selection service here crosses the chunk boundary and panics
+      // rolldown during the E2E artifact build.
+      const message = error instanceof Error ? error.message : String(error);
+      const classified = classifyWorkerProxyError(message);
+      if (classified) {
+        return {
+          success: false,
+          errorCode: classified,
+          effectUnknown: true,
+        };
+      }
+      throw error;
+    }
     // Navigation invalidates every reference (FR-TOOL-003).
     options.registry.reset(options.registry.currentRevision + 1);
     return { success: true, urlAfter: safeUrl(options.page) };
@@ -504,13 +778,7 @@ export class BrowserActionExecutor {
         continue;
       }
       const value = await lookup.entry.element
-        .evaluate<unknown>(
-          `((el) => ({
-            tag: el.tagName ? el.tagName.toLowerCase() : null,
-            text: (el.innerText || el.value || '').slice(0, 2000),
-            href: el.tagName === 'A' ? (el.origin || null) : null,
-          }))`
-        )
+        .evaluate<unknown>(extractElementDataFn)
         .catch(() => null);
       if (value != null) {
         extracted.push(redactSecrets(value));
@@ -563,9 +831,53 @@ export class BrowserActionExecutor {
       name: action.expectedName ?? lookup.entry.name,
     };
     const live = await lookup.entry.element
-      .evaluate<LiveElementDescriptor | null>(READ_ELEMENT_DESCRIPTOR_SCRIPT)
+      .evaluate<LiveElementDescriptor | null>(readElementDescriptor)
       .catch(() => null);
     if (!live || live.role !== expected.role || live.name !== expected.name) {
+      return {
+        success: false,
+        errorCode: "stale_page_reference",
+        elementFound: true,
+        stopCode: "stale_page_reference",
+      };
+    }
+    // V06/D-FR-15: revalidate the ENABLED state and hit-testability
+    // immediately before input — a control that became disabled or was
+    // covered after observation is a proven no-effect refusal (no input
+    // dispatched).
+    if (live.disabled === true) {
+      return {
+        success: false,
+        errorCode: "element_disabled",
+        elementFound: true,
+      };
+    }
+    if (live.occluded === true) {
+      return {
+        success: false,
+        errorCode: "element_occluded",
+        elementFound: true,
+      };
+    }
+    // D-FR-15: revalidate the target is actually VISIBLE/interactable
+    // immediately before input — bring it into view first (the dispatch
+    // cases scroll again; idempotent), then probe. An occluded or
+    // off-viewport control is a proven no-effect failure (no input has
+    // been dispatched).
+    try {
+      await lookup.entry.element.scrollIntoView();
+      const intersecting = await lookup.entry.element.isIntersectingViewport();
+      if (!intersecting) {
+        return {
+          success: false,
+          errorCode: "stale_page_reference",
+          elementFound: true,
+          stopCode: "stale_page_reference",
+        };
+      }
+    } catch {
+      // A handle that cannot be scrolled/probed is detached — the
+      // fingerprint read above succeeded, so treat as invisible.
       return {
         success: false,
         errorCode: "stale_page_reference",
@@ -582,16 +894,7 @@ export class BrowserActionExecutor {
   ): Promise<string | null> {
     try {
       return await element.evaluate<string | null>(
-        `((el) => {
-          if (!el || el.tagName !== 'INPUT') return null;
-          const type = (el.getAttribute('type') || 'text').toLowerCase();
-          const auto = el.getAttribute('autocomplete') || '';
-          if (type === 'password') return 'password';
-          if (/one-time-code|otp/i.test(auto)) return 'otp';
-          if (/cc-number/i.test(auto)) return 'card';
-          if (/passkey|webauthn/i.test(auto)) return 'passkey';
-          return type;
-        })()`
+        probeInputElementTypeFn
       );
     } catch {
       return null;
@@ -601,7 +904,11 @@ export class BrowserActionExecutor {
 
 function safeUrl(page: ExecutorPageLike): string {
   try {
-    return page.url();
+    // R03/A04: the ACTION-RESULT URL path applies the SAME containment
+    // as the observation path — a credential echoed into a navigated
+    // URL (exact trusted value first, then report-safe query scrubbing)
+    // never leaves the worker through an action result.
+    return redactTrustedSecrets(sanitizeUrlForReport(page.url())).slice(0, 2048);
   } catch {
     return "";
   }
@@ -663,4 +970,24 @@ export function validateProgramLimits(
     return { ok: false, errorCode: "result_too_large" };
   }
   return { ok: true };
+}
+
+/**
+ * N05/P-FR-04: Chromium error message → structured proxy reason. Local
+ * copy of BrowserProxySelectionService.classifyProxyError — the worker
+ * bundle must not reach into main-process modules (chunking).
+ */
+function classifyWorkerProxyError(
+  message: string
+): "tunnel_failed" | "proxy_auth_failed" | "proxy_connect_failed" | null {
+  if (/ERR_TUNNEL_CONNECTION_FAILED/i.test(message)) {
+    return "tunnel_failed";
+  }
+  if (/407|proxy authentication/i.test(message)) {
+    return "proxy_auth_failed";
+  }
+  if (/ERR_PROXY_CONNECTION_FAILED/i.test(message)) {
+    return "proxy_connect_failed";
+  }
+  return null;
 }

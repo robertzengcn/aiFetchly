@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { IsNull } from "typeorm";
 import { SqliteDb } from "@/config/SqliteDb";
 import { EmailMailboxActionService } from "@/service/emailOrganization/EmailMailboxActionService";
 import type {
@@ -13,6 +12,7 @@ import type {
   MailboxLocation,
   MoveResult,
   PresenceResult,
+  SentCopyAppendResult,
   ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
@@ -23,11 +23,8 @@ import { EmailReplyDraftEntity } from "@/entity/EmailReplyDraft.entity";
 import { EmailReplyApprovalEntity } from "@/entity/EmailReplyApproval.entity";
 import { EmailOrganizationAttemptEntity } from "@/entity/EmailOrganizationAttempt.entity";
 import { EmailOrganizationOperationModel } from "@/model/EmailOrganizationOperation.model";
-import { EmailOrganizationOperationEntity } from "@/entity/EmailOrganizationOperation.entity";
-import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes";
 
 let dbpath = "";
-let actionService: EmailMailboxActionService;
 let locationModel: EmailMessageLocationModel;
 
 interface ActionFakeState {
@@ -63,7 +60,7 @@ class BulkFakeAdapterShim implements EmailMailboxAdapter {
   async checkMessagePresent(): Promise<PresenceResult> {
     return { status: "present" };
   }
-  async appendSent() {
+  async appendSent(): Promise<SentCopyAppendResult> {
     return { status: "skipped" as const, reason: "no_sent_folder" };
   }
   async searchUids(): Promise<ServerSearchResult> {
@@ -109,14 +106,14 @@ class ActionFakeAdapter implements EmailMailboxAdapter {
   async appendSent(): Promise<{ status: "skipped"; reason: string }> {
     return { status: "skipped", reason: "no_sent_folder" };
   }
-  async searchUids() {
+  async searchUids(): Promise<ServerSearchResult> {
     return { status: "listed" as const, candidates: [], capped: false };
   }
 }
 
 class StubCapabilityService {
   constructor(private readonly trashFolder: string | null) {}
-  async getCapabilities(emailServiceId: number) {
+  async getCapabilities(emailServiceId: number): Promise<unknown> {
     return {
       emailServiceId,
       protocol: "imap" as const,
@@ -129,7 +126,7 @@ class StubCapabilityService {
       resolvedAt: new Date().toISOString(),
     };
   }
-  async getReceiveConfig(emailServiceId: number) {
+  async getReceiveConfig(emailServiceId: number): Promise<unknown> {
     return {
       emailServiceId,
       protocol: "imap" as const,
@@ -242,8 +239,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     await seedMessage(3001);
     await seedApprovedReplyDraft(3001);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => ({
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => ({
         status: "moved",
         destinationUidValidity: "99",
         destinationUid: "55",
@@ -293,8 +290,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   it("records a verified no-op when the message already sits in Trash", async () => {
     await seedMessage(3002, "Trash", "99");
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => {
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => {
         throw new Error("must not move");
       },
       trashFolder: "Trash",
@@ -314,8 +311,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   it("fails with CAPABILITY_UNSUPPORTED when the server lacks MOVE", async () => {
     await seedMessage(3003);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => ({ status: "no_move_capability" }),
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => ({ status: "no_move_capability" }),
       trashFolder: "Trash",
     });
     const service = new EmailMailboxActionService({
@@ -332,8 +329,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   it("marks the location stale on UIDVALIDITY change and never moves", async () => {
     await seedMessage(3004);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "uid_validity_changed" }),
-      moveResult: () => {
+      presence: (): PresenceResult => ({ status: "uid_validity_changed" }),
+      moveResult: (): MoveResult => {
         throw new Error("must not move");
       },
       trashFolder: "Trash",
@@ -351,8 +348,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   it("refuses TRASH_NOT_CONFIGURED without a resolvable Trash folder", async () => {
     await seedMessage(3005);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => ({ status: "no_move_capability" }),
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => ({ status: "no_move_capability" }),
       trashFolder: null,
     });
     const service = new EmailMailboxActionService({
@@ -366,8 +363,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   it("restores from a prior trash operation to the recorded original folder", async () => {
     await seedMessage(3006);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => ({ status: "moved", destinationUidValidity: "4242", destinationUid: "3006" }),
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => ({ status: "moved", destinationUidValidity: "4242", destinationUid: "3006" }),
       trashFolder: "Trash",
     });
     const service = new EmailMailboxActionService({
@@ -394,9 +391,9 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     await seedMessage(3007);
     const adapter = new ActionFakeAdapter({
       // Present at source during trash, absent during reconciliation probe.
-      presence: (location) =>
+      presence: (location: MailboxLocation): PresenceResult =>
         location.folderPath === "INBOX" ? { status: "present" } : { status: "absent" },
-      moveResult: (location) => {
+      moveResult: (location): MoveResult => {
         // Simulate a crash right after dispatch: the item stays claimed and
         // its lease expires; the message actually reached Trash.
         location.folderPath;
@@ -429,11 +426,11 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     await seedMessage(3008);
     let presenceCalls = 0;
     const adapter = new ActionFakeAdapter({
-      presence: () => {
+      presence: (): PresenceResult => {
         presenceCalls += 1;
         return presenceCalls === 1 ? { status: "present" } : { status: "absent" };
       },
-      moveResult: () => ({
+      moveResult: (): MoveResult => ({
         status: "failed",
         reasonCode: "OUTCOME_UNKNOWN",
         sanitizedError: "connection dropped",
@@ -457,10 +454,7 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   async function buildCrashWindow(messageId: number): Promise<string> {
     // Simulate a crash AFTER the remote move + evidence write but BEFORE the
     // local commit: the item stays CLAIMED with a lease that then expires.
-    const { EmailOrganizationAttemptEntity } = await import(
-      "@/entity/EmailOrganizationAttempt.entity"
-    );
-    const opModel = new EmailOrganizationOperationModel(dbpath);
+        const opModel = new EmailOrganizationOperationModel(dbpath);
     const operationId = `op-crash-${messageId}`;
     await opModel.createOperation({
       operationId,
@@ -506,11 +500,11 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     // Source folder: message gone (moved). Mapped destination: present.
     let presenceCalls = 0;
     const adapter = new ActionFakeAdapter({
-      presence: () => {
+      presence: (): PresenceResult => {
         presenceCalls += 1;
         return presenceCalls === 1 ? { status: "absent" } : { status: "present" };
       },
-      moveResult: () => ({
+      moveResult: (): MoveResult => ({
         status: "moved",
         destinationUidValidity: "99",
         destinationUid: "88",
@@ -541,13 +535,11 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     await seedMessage(3010);
     const operationId = await buildCrashWindow(3010);
     // Source: absent. Mapped destination: ABSENT → evidence inconclusive.
-    let presenceCalls = 0;
     const adapter = new ActionFakeAdapter({
-      presence: () => {
-        presenceCalls += 1;
-        return presenceCalls === 1 ? { status: "absent" } : { status: "absent" };
-      },
-      moveResult: () => ({
+      presence: (): PresenceResult => ({
+        status: "absent",
+      }),
+      moveResult: (): MoveResult => ({
         status: "moved",
         destinationUidValidity: "99",
         destinationUid: "66",
@@ -676,9 +668,9 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     // accept the ALREADY-APPLIED locator as idempotent success — not loop
     // forever on LOCAL_COMMIT_PENDING, and not re-move anything.
     const adapter = new ActionFakeAdapter({
-      presence: (location) =>
+      presence: (location: MailboxLocation): PresenceResult =>
         location.folderPath === "INBOX" ? { status: "absent" } : { status: "present" },
-      moveResult: () => {
+      moveResult: (): MoveResult => {
         throw new Error("reconcile must never re-move");
       },
       trashFolder: "Trash",
@@ -701,8 +693,8 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     await seedMessage(3114);
     await seedApprovedReplyDraft(3114);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => ({ status: "moved", destinationUidValidity: "99", destinationUid: "57" }),
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => ({ status: "moved", destinationUidValidity: "99", destinationUid: "57" }),
       trashFolder: "Trash",
     });
     const service = new EmailMailboxActionService({ adapter });
@@ -717,10 +709,10 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     const realModule = replyModule.replyDraftModule;
     // BOTH the invalidation AND the guard-row insert fail (the same DB fault).
     replyModule.replyDraftModule = {
-      invalidateUnsentDraftsForMessage: () => Promise.reject(new Error("invalidation failed")),
-      resolveInvalidationObligations: () => Promise.resolve(),
-      hasOpenInvalidationObligation: () => Promise.resolve(false),
-      recordInvalidationObligation: () => Promise.reject(new Error("obligation insert failed")),
+      invalidateUnsentDraftsForMessage: (): Promise<number> => Promise.reject(new Error("invalidation failed")),
+      resolveInvalidationObligations: (): Promise<void> => Promise.resolve(),
+      hasOpenInvalidationObligation: (): Promise<boolean> => Promise.resolve(false),
+      recordInvalidationObligation: (): Promise<void> => Promise.reject(new Error("obligation insert failed")),
     };
     const result = await service.trashMessage({ messageId: 3114, origin: "ui_action" });
     // The move is honestly unknown (never a clean success).
@@ -766,14 +758,14 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
   it("fault injection: an attempt-evidence WRITE FAILURE never breaks the honest move outcome", async () => {
     await seedMessage(3113);
     const adapter = new ActionFakeAdapter({
-      presence: () => ({ status: "present" }),
-      moveResult: () => ({ status: "moved", destinationUidValidity: "99", destinationUid: "3113T" }),
+      presence: (): PresenceResult => ({ status: "present" }),
+      moveResult: (): MoveResult => ({ status: "moved", destinationUidValidity: "99", destinationUid: "3113T" }),
       trashFolder: "Trash",
     });
     const service = new EmailMailboxActionService({ adapter });
     // The evidence write itself throws (db contention simulation).
     (service as unknown as { operationModule: { recordAttemptEvidence: () => Promise<void> } })
-      .operationModule.recordAttemptEvidence = () =>
+      .operationModule.recordAttemptEvidence = (): Promise<void> =>
       Promise.reject(new Error("evidence write failed"));
     const result = await service.trashMessage({ messageId: 3113, origin: "ui_action" });
     // The move STILL persists honestly: the item is succeeded, the location
@@ -788,7 +780,7 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
 });
 
 /** Helper: reconcile one operation with a fixed source presence answer. */
-async function service_reconcileHelper(
+async function _service_reconcileHelper(
   operationId: string,
   sourcePresence: "present" | "absent"
 ): Promise<void> {
@@ -796,9 +788,9 @@ async function service_reconcileHelper(
     "@/service/emailOrganization/EmailMailboxActionService"
   );
   const adapter = new ActionFakeAdapter({
-    presence: (location) =>
+    presence: (location: MailboxLocation): PresenceResult =>
       location.folderPath === "INBOX" ? { status: sourcePresence } : { status: "absent" },
-    moveResult: () => ({ status: "moved", destinationUidValidity: "99", destinationUid: "44" }),
+    moveResult: (): MoveResult => ({ status: "moved", destinationUidValidity: "99", destinationUid: "44" }),
     trashFolder: "Trash",
   });
   const service = new Service({ adapter });

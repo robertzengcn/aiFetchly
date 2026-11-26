@@ -1,4 +1,5 @@
 import { installWorkerShutdownResponder } from "@/childprocess/lib/workerShutdownResponder";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 import { log } from "@/modules/Logger";
 import {
   managedBrowserInboundSchema,
@@ -10,6 +11,7 @@ import {
   MANAGED_BROWSER_TIMEOUTS,
 } from "@/config/managedBrowser";
 import { WorkerSession } from "@/childprocess/managed-browser/WorkerSession";
+import { sanitizeWorkerText } from "@/childprocess/managed-browser/ResultSanitizer";
 
 /**
  * Managed-browser worker entry (technical design §4/§8).
@@ -69,13 +71,13 @@ const session = new WorkerSession({
 });
 
 function baseMessage(requestId: string): {
-  protocolVersion: 1;
+  protocolVersion: typeof MANAGED_BROWSER_PROTOCOL_VERSION;
   sessionId: string;
   requestId: string;
   sequence: number;
 } {
   return {
-    protocolVersion: 1,
+    protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
     sessionId,
     requestId,
     sequence: nextSequence(),
@@ -92,7 +94,11 @@ function sendWorkerError(
       ...baseMessage(requestId),
       type: "WORKER_ERROR",
       code,
-      message: message.slice(0, 300),
+      // B04/A-FR-08: error text is runtime/page-authored free-form — the
+      // same scrubbing invariant as every other outbound field (a
+      // navigation error can echo a URL that embeds a filled credential;
+      // redaction applies BEFORE the length cap).
+      message: sanitizeWorkerText(message, 300),
     })
   );
 }
@@ -200,9 +206,72 @@ parentPort.on("message", async (event: { data: unknown }) => {
       case "RESUME_HANDOFF":
         await session.resumeFromHandoff(message.requestId);
         return;
+      case "SET_COOKIES": {
+        const cookiesMsg = message as Extract<
+          ManagedBrowserInboundMessage,
+          { type: "SET_COOKIES" }
+        >;
+        await session.setCookies(cookiesMsg.requestId, cookiesMsg.cookies);
+        return;
+      }
       case "VERIFY_MANUAL_LOGIN":
         await session.verifyManualLogin(message.requestId);
         return;
+      case "PAUSE_REQUEST":
+        // T24/C-FR-05: same safe-point abort as cancel; executed results
+        // ride the ACTION_RESULT, and the module moves the session to
+        // user control afterwards.
+        session.pauseCurrent();
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+            reasonCode: "user_paused",
+          })
+        );
+        return;
+      case "FOCUS_WINDOW": {
+        // R01/C-FR-10: EXPLICIT user-requested focus ("Open browser") —
+        // the sanctioned bringToFront path; launches never steal focus.
+        // N08: a headless/closed window is an HONEST failure — the
+        // worker replies with a typed error instead of success.
+        const focused = await session.focusWindow();
+        if (!focused) {
+          parentPort.postMessage(
+            JSON.stringify({
+              ...baseMessage(message.requestId),
+              type: "WORKER_ERROR",
+              errorCode: "focus_unavailable",
+              message: "window not focusable (headless or closed)",
+            })
+          );
+          return;
+        }
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+          })
+        );
+        return;
+      }
+      case "RETITLE_WINDOW": {
+        // C04/M-FR-13: the OS-window marker follows control — "ai" names
+        // the AI controller; "user" marks a takeover. Only document.title
+        // is touched; best-effort (a headless page replies anyway).
+        const retitled = await session.retitleWindow(message.prefix);
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+            reasonCode: retitled ? "window_retitled" : "window_headless",
+          })
+        );
+        return;
+      }
       case "CANCEL_REQUEST":
         session.cancelCurrent();
         parentPort.postMessage(
@@ -211,6 +280,40 @@ parentPort.on("message", async (event: { data: unknown }) => {
             type: "SESSION_STATE_CHANGED",
             state: session.state,
             reasonCode: "cancelled",
+          })
+        );
+        return;
+      case "FILL_LOGIN_FORM":
+        // PRD A-FR-08: the password lives only inside this call.
+        await session.fillLoginForm(message.requestId, {
+          mode: message.mode,
+          allowedDomainSuffixes: message.allowedDomainSuffixes,
+          recipe: message.recipe,
+          username: message.username,
+          password: message.password,
+        });
+        return;
+      case "BIND_PLATFORM":
+        await session.bindPlatform(message.requestId, {
+          platform: message.platform,
+          captureCookies: message.captureCookies,
+        });
+        return;
+      case "PIN_OBSERVATION":
+        // PRD D-FR-15a: keep a pending observation's refs resolvable.
+        if (message.pinned) {
+          session.pinObservation(message.observationId);
+        } else {
+          session.unpinObservation(message.observationId);
+        }
+        parentPort.postMessage(
+          JSON.stringify({
+            ...baseMessage(message.requestId),
+            type: "SESSION_STATE_CHANGED",
+            state: session.state,
+            reasonCode: message.pinned
+              ? "observation_pinned"
+              : "observation_unpinned",
           })
         );
         return;

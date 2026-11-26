@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createI18n } from "vue-i18n";
+import { resetHandoffDialogQueueForTest } from "@/views/components/aiChatV2/handoffDialogQueue";
 import { defineComponent, nextTick, type Component } from "vue";
 import ManagedBrowserSessionCard from "@/views/components/aiChatV2/ManagedBrowserSessionCard.vue";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
@@ -51,6 +52,11 @@ function status(
     platformId: 2,
     accountLabel: "My Channel",
     platformLabel: "YouTube",
+      ownerConversationId: null,
+      rootConversationId: null,
+      effectiveProxyId: null,
+      proxyHostLabel: null,
+      proxyCountry: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",
@@ -149,6 +155,8 @@ function capturedStatusCallback(): (s: SafeManagedBrowserStatus) => void {
 beforeEach(() => {
   vi.clearAllMocks();
   apiMocks.listActiveSessions.mockImplementation(async () => []);
+  // R06: the app-wide dialog queue resets between tests.
+  resetHandoffDialogQueueForTest();
 });
 
 describe("ManagedBrowserSessionCard", () => {
@@ -739,4 +747,169 @@ it("renders and stops an account-free public browser session", async () => {
   await wrapper.find("[data-testid='mb-btn-stop']").trigger("click");
   expect(apiMocks.stopManagedBrowser).toHaveBeenCalled();
   wrapper.unmount();
+});
+
+// ---------------------------------------------------------------------------
+// W06/M-FR-08: notice routing — a notice for ANOTHER conversation (neither
+// the displayed session's owner nor its root) never renders here, and a
+// notice carrying a task label renders it.
+// ---------------------------------------------------------------------------
+it("drops a notice published on a foreign conversation and renders task labels", async () => {
+  apiMocks.listActiveSessions.mockImplementation(async () => [
+    status({
+      ownerConversationId: "conv-owner",
+      rootConversationId: "conv-root",
+    }),
+  ]);
+  const wrapper = mountCard();
+  await vi.waitFor(() =>
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(true)
+  );
+  const noticeMock = apiMocks.onManagedBrowserChatNotice;
+  const push = noticeMock.mock.calls[noticeMock.mock.calls.length - 1][0] as (
+    payload: unknown
+  ) => void;
+  // A challenge notice from a SECOND parent conversation: dropped.
+  push({
+    eventId: "evt-foreign",
+    sessionId: "mb_other000000001",
+    conversationId: "conv-second-parent",
+    type: "challenge_detected",
+    severity: "warning",
+    taskLabel: "Browser task 2/3",
+  });
+  await nextTick();
+  expect(
+    wrapper.findAll("[data-testid='mb-session-notices'] li")
+  ).toHaveLength(0);
+  // The displayed session's own notice (root conversation, task label).
+  push({
+    eventId: "evt-own",
+    sessionId: "mb_test000000001",
+    conversationId: "conv-root",
+    type: "challenge_detected",
+    severity: "warning",
+    taskLabel: "Browser task 2/3",
+  });
+  await nextTick();
+  const items = wrapper.findAll("[data-testid='mb-session-notices'] li");
+  expect(items).toHaveLength(1);
+  expect(items[0].text()).toContain("Browser task 2/3");
+  wrapper.unmount();
+});
+
+// ---------------------------------------------------------------------------
+// C04/C-FR-10: sibling-session safety and queue promotion — a sibling's
+// terminal event never clears the displayed session; after the displayed
+// session stops, a NEW active session is adopted; releasing the one
+// handoff dialog slot PROMOTES the next waiting card without waiting for
+// its own refresh.
+// ---------------------------------------------------------------------------
+describe("ManagedBrowserSessionCard sibling sessions (C04)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMocks.listActiveSessions.mockImplementation(async () => []);
+    resetHandoffDialogQueueForTest();
+  });
+
+  it("a sibling session's terminal event does NOT clear the displayed session", async () => {
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    push(status({ state: "ready" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      true
+    );
+    // A DIFFERENT session dies — the card's session (mb_test000000001)
+    // stays on screen.
+    push(status({ sessionId: "mb_sibling00001", state: "stopped" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      true
+    );
+    expect(wrapper.text()).toContain("My Channel");
+    // The DISPLAYED session's own terminal still tears the card down.
+    push(status({ state: "stopped" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      false
+    );
+  });
+
+  it("adopts a NEW active session after the displayed one stops (two siblings)", async () => {
+    const wrapper = mountCard();
+    await nextTick();
+    const push = capturedStatusCallback();
+    push(status({ state: "ready" }));
+    await nextTick();
+    push(status({ state: "stopped" }));
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      false
+    );
+    // The sibling task's session goes active — the card adopts it (the
+    // ignore rule only protects the LIVE displayed session).
+    push(
+      status({
+        sessionId: "mb_sibling00002",
+        state: "ready",
+        accountLabel: "Other Account",
+      })
+    );
+    await nextTick();
+    expect(wrapper.find("[data-testid='mb-session-card']").exists()).toBe(
+      true
+    );
+    expect(wrapper.text()).toContain("Other Account");
+  });
+
+  it("releasing the handoff dialog slot promotes the next waiting card", async () => {
+    const first = mountCard();
+    await nextTick();
+    // With TWO cards mounted, the subscription callbacks are INDEXED by
+    // mount order — capturedStatusCallback() (the LAST one) is the
+    // second card's, not the first's.
+    const pushFor = (index: number): (s: SafeManagedBrowserStatus) => void =>
+      apiMocks.onManagedBrowserStatusChanged.mock.calls[index]![0];
+    const pushFirst = pushFor(0);
+    pushFirst(status({ state: "handoff", handoffReason: "challenge_unresolved" }));
+    await nextTick();
+    expect(
+      first.find("[data-testid='mb-handoff-dialog-stub']").exists()
+    ).toBe(true);
+
+    // A SECOND card waits — it holds no dialog.
+    const second = mountCard();
+    await nextTick();
+    const pushSecond = pushFor(1);
+    pushSecond(
+      status({
+        sessionId: "mb_second000001",
+        state: "handoff",
+        handoffReason: "login_required",
+      })
+    );
+    await nextTick();
+    // The dialog stub renders with the card; the OPEN state carries the
+    // claim — a waiting card's dialog is CLOSED.
+    expect(
+      second
+        .find("[data-testid='mb-handoff-dialog-stub']")
+        .attributes("data-open")
+    ).toBe("false");
+
+    // The first session leaves the handoff (stopped) — the SECOND card's
+    // dialog opens WITHOUT its own status refresh (auto-promotion).
+    pushFirst(status({ state: "stopped" }));
+    await nextTick();
+    await nextTick();
+    // The first holder released → the queue PROMOTED the second card and
+    // notified it — its dialog opened WITHOUT its own status refresh.
+    expect(
+      second
+        .find("[data-testid='mb-handoff-dialog-stub']")
+        .attributes("data-open")
+    ).toBe("true");
+  });
 });

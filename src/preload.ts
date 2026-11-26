@@ -104,6 +104,11 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+  SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
+  SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+  SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+  BROWSER_SITE_LIST,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
@@ -600,6 +605,16 @@ import {
   MANAGED_BROWSER_RESUME,
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
+  MANAGED_BROWSER_CREDENTIAL_REQUEST,
+  MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
+  MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
+  MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
+  MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
+  MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+  MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
+  MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
+  MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
   MANAGED_BROWSER_CANCEL_ACTIVE,
   MANAGED_BROWSER_CAPTURE_SCREENSHOT,
   MANAGED_BROWSER_EXTEND_HANDOFF,
@@ -608,10 +623,17 @@ import {
   MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
   MANAGED_BROWSER_CLEAR_CACHE,
   MANAGED_BROWSER_UPDATE_SETTINGS,
+      BROWSER_TASK_PAUSE,
+      BROWSER_TASK_TAKE_CONTROL,
+      BROWSER_TASK_RESUME,
+      BROWSER_TASK_STOP,
+      BROWSER_TASK_FOCUS_WINDOW,
+      BROWSER_BATCH_RETURN_NOW,
   MANAGED_BROWSER_STATUS_EVENT,
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_BATCH_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
   // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
   AI_CONTENT_REPORT_CAPABILITIES,
@@ -809,6 +831,7 @@ contextBridge.exposeInMainWorld("api", {
       MANAGED_BROWSER_PROGRESS_EVENT,
       MANAGED_BROWSER_APPROVAL_EVENT,
       MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_BATCH_EVENT,
       MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Subscription entitlement snapshot broadcast (main -> renderer)
       USER_INFO_UPDATED,
@@ -912,6 +935,7 @@ contextBridge.exposeInMainWorld("api", {
       MANAGED_BROWSER_PROGRESS_EVENT,
       MANAGED_BROWSER_APPROVAL_EVENT,
       MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_BATCH_EVENT,
       MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Intent-Aware Outbound Email Delivery — per-recipient worker progress (§17)
       OUTBOUND_EMAIL_BATCH_PROGRESS,
@@ -968,6 +992,7 @@ contextBridge.exposeInMainWorld("api", {
       MANAGED_BROWSER_PROGRESS_EVENT,
       MANAGED_BROWSER_APPROVAL_EVENT,
       MANAGED_BROWSER_CHAT_NOTICE_EVENT,
+  MANAGED_BROWSER_BATCH_EVENT,
       MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
       // Subscription entitlement snapshot broadcast (main -> renderer)
       USER_INFO_UPDATED,
@@ -1007,6 +1032,11 @@ contextBridge.exposeInMainWorld("api", {
       "socialaccount:detail",
       "socialaccount:delete",
       SOCIAL_ACCOUNT_SESSION_METADATA,
+      SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+  SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
+  SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+      SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+      BROWSER_SITE_LIST,
       SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
       SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
       SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
@@ -1555,6 +1585,16 @@ contextBridge.exposeInMainWorld("api", {
       MANAGED_BROWSER_RESUME,
       MANAGED_BROWSER_STOP,
       MANAGED_BROWSER_APPROVE,
+      MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
+      MANAGED_BROWSER_CREDENTIAL_REQUEST,
+      MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
+      MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
+      MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
+      MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
+      MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+      MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
+      MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
+      MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
       MANAGED_BROWSER_CANCEL_ACTIVE,
       MANAGED_BROWSER_CAPTURE_SCREENSHOT,
       MANAGED_BROWSER_EXTEND_HANDOFF,
@@ -1563,6 +1603,13 @@ contextBridge.exposeInMainWorld("api", {
       MANAGED_BROWSER_ISSUE_CLEAR_CONFIRMATION,
       MANAGED_BROWSER_CLEAR_CACHE,
       MANAGED_BROWSER_UPDATE_SETTINGS,
+      // F21: browser task/batch control verbs (validated handlers).
+      BROWSER_TASK_PAUSE,
+      BROWSER_TASK_TAKE_CONTROL,
+      BROWSER_TASK_RESUME,
+      BROWSER_TASK_STOP,
+      BROWSER_TASK_FOCUS_WINDOW,
+      BROWSER_BATCH_RETURN_NOW,
       // AI Content Reporting capabilities — NOT AI-gated (PRD FR-4.4)
       AI_CONTENT_REPORT_CAPABILITIES,
       // Intent-Aware Outbound Email Delivery (§17) — review/approve/send lifecycle.
@@ -1590,6 +1637,86 @@ contextBridge.exposeInMainWorld("api", {
     }
   },
 });
+
+// E01/D-AC-02/06/09: the APP-PATH acceptance hooks - exposed ONLY when the
+// E2E launch env opts in (the main-process bridge is gated identically).
+// The hooks drive the REAL production accelerated-task path (startSession +
+// executeTask) against the loopback fixture; product behavior is unchanged
+// otherwise.
+if (process.env.AIFETCHLY_E2E_APP_HOOKS === "1") {
+  contextBridge.exposeInMainWorld("__e2e", {
+    executeTask: (input: {
+      readonly startUrl: string;
+      readonly goal: string;
+      readonly completionCriteria?: ReadonlyArray<{
+        kind: string;
+        value: string;
+      }>;
+      readonly flipProviderMidTask?: boolean;
+      readonly stopAfterMs?: number;
+    }): Promise<{
+      status: string;
+      reason: string;
+      finalObservation: { url: string | null } | null;
+      sessionId: string | null;
+      evidence: string[];
+    }> =>
+      ipcRenderer.invoke(
+        "managed-browser:e2e:execute-task",
+        input
+      ) as unknown as Promise<{
+        status: string;
+        reason: string;
+        finalObservation: { url: string | null } | null;
+        sessionId: string | null;
+        evidence: string[];
+      }>,
+    runBatchAndStop: (input: {
+      readonly stopAfterMs?: number;
+      readonly goals: readonly string[];
+      readonly executor?: "fast_runner" | "llm_agent";
+      readonly subAgentModel?: string | null;
+    }): Promise<{
+      batchId: string;
+      statuses: string[];
+      openSessions: number;
+      metrics?: {
+        wallMs: number;
+        tokensUsed: number;
+        attempts: number;
+        phases: {
+          observationMs: number;
+          decideMs: number;
+          executeMs: number;
+          verifyMs: number;
+        };
+        parentContextBytes: number;
+      };
+      rows: Array<Record<string, unknown>>;
+    }> =>
+      ipcRenderer.invoke(
+        "managed-browser:e2e:run-batch",
+        input
+      ) as unknown as Promise<{
+        batchId: string;
+        statuses: string[];
+        openSessions: number;
+        metrics?: {
+          wallMs: number;
+          tokensUsed: number;
+          attempts: number;
+          phases: {
+            observationMs: number;
+            decideMs: number;
+            executeMs: number;
+            verifyMs: number;
+          };
+          parentContextBytes: number;
+        };
+        rows: Array<Record<string, unknown>>;
+      }>,
+  });
+}
 
 // Dedicated diagnostics bridge for renderer-originated error reports.
 // Kept separate from the generic `api` whitelist so the renderer entry point

@@ -94,7 +94,7 @@ function event(overrides: Partial<ConversationSummaryEvent>): ConversationSummar
 }
 
 beforeEach(() => {
-  localStorage.clear();
+  window.localStorage?.clear();
   setActivePinia(createPinia());
   bootstrapWorkspaceMock.mockReset();
   bootstrapWorkspaceMock.mockResolvedValue({

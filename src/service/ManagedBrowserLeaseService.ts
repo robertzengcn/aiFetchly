@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
+import { MANAGED_BROWSER_GLOBAL_SESSION_LIMIT } from "@/config/managedBrowser";
 
 /**
  * Managed-browser account leases (technical design §7.2).
@@ -18,46 +19,81 @@ import { v4 as uuidv4 } from "uuid";
  */
 
 export interface AccountLease {
-  readonly accountId: number;
+  /** Lease key: `account:<id>` or `public:<sessionId>` (PRD M-FR-06). */
+  readonly leaseKey: string;
   readonly sessionId: string;
   readonly leaseToken: string;
   readonly acquiredAt: number;
   readonly ownerConversationId: string | null;
+  /** Owning agent task for sub-agent driven sessions (PRD M-FR-07). */
+  readonly ownerAgentTaskId: string | null;
 }
 
 export interface AcquireLeaseInput {
   readonly sessionId: string;
   readonly ownerConversationId: string | null;
+  readonly ownerAgentTaskId?: string | null;
 }
 
 export type AcquireLeaseResult =
   | { readonly status: "granted"; readonly leaseToken: string }
-  /** Same owner requested the same account: return the live session. */
+  /** Same owner requested the same key: return the live session. */
   | { readonly status: "already_active"; readonly sessionId: string }
-  /** A different owner holds the account. No owner details are exposed. */
+  /** A different owner holds the key. No owner details are exposed. */
   | { readonly status: "account_in_use" }
   | { readonly status: "global_limit_reached" };
+
+/** Lease key for an account-backed session (one session per account). */
+export function accountLeaseKey(accountId: number): string {
+  return `account:${accountId}`;
+}
+
+/**
+ * Lease key for an account-free session. Keying by session id lets several
+ * public sessions run in parallel instead of serializing on account 0.
+ */
+export function publicSessionLeaseKey(sessionId: string): string {
+  return `public:${sessionId}`;
+}
 
 export type ReleaseLeaseResult = "released" | "not_held" | "token_mismatch";
 
 export class ManagedBrowserLeaseService {
-  private readonly leases = new Map<number, AccountLease>();
-  private readonly globalLimit: number;
+  private readonly leases = new Map<string, AccountLease>();
+  private globalLimit: number;
 
-  constructor(globalLimit = 1) {
+  constructor(globalLimit = MANAGED_BROWSER_GLOBAL_SESSION_LIMIT) {
     this.globalLimit = globalLimit;
   }
 
-  public acquire(
-    accountId: number,
-    input: AcquireLeaseInput
-  ): AcquireLeaseResult {
-    const existing = this.leases.get(accountId);
+  /** PRD M-FR-06: the concurrent-session limit is setting-backed. */
+  public setGlobalLimit(limit: number): void {
+    if (Number.isFinite(limit) && limit >= 1) {
+      this.globalLimit = Math.floor(limit);
+    }
+  }
+
+  public getGlobalLimit(): number {
+    return this.globalLimit;
+  }
+
+  public acquire(leaseKey: string, input: AcquireLeaseInput): AcquireLeaseResult {
+    const existing = this.leases.get(leaseKey);
     if (existing) {
       if (
         input.ownerConversationId != null &&
         existing.ownerConversationId === input.ownerConversationId
       ) {
+        // N05/M-FR-06: bind reuse to the unique owning task when BOTH are
+        // known — two tasks in one conversation (main chat plus runner,
+        // or two sub-agents) must not share a session.
+        if (
+          existing.ownerAgentTaskId != null &&
+          input.ownerAgentTaskId != null &&
+          existing.ownerAgentTaskId !== input.ownerAgentTaskId
+        ) {
+          return { status: "account_in_use" };
+        }
         return { status: "already_active", sessionId: existing.sessionId };
       }
       return { status: "account_in_use" };
@@ -66,13 +102,14 @@ export class ManagedBrowserLeaseService {
       return { status: "global_limit_reached" };
     }
     const lease: AccountLease = {
-      accountId,
+      leaseKey,
       sessionId: input.sessionId,
       leaseToken: uuidv4(),
       acquiredAt: Date.now(),
       ownerConversationId: input.ownerConversationId,
+      ownerAgentTaskId: input.ownerAgentTaskId ?? null,
     };
-    this.leases.set(accountId, lease);
+    this.leases.set(leaseKey, lease);
     return { status: "granted", leaseToken: lease.leaseToken };
   }
 
@@ -81,18 +118,18 @@ export class ManagedBrowserLeaseService {
    * Idempotent: releasing an unheld account is `not_held`, not an error.
    */
   public release(
-    accountId: number,
+    leaseKey: string,
     sessionId: string,
     leaseToken: string
   ): ReleaseLeaseResult {
-    const lease = this.leases.get(accountId);
+    const lease = this.leases.get(leaseKey);
     if (!lease) {
       return "not_held";
     }
     if (lease.sessionId !== sessionId || lease.leaseToken !== leaseToken) {
       return "token_mismatch";
     }
-    this.leases.delete(accountId);
+    this.leases.delete(leaseKey);
     return "released";
   }
 
@@ -103,14 +140,49 @@ export class ManagedBrowserLeaseService {
     return count;
   }
 
-  /** Watchdog support: is a lease live for this account? */
-  public isHeld(accountId: number): boolean {
-    return this.leases.has(accountId);
+  /** Watchdog support: is a lease live for this key? */
+  public isHeld(leaseKey: string): boolean {
+    return this.leases.has(leaseKey);
   }
 
-  /** The active lease for an account, if any (main-process internal use). */
-  public getLease(accountId: number): AccountLease | null {
-    return this.leases.get(accountId) ?? null;
+  /** The active lease for a key, if any (main-process internal use). */
+  /**
+   * A07/M-FR-07: reassign a live lease's owner conversation (the
+   * keep-open transfer) — account reuse/ownership checks then read the
+   * transferred identity. The lease token/session stay stable.
+   */
+  public reassignLeaseOwner(
+    leaseKey: string,
+    ownerConversationId: string,
+    ownerAgentTaskId: string | null = null
+  ): void {
+    const lease = this.leases.get(leaseKey);
+    if (!lease) {
+      return;
+    }
+    // R06/M-FR-07: BOTH owner fields move together — leaving the child
+    // task owner on the lease let child-scoped cleanup and ownership
+    // checks still see the pre-transfer identity.
+    const mutable = lease as {
+      ownerConversationId: string | null;
+      ownerAgentTaskId: string | null;
+    };
+    mutable.ownerConversationId = ownerConversationId;
+    mutable.ownerAgentTaskId = ownerAgentTaskId;
+  }
+
+  public getLease(leaseKey: string): AccountLease | null {
+    return this.leases.get(leaseKey) ?? null;
+  }
+
+  /** Find the live lease holding a session (supervisor cleanup path). */
+  public findBySessionId(sessionId: string): AccountLease | null {
+    for (const lease of this.leases.values()) {
+      if (lease.sessionId === sessionId) {
+        return lease;
+      }
+    }
+    return null;
   }
 
   /** All live leases (snapshot for supervisor cleanup). */

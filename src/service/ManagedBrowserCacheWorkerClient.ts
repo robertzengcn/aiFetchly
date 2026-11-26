@@ -1,4 +1,5 @@
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 import * as fs from "fs";
 import * as path from "path";
 import { log } from "@/modules/Logger";
@@ -319,7 +320,7 @@ export class ManagedBrowserCacheWorkerClient
     const requestId = `req-cache-${this.requestIdCounter}`;
     this.sequence += 1;
     const full = {
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       requestId,
       sequence: this.sequence,
       ...message,

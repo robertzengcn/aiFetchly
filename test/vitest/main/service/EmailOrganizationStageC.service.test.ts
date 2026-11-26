@@ -16,6 +16,7 @@ import type {
   PresenceResult,
   ServerSearchInput,
   ServerSearchResult,
+  SentCopyAppendResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
@@ -86,7 +87,7 @@ class BulkFakeAdapter implements EmailMailboxAdapter {
   ): Promise<ServerSearchResult> {
     return { status: "listed", candidates: [], capped: false };
   }
-  async appendSent() {
+  async appendSent(): Promise<SentCopyAppendResult> {
     return { status: "skipped" as const, reason: "no_sent_folder" };
   }
 }
@@ -97,7 +98,7 @@ interface BulkState {
 }
 
 class BulkCapabilityStub {
-  async getCapabilities(emailServiceId: number) {
+  async getCapabilities(emailServiceId: number): Promise<unknown> {
     return {
       emailServiceId,
       protocol: "imap" as const,
@@ -110,7 +111,7 @@ class BulkCapabilityStub {
       resolvedAt: new Date().toISOString(),
     };
   }
-  async getReceiveConfig() {
+  async getReceiveConfig(): Promise<unknown> {
     return {
       emailServiceId: ACCOUNT_ID,
       protocol: "imap" as const,
@@ -360,8 +361,8 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     // The FIRST move stamps the durable cancel flag, so the pre-claim check
     // for the second item observes it (review: the old test held under every
     // interleaving; this one fails if the cancel check is removed).
-    adapter.onMove = () => {
-      void (async () => {
+    adapter.onMove = (): void => {
+      void (async (): Promise<void> => {
         const operations = await SqliteDb.getInstance(dbpath)
           .connection.getRepository(EmailOrganizationOperationEntity)
           .find();
@@ -457,7 +458,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     // page never fills and the service's own 1000-candidate ceiling stops
     // the scan (R6-02: the adapter's per-window `capped` bit no longer
     // fakes a ceiling).
-    adapter.searchUids = async (_c, _folder, input) => {
+    adapter.searchUids = async (_c, _folder, input): Promise<ServerSearchResult> => {
       const all = Array.from({ length: 1600 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -493,7 +494,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     // 3 candidates in INBOX; page size 2 → page 1 returns 2, cursor resumes
     // at uidOffset 2 → page 2 returns the third.
     const adapter = new BulkFakeAdapter();
-    adapter.searchUids = async (_c, _folder, input) => ({
+    adapter.searchUids = async (_c, _folder, input): Promise<ServerSearchResult> => ({
       status: "listed" as const,
       candidates: [
         { uid: "1", fromAddress: "a@b.test", subject: "September 1", date: "2026-09-15T10:00:00Z", seen: false },
@@ -545,7 +546,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
 
   it("never reports a failed server folder as complete with zero rows (review CRITICAL)", async () => {
     const adapter = new BulkFakeAdapter();
-    adapter.searchUids = async () => ({
+    adapter.searchUids = async (): Promise<ServerSearchResult> => ({
       status: "failed" as const,
       reasonCode: "ACCOUNT_NOT_AVAILABLE",
       sanitizedError: "connection refused",
@@ -622,7 +623,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const adapter = new BulkFakeAdapter();
     // INBOX has 2 matches, Archive has 2; page size 3 must cross the
     // boundary and the cursor must resume in Archive (never re-emit it).
-    adapter.searchUids = async (_c, folder, input) => {
+    adapter.searchUids = async (_c, folder, input): Promise<ServerSearchResult> => {
       const all =
         folder === "INBOX"
           ? [
@@ -669,7 +670,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const adapter = new BulkFakeAdapter();
     // The first two candidates fail the exact UTC filter; 3 and 4 match.
     // The page fills on candidate 3 — candidate 4 must surface on page 2.
-    adapter.searchUids = async (_c, _folder, input) => {
+    adapter.searchUids = async (_c, _folder, input): Promise<ServerSearchResult> => {
       const all = [
         { uid: "1", fromAddress: "a@b.test", subject: "filtered 1", date: "2026-08-01T10:00:00Z", seen: false },
         { uid: "2", fromAddress: "a@b.test", subject: "filtered 2", date: "2026-08-02T10:00:00Z", seen: false },
@@ -731,7 +732,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
 
   it("R6-02: a 250-match folder pages to an EXHAUSTED end — complete:true, nextCursor:null", async () => {
     const adapter = new BulkFakeAdapter();
-    adapter.searchUids = async (_c, _folder, input) => {
+    adapter.searchUids = async (_c, _folder, searchInput): Promise<ServerSearchResult> => {
       const all = Array.from({ length: 250 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -739,8 +740,8 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: "2026-09-15T10:00:00Z",
         seen: false,
       }));
-      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
-      const win = matched.slice(0, input.cap);
+      const matched = all.filter((c) => Number(c.uid) > (searchInput.resumeUid ?? 0));
+      const win = matched.slice(0, searchInput.cap);
       return { status: "listed" as const, candidates: win, capped: matched.length > win.length };
     };
     const serverService = new EmailOrganizationSearchService({
@@ -796,7 +797,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
   it("R6-02/R7-02: a failed folder is RESUMABLE — next page retries it instead of dead-ending", async () => {
     const adapter = new BulkFakeAdapter();
     let firstCall = true;
-    adapter.searchUids = async (_c, _folder, input) => {
+    adapter.searchUids = async (_c, _folder, _input): Promise<ServerSearchResult> => {
       if (firstCall) {
         firstCall = false;
         return { status: "failed" as const, reasonCode: "NETWORK_BEFORE_DISPATCH", sanitizedError: "drop" };
@@ -847,7 +848,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const adapter = new BulkFakeAdapter();
     const failingCalls = new Set<number>();
     let failingAttempts = 0;
-    adapter.searchUids = async (_c, folder, input) => {
+    adapter.searchUids = async (_c, folder, _input): Promise<ServerSearchResult> => {
       if (folder === "Failing") {
         failingAttempts += 1;
         if (failingAttempts === 1) {
@@ -908,7 +909,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
   it("R6-02: a dropped envelope fetch does not shift the next page (no repeats, no gaps)", async () => {
     const adapter = new BulkFakeAdapter();
     const droppedFetches = new Set(["2"]);
-    adapter.searchUids = async (_c, _folder, input) => {
+    adapter.searchUids = async (_c, _folder, searchInput): Promise<ServerSearchResult> => {
       const all = Array.from({ length: 300 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -916,8 +917,8 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: "2026-09-15T10:00:00Z",
         seen: false,
       }));
-      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
-      const window = matched.slice(0, input.cap);
+      const matched = all.filter((c) => Number(c.uid) > (searchInput.resumeUid ?? 0));
+      const window = matched.slice(0, searchInput.cap);
       const candidates = [];
       for (const candidate of window) {
         if (droppedFetches.has(candidate.uid)) {

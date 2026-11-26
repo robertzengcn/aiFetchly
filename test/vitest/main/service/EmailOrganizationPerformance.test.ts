@@ -15,7 +15,6 @@ import type {
   FolderListResult,
   FullSourceResult,
   MailboxCapabilityProbe,
-  MailboxLocation,
   MoveResult,
   PresenceResult,
   ServerSearchResult,

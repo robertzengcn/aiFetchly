@@ -18,6 +18,12 @@ import {
   type ExecutorPageLike,
 } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { MANAGED_BROWSER_ACTION_LIMITS } from "@/config/managedBrowser";
+import {
+  clearTrustedSecretsForTest,
+  registerTrustedSecret,
+  sanitizeWorkerText,
+} from "@/childprocess/managed-browser/ResultSanitizer";
+import { windowTitleMarkerScript } from "@/childprocess/managed-browser/WindowTitleMarker";
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -49,7 +55,11 @@ class FakeHandle implements ExecutorElementHandle {
   async type(text: string): Promise<void> {
     this.typed = text;
   }
+  public resolvedSelectValues: string[] = [];
+  public expectedSelectValue: string | null = null;
+  public lastSelectedValues: string[] | null = null;
   async select(...values: string[]): Promise<string[]> {
+    this.lastSelectedValues = values;
     return values;
   }
   async scrollIntoView(): Promise<void> {}
@@ -57,17 +67,44 @@ class FakeHandle implements ExecutorElementHandle {
     return true;
   }
   async evaluate<T>(script: unknown): Promise<T> {
-    const source = String(script);
-    if (source.includes("aria-label")) {
-      // Live-descriptor read (executor revalidation, GAP-01/03).
-      return (this.liveDescriptor ?? { role: "", name: "" }) as T;
-    }
-    if (source.includes("type')") || source.includes("getAttribute('type')")) {
-      return this.inputType as T;
-    }
-    if (source.includes("el.value = ''")) {
+    // F02: the executor passes REAL page functions — identify them by
+    // their (transpile-stable) name, not by source-string matching.
+    if (typeof script === "function") {
+      const fnName = script.name;
+      if (fnName === "readElementDescriptor") {
+        return (this.liveDescriptor ?? { role: "", name: "" }) as T;
+      }
+      if (fnName === "probeInputElementTypeFn") {
+        return this.inputType as T;
+      }
+      if (
+        fnName === "clearElementValueFn" ||
+        fnName === "clearElementWithEventFn"
+      ) {
+        return undefined as T;
+      }
+      if (fnName === "extractElementDataFn") {
+        return this.extractValue as T;
+      }
+      // P1/D-FR-17 + R02: the live identity commit — the fake mirrors
+      // the page function's contract: verify the OBSERVED value, then
+      // commit (the real function selects by index page-side).
+      if (fnName === "selectOptionsByIdentityFn") {
+        const resolved = this.resolvedSelectValues;
+        if (this.expectedSelectValue !== null) {
+          const expected = this.expectedSelectValue;
+          if (resolved[0] !== expected) {
+            throw new Error("stale_select_option");
+          }
+        }
+        // The commit lands INSIDE the page function now — record what
+        // the real function would have selected.
+        this.lastSelectedValues = [...resolved];
+        return { ok: true, selectedValues: resolved } as T;
+      }
       return undefined as T;
     }
+    const source = String(script);
     if (source.includes("innerText")) {
       return this.extractValue as T;
     }
@@ -139,6 +176,7 @@ function visibleRecord(
     checked: null,
     selected: null,
     hrefOrigin: null,
+    hrefFull: null,
     visible: true,
     ...overrides,
   };
@@ -301,6 +339,7 @@ describe("buildObservation", () => {
     const registry = new PageReferenceRegistry<FakeHandle>(1);
     const text = renderObservationCompact({
       sessionId: "mb_observe001",
+      observationId: "obs_compact001",
       pageRevision: 3,
       url: "https://www.youtube.com/feed/history",
       origin: "https://www.youtube.com",
@@ -332,6 +371,35 @@ describe("buildObservation", () => {
       visibleRecord({ inputType: "password", value: "supersecret" })
     );
     expect(shaped.valueSummary).toBe("[password-like]");
+  });
+
+  it("F09: masks the accessible name of UNMARKED password fields too", () => {
+    // A password field our filler never marked can still carry a
+    // secret in its page-authored name chain (aria-label/placeholder/
+    // title/value) — the summary must mask it unconditionally.
+    const shaped = shapeElementRecord(
+      visibleRecord({
+        tag: "input",
+        role: "textbox",
+        name: "sentinel-password-123",
+        inputType: "password",
+        value: "",
+      })
+    );
+    expect(shaped.name).toBe("[credential]");
+    // Marked fields keep the same masking.
+    const marked = shapeElementRecord(
+      visibleRecord({
+        tag: "input",
+        role: "textbox",
+        name: "sentinel-password-123",
+        inputType: "password",
+        value: "sentinel-password-123",
+        isCredential: true,
+      })
+    );
+    expect(marked.name).toBe("[credential]");
+    expect(marked.valueSummary).toBe("[credential]");
   });
 });
 
@@ -426,6 +494,40 @@ describe("BrowserActionExecutor", () => {
     expect(page.navigations).toEqual(["https://www.youtube.com/feed/history"]);
     expect(registry.lookup(ref).status).toBe("unknown_ref");
     expect(outcome.pageRevision).toBe(2);
+  });
+
+  it("a started navigation fires the SAME per-leaf dispatch progress as other mutations (R13/D-FR-26)", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    registry.register({
+      element: new FakeHandle(),
+      role: "button",
+      name: "X",
+    });
+    const leafEvents: Array<{ inputDispatched: boolean }> = [];
+    const dispatchFlag = { inputDispatched: false };
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "navigate", url: "https://www.youtube.com/feed/history" },
+        ],
+      },
+      {
+        page,
+        registry,
+        navigation,
+        shouldCancel: () => false,
+        dispatchFlag,
+        onLeaf: (info: { inputDispatched: boolean }) => {
+          leafEvents.push(info);
+        },
+      }
+    );
+    expect(outcome.stopCode).toBe("completed");
+    // The goto started: the per-leaf progress fires like click/fill —
+    // a crash after this point classifies as dispatched, never
+    // pre-dispatch.
+    expect(leafEvents).toEqual([{ inputDispatched: true }]);
+    expect(dispatchFlag.inputDispatched).toBe(true);
   });
 
   it("stops immediately when cancelled between actions", async () => {
@@ -819,11 +921,15 @@ describe("TODO-MSB-010 action vocabulary", () => {
     const { ref, handle } = registerElement(registry, "textbox", "Search");
     let cleared = false;
     handle.evaluate = async <T,>(script: unknown): Promise<T> => {
-      if (String(script).includes("el.value = ''")) {
+      if (typeof script === "function" && script.name === "clearElementWithEventFn") {
         cleared = true;
+        return undefined as T;
       }
-      if (String(script).includes("aria-label")) {
+      if (typeof script === "function" && script.name === "readElementDescriptor") {
         return { role: "textbox", name: "Search" } as T;
+      }
+      if (typeof script === "function" && script.name === "probeInputElementTypeFn") {
+        return "text" as T;
       }
       return null as T;
     };
@@ -960,5 +1066,191 @@ describe("isWriteCapableScriptSource (TODO-MSB-009)", () => {
     expect(
       isWriteCapableScriptSource("document.title")
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1/D-FR-17: SELECT tokens resolve against the LIVE element's options
+// ---------------------------------------------------------------------------
+
+describe("BrowserActionExecutor select token resolution (P1)", () => {
+  it("a positional o_N token selects the live native value — not a truncated display value", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "combobox", "Country");
+    // The live option's REAL value is far longer than the display bound.
+    handle.resolvedSelectValues = ["livingstonedaily-9f3a-exact-native-value"];
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "select", ref, pageRevision: 1, values: ["o_1"] },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.results[0].success).toBe(true);
+    expect(handle.lastSelectedValues).toEqual([
+      "livingstonedaily-9f3a-exact-native-value",
+    ]);
+  });
+
+  it("a reordered option fails the step instead of silently choosing another", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "combobox", "Country");
+    // The live option at index 1 changed after the observation — the
+    // resolved value no longer matches the OBSERVED value bound at
+    // decision time.
+    handle.resolvedSelectValues = ["jp-new"];
+    handle.expectedSelectValue = "fr";
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "select", ref, pageRevision: 1, values: ["o_1"], expected_values: ["fr"] },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.results[0].success).toBe(false);
+    expect(handle.lastSelectedValues).toBeNull();
+  });
+
+  it("a plain value passes through the resolution untouched", async () => {
+    const { page, registry, executor, navigation } = setupExecutor();
+    const { ref, handle } = registerElement(registry, "combobox", "Country");
+    handle.resolvedSelectValues = ["fr"];
+    const outcome = await executor.executeProgram(
+      {
+        actions: [
+          { type: "select", ref, pageRevision: 1, values: ["fr"] },
+        ],
+      },
+      { page, registry, navigation, shouldCancel: () => false }
+    );
+    expect(outcome.results[0].success).toBe(true);
+    expect(handle.lastSelectedValues).toEqual(["fr"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B04/D-FR-12/A-FR-08/15: outbound free-form text outside observations —
+// worker error messages and field-history stamps — obeys the same
+// scrubbing invariant (trusted pass first, cap re-enforced last). All
+// data below is SYNTHETIC.
+// ---------------------------------------------------------------------------
+describe("B04 worker outbound text scrubbing", () => {
+  it("redacts the exact filled credential from a worker error message before the cap", () => {
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("SYNTHETIC-FILLED-VALUE-0001");
+    const message = sanitizeWorkerText(
+      "navigation failed: net::ERR at https://example.test/next?q=SYNTHETIC-FILLED-VALUE-0001 and more text " +
+        "x".repeat(400),
+      300
+    );
+    expect(message.includes("SYNTHETIC-FILLED-VALUE-0001")).toBe(false);
+    expect(message.includes("[redacted]")).toBe(true);
+    // The cap is re-enforced AFTER redaction (replacement can expand).
+    expect(message.length).toBeLessThanOrEqual(300);
+    clearTrustedSecretsForTest();
+  });
+
+  it("redacts secret-shaped tokens and key=value pairs in worker error text", () => {
+    clearTrustedSecretsForTest();
+    const message = sanitizeWorkerText(
+      "selector error near token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12 marker",
+      300
+    );
+    expect(message.includes("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ12")).toBe(false);
+    expect(message).toContain("token=[redacted]");
+    clearTrustedSecretsForTest();
+  });
+
+  it("keeps ordinary field names intact and caps field-history stamps", () => {
+    clearTrustedSecretsForTest();
+    const stamp = sanitizeWorkerText("email", 128);
+    expect(stamp).toBe("email");
+    const planted = sanitizeWorkerText(
+      "sk-ABCDEFGHIJKLMNOP1234567890 " + "y".repeat(200),
+      128
+    );
+    expect(planted.includes("sk-ABCDEFGHIJKLMNOP1234567890")).toBe(false);
+    expect(planted.length).toBeLessThanOrEqual(128);
+    clearTrustedSecretsForTest();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C04/M-FR-13: the window-title marker is IDEMPOTENT (reload never grows
+// "[AI] [AI] ...") and a takeover retitles to the user marker.
+// ---------------------------------------------------------------------------
+describe("C04 window title marker", () => {
+  function evalTitleScript(script: string, initialTitle: string): string {
+    const doc = { title: initialTitle };
+    new Function("document", script)(doc);
+    return doc.title;
+  }
+
+  it("re-applying the marker never grows the prefix", () => {
+    let title = evalTitleScript(windowTitleMarkerScript("[AI]"), "Example Market");
+    expect(title).toBe("[AI] Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[AI]"), title);
+    expect(title).toBe("[AI] Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[AI]"), title);
+    expect(title).toBe("[AI] Example Market");
+  });
+
+  it("a takeover retitles to the user marker and the AI marker returns on resume", () => {
+    let title = evalTitleScript(windowTitleMarkerScript("[AI]"), "Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[You]"), title);
+    expect(title).toBe("[You] Example Market");
+    title = evalTitleScript(windowTitleMarkerScript("[AI]"), title);
+    expect(title).toBe("[AI] Example Market");
+  });
+
+  it("page-authored titles starting with a marker-like prefix are still re-marked safely", () => {
+    const title = evalTitleScript(
+      windowTitleMarkerScript("[AI]"),
+      "[You] planted.example"
+    );
+    // The strip pass removes ANY marker prefix before re-applying — the
+    // title carries exactly ONE marker.
+    expect(title).toBe("[AI] planted.example");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P02/D-FR-15a: a PASSIVE reobserve neither replaces a live pin nor
+// invalidates authorized work — the pinned observation survives bounds
+// enforcement, and a same-revision reobserve keeps the approval binding
+// (digest + revision) resolvable.
+// ---------------------------------------------------------------------------
+describe("P02 passive reobserve vs live pin", () => {
+  it("the pinned observation survives a later reobserve and its bounds sweep", () => {
+    const registry = new PageReferenceRegistry<FakeHandle>(64);
+    // The approval's observation A: register a ref, pin it, commit.
+    registry.beginObservation("obs-A");
+    const refA = registry.register({ element: new FakeHandle(), role: "button", name: "Go" });
+    registry.pinObservation("obs-A");
+    registry.commitObservation("obs-A");
+    // A PASSIVE reobserve commits a LATER observation (same revision —
+    // no navigation happened).
+    registry.beginObservation("obs-B");
+    const refB = registry.register({ element: new FakeHandle(), role: "button", name: "Buy" });
+    registry.commitObservation("obs-B");
+    // Bounds enforcement (a full sweep) never evicts the PINNED A...
+    registry.expire();
+    expect(registry.lookup(refA, registry.currentRevision).status).toBe("ok");
+    // ...and the reobserve's own refs resolve for the authorized work.
+    expect(registry.lookup(refB, registry.currentRevision).status).toBe("ok");
+  });
+
+  it("the approval's revision binding survives a same-revision reobserve", () => {
+    const registry = new PageReferenceRegistry<FakeHandle>(64);
+    registry.beginObservation("obs-A");
+    registry.register({ element: new FakeHandle(), role: "button", name: "Go" });
+    registry.commitObservation("obs-A");
+    const revisionAtApproval = registry.currentRevision;
+    // A PASSIVE reobserve (no navigation) — the revision does NOT move.
+    registry.beginObservation("obs-B");
+    registry.commitObservation("obs-B");
+    expect(registry.currentRevision).toBe(revisionAtApproval);
   });
 });

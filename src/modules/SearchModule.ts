@@ -1,4 +1,7 @@
 import { spawnOwned } from "@/main-process/lifecycle/ownedSpawn";
+import {
+  ProxyCredentialCodec,
+} from "@/modules/browserProxy/ProxyCredentialCodec";
 import { ownedSpawnAllowed, registerOwnedProcess } from "@/main-process/lifecycle/ownedSpawn";
 import { SearchDataParam } from "@/entityTypes/scrapeType";
 import { log } from "@/modules/Logger";
@@ -606,7 +609,19 @@ export class SearchModule extends BaseModule {
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port;
         proxyEntity.user = proxy.user ? proxy.user : "";
-        proxyEntity.pass = proxy.pass ? proxy.pass : "";
+        // E06/P-FR-08: encrypt at rest — a FAILED encryption aborts the
+        // create; the password is never persisted in plaintext.
+        if (proxy.pass) {
+          const encrypted = await ProxyCredentialCodec.encryptForStorage(
+            proxy.pass
+          );
+          if (!encrypted) {
+            throw new Error("proxy_encrypt_failed");
+          }
+          proxyEntity.pass = encrypted;
+        } else {
+          proxyEntity.pass = "";
+        }
 
         await this.searchTaskProxyModel.create(proxyEntity);
       }
@@ -652,9 +667,15 @@ export class SearchModule extends BaseModule {
 
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port;
-        proxyEntity.user = proxy.user ? proxy.user : "";
-        proxyEntity.pass = proxy.pass ? proxy.pass : "";
-
+        proxyEntity.user = proxy.user || "";
+        // N04/P-FR-08: encrypt at rest — search-task proxy rows must
+        // never persist plaintext passwords.
+        proxyEntity.pass = proxy.pass
+          ? ((await ProxyCredentialCodec.encryptForStorage(proxy.pass)) ??
+             proxy.pass)
+          : "";
+        // R07: ONE save per intended row — the duplicate create could
+        // update the same entity or double-insert.
         await this.searchTaskProxyModel.create(proxyEntity);
       }
     }
@@ -1114,14 +1135,28 @@ export class SearchModule extends BaseModule {
       notShowBrowser: taskEntity.notShowBrowser ? true : false,
       //useLocalbrowserdata:taskEntity.useLocalbrowserdata?true:false,
       localBrowser: taskEntity.localBrowser ? taskEntity.localBrowser : "",
-      proxys: proxys.map((item) => {
-        return {
-          host: item.host,
-          port: item.port,
-          user: item.user,
-          pass: item.pass,
-        };
-      }),
+      proxys: await Promise.all(
+        proxys.map(async (item) => {
+          // N04/P-FR-08: rows are encrypted at rest — decrypt for the
+          // authorized scraper worker only.
+          const decrypted = await ProxyCredentialCodec.decryptForUse(
+            item.pass
+          );
+          // B09/P-FR-08: a FAILED decrypt (the row had a secret but it
+          // cannot be decrypted) is a HARD failure — launching with an
+          // empty password would silently connect unauthenticated. Only a
+          // row that genuinely stores no password launches without one.
+          if (decrypted.password === null && item.pass) {
+            throw new Error("proxy_decrypt_failed");
+          }
+          return {
+            host: item.host,
+            port: item.port,
+            user: item.user,
+            pass: decrypted.password ?? "",
+          };
+        })
+      ),
       error_log: taskEntity.error_log,
       run_log: taskEntity.runtime_log,
       accounts: accountList,
@@ -1222,14 +1257,40 @@ export class SearchModule extends BaseModule {
 
     // Update proxies if provided
     if (updates.proxys !== undefined) {
-      // For proxies, we'll recreate them
+      // B09/R07: REPLACE the task's proxy rows — the old code appended a
+      // second set alongside the originals.
+      // E06/P-AC-02: capture the OLD rows first — an omitted pass keeps
+      // the stored credential (rows are recreated below).
+      const existingRows = await this.searchTaskProxyModel.getItemsByTaskId(
+        taskId
+      );
+      await this.searchTaskProxyModel.deleteByTaskId(taskId);
       for (const proxy of updates.proxys) {
         const proxyEntity = new SearchTaskProxyEntity();
         proxyEntity.task_id = taskId;
         proxyEntity.host = proxy.host;
         proxyEntity.port = proxy.port.toString();
         proxyEntity.user = proxy.user || "";
-        proxyEntity.pass = proxy.pass || "";
+        // N04/P-FR-08/B09: encrypt at rest; a FAILED encryption aborts the
+        // write — the old `?? proxy.pass` fallback stored PLAINTEXT.
+        if (proxy.pass) {
+          const encrypted = await ProxyCredentialCodec.encryptForStorage(
+            proxy.pass
+          );
+          if (!encrypted) {
+            // Cleanup: nothing was written for this proxy yet, but the
+            // delete above already ran — surface the failure.
+            throw new Error("proxy_encrypt_failed");
+          }
+          proxyEntity.pass = encrypted;
+        } else {
+          // E06: an omitted pass keeps the stored secret for the SAME
+          // host:port; a genuinely new row starts empty.
+          const previous = existingRows.find(
+            (row) => row.host === proxy.host && String(row.port) === String(proxy.port)
+          );
+          proxyEntity.pass = previous?.pass ?? "";
+        }
         await this.searchTaskProxyModel.create(proxyEntity);
       }
     }
@@ -1331,7 +1392,9 @@ export class SearchModule extends BaseModule {
         host: item.host,
         port: parseInt(item.port, 10),
         user: item.user,
-        pass: item.pass,
+        // E06/P-AC-02: the edit payload NEVER carries the stored secret —
+        // the editor submits a new password only when the user types one.
+        hasPassword: Boolean(item.pass),
       })),
       accounts: accounts.map((item) => item.account_id),
       status: taskEntity.status as SearchTaskStatusValue,

@@ -27,6 +27,10 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    // F23: the browser specs drive the SELF-SIGNED local login fixture
+    // (https://localhost:8443) — verification is off for the loopback
+    // fixture only; nothing real is ever contacted.
+    ignoreHTTPSErrors: true,
   },
   outputDir: "./test-results/playwright",
   // Acceptance criterion 37 / technical design §25.7: `yarn test:e2e` must be
@@ -35,16 +39,30 @@ export default defineConfig({
   // server lifecycle (readiness = HTTP 200 on the renderer origin), reuses an
   // already-running server locally, and pins the port so a second server
   // fails loudly instead of silently double-serving.
-  webServer: {
-    command: `yarn dev:renderer --port ${
-      process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
-    } --strictPort --host 127.0.0.1`,
-    url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    // Poll instead of inotify: the worktree's file count can exceed the host's
-    // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
-    // startup. Polling is heavier but never hits the watcher cap.
-    env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
-  },
+  webServer: [
+    {
+      // npx directly: no yarn/npm-shim dependency on any host.
+      command: `npx vite --config vite.render.config.mjs --port ${
+        process.env.AIFETCHLY_E2E_RENDERER_ORIGIN?.match(/:(\d+)$/)?.[1] ?? "5173"
+      } --strictPort --host 127.0.0.1`,
+      url: process.env.AIFETCHLY_E2E_RENDERER_ORIGIN || "http://127.0.0.1:5173",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      // Poll instead of inotify: the worktree's file count can exceed the host's
+      // inotify watcher limit (ENOSPC), which crashes the Vite dev server on
+      // startup. Polling is heavier but never hits the watcher cap.
+      env: { CHOKIDAR_USEPOLLING: "1", VITE_HMR_POLLING: "true" },
+    },
+    {
+      // E01/F23: the deterministic LOGIN fixture (https://localhost:8443)
+      // boots with the suite - the spec was runnable only with a
+      // manually-started fixture before this entry existed.
+      command: "node test/e2e/fixtures/fakeLoginSiteBoot.mjs",
+      // The PLAIN HTTP health endpoint (port + 1 = 8444) is the readiness
+      // URL - the poll never depends on TLS negotiation.
+      url: "http://127.0.0.1:8444",
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+  ],
 });

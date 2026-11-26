@@ -16,7 +16,6 @@ const MANAGED_BROWSER_TOOLS = [
   "browser_run_actions",
   "browser_screenshot",
   "browser_request_handoff",
-  "browser_resume_after_handoff",
   "browser_stop_session",
   "browser_clear_cache",
   "browser_evaluate_script",
@@ -44,12 +43,16 @@ function getTool(name: string) {
 }
 
 describe("managed-browser tool registration", () => {
-  it("registers all eleven tools with the automation permission category", () => {
+  it("registers the browser tools with the automation permission category (E04: no model resume)", () => {
     for (const name of MANAGED_BROWSER_TOOLS) {
       const tool = getTool(name);
       expect(tool, name).toBeDefined();
       expect(tool?.permissionCategory, name).toBe("automation");
     }
+  });
+
+  it("E04/C-FR-03: resume is NOT a model tool", () => {
+    expect(getTool("browser_resume_after_handoff") ?? null).toBeNull();
   });
 
   it("requires confirmation for session start, action programs, and cache clears", () => {
@@ -62,7 +65,6 @@ describe("managed-browser tool registration", () => {
       "browser_navigate",
       "browser_screenshot",
       "browser_request_handoff",
-      "browser_resume_after_handoff",
       "browser_stop_session",
     ]) {
       expect(getTool(name)?.requiresConfirmation, name).toBe(false);

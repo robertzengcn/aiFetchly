@@ -16,7 +16,7 @@ const handlers = new Map<
 
 vi.mock("electron", () => ({
   ipcMain: {
-    handle: (channel: string, h: (...args: unknown[]) => unknown) => {
+    handle: (channel: string, h: (...args: unknown[]) => unknown): void => {
       handlers.set(channel, h as never);
     },
   },
@@ -73,9 +73,7 @@ beforeEach(() => {
 
 describe("email organization IPC surface", () => {
   it("keeps manual draft creation available WITHOUT AI entitlement (review D3)", async () => {
-    tokenGetValue.mockImplementation((key: string) =>
-      key === "user_ai_enabled" ? "false" : "false"
-    );
+    tokenGetValue.mockImplementation((_key: string): "false" | "true" => "false");
     const result = await invoke(EMAIL_FORWARD_DRAFT_CREATE, { garbage: true });
     expect(result.status).toBe(false);
     // The failure is a zod validation message, NOT an AI-entitlement refusal:
@@ -91,9 +89,7 @@ describe("email organization IPC surface", () => {
   });
 
   it("keeps manual trash controls available without AI entitlement (PRD §9)", async () => {
-    tokenGetValue.mockImplementation((key: string) =>
-      key === "user_ai_enabled" ? "false" : "false"
-    );
+    tokenGetValue.mockImplementation((_key: string): "false" | "true" => "false");
     // Unknown message id: the handler runs (no AI refusal) and returns a
     // deterministic SOURCE_NOT_FOUND failure envelope.
     const result = await invoke(EMAIL_ORG_TRASH, { messageId: 987654321 });

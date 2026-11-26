@@ -82,6 +82,52 @@ describe("ProxyAiTools.listProxies", () => {
     expect(result.credentialsRedacted).toBe(true);
   });
 
+  // R03/P-FR-07: proxy_list carries browser_usable — a browser-usable
+  // protocol whose latest basic check PASSED — plus country and the last
+  // check fields, and never a password.
+  it("reports browser_usable from protocol + latest basic check", async () => {
+    const records: ProxyListEntity[] = [
+      makeListRecord({
+        id: 1,
+        status: 1,
+        checktime: "2026-07-19",
+        protocol: "http",
+        country_code: "US",
+      }), // pass → usable
+      makeListRecord({
+        id: 2,
+        status: 2,
+        checktime: "2026-07-19",
+        protocol: "http",
+      }), // failure → not usable
+      makeListRecord({ id: 3, status: 1, protocol: "http" }), // never checked → not usable
+      makeListRecord({
+        id: 4,
+        status: 1,
+        checktime: "2026-07-19",
+        protocol: "socks5",
+      }), // SOCKS → not browser-usable
+    ];
+    const getProxylist = vi.fn(async () => listResp(records, records.length));
+    const tools = makeTools({ proxyController: { getProxylist } });
+
+    const result = await tools.listProxies({ page: 0, size: 10 });
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+    const byId = new Map(result.proxies.map((p) => [p.id, p]));
+    expect(byId.get(1)?.browserUsable).toBe(true);
+    expect(byId.get(1)?.countryCode).toBe("US");
+    expect(byId.get(1)?.checktime).toBe("2026-07-19");
+    expect(byId.get(2)?.browserUsable).toBe(false);
+    expect(byId.get(3)?.browserUsable).toBe(false);
+    expect(byId.get(4)?.browserUsable).toBe(false);
+    // Never a password.
+    expect(JSON.stringify(result)).not.toContain("password\":");
+  });
+
   it("filters by status via bounded scan and paginates the filtered set", async () => {
     const records: ProxyListEntity[] = [
       makeListRecord({ id: 1, status: 2, checktime: "2026-07-19" }), // failure

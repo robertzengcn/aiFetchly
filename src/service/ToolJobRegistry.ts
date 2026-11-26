@@ -91,6 +91,16 @@ export interface ToolJobSnapshot {
   readonly updatedAt: number;
   readonly completedAt: number | null;
   readonly retryAfterMs?: number;
+  /**
+   * PRD C-FR-09: sub-state while the job blocks waiting for the user
+   * (approval/credential card/handoff/pause). The parent's poll deadline
+   * excludes this time (technical design 18.4).
+   */
+  readonly userWait?: {
+    readonly waiting: boolean;
+    readonly reason: string | null;
+    readonly since: number | null;
+  } | null;
 }
 
 export interface ToolJobLimits {
@@ -154,6 +164,7 @@ interface InternalJob {
   settledCallbacks: Array<() => void>;
   settled: boolean;
   lastPolledAt: number;
+  userWait?: { waiting: boolean; reason: string | null; since: number | null };
   queuedSpawn?: () => void;
   abortController: AbortController;
   /** Timer that force-releases the admission lease after a cancel (H5). */
@@ -384,6 +395,72 @@ export class ToolJobRegistry {
         next.queuedSpawn = undefined;
       }
     }
+  }
+
+  /**
+   * PRD C-FR-09: lightweight wait probe that never touches poll
+   * rate-limit accounting (unlike getStatus).
+   */
+  isWaitingForUser(jobId: string): { waiting: boolean; since: number | null } {
+    const job = this.jobs.get(jobId);
+    const wait = job?.userWait;
+    return { waiting: wait?.waiting === true, since: wait?.since ?? null };
+  }
+
+  /**
+   * F06: true when ANY live job is currently waiting for the user.
+   * Used by the agent runtime's wait-aware deadline: during a user
+   * wait the wall-clock budget freezes (D-21). Concurrent waits pause
+   * sibling deadlines too — the safe direction (never a false abort).
+   */
+  isAnyWaitingForUser(): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.userWait?.waiting === true) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * C-FR-09: conversation-scoped wait probe — only jobs of THIS
+   * conversation freeze the deadline; a sibling conversation's user wait
+   * never stalls another task's clock.
+   */
+  isConversationWaitingForUser(conversationId: string): boolean {
+    for (const job of this.jobs.values()) {
+      if (
+        job.conversationId === conversationId &&
+        job.userWait?.waiting === true
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** PRD C-FR-09: mark a job as waiting for the user (or not). */
+  setUserWait(jobId: string, waiting: boolean, reason?: string | null): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    // R11/C-FR-09: a REPEATED set (the batch watchdog polls every second)
+    // must not reset the wait start — the parent poll's freeze window
+    // would otherwise keep sliding and never expire.
+    const existingWait = job.userWait;
+    const unchangedWait =
+      waiting === true &&
+      existingWait?.waiting === true &&
+      (existingWait.reason ?? null) === (reason ?? null);
+    job.userWait = {
+      waiting,
+      reason: waiting ? (reason ?? null) : null,
+      since: unchangedWait
+        ? (existingWait?.since ?? Date.now())
+        : waiting
+          ? Date.now()
+          : null,
+    };
+    job.updatedAt = Date.now();
   }
 
   updateProgress(jobId: string, progress: ToolJobProgress): void {
@@ -865,6 +942,7 @@ export class ToolJobRegistry {
       startedAt: job.startedAt,
       updatedAt: job.updatedAt,
       completedAt: job.completedAt,
+      userWait: job.userWait ?? null,
     };
   }
 

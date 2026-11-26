@@ -5,14 +5,12 @@ import Card from "@/views/components/emailOrganization/EmailOrganizationOperatio
 import {
   getEmailOrganizationOperation,
   restoreFromOperation,
-  reconcileEmailOrganizationOperation,
 } from "@/views/api/emailorganization";
 import type { EmailOrganizationOperationDto } from "@/entityTypes/emailOrganizationTypes";
 
 vi.mock("@/views/api/emailorganization", () => ({
   getEmailOrganizationOperation: vi.fn(),
   restoreFromOperation: vi.fn(),
-  reconcileEmailOrganizationOperation: vi.fn(),
 }));
 
 const i18n = createI18n({
@@ -66,7 +64,7 @@ function operationFixture(
   };
 }
 
-function mountCard(operationId: string | null = "op-abc-12345") {
+function mountCard(operationId: string | null = "op-abc-12345"): ReturnType<typeof mount> {
   return mount(Card, {
     props: { operationId },
     global: {
@@ -89,7 +87,6 @@ function mountCard(operationId: string | null = "op-abc-12345") {
 
 const mockGet = vi.mocked(getEmailOrganizationOperation);
 const mockRestore = vi.mocked(restoreFromOperation);
-const mockReconcile = vi.mocked(reconcileEmailOrganizationOperation);
 
 beforeEach(() => {
   vi.clearAllMocks();

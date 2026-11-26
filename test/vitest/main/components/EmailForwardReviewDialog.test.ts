@@ -88,7 +88,7 @@ function previewFixture(overrides?: Partial<ForwardDraftPreviewDto>): ForwardDra
   };
 }
 
-function mountDialog(messageId: number | null = 33) {
+function mountDialog(messageId: number | null = 33): ReturnType<typeof mount> {
   return mount(Dialog, {
     props: { messageId, emailServiceId: 1 },
     global: {

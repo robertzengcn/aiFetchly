@@ -20,6 +20,11 @@ import {
   SOCIAL_ACCOUNT_CLEAN_COOKIES,
   SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE,
   SOCIAL_ACCOUNT_SESSION_METADATA,
+  SOCIAL_ACCOUNT_AI_OPTIN_PENDING,
+  SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT,
+  SOCIAL_ACCOUNT_GET_AI_USE_ENABLED,
+  SOCIAL_ACCOUNT_SET_AI_USE_ENABLED,
+  BROWSER_SITE_LIST,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_START,
   SOCIAL_ACCOUNT_BROWSER_IMPORT_CANCEL,
@@ -87,6 +92,61 @@ export async function getSocialaccountinfo(
   }
 
   return resp;
+}
+
+// R09/Q-01: the ONE-TIME existing-account opt-in prompt.
+export interface AiOptInPendingAccount {
+  readonly id: number;
+  readonly user: string;
+  readonly name: string | null;
+}
+
+export async function getAiOptInPendingAccounts(): Promise<
+  ReadonlyArray<AiOptInPendingAccount>
+> {
+  const resp = (await windowInvoke(SOCIAL_ACCOUNT_AI_OPTIN_PENDING, {})) as {
+    pending: ReadonlyArray<AiOptInPendingAccount>;
+  } | null;
+  return resp?.pending ?? [];
+}
+
+export async function submitAiOptInDecisions(
+  decisions: ReadonlyArray<{ id: number; enabled: boolean }>
+): Promise<{ ok: boolean; failedIds?: number[] }> {
+  // P04/Q-01: the IPC reports ids that could not be written so the
+  // prompt stays open and retries (never a partial silent apply).
+  return (await windowInvoke(SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT, {
+    decisions,
+  })) as { ok: boolean; failedIds?: number[] };
+}
+
+// Q-01/R02: the per-account AI opt-in (read + toggle).
+export async function getSocialAccountAiUseEnabled(id: number): Promise<boolean> {
+  const resp = (await windowInvoke(SOCIAL_ACCOUNT_GET_AI_USE_ENABLED, {
+    id,
+  })) as { enabled: boolean } | null;
+  return resp?.enabled === true;
+}
+
+export async function setSocialAccountAiUseEnabled(
+  id: number,
+  enabled: boolean
+): Promise<void> {
+  await windowInvoke(SOCIAL_ACCOUNT_SET_AI_USE_ENABLED, { id, enabled });
+}
+
+/** N08/S-FR-06: the AUTHORITATIVE site registry (names + ids only). */
+export interface BrowserSiteListItem {
+  readonly id: number;
+  readonly name: string;
+  readonly registrableDomain: string;
+}
+
+export async function listBrowserSites(): Promise<BrowserSiteListItem[]> {
+  const resp = (await windowInvoke(BROWSER_SITE_LIST, {})) as {
+    sites?: BrowserSiteListItem[];
+  } | null;
+  return resp?.sites ?? [];
 }
 //save social account
 export async function saveSocialAccount(

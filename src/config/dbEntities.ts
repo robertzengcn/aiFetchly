@@ -44,6 +44,8 @@ import { ScheduleExecutionLogEntity } from "@/entity/ScheduleExecutionLog.entity
 import { ScheduleDependencyEntity } from "@/entity/ScheduleDependency.entity";
 import { SchedulerStatusEntity } from "@/entity/SchedulerStatus.entity";
 import { SocialAccountEntity } from "@/entity/SocialAccount.entity";
+import { BrowserSiteEntity } from "@/entity/BrowserSite.entity";
+import { BrowserTaskEntity } from "@/entity/BrowserTask.entity";
 import { SessionRecordingEntity } from "@/entity/SessionRecording.entity";
 import { RAGDocumentEntity } from "@/entity/RAGDocument.entity";
 import { RAGChunkEntity } from "@/entity/RAGChunk.entity";
@@ -184,6 +186,8 @@ export const DB_ENTITIES = [
   EmailServiceEntity,
   EmailServiceTaskRelationEntity,
   SocialAccountEntity,
+  BrowserSiteEntity,
+  BrowserTaskEntity,
   SessionRecordingEntity,
   RAGDocumentEntity,
   RAGChunkEntity,

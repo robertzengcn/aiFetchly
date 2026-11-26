@@ -9,6 +9,7 @@ import {
   MANAGED_BROWSER_RESUME,
   MANAGED_BROWSER_STOP,
   MANAGED_BROWSER_APPROVE,
+  MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL,
   MANAGED_BROWSER_CANCEL_ACTIVE,
   MANAGED_BROWSER_CAPTURE_SCREENSHOT,
   MANAGED_BROWSER_EXTEND_HANDOFF,
@@ -22,6 +23,21 @@ import {
   MANAGED_BROWSER_PROGRESS_EVENT,
   MANAGED_BROWSER_APPROVAL_EVENT,
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
+  MANAGED_BROWSER_CREDENTIAL_REQUEST,
+  MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST,
+  MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER,
+  MANAGED_BROWSER_SITE_CONFIRM_REQUEST,
+  MANAGED_BROWSER_SUBMIT_SITE_CONFIRM,
+  MANAGED_BROWSER_BATCH_CONFIRM_REQUEST,
+  MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
+  MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM,
+  MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
+  BROWSER_TASK_PAUSE,
+  BROWSER_TASK_RESUME,
+  BROWSER_TASK_STOP,
+  BROWSER_TASK_FOCUS_WINDOW,
+  BROWSER_BATCH_RETURN_NOW,
+  MANAGED_BROWSER_BATCH_EVENT,
 } from "@/config/channellist";
 import type {
   EffectiveManagedBrowserSettings,
@@ -60,6 +76,11 @@ export async function startManagedBrowser(input: {
   purpose: string;
   requestedStartUrl?: string;
   conversationId?: string;
+  /** R10/P-FR-01: proxy_id | auto(+country) | "direct" — ids only. */
+  proxy?:
+    | { proxy_id: number }
+    | { auto: true; country_code?: string }
+    | "direct";
 }): Promise<SafeManagedBrowserStatus> {
   return await windowInvoke(MANAGED_BROWSER_START, input);
 }
@@ -95,6 +116,25 @@ export async function stopManagedBrowser(
   reason: "user_stop" | "cancelled" | "shutdown" = "user_stop"
 ): Promise<SafeManagedBrowserStatus> {
   return await windowInvoke(MANAGED_BROWSER_STOP, { sessionId, reason });
+}
+
+/**
+ * PRD A-FR-05/06: submit the credential card. Values travel over this
+ * validated channel straight to encrypted storage or the one-time
+ * in-memory store — never into chat state.
+ */
+export async function submitBrowserLoginCredential(input: {
+  requestId: string;
+  conversationId: string;
+  username: string;
+  password: string;
+  save: boolean;
+  cancelled?: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL, {
+    ...input,
+    cancelled: input.cancelled ?? false,
+  });
 }
 
 export async function approveBrowserAction(input: {
@@ -139,8 +179,52 @@ export async function updateBrowserPreferences(patch: {
   cacheEnabled?: boolean;
   cacheMaxSizeMb?: number;
   clearCacheOnExit?: boolean;
+  maxConcurrentSessions?: number;
+  signInEnabled?: boolean;
+  siteUpsertEnabled?: boolean;
+  proxySwitchEnabled?: boolean;
+  parallelAgentsEnabled?: boolean;
+  browserDecisionEnabled?: boolean;
+  /** N01/design 5.3: the decision-route patch (merged into the store). */
+    decisionRoute?: {
+      mode?: "follow_chat" | "native_profile";
+      chatDecisionModel?: string | null;
+      batchSubAgentModel?: string | null;
+      nativeProfile?: {
+        displayName: string;
+        baseUrl: string;
+        model: string;
+        apiKeyRef: "chat" | "none";
+      } | null;
+      requestTimeoutMs?: number | null;
+    /** R01/D-FR-18: probed chat output capabilities. */
+    chatCapabilities?: {
+      structuredJsonSchema: boolean;
+      forcedToolDecision: boolean;
+    } | null;
+  };
 }): Promise<EffectiveManagedBrowserSettings> {
   return await windowInvoke(MANAGED_BROWSER_UPDATE_SETTINGS, patch);
+}
+
+/** R01/PRD §7: the per-capability probe verdicts (reported separately). */
+export interface BrowserDecisionProbeResult {
+  readonly chat: boolean;
+  readonly structuredJsonSchema: boolean;
+  readonly forcedToolDecision: boolean;
+  readonly structuredError: string | null;
+  readonly forcedToolError: string | null;
+}
+
+/**
+ * R01/D-FR-18: run the three decision-capability probes against the
+ * user's chat endpoint and persist the flags on the decision route.
+ */
+export async function probeBrowserDecisionCapabilities(): Promise<BrowserDecisionProbeResult> {
+  return await windowInvoke(
+    MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES,
+    {}
+  ) as BrowserDecisionProbeResult;
 }
 
 export async function getCacheStatus(input: {
@@ -197,6 +281,250 @@ export function onManagedBrowserStatusChanged(
   };
 }
 
+/** F21: live browser-batch task state (batch control card). */
+export interface BrowserBatchEvent {
+  readonly batchId: string;
+  readonly conversationId: string;
+  readonly phase: "started" | "task" | "finished";
+  readonly taskId?: string;
+  readonly label?: string;
+  readonly state?:
+    | "running"
+    | "waiting_for_user"
+    | "queued"
+    | "paused"
+    | "cancelling"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted"
+    // W02: a partial runner ending reaches the card as its own state.
+    | "partial";
+  readonly summary?: string;
+  readonly sessionId?: string;
+}
+
+export function onManagedBrowserBatchEvent(
+  callback: (event: BrowserBatchEvent) => void
+): () => void {
+  const handler = (event: unknown): void => {
+    callback(event as BrowserBatchEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_BATCH_EVENT, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_BATCH_EVENT, handler);
+  };
+}
+
+/** F21: task-control verbs backed by the existing validated IPC. */
+export async function pauseBrowserTask(input: {
+  taskId: string;
+  sessionId?: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return await windowInvoke(BROWSER_TASK_PAUSE, input);
+}
+
+export async function resumeBrowserTask(input: {
+  taskId: string;
+  sessionId?: string;
+  instructions?: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return await windowInvoke(BROWSER_TASK_RESUME, input);
+}
+
+/**
+ * R01/C-FR-10: the user EXPLICITLY requested focus ("Open browser" on
+ * the session card) — the sanctioned bringToFront path. A headless or
+ * closed window is an honest ok:false.
+ */
+export async function focusBrowserWindow(input: {
+  taskId: string;
+  sessionId: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return await windowInvoke(BROWSER_TASK_FOCUS_WINDOW, input);
+}
+
+export async function stopBrowserTask(input: {
+  taskId: string;
+  sessionId?: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return await windowInvoke(BROWSER_TASK_STOP, input);
+}
+
+export async function browserBatchReturnNow(input: {
+  batchId: string;
+}): Promise<{ ok: boolean; reason?: string }> {
+  return await windowInvoke(BROWSER_BATCH_RETURN_NOW, input);
+}
+
+export interface BrowserCredentialRequestEvent {
+  readonly requestId: string;
+  /** B01: owner conversation — the card is conversation-scoped. */
+  readonly conversationId: string;
+  readonly sessionId: string;
+  /** B01: creation time (epoch ms) — the renderer prunes expired cards. */
+  readonly createdAt: number;
+  readonly siteDomain: string;
+  readonly mode: "login" | "register";
+  readonly prefillUsername: string | null;
+  /** A-FR-05/N03: a username-only saved account asks for the password. */
+  readonly passwordOnly: boolean;
+  /** C04/M-FR-08: the owning task's user-visible label ("Browser task 2/3"). */
+  readonly taskLabel?: string | null;
+}
+
+/**
+ * B02/A-FR-03: submit the account-picker card. The user's choice resolves
+ * the in-job picker wait; the account id travels alone (no secrets).
+ */
+export async function submitBrowserAccountPicker(input: {
+  requestId: string;
+  conversationId: string;
+  accountId: number | null;
+  cancelled: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER, input);
+}
+
+export interface BrowserAccountPickerRequestEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly sessionId: string;
+  readonly siteDomain: string;
+  readonly candidates: ReadonlyArray<{
+    id: number;
+    user: string;
+    name: string;
+  }>;
+  readonly createdAt: number;
+  /** C04/M-FR-08: the owning task's user-visible label. */
+  readonly taskLabel?: string | null;
+}
+
+/** B02: live account-picker requests (multi-account sign-in path). */
+export function onManagedBrowserAccountPickerRequest(
+  callback: (request: BrowserAccountPickerRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserAccountPickerRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST, handler);
+  };
+}
+
+/**
+ * B03/S-FR-04: submit the extra-domain confirmation card. The chosen
+ * domain subset is validated against the proposal inside the main
+ * process (token-gated); no token crosses IPC.
+ */
+export async function submitBrowserSiteConfirm(input: {
+  requestId: string;
+  conversationId: string;
+  siteId: number;
+  domains: string[];
+  cancelled: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_SITE_CONFIRM, input);
+}
+
+export interface BrowserSiteConfirmRequestEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly sessionId: string;
+  readonly siteId: number;
+  readonly registrableDomain: string;
+  readonly proposedDomains: readonly string[];
+  readonly createdAt: number;
+  /** C04/M-FR-08: the owning task's user-visible label. */
+  readonly taskLabel?: string | null;
+}
+
+/** B03: live extra-domain confirmation proposals (post sign-in). */
+export function onManagedBrowserSiteConfirmRequest(
+  callback: (request: BrowserSiteConfirmRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserSiteConfirmRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_SITE_CONFIRM_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_SITE_CONFIRM_REQUEST, handler);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// M-FR-04/W08: batch confirmation card — the batch preview (tasks + sites)
+// is confirmed BEFORE any session starts; the grant expires with the batch.
+// ---------------------------------------------------------------------------
+
+export interface BrowserBatchConfirmRequestEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+  readonly tasks: ReadonlyArray<{
+    readonly index: number;
+    readonly goal: string;
+    readonly site: string | null;
+  }>;
+  readonly createdAt: number;
+}
+
+export function onManagedBrowserBatchConfirmRequest(
+  callback: (request: BrowserBatchConfirmRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserBatchConfirmRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_BATCH_CONFIRM_REQUEST, handler);
+  };
+}
+
+export interface BrowserBatchConfirmCancelledEvent {
+  readonly requestId: string;
+  readonly conversationId: string;
+}
+
+/** R07: a pending batch card retired WITHOUT a user decision. */
+export function onManagedBrowserBatchConfirmCancelled(
+  callback: (event: BrowserBatchConfirmCancelledEvent) => void
+): () => void {
+  const handler = (event: unknown): void => {
+    callback(event as BrowserBatchConfirmCancelledEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED, handler);
+  return () => {
+    window.api.removeListener(
+      MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED,
+      handler
+    );
+  };
+}
+
+export async function submitBrowserBatchConfirm(input: {
+  requestId: string;
+  conversationId: string;
+  confirmed: boolean;
+  cancelled: boolean;
+}): Promise<{ accepted: boolean }> {
+  return await windowInvoke(MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM, input);
+}
+
+/** N07: live credential-card requests (no-account sign-in path). */
+export function onManagedBrowserCredentialRequest(
+  callback: (request: BrowserCredentialRequestEvent) => void
+): () => void {
+  const handler = (request: unknown): void => {
+    callback(request as BrowserCredentialRequestEvent);
+  };
+  window.api.receive(MANAGED_BROWSER_CREDENTIAL_REQUEST, handler);
+  return () => {
+    window.api.removeListener(MANAGED_BROWSER_CREDENTIAL_REQUEST, handler);
+  };
+}
+
 export function onManagedBrowserChatNotice(
   callback: (notice: SafeBrowserChatNotice) => void
 ): () => void {
@@ -244,6 +572,8 @@ export interface ManagedBrowserApprovalRequest {
   readonly riskClass: string;
   readonly messageKey: string;
   readonly contentSummary: string | null;
+  /** W06/M-FR-08: the ROOT conversation the prompt is published on. */
+  readonly conversationId?: string | null;
 }
 
 export function onManagedBrowserApprovalRequired(

@@ -6,6 +6,23 @@ import {
   type ManagedBrowserAiToolServiceDeps,
 } from "@/service/ManagedBrowserAiToolService";
 import { ManagedBrowserError } from "@/modules/ManagedBrowserModule";
+
+// B12: the HandoffCoordinator resolves the DEFAULT module singleton —
+// tests point that at the CURRENT test's module fixture.
+const defaultModuleHolder = vi.hoisted(() => ({
+  current: null as unknown | null,
+}));
+vi.mock("@/modules/ManagedBrowserModule", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/modules/ManagedBrowserModule")>();
+  return {
+    ...original,
+    getDefaultManagedBrowserModule: () =>
+      defaultModuleHolder.current ??
+      original.getDefaultManagedBrowserModule(),
+  };
+});
+import { getDefaultAgentTaskControlService } from "@/service/browserAgents/AgentTaskControlService";
 import { BrowserActionRiskClassifier } from "@/service/BrowserActionRiskClassifier";
 import type { SafeManagedBrowserStatus } from "@/entityTypes/managedBrowserTypes";
 
@@ -26,6 +43,11 @@ function status(
     platformId: 2,
     accountLabel: "My Channel",
     platformLabel: "YouTube",
+      ownerConversationId: null,
+      rootConversationId: null,
+      effectiveProxyId: null,
+      proxyHostLabel: null,
+      proxyCountry: null,
     state: "ready",
     currentOrigin: "https://www.youtube.com",
     pageTitle: "YouTube",
@@ -203,6 +225,209 @@ describe("gate order", () => {
   });
 });
 
+describe("runAuthorizedForRunner (D-AC-05 runner seam)", () => {
+  it("stops a consequential action with approval_required and never reaches the module", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        sessionId: SESSION_ID,
+        pageRevision: 4,
+        url: "https://www.youtube.com/upload",
+        origin: "https://www.youtube.com",
+        title: "Upload",
+        state: "ready",
+        elements: [
+          { ref: "e_pub", role: "button", name: "Publish", disabled: false },
+        ],
+        visibleText: "",
+        notices: [],
+        truncated: false,
+      })
+    );
+    const service = makeService({ module });
+    const outcome = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [
+        {
+          type: "click",
+          ref: "e_pub",
+          pageRevision: 4,
+          expectedRole: "button",
+          expectedName: "Publish",
+        } as never,
+      ],
+      { conversationId: CTX.conversationId, toolCallId: "call-runner" }
+    );
+    expect(outcome).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    expect(module.notifyApprovalRequired).toHaveBeenCalled();
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
+
+  it("executes a read-only program through the authorized path", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    const outcome = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [{ type: "scroll", direction: "down", amount: 100 } as never],
+      { conversationId: CTX.conversationId, toolCallId: "call-runner" }
+    );
+    expect(outcome.kind).toBe("executed");
+    expect(module.runActions).toHaveBeenCalled();
+  });
+
+  it("honors the in-job wait's approval exactly once on redispatch — one approval, one dispatch, ONE prompt (R13/D-AC-05)", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        sessionId: SESSION_ID,
+        pageRevision: 4,
+        url: "https://www.youtube.com/upload",
+        origin: "https://www.youtube.com",
+        title: "Upload",
+        state: "ready",
+        elements: [
+          { ref: "e_pub", role: "button", name: "Publish", disabled: false },
+        ],
+        visibleText: "",
+        notices: [],
+        truncated: false,
+      })
+    );
+    // Call 1 = the gate check on the FIRST dispatch (nothing recorded →
+    // prompt); call 2 = the in-job wait's consume (approve → ticket).
+    // The redispatch must NOT consume again — the ticket covers it.
+    let consumeCalls = 0;
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (_input: unknown): "approve" | "deny" | null => {
+        consumeCalls++;
+        return consumeCalls === 2 ? "approve" : null;
+      }
+    );
+    const moduleWithPeek = module as BrowserModuleLike & {
+      peekApprovalForProgram?: (input: unknown) => "approve" | "deny" | null;
+    };
+    moduleWithPeek.peekApprovalForProgram = vi.fn(
+      (_input: unknown): "approve" | "deny" | null => "approve"
+    );
+    const service = makeService({ module });
+    const clickAction = {
+      type: "click",
+      ref: "e_pub",
+      pageRevision: 4,
+      expectedRole: "button",
+      expectedName: "Publish",
+    } as never;
+
+    // 1. First dispatch → approval_required + exactly ONE prompt.
+    const first = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13" }
+    );
+    expect(first).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    expect(module.notifyApprovalRequired).toHaveBeenCalledTimes(1);
+    expect(module.runActions).not.toHaveBeenCalled();
+
+    // 2. The in-job wait consumes the recorded decision → ticket.
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: SESSION_ID,
+      requestId: "call-r13",
+      taskId: "task-r13",
+    });
+    expect(resolution).toBe("approved");
+    expect(consumeCalls).toBe(2);
+
+    // 3. Redispatch → the ticket is honored: the action dispatches, the
+    // registry is NOT consumed a second time, and NO second prompt.
+    const second = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13" }
+    );
+    expect(second.kind).toBe("executed");
+    expect(module.runActions).toHaveBeenCalledTimes(1);
+    expect(consumeCalls).toBe(2);
+    expect(module.notifyApprovalRequired).toHaveBeenCalledTimes(1);
+  });
+
+  it("a ticket does NOT authorize a different digest or session (R13 binding)", async () => {
+    const module = makeModule();
+    let observeCount = 0;
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => {
+        observeCount++;
+        return {
+          sessionId: SESSION_ID,
+          pageRevision: 4,
+          url: "https://www.youtube.com/upload",
+          origin: "https://www.youtube.com",
+          title: "Upload",
+          state: "ready",
+          elements: [
+            // The target CHANGES between publish and redispatch — a
+            // different semantic program must never reuse the ticket.
+            {
+              ref: "e_pub",
+              role: "button",
+              name: observeCount === 1 ? "Publish" : "Delete",
+              disabled: false,
+            },
+          ],
+          visibleText: "",
+          notices: [],
+          truncated: false,
+        };
+      }
+    );
+    let consumeCalls = 0;
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (_input: unknown): "approve" | "deny" | null => {
+        consumeCalls++;
+        return consumeCalls === 2 ? "approve" : null;
+      }
+    );
+    const moduleWithPeek = module as BrowserModuleLike & {
+      peekApprovalForProgram?: (input: unknown) => "approve" | "deny" | null;
+    };
+    moduleWithPeek.peekApprovalForProgram = vi.fn(
+      (_input: unknown): "approve" | "deny" | null => "approve"
+    );
+    const service = makeService({ module });
+    const clickAction = {
+      type: "click",
+      ref: "e_pub",
+      pageRevision: 4,
+      expectedRole: "button",
+      expectedName: "Publish",
+    } as never;
+
+    const first = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13b" }
+    );
+    expect(first).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: SESSION_ID,
+      requestId: "call-r13b",
+      taskId: "task-r13b",
+    });
+    expect(resolution).toBe("approved");
+
+    // The redispatch sees a DIFFERENT semantic target (Publish → Delete)
+    // — the digest no longer matches the ticket, so a FRESH prompt is
+    // issued and nothing dispatches.
+    const second = await service.runAuthorizedForRunner(
+      SESSION_ID,
+      [clickAction],
+      { conversationId: CTX.conversationId, toolCallId: "call-r13b" }
+    );
+    expect(second).toMatchObject({ kind: "stop", stopCode: "approval_required" });
+    expect(module.notifyApprovalRequired).toHaveBeenCalledTimes(2);
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
+});
+
 describe("risk routing", () => {
   it("navigate to a credential URL triggers handoff and returns challenge_requires_handoff", async () => {
     const module = makeModule();
@@ -228,6 +453,27 @@ describe("risk routing", () => {
     const program = {
       actions: [{ type: "click", ref: "e_abc", pageRevision: 1 }],
     };
+    // P0-3: the ref must exist in the ATTESTED observation — the fake
+    // module exposes one containing e_abc so the click classifies normally.
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        observationId: "obs-p03",
+        pageRevision: 1,
+        url: "https://www.youtube.com",
+        origin: "https://www.youtube.com",
+        title: "YouTube",
+        state: "ready",
+        // A NON-consequential label: the test's intent is an ordinary
+        // reversible click ("Publish" would match the consequential
+        // descriptor markers and always demand approval).
+        elements: [
+          { ref: "e_abc", role: "button", name: "Open details" },
+        ],
+        visibleText: "page text",
+        notices: [],
+        truncated: false,
+      })
+    );
     // The program-level registry confirmation covers ref-only clicks; a
     // credential URL inside the program still forces approval/handoff:
     const err = await errorOf(
@@ -256,7 +502,16 @@ describe("risk routing", () => {
       { ...CTX, skipPermissionCheck: true }
     );
     expect(result.effect).toBe("known");
-    expect(module.runActions).toHaveBeenCalledWith(SESSION_ID, program);
+    // P0-3: the dispatched program is the ATTESTED one — ref/type
+    // preserved, descriptors stamped from the observation.
+    expect(module.runActions).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.objectContaining({
+        actions: [
+          expect.objectContaining({ type: "click", ref: "e_abc" }),
+        ],
+      })
+    );
   });
 });
 
@@ -342,6 +597,36 @@ describe("GAP-01 resolved-target approval", () => {
     );
   });
 
+  // W08/M-FR-05: a CHILD agent runs headless — a consequential call does
+  // NOT throw approval_required (an unactionable error there); it returns
+  // the structured needs_user proposal for that task only. No approval
+  // card is published (there is no interactive card for a child).
+  it("a child agent gets a structured needs_user proposal instead of a throw", async () => {
+    const module = moduleWithObservation();
+    const service = makeService({ module });
+    const result = await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 4,
+        program: { actions: [{ type: "click", ref: "e_pub", pageRevision: 4 }] },
+      },
+      { ...CTX, ownerAgentId: "agt-child-1" }
+    );
+    expect(result).toMatchObject({
+      status: "needs_user",
+      needs_user: {
+        type: "approval",
+        risk_class: "consequential_write",
+      },
+    });
+    expect(
+      String((result.needs_user as { proposed_action: string }).proposed_action)
+    ).toContain("Publish");
+    // The action never reached the module and no approval card fired.
+    expect(module.runActions).not.toHaveBeenCalled();
+    expect(module.notifyApprovalRequired).not.toHaveBeenCalled();
+  });
+
   it("attests expected fingerprints and executes on a DIGEST-MATCHING approval", async () => {
     const module = moduleWithObservation();
     const program = {
@@ -373,6 +658,77 @@ describe("GAP-01 resolved-target approval", () => {
         },
       ],
     });
+  });
+
+  it("D-FR-27: a reobservation (new pageRevision) still consumes a digest-matching approval", async () => {
+    // The SEMANTIC digest is the match key — a reobservation on the same
+    // page keeps the semantic action unchanged, so the approval holds
+    // even though the page revision moved.
+    const module = moduleWithObservation();
+    const program = {
+      actions: [{ type: "click", ref: "e_pub", pageRevision: 7 }],
+    };
+    (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+      (input: { programDigest: string; pageRevision: number }) =>
+        input.pageRevision === 7 ? "approve" : null
+    );
+    const service = makeService({ module });
+    const result = await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 7,
+        program,
+      },
+      CTX
+    );
+    expect(result.effect).toBe("known");
+    // The digest the caller computed was passed for the match.
+    const calls = (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>)
+      .mock.calls as unknown as Array<Record<string, unknown>>;
+    expect(calls[0]).toBeDefined();
+    expect(calls[0]![0]).toMatchObject({
+      sessionId: SESSION_ID,
+      pageRevision: 7,
+    });
+  });
+
+  it("D-FR-27: a SELECT approval binds the resolved option values, not only o_N tokens", async () => {
+    const digests: string[] = [];
+    const runSelect = async (expected: string[] | undefined): Promise<void> => {
+      const module = moduleWithObservation();
+      (module.consumeApprovalForProgram as ReturnType<typeof vi.fn>).mockImplementation(
+        (input: { programDigest: string }) => {
+          digests.push(input.programDigest);
+          return null;
+        }
+      );
+      const service = makeService({ module });
+      await service
+        .runActions(
+          {
+            session_id: SESSION_ID,
+            page_revision: 4,
+            program: {
+              actions: [
+                {
+                  type: "select",
+                  ref: "e_pub",
+                  pageRevision: 4,
+                  values: ["o_0"],
+                  ...(expected ? { expected_values: expected } : {}),
+                },
+              ],
+            },
+          },
+          CTX
+        )
+        .catch(() => undefined);
+    };
+    await runSelect(["de"]);
+    await runSelect(["fr"]);
+    // Same o_N token, DIFFERENT resolved value → DIFFERENT fingerprint.
+    expect(digests).toHaveLength(2);
+    expect(digests[0]).not.toBe(digests[1]);
   });
 
   it("full_access / skipPermissionCheck cannot bypass consequential approval (TODO-MSB-002)", async () => {
@@ -701,4 +1057,712 @@ it("reports a fresh-browser startup failure without retrying or hiding it", asyn
     .mockRejectedValueOnce(new ManagedBrowserError("browser_dependency_missing"));
   await expect(makeService({ module }).startSession({ account_id: 1, purpose: "open" }, CTX)).rejects.toMatchObject({ code: "browser_dependency_missing" });
   expect(module.start).toHaveBeenCalledTimes(2);
+});
+
+// ---------------------------------------------------------------------------
+// F06: in-job approval wait (D-AC-05 pending step preserved)
+// ---------------------------------------------------------------------------
+
+describe("awaitRunnerApproval (F06)", () => {
+  function makeApprovalService(overrides: {
+    peek?: () => "approve" | "deny" | null;
+    consume?: () => "approve" | "deny" | null;
+  }) {
+    const module = makeModule();
+    const service = new ManagedBrowserAiToolService({
+      browserModule: {
+        ...module,
+        peekApprovalForProgram: overrides.peek,
+        consumeApprovalForProgram: overrides.consume,
+      } as unknown as BrowserModuleLike,
+    } as unknown as ManagedBrowserAiToolServiceDeps);
+    return service;
+  }
+
+  it("resolves approved when the user approves the bound program", async () => {
+    const service = makeApprovalService({
+      peek: () => "approve",
+      consume: () => "approve",
+    });
+    // Simulate the seam recording a pending approval binding.
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-app1", {
+      programDigest: "digest-1",
+      pageRevision: 3,
+      sessionId: "mb_app1",
+    });
+    const control = getDefaultAgentTaskControlService();
+    control.register("f06-approve", "conv-1");
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app1",
+      requestId: "req-app1",
+      taskId: "f06-approve",
+      pollIntervalMs: 1,
+      waitWindowMs: 2_000,
+    });
+    expect(resolution).toBe("approved");
+    // The wait opened and closed the intervention (gate reopened).
+    expect(control.getState("f06-approve")).toBe("running");
+    expect(control.get("f06-approve")?.openIntervention).toBeNull();
+  });
+
+  it("resolves denied when the user denies", async () => {
+    const service = makeApprovalService({
+      peek: () => "deny",
+      consume: () => "deny",
+    });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-app2", {
+      programDigest: "digest-2",
+      pageRevision: 3,
+      sessionId: "mb_app2",
+    });
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app2",
+      requestId: "req-app2",
+      taskId: "f06-deny",
+      pollIntervalMs: 1,
+      waitWindowMs: 2_000,
+    });
+    expect(resolution).toBe("denied");
+  });
+
+  it("expires when no approval binding exists for the session", async () => {
+    const service = makeApprovalService({});
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app_missing",
+      requestId: "req-app-none",
+      taskId: "f06-none",
+      pollIntervalMs: 1,
+    });
+    expect(resolution).toBe("expired");
+  });
+
+  it("expires when the window lapses without a decision", async () => {
+    const service = makeApprovalService({ peek: () => null });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-app3", {
+      programDigest: "digest-3",
+      pageRevision: 3,
+      sessionId: "mb_app3",
+    });
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_app3",
+      requestId: "req-app3",
+      taskId: "f06-window",
+      pollIntervalMs: 1,
+      waitWindowMs: 30,
+    });
+    expect(resolution).toBe("expired");
+  });
+
+  // B02/D-FR-10a: a NORMAL approval resolution releases the wait WITHOUT
+  // the resume-generation bump — the approved pending action re-dispatches.
+  // Only an actual user takeover (pause → resume) bumps the generation.
+  it("approval resolution releases the gate WITHOUT bumping the resume generation (B02)", async () => {
+    const service = makeApprovalService({
+      peek: () => "approve",
+      consume: () => "approve",
+    });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-b02gen", {
+      programDigest: "digest-b02",
+      pageRevision: 3,
+      sessionId: "mb_b02gen",
+    });
+    const control = getDefaultAgentTaskControlService();
+    control.register("b02-gen", "conv-1");
+    const before = control.getResumeGeneration("b02-gen");
+    const resolution = await service.awaitRunnerApproval({
+      sessionId: "mb_b02gen",
+      requestId: "req-b02gen",
+      taskId: "b02-gen",
+      pollIntervalMs: 1,
+      waitWindowMs: 2_000,
+    });
+    expect(resolution).toBe("approved");
+    expect(control.getState("b02-gen")).toBe("running");
+    expect(control.getResumeGeneration("b02-gen")).toBe(before);
+    // The contrast: a real USER takeover release still bumps.
+    control.beginIntervention("b02-gen", "user_paused");
+    control.resume("b02-gen");
+    expect(control.getResumeGeneration("b02-gen")).toBe(before + 1);
+  });
+
+  // B02 (benign in-memory probe promoted to a regression test): the
+  // accelerated runner wired to the REAL card wait re-dispatches the
+  // pending step after an approval — before the fix the resume-based
+  // release bumped the generation and the redispatch guard discarded
+  // every approved action (zero actual redispatches).
+  it("the runner re-dispatches the pending step after a REAL card approval (B02)", async () => {
+    const { BrowserTaskRunner } = await import(
+      "@/service/browserDecision/BrowserTaskRunner"
+    );
+    const service = makeApprovalService({
+      peek: () => "approve",
+      consume: () => "approve",
+    });
+    (
+      service as unknown as {
+        pendingRunnerApprovals: Map<string, unknown>;
+      }
+    ).pendingRunnerApprovals.set("req-b02probe", {
+      programDigest: "digest-probe",
+      pageRevision: 3,
+      sessionId: "mb_b02probe",
+    });
+    const clickDecision: import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult = {
+      status: "decided",
+      action: { operation: "CLICK", target_id: "e_bbb", option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    };
+    const doneEntryLike = (): import("@/entityTypes/browserDecisionTypes").BrowserDecisionResult => ({
+      status: "decided",
+      action: { operation: "DONE", target_id: null, option_id: null, key: null, url: null, text: null },
+      uncertainty: { source: "unavailable", confidence: null },
+    });
+    const dispatches: number[] = [];
+    let dispatchCount = 0;
+    const control = getDefaultAgentTaskControlService();
+    const runner = new BrowserTaskRunner(
+      {
+        sessionId: "mb_b02probe",
+        conversationId: "conv-b02",
+        goal: "click go",
+        completionCriteria: [{ kind: "url_contains", value: "/search" }],
+      },
+      {
+        observe: async () => ({
+          sessionId: "mb_b02probe",
+          observationId: "obs-b02",
+          pageRevision: 3,
+          url: "https://example.test/search",
+          origin: "https://example.test",
+          title: "Example",
+          elements: [
+            { ref: "e_aaa", role: "textbox", name: "Query" },
+            { ref: "e_bbb", role: "button", name: "Go" },
+          ],
+          visibleText: "Example Market",
+        }),
+        runActions: async () => {
+          dispatchCount++;
+          dispatches.push(dispatchCount);
+          if (dispatchCount === 1) {
+            return {
+              effect: "known" as const,
+              pageRevision: 3,
+              results: [],
+              stopCode: "approval_required" as const,
+            };
+          }
+          return {
+            effect: "known" as const,
+            pageRevision: 3,
+            results: [{ success: true, errorCode: null }],
+          };
+        },
+        decisionClient: {
+          getCapabilities: async () => ({}) as never,
+          decide: async () =>
+            dispatches.length === 0 ? clickDecision : doneEntryLike(),
+        },
+        route: "chat" as const,
+        control,
+        awaitApproval: (input: { taskId: string }) =>
+          service.awaitRunnerApproval({
+            sessionId: "mb_b02probe",
+            requestId: "req-b02probe",
+            taskId: input.taskId,
+            pollIntervalMs: 1,
+            waitWindowMs: 2_000,
+          }),
+      }
+    );
+    const result = await runner.run();
+    // The approval produced ONE actual redispatch (2 dispatches total)
+    // and the task completed — not a discarded stale action.
+    expect(dispatches).toEqual([1, 2]);
+    expect(result.status).toBe("completed");
+    expect(result.evidence).toContain("CLICK:Go:approval_granted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F16: session-long runner ownership lease
+// ---------------------------------------------------------------------------
+
+describe("executeTask runner ownership (F16)", () => {
+  it("refuses a second runner on a session that is already owned", async () => {
+    const service = makeService({});
+    // An active runner owns the session (registered at its admission).
+    (
+      service as unknown as {
+        runnerOwnedSessions: Map<string, string>;
+      }
+    ).runnerOwnedSessions.set(SESSION_ID, "task_owner1");
+    await expect(
+      service.executeTask(
+        { session_id: SESSION_ID, goal: "second runner" },
+        { conversationId: CTX.conversationId, toolCallId: "call-f16" }
+      )
+    ).rejects.toMatchObject({
+      code: "session_not_owned",
+      reasonCode: "session_owned_by_active_runner",
+    });
+  });
+
+  it("admits a runner when no ownership is registered", async () => {
+    const service = makeService({});
+    // The ownership check passes; the flow proceeds past it (the follow-up
+    // gates may fail on fakes, but NOT with session_owned_by_active_runner).
+    try {
+      await service.executeTask(
+        { session_id: SESSION_ID, goal: "single runner" },
+        { conversationId: CTX.conversationId, toolCallId: "call-f16" }
+      );
+    } catch (error) {
+      expect((error as { reasonCode?: string }).reasonCode).not.toBe(
+        "session_owned_by_active_runner"
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F16/P0: synchronous runner admission serialization
+// ---------------------------------------------------------------------------
+
+describe("executeTask admission serialization (F16/P0)", () => {
+  it("rejects a second runner while the first reservation is pending", async () => {
+    const service = makeService({});
+    // The first runner reserved synchronously and is still inside its
+    // awaited admission (pending) or running — either way the second
+    // admission is refused BEFORE any await.
+    (
+      service as unknown as {
+        runnerOwnedSessions: Map<string, string>;
+      }
+    ).runnerOwnedSessions.set(SESSION_ID, "pending");
+    await expect(
+      service.executeTask(
+        { session_id: SESSION_ID, goal: "overlapping" },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-b" }
+      )
+    ).rejects.toMatchObject({
+      code: "session_not_owned",
+      reasonCode: "session_owned_by_active_runner",
+    });
+    // The refused admission did NOT evict the first owner.
+    expect(
+      (service as unknown as { runnerOwnedSessions: Map<string, string> })
+        .runnerOwnedSessions.get(SESSION_ID)
+    ).toBe("pending");
+  });
+
+  it("releases the reservation when admission fails before ownership", async () => {
+    const service = makeService({ browserEnabled: false });
+    await expect(
+      service.executeTask(
+        { session_id: SESSION_ID, goal: "will fail the gate" },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-c" }
+      )
+    ).rejects.toBeDefined();
+    // The synchronous reservation was released on the early return.
+    expect(
+      (service as unknown as { runnerOwnedSessions: Map<string, string> })
+        .runnerOwnedSessions.has(SESSION_ID)
+    ).toBe(false);
+    // A retry is admitted (past the ownership check).
+    try {
+      await service.executeTask(
+        { session_id: SESSION_ID, goal: "retry" },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-d" }
+      );
+    } catch (error) {
+      expect((error as { reasonCode?: string }).reasonCode).not.toBe(
+        "session_owned_by_active_runner"
+      );
+    }
+  });
+
+  it("ordinary mutation tools are refused while a runner owns the session", async () => {
+    const service = makeService({});
+    (
+      service as unknown as {
+        runnerOwnedSessions: Map<string, string>;
+      }
+    ).runnerOwnedSessions.set(SESSION_ID, "task_owner1");
+    await expect(
+      service.navigate(
+        {
+          session_id: SESSION_ID,
+          url: "https://www.youtube.com/",
+          page_revision: 1,
+        },
+        { conversationId: CTX.conversationId, toolCallId: "call-p0-e" }
+      )
+    ).rejects.toMatchObject({
+      code: "session_not_owned",
+      reasonCode: "session_owned_by_active_runner",
+    });
+  });
+});
+
+describe("P0-3 fail-closed refs", () => {
+  it("a targeted ref missing from the attested observation is rejected, never auto-executed", async () => {
+    const module = makeModule(); // getLastObservation → null
+    const service = makeService({ module });
+    const err = await errorOf(
+      service.runActions(
+        {
+          session_id: SESSION_ID,
+          page_revision: 1,
+          program: {
+            actions: [{ type: "click", ref: "e_ghost", pageRevision: 1 }],
+          },
+        },
+        { ...CTX, skipPermissionCheck: true }
+      )
+    );
+    expect(err.code).toBe("stale_page_reference");
+    // The module was never called — nothing executed.
+    expect(module.runActions).not.toHaveBeenCalled();
+  });
+
+  it("model-authored expectedRole/expectedName are stripped at the boundary", async () => {
+    const module = makeModule();
+    (module.getLastObservation as ReturnType<typeof vi.fn>).mockImplementation(
+      () => ({
+        observationId: "obs-p03b",
+        pageRevision: 1,
+        url: "https://www.youtube.com",
+        origin: "https://www.youtube.com",
+        title: "YouTube",
+        state: "ready",
+        elements: [{ ref: "e_abc", role: "button", name: "Real Name" }],
+        visibleText: "page text",
+        notices: [],
+        truncated: false,
+      })
+    );
+    const service = makeService({ module });
+    await service.runActions(
+      {
+        session_id: SESSION_ID,
+        page_revision: 1,
+        program: {
+          actions: [
+            {
+              type: "click",
+              ref: "e_abc",
+              pageRevision: 1,
+              expectedRole: "link",
+              expectedName: "Attacker-chosen name",
+            },
+          ],
+        },
+        },
+        { ...CTX, skipPermissionCheck: true }
+      );
+      const dispatched = (module.runActions as ReturnType<typeof vi.fn>).mock
+        .calls[0][1] as {
+        actions: Array<{ expectedName?: string; expectedRole?: string }>;
+      };
+      // The model-authored descriptor never reaches the worker — the
+      // ATTESTED one is stamped in its place.
+      expect(dispatched.actions[0]!.expectedName).toBe("Real Name");
+      expect(
+        JSON.stringify(dispatched)
+      ).not.toContain("Attacker-chosen name");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// B11/M-FR-07: sub-agent session ownership — the ROOT (parent) conversation
+// rides the start call, is recorded on the session, and may drive/read the
+// session; every OTHER conversation stays rejected.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService sub-agent ownership (B11)", () => {
+  const SUB_AGENT_CTX = {
+    conversationId: "agent-v2-child",
+    toolCallId: "call-agent-1",
+    ownerAgentId: "agt-123",
+    rootConversationId: "conv-parent",
+  };
+
+  it("startSession forwards agentTaskId and rootConversationId to the module", async () => {
+    const module = makeModule();
+    const service = makeService({ module });
+    await service.startSession({ purpose: "open website" }, SUB_AGENT_CTX);
+    const startInput = (module.start as ReturnType<typeof vi.fn>).mock
+      .calls[0]![0] as Record<string, unknown>;
+    expect(startInput.agentTaskId).toBe("agt-123");
+    expect(startInput.rootConversationId).toBe("conv-parent");
+    expect(startInput.conversationId).toBe("agent-v2-child");
+  });
+
+  it("the ROOT conversation may drive the sub-agent's session", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({
+            ownerConversationId: "agent-v2-child",
+            rootConversationId: "conv-parent",
+          })
+        : null
+    );
+    const service = makeService({ module });
+    // Observe from the PARENT conversation: accepted (read/takeover).
+    const obs = await service.observe({ session_id: SESSION_ID }, {
+      ...CTX,
+      conversationId: "conv-parent",
+    });
+    expect(obs.sessionId).toBe(SESSION_ID);
+  });
+
+  it("every OTHER conversation is still rejected", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({
+            ownerConversationId: "agent-v2-child",
+            rootConversationId: "conv-parent",
+          })
+        : null
+    );
+    const service = makeService({ module });
+    await expect(
+      service.observe({ session_id: SESSION_ID }, {
+        ...CTX,
+        conversationId: "conv-stranger",
+      })
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B12/C-FR-02: browser_request_handoff BLOCKS inside the tool until the
+// user resolves / the window expires / the task stops; expiry and cancel
+// map to interrupted (never failed).
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService blocking handoff (B12)", () => {
+  const HANDOFF_CTX = {
+    conversationId: "agent-v2-child",
+    toolCallId: "call-handoff-1",
+  };
+
+  it("blocks until the user resolves and reports handoff_resolution resolved", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({ state: "ready" }) // the user already resumed via the dialog
+        : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    const result = (await service.requestHandoff(
+      { session_id: SESSION_ID },
+      HANDOFF_CTX
+    )) as Record<string, unknown>;
+    expect(result.handoff_resolution).toBe("resolved");
+    expect(result.interrupted).toBe(false);
+    // The coordinator opened the handoff with the schema-valid reason.
+    expect(module.requestHandoff).toHaveBeenCalledWith(
+      SESSION_ID,
+      "user_requested"
+    );
+  });
+
+  it("maps an EXPIRED window to interrupted (never failed)", async () => {
+    const module = makeModule();
+    // The window lapses: the session stops (scheduleHandoffExpiry path).
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID ? status({ state: "stopped" }) : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    const result = (await service.requestHandoff(
+      { session_id: SESSION_ID },
+      HANDOFF_CTX
+    )) as Record<string, unknown>;
+    expect(result.handoff_resolution).toBe("expired");
+    expect(result.interrupted).toBe(true);
+    // The control record for THIS task is interrupted, not failed.
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const control = getDefaultAgentTaskControlService();
+    const record = control.get("call-handoff-1");
+    expect(record?.state).toBe("interrupted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E03: EVERY browser tool enforces session ownership — a foreign
+// conversation receives session_not_owned; the owning conversation passes.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService ownership on all tools (E03)", () => {
+  function ownedModule() {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({ ownerConversationId: "conv-owner", rootConversationId: null })
+        : null
+    );
+    return module;
+  }
+
+  const OWNER_CTX = { conversationId: "conv-owner", toolCallId: "call-owner" };
+  const FOREIGN_CTX = {
+    conversationId: "conv-stranger",
+    toolCallId: "call-stranger",
+  };
+
+  it("browser_get_status rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.getStatus({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+    const ok = await service.getStatus({ session_id: SESSION_ID }, OWNER_CTX);
+    expect(ok.sessionId).toBe(SESSION_ID);
+  });
+
+  it("browser_request_handoff rejects a foreign conversation", async () => {
+    const module = ownedModule();
+    const service = makeService({ module });
+    await expect(
+      service.requestHandoff({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+    void module;
+  });
+
+  it("browser_resume_after_handoff rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.resumeAfterHandoff({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("browser_screenshot rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.captureScreenshot({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("browser_stop_session rejects a foreign conversation", async () => {
+    const service = makeService({ module: ownedModule() });
+    await expect(
+      service.stopSession({ session_id: SESSION_ID }, FOREIGN_CTX)
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("browser_clear_cache rejects a foreign conversation", async () => {
+    const module = ownedModule();
+    const service = makeService({
+      module,
+      cacheModule: { clearCache: vi.fn(async () => ({ state: "cleared" })) },
+    });
+    await expect(
+      service.clearCache(
+        {
+          session_id: SESSION_ID,
+          confirmation_id: "confirmation-12345678",
+        } as never,
+        FOREIGN_CTX
+      )
+    ).rejects.toMatchObject({ reasonCode: "session_not_owned" });
+  });
+
+  it("the ROOT conversation of a sub-agent session is accepted", async () => {
+    const module = ownedModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID
+        ? status({
+            ownerConversationId: "agent-v2-child",
+            rootConversationId: "conv-parent",
+          })
+        : null
+    );
+    const service = makeService({ module });
+    const ok = await service.getStatus({ session_id: SESSION_ID }, {
+      ...CTX,
+      conversationId: "conv-parent",
+    });
+    expect(ok.sessionId).toBe(SESSION_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E04/C-FR-02/09/12: the handoff wait lands on the OWNING agent task id
+// (not handoff-*), freezes the PARENT JOB's user-wait flag, and honors
+// the model's reason.
+// ---------------------------------------------------------------------------
+
+describe("ManagedBrowserAiToolService blocking handoff (E04)", () => {
+  const AGENT_CTX = {
+    conversationId: "agent-v2-child",
+    toolCallId: "call-handoff-agent",
+    ownerAgentId: "agt-owner-1",
+    jobId: "job-parent-1",
+  };
+
+  it("registers the wait under the OWNING agent task id, not handoff-*", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID ? status({ state: "ready" }) : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    const result = (await service.requestHandoff(
+      { session_id: SESSION_ID, reason: "login_required" },
+      AGENT_CTX
+    )) as Record<string, unknown>;
+    expect(result.handoff_resolution).toBe("resolved");
+    const { getDefaultAgentTaskControlService } = await import(
+      "@/service/browserAgents/AgentTaskControlService"
+    );
+    const control = getDefaultAgentTaskControlService();
+    // The intervention/wait record is under the agent task id.
+    expect(control.get("agt-owner-1")).toBeDefined();
+    // The model's reason was mapped to a schema-valid handoff reason.
+    expect(module.requestHandoff).toHaveBeenCalledWith(
+      SESSION_ID,
+      "login_required"
+    );
+  });
+
+  it("an unmappable model reason stays user_requested", async () => {
+    const module = makeModule();
+    module.getStatus = vi.fn((sessionId: string) =>
+      sessionId === SESSION_ID ? status({ state: "ready" }) : null
+    );
+    defaultModuleHolder.current = module;
+    const service = makeService({ module });
+    await service.requestHandoff(
+      { session_id: SESSION_ID, reason: "something odd" },
+      AGENT_CTX
+    );
+    const moduleMock = module;
+    expect(moduleMock.requestHandoff).toHaveBeenCalledWith(
+      SESSION_ID,
+      "user_requested"
+    );
+  });
 });

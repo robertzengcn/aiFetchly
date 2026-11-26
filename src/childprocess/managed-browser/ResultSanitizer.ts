@@ -23,6 +23,10 @@ const SECRET_VALUE_PATTERNS: readonly RegExp[] = [
   /^(?:[0-9a-f]{32,})$/i, // hex digest / random token
   /^gh[pousr]_[A-Za-z0-9]{20,}$/, // GitHub-style PAT
   /^sk-[A-Za-z0-9]{16,}$/, // API-key shape
+  // A-FR-15: internal credential sentinels (e.g. __decrypt_failed__) are
+  // markers, never page data — they must never leak through observations
+  // or logs as if they were content.
+  /^__[a-z0-9_]+__$/i,
 ];
 
 /**
@@ -39,7 +43,72 @@ export function isLikelySecretKey(key: string): boolean {
   return SECRET_KEY_PATTERN.test(key);
 }
 
+// ---------------------------------------------------------------------------
+// B09/A-FR-15: TRUSTED-SECRET containment. Pattern checks cannot catch an
+// ordinary synthetic credential ("summer2024!") embedded in page text —
+// the value does not look like a secret. The WORKER KNOWS the values it
+// actually filled: LoginFormFiller's credential registers them here, and
+// every redaction path redacts the EXACT value from every outbound
+// channel (observation text/titles, structured records, action results,
+// extraction). Bounded registry (FIFO, max 8) — old values age out.
+// ---------------------------------------------------------------------------
+const trustedSecrets: string[] = [];
+const TRUSTED_SECRET_MAX = 8;
+
+export function registerTrustedSecret(value: string): void {
+  // N07: the credential schemas accept values of length 1 — containment
+  // covers EVERY accepted length. An empty value is skipped (nothing to
+  // contain), and a same-value re-registration just moves it to newest.
+  if (!value) {
+    return;
+  }
+  const existing = trustedSecrets.indexOf(value);
+  if (existing >= 0) {
+    trustedSecrets.splice(existing, 1);
+  }
+  trustedSecrets.push(value);
+  while (trustedSecrets.length > TRUSTED_SECRET_MAX) {
+    trustedSecrets.shift();
+  }
+}
+
+/** Test seam — clears every registered trusted secret. */
+export function clearTrustedSecretsForTest(): void {
+  trustedSecrets.length = 0;
+}
+
+/** The filled credential itself, anywhere in text, is containment-critical. */
+function containsTrustedSecret(text: string): boolean {
+  return trustedSecrets.some((secret) => text.includes(secret));
+}
+
+/** Replace every registered trusted secret occurrence in text. */
+export function redactTrustedSecrets(text: string): string {
+  let out = text;
+  for (const secret of trustedSecrets) {
+    if (out.includes(secret)) {
+      out = out.split(secret).join(REDACTED_MARKER);
+    }
+  }
+  return out;
+}
+
+/** Does text carry an ACTUAL filled credential (exact value)? */
+export function containsTrustedSecretValue(text: string): boolean {
+  return containsTrustedSecret(text);
+}
+
+/** N07: clear registered secrets when the session/work ends. */
+export function clearTrustedSecrets(): void {
+  trustedSecrets.length = 0;
+}
+
 export function isLikelySecretValue(value: string): boolean {
+  // B09: internal sentinels are markers at ANY length — the min-length
+  // gate must not let a shorter marker through.
+  if (/^__[a-z0-9_]+__$/i.test(value)) {
+    return true;
+  }
   if (value.length < 16) {
     // Too short to be a meaningful secret; avoid false positives on normal
     // short text (names, single words).
@@ -60,6 +129,11 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
     return "[depth_limit]";
   }
   if (typeof value === "string") {
+    // B09: the ACTUAL filled credential is redacted by exact value first,
+    // at any length, before any shape heuristic.
+    if (containsTrustedSecret(value)) {
+      return redactTrustedSecrets(value);
+    }
     return isLikelySecretValue(value) ? REDACTED_MARKER : value;
   }
   if (Array.isArray(value)) {
@@ -68,7 +142,12 @@ export function redactSecrets(value: unknown, depth = 0): unknown {
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = isLikelySecretKey(key)
+      // R03: the trusted pass applies to KEYS as well — a credential
+      // echoed into a property name must not survive structured output.
+      const safeKey = containsTrustedSecret(key)
+        ? redactTrustedSecrets(key)
+        : key;
+      out[safeKey] = isLikelySecretKey(key)
         ? REDACTED_MARKER
         : redactSecrets(val, depth + 1);
     }
@@ -92,6 +171,11 @@ export function redactSecretsInText(text: string): string {
   if (!text) {
     return text;
   }
+  // B09 pass 0: the ACTUAL filled credential (exact value, any length,
+  // any position) is containment-critical — redact before shape passes.
+  if (containsTrustedSecret(text)) {
+    text = redactTrustedSecrets(text);
+  }
   // Pass 1: secret-shaped key=value / key: value pairs → key=[redacted].
   const out = text.replace(
     INLINE_KEY_VALUE_SECRET,
@@ -107,7 +191,7 @@ export function redactSecretsInText(text: string): string {
     }
     // Strip sentence punctuation for the shape check, keep the marker swap.
     const bare = token.replace(/^[("']+|[)"'\],.;:!?]+$/g, "");
-    if (bare.length >= 16 && isLikelySecretValue(bare)) {
+    if (isLikelySecretValue(bare)) {
       tokens[i] = token.replace(bare, REDACTED_MARKER);
     }
   }
@@ -123,6 +207,19 @@ export function truncateText(
     return { text, truncated: false };
   }
   return { text: text.slice(0, max), truncated: true };
+}
+
+/**
+ * B04/A-FR-08/15: scrubbing for page/runtime-authored FREE-FORM text on
+ * OUTBOUND paths that are not observations — worker error messages and
+ * field-history stamps. Page content (a URL echoed by a navigation error,
+ * a planted field name) is untrusted input: the trusted pass (exact
+ * filled credential) applies FIRST, then the shape heuristics, and the
+ * length cap is re-enforced LAST (redaction replacement can expand the
+ * text past the cap).
+ */
+export function sanitizeWorkerText(text: string, maxChars: number): string {
+  return truncateText(redactSecretsInText(redactTrustedSecrets(text)), maxChars).text;
 }
 
 /** Sensitive input types whose values must never be echoed. */
@@ -154,6 +251,17 @@ export function summarizeInputValue(
   }
   if (inputType && isSensitiveInputType(inputType)) {
     return "[password-like]";
+  }
+  // A04: the EXACT filled credential pass runs FIRST — a value echoed
+  // into another nonsensitive input is contained regardless of shape.
+  // R03: the budget is re-enforced AFTER the redaction — the replacement
+  // can expand the summary past the wire cap and reject the observation.
+  if (containsTrustedSecret(value)) {
+    const { text } = truncateText(
+      redactTrustedSecrets(value),
+      MANAGED_BROWSER_OBSERVATION_BUDGETS.maxValueSummaryChars
+    );
+    return text;
   }
   if (isLikelySecretValue(value)) {
     return REDACTED_MARKER;

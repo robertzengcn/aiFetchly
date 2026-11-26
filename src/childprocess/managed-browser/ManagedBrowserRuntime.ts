@@ -28,6 +28,7 @@ export type ManagedBrowserCommandType =
   | "RESUME_HANDOFF"
   | "VERIFY_MANUAL_LOGIN"
   | "CANCEL_REQUEST"
+  | "FILL_LOGIN_FORM"
   | "STOP_SESSION";
 
 export type CommandGuardResult =
@@ -44,10 +45,13 @@ const OBSERVE_STATES: ReadonlySet<ManagedBrowserSessionState> = new Set([
 const ACTION_STATES: ReadonlySet<ManagedBrowserSessionState> = new Set([
   "ready",
   "running",
+  // login_required: the adapter says the user is NOT authenticated and
+  // the automated sign-in flow is about to run — AI commands (including
+  // FILL_LOGIN_FORM) must be allowed here. This is NOT user control.
+  "login_required",
 ]);
 
 const USER_CONTROL_STATES: ReadonlySet<ManagedBrowserSessionState> = new Set([
-  "login_required",
   "user_login_in_progress",
   "verifying_manual_login",
   "handoff",
@@ -92,18 +96,36 @@ export function assertCommandAllowed(
       return ACTION_STATES.has(state)
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
+    case "FILL_LOGIN_FORM":
+      // R19/C-FR-05 + login_required: automated sign-in MUST be allowed
+      // when the adapter reported LOGIN_REQUIRED (that's the whole point).
+      // It is BLOCKED when the user is manually logging in
+      // (user_login_in_progress) or has taken control (handoff).
+      if (
+        state === "user_login_in_progress" || state === "handoff"
+      ) {
+        return { ok: false, errorCode: "user_has_control" };
+      }
+      if (CHALLENGE_STATES.has(state)) {
+        return { ok: false, errorCode: "challenge_in_progress" };
+      }
+      return state === "ready" || state === "running" || state === "login_required"
+        ? { ok: true }
+        : { ok: false, errorCode: "action_not_allowed" };
     case "BEGIN_HANDOFF":
       return ACTION_STATES.has(state) || OBSERVE_STATES.has(state)
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
     case "RESUME_HANDOFF":
-      return state === "handoff"
+      return state === "handoff" || state === "login_required"
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
     case "VERIFY_MANUAL_LOGIN":
       // The handoff dialog's "I've finished logging in" is this command.
-      // Takeover and captcha land in `handoff`, not `user_login_in_progress`.
+      // login_required is also accepted (automated sign-in may fail and
+      // the user can verify manually from that state).
       return state === "user_login_in_progress" || state === "handoff"
+        || state === "login_required"
         ? { ok: true }
         : { ok: false, errorCode: "action_not_allowed" };
     default:

@@ -20,9 +20,9 @@ import type {
   MoveResult,
   PresenceResult,
   SentCopyAppendResult,
+  ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationArtifactBackend } from "@/service/emailOrganization/EmailOrganizationArtifactStore";
-import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
 import { EmailServiceEntity } from "@/entity/EmailService.entity";
 import { EmailReceivedMessageEntity } from "@/entity/EmailReceivedMessage.entity";
 import { EmailMessageLocationModel } from "@/model/EmailMessageLocation.model";
@@ -33,7 +33,7 @@ import { EMAIL_ORGANIZATION_LIMITS } from "@/entityTypes/emailOrganizationTypes"
 let dbpath = "";
 let materializer: EmailForwardMaterializer;
 let draftService: EmailForwardDraftService;
-let deliveryService: EmailForwardDeliveryService;
+let _deliveryService: EmailForwardDeliveryService;
 let authorizationModule: EmailOrganizationAuthorizationModule;
 let artifacts: MemoryArtifacts;
 
@@ -101,7 +101,7 @@ class FakeAdapter implements EmailMailboxAdapter {
   async checkMessagePresent(): Promise<PresenceResult> {
     return { status: "present" };
   }
-  async searchUids() {
+  async searchUids(): Promise<ServerSearchResult> {
     return { status: "listed" as const, candidates: [], capped: false };
   }
   async appendSent(): Promise<SentCopyAppendResult> {
@@ -141,7 +141,7 @@ function makeSenderFactory(
   callLog: Array<{ to: unknown; attachmentCount: number; subject: string }>
 ): ForwardSenderFactory {
   return (_param: SenderParam): ForwardSender => ({
-    async sendMail(options) {
+    async sendMail(options): ReturnType<ForwardSender["sendMail"]> {
       const to = options.to;
       const call = {
         to,
@@ -236,7 +236,7 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
     }));
     materializer = new EmailForwardMaterializer({ adapter, artifactStore: artifacts });
     draftService = new EmailForwardDraftService({ adapter, artifactStore: artifacts });
-    deliveryService = new EmailForwardDeliveryService({
+    _deliveryService = new EmailForwardDeliveryService({
       adapter,
       artifactStore: artifacts,
       senderFactory: makeSenderFactory(
@@ -734,7 +734,7 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
       source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
       uidValidity: "4242",
     }));
-    failingAppendAdapter.appendSent = async () => {
+    failingAppendAdapter.appendSent = async (): Promise<SentCopyAppendResult> => {
       appendCalls += 1;
       return { status: "failed" as const, reasonCode: "PROVIDER_REJECTED", sanitizedError: "mailbox full" };
     };
@@ -1189,7 +1189,7 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
       source: Buffer.from(RFC822_WITH_ATTACHMENT, "utf8"),
       uidValidity: "4242",
     }));
-    failingAppendAdapter.appendSent = async () => ({
+    failingAppendAdapter.appendSent = async (): Promise<SentCopyAppendResult> => ({
       status: "failed",
       reasonCode: "PROVIDER_REJECTED",
       sanitizedError: "append rejected",
@@ -1251,7 +1251,7 @@ describe("EmailForwardMaterializer + DraftService + DeliveryService", () => {
     // sendMail is entered — the audit's exact pre-dispatch window.
     const operationModule = delivery["operationModule"];
     (operationModule as unknown as { markAttemptDispatched: () => Promise<void> }).markAttemptDispatched =
-      () => Promise.reject(new Error("attempt row update failed"));
+      (): Promise<void> => Promise.reject(new Error("attempt row update failed"));
 
     const outcome = await delivery.sendApprovedForward({
       draftId: preview.draftId,

@@ -105,7 +105,7 @@ export class ImapEmailMailboxAdapter implements EmailMailboxAdapter {
   constructor(options?: { connectionFactory?: MailboxActionConnectionFactory }) {
     this.connectionFactory =
       options?.connectionFactory ??
-      ((imapOptions) => {
+      ((imapOptions): MailboxActionConnection => {
         // Lazy import keeps the real client out of pure-unit test paths.
         // (A top-level import would load imapflow into every suite that
         // imports this module; the lazy require is deliberate.)

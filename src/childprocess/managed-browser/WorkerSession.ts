@@ -15,6 +15,7 @@ import type {
 import type {
   BrowserActionProgram,
   ManagedBrowserInboundMessage,
+  WorkerLoginRecipe,
   ManagedBrowserOutboundMessage,
 } from "@/schemas/worker/managedBrowser";
 import { authenticationAssessmentSchema } from "@/schemas/worker/managedBrowser";
@@ -39,6 +40,8 @@ import {
   type ObservationPageLike,
 } from "@/childprocess/managed-browser/BrowserObservationService";
 import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageReferenceRegistry";
+import { LoginFormFiller } from "@/childprocess/managed-browser/LoginFormFiller";
+
 import type {
   ExecutorElementHandle,
   ExecutorPageLike,
@@ -46,13 +49,21 @@ import type {
 import { BrowserActionExecutor } from "@/childprocess/managed-browser/BrowserActionExecutor";
 import { YouTubeBrowserAdapter } from "@/childprocess/managed-browser/adapters/YouTubeBrowserAdapter";
 import { PublicBrowserAdapter } from "@/childprocess/managed-browser/adapters/PublicBrowserAdapter";
-import type { PlatformBrowserAdapter } from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
+import { GenericSignInAdapter } from "@/childprocess/managed-browser/adapters/GenericSignInAdapter";
+import type {
+  DetectedChallenge,
+  PlatformBrowserAdapter,
+} from "@/childprocess/managed-browser/adapters/PlatformBrowserAdapter";
 import {
+  clearTrustedSecrets,
   redactSecrets,
+  registerTrustedSecret,
   sanitizeScriptResult,
+  sanitizeWorkerText,
   toSafeErrorMessage,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
+import { windowTitleMarkerScript } from "@/childprocess/managed-browser/WindowTitleMarker";
 
 /**
  * Managed-browser worker session (technical design §4 worker column).
@@ -89,6 +100,12 @@ export interface PuppeteerDownloadLike {
 export interface PuppeteerPageLike
   extends ObservationPageLike,
     ExecutorPageLike {
+  /**
+   * R05/M-FR-13: an early init script (the AI window-title marker
+   * re-applies on every document load). Optional — the real Puppeteer
+   * page provides it; fakes may omit it.
+   */
+  evaluateOnNewDocument?: (script: string) => Promise<unknown>;
   /** Main-frame + sub-frame navigation events (used to invalidate refs). */
   on(
     event: "framenavigated",
@@ -173,6 +190,7 @@ export class WorkerSession {
   private readonly registry =
     new PageReferenceRegistry<ExecutorElementHandle>();
   private readonly executor = new BrowserActionExecutor();
+  private readonly loginFiller = new LoginFormFiller();
   private adapter: PlatformBrowserAdapter =
     new YouTubeBrowserAdapter();
 
@@ -189,6 +207,15 @@ export class WorkerSession {
   /** GAP-05: redirect storms emit ONE challenge — dedupe by kind+origin. */
   private lastChallengeKey: string | null = null;
   private lastChallengeAtEpochMs = 0;
+  /**
+   * E13/D-FR-16: URL keys (origin+path+query+fragment) observed as link
+   * hrefs since the last navigation — the worker-side navigation gate
+   * authorizes a goto only against these, the current page, or the same
+   * key.
+   */
+  private observedUrlKeys = new Set<string>();
+  /** E15/D-FR-26: input-dispatch state of the IN-FLIGHT program. */
+  private currentDispatchFlag: { inputDispatched: boolean } | null = null;
 
   constructor(deps: WorkerSessionDeps) {
     this.sessionId = deps.sessionId;
@@ -218,7 +245,20 @@ export class WorkerSession {
       return;
     }
     this.platformDefinition = payload.platform;
-    if (payload.platform.platformId === 0) this.adapter = new PublicBrowserAdapter();
+    // R09/S-FR-05: generic adapter for non-YouTube registered sites;
+    // YouTube keeps its dedicated adapter, public browsing uses the
+    // public adapter, and anything else gets the generic sign-in adapter.
+    if (payload.platform.platformId === 0) {
+      this.adapter = new PublicBrowserAdapter();
+    } else if (payload.platform.platformId !== 2) {
+      this.adapter = new GenericSignInAdapter({
+        platformId: payload.platform.platformId,
+        key: payload.platform.platformName,
+        allowedOrigins: payload.platform.allowedDomainSuffixes,
+        loginUrl: payload.platform.loginUrl,
+        verificationUrl: payload.platform.verificationUrl,
+      });
+    }
     this.storagePolicy = payload.storagePolicy;
     this.executableVersion = payload.executable.version;
     try {
@@ -236,6 +276,10 @@ export class WorkerSession {
         userDataDir: storagePolicy.temporaryProfilePath,
         diskCacheDir,
         proxyServer,
+        // R05/M-FR-13: concurrent sessions tile/offset.
+        ...(payload.windowLayout
+          ? { windowPosition: payload.windowLayout.position }
+          : {}),
       });
       const launch = this.launch ?? defaultLaunchBrowser;
       const browser = await launch({
@@ -259,6 +303,18 @@ export class WorkerSession {
       const pages = await browser.pages();
       this.page = pages[0] ?? (await browser.newPage());
       this.watchPageNavigations(this.page);
+      // R05/M-FR-13: the OS window title names the AI controller. The
+      // marker re-applies on every document load (the page's own scripts
+      // can overwrite it afterwards — a best-effort label, not a
+      // security control).
+      if (payload.windowLayout?.aiWindowTitle && this.page.evaluateOnNewDocument) {
+        // C04/M-FR-13: the marker is IDEMPOTENT — the old plain
+        // concatenation grew "[AI] [AI] ..." on every document load, and
+        // the marker never left the title after a takeover.
+        const markerScript = windowTitleMarkerScript("[AI]");
+        await this.page.evaluateOnNewDocument(markerScript);
+        await this.page.evaluate(markerScript).catch(() => undefined);
+      }
       if (
         proxy &&
         proxy.mode !== "direct" &&
@@ -271,7 +327,9 @@ export class WorkerSession {
           password: proxy.password ?? "",
         });
       }
-      await this.page.bringToFront().catch(() => undefined);
+      // C-FR-10/R04: the worker NEVER steals focus — a launch must not
+      // yank the user's foreground window. The user focuses the task
+      // window deliberately (BROWSER_TASK_FOCUS_WINDOW request path).
 
       if (storagePolicy.persistentCache.enabled) {
         this.send({
@@ -335,7 +393,9 @@ export class WorkerSession {
         case "authenticated": {
           await this.captureAndSendRefreshedCookies(payload.requestId);
           this.runtime.transition("ready");
-          this.registry.reset(this.runtime.pageRevision + 1);
+          // P0-5: bump from the REGISTRY's own revision — runtime.pageRevision
+      // never advances, so the old form reused revisions after handoffs.
+      this.registry.reset(this.registry.currentRevision + 1);
           this.send({
             ...this.base(payload.requestId),
             type: "SESSION_READY",
@@ -361,8 +421,9 @@ export class WorkerSession {
         case "unauthenticated":
         case "unknown": {
           // Same-context manual login handoff (FR-HANDOFF-001).
+          // F10: stay in login_required (non-user-control) so the
+          // automated sign-in flow (browser_sign_in) can run.
           this.runtime.transition("login_required");
-          this.runtime.transition("user_login_in_progress");
           this.send({
             ...this.base(payload.requestId),
             type: "LOGIN_REQUIRED",
@@ -452,33 +513,121 @@ export class WorkerSession {
     const abort = new AbortController();
     this.currentRunActionsAbort = abort;
     try {
+      const dispatchFlag = { inputDispatched: false };
+      this.currentDispatchFlag = dispatchFlag;
+      let dispatchedSteps = 0;
       const outcome = await this.executor.executeProgram(program, {
         page,
         registry: this.registry,
         navigation: {
           publicBrowsing: this.platformDefinition?.platformId === 0,
+          // E01/F23: the E2E launch permits the loopback HTTP fixtures
+          // (the network guard already constrains the app to loopback);
+          // production/dev builds never define AIFETCHLY_E2E.
+          allowLoopbackFixtures: process.env.AIFETCHLY_E2E === "1",
           allowedOrigins: [
             ...this.adapter.allowedOrigins,
             ...this.adapter.loginOrigins,
           ],
         },
+        dispatchFlag,
+        onLeaf: (info) => {
+          // E15/D-FR-26: stream dispatch state so the module's step-timeout
+          // path can classify known no-effect vs unknown.
+          dispatchedSteps++;
+          this.send({
+            ...this.base(`evt-progress-${this.now()}`),
+            type: "ACTION_PROGRESS",
+            phase: "acting",
+            completedSteps: dispatchedSteps,
+            totalSteps: null,
+            messageCode: 'e15-dispatch',
+            inputDispatched: info.inputDispatched,
+          });
+        },
+        // E13/D-FR-16: the worker-side gate authorizes a goto only against
+        // observed link URLs and the current page.
+        observedUrlKeys: this.observedUrlKeys,
+        currentPageKey: (() => {
+          try {
+            const u = new URL(page.url());
+            return `${u.origin}${u.pathname}${u.search}${u.hash}`;
+          } catch {
+            return null;
+          }
+        })(),
         shouldCancel: () => this.cancelled || abort.signal.aborted,
         now: this.now,
       });
+      // B06/D-FR-11 (design 7.1): the challenge probe runs BEFORE the
+      // next-step observation is built. A challenge landing after a
+      // normal action must be delivered as a HANDOFF-state observation —
+      // never as a ready page the runner could choose another action on.
+      const challenge =
+        outcome.stopCode === "handoff_required"
+          ? null
+          : await this.adapter.detectChallenge(page).catch(() => null);
+      let observation: BrowserObservation | null = null;
+      if (
+        outcome.stopCode === null || outcome.stopCode === "completed"
+      ) {
+        try {
+          observation = await this.buildObservation(
+            page,
+            challenge ? "handoff" : "ready"
+          );
+        } catch {
+          observation = null;
+        }
+      }
+      // E13/D-FR-16: harvest observed link URLs for the worker-side gate.
+      if (observation) {
+        if (this.observedUrlKeys.size > 500) {
+          this.observedUrlKeys.clear();
+        }
+        for (const el of observation.elements) {
+          const href = (el as { href_full?: string | null }).href_full;
+          if (href) {
+            try {
+              const u = new URL(href);
+              this.observedUrlKeys.add(
+                `${u.origin}${u.pathname}${u.search}${u.hash}`
+              );
+            } catch {
+              /* unparsable hrefs are skipped */
+            }
+          }
+        }
+      }
+      // F07: the dispatched action's evidence is NEVER lost — the
+      // ACTION_RESULT (effect, per-step results, stopCode, extracted)
+      // is emitted BEFORE the challenge early-return, so a challenge
+      // that appears afterwards cannot swallow the outcome.
       this.send({
         ...this.base(requestId),
         type: "ACTION_RESULT",
         effect: outcome.effect,
         pageRevision: outcome.pageRevision,
         results: [...outcome.results],
-        observation: null,
+        stopCode: outcome.stopCode,
+        ...(outcome.extracted.length > 0
+          ? { extracted: [...outcome.extracted] }
+          : {}),
+        observation: observation
+          ? {
+              ...observation,
+              elements: [...observation.elements],
+              notices: [...observation.notices],
+            }
+          : null,
       });
-      // GAP-05: challenges appearing after an ordinary action must stop
-      // further automation — detect AFTER every action program, before the
-      // runtime returns to ready.
+      // GAP-05: the challenge EVENTS follow the ACTION_RESULT (the
+      // outcome is never swallowed), but the probe already ran BEFORE the
+      // observation — the result's observation state is "handoff" and the
+      // session does NOT go ready (the early-return skips that).
       if (
         outcome.stopCode !== "handoff_required" &&
-        (await this.detectAndReportChallenge())
+        (await this.detectAndReportChallenge(challenge))
       ) {
         return;
       }
@@ -500,6 +649,7 @@ export class WorkerSession {
       this.emitError(requestId, "internal_error", toSafeErrorMessage(error));
     } finally {
       this.currentRunActionsAbort = null;
+        this.currentDispatchFlag = null;
     }
   }
 
@@ -623,7 +773,9 @@ export class WorkerSession {
     const assessment = await this.assess();
     if (assessment.state === "authenticated") {
       this.runtime.transition("ready");
-      this.registry.reset(this.runtime.pageRevision + 1);
+      // P0-5: bump from the REGISTRY's own revision — runtime.pageRevision
+      // never advances, so the old form reused revisions after handoffs.
+      this.registry.reset(this.registry.currentRevision + 1);
       this.send({
         ...this.base(requestId),
         type: "SESSION_STATE_CHANGED",
@@ -665,7 +817,9 @@ export class WorkerSession {
     if (assessment.state === "authenticated") {
       await this.captureAndSendRefreshedCookies(requestId);
       this.runtime.transition("ready");
-      this.registry.reset(this.runtime.pageRevision + 1);
+      // P0-5: bump from the REGISTRY's own revision — runtime.pageRevision
+      // never advances, so the old form reused revisions after handoffs.
+      this.registry.reset(this.registry.currentRevision + 1);
       this.send({
         ...this.base(requestId),
         type: "SESSION_STATE_CHANGED",
@@ -677,7 +831,9 @@ export class WorkerSession {
     // not_verified / challenge / unknown → user keeps control in the
     // state they confirmed from (manual login or handoff).
     const restore: ManagedBrowserSessionState =
-      prior === "handoff" ? "handoff" : "user_login_in_progress";
+      prior === "handoff" || prior === "login_required"
+        ? prior
+        : "user_login_in_progress";
     this.runtime.transition(restore);
     this.send({
       ...this.base(requestId),
@@ -692,6 +848,149 @@ export class WorkerSession {
     });
   }
 
+  /**
+   * PRD A-FR-08/16..21: privileged credential fill. The password exists
+   * only inside this call; the result carries outcome + field stamps and
+   * NEVER a value. Returns through LOGIN_FORM_RESULT.
+   */
+  public async fillLoginForm(
+    requestId: string,
+    input: {
+      mode: "login" | "register";
+      allowedDomainSuffixes: string[];
+      recipe: WorkerLoginRecipe | null;
+      username: string;
+      password: string;
+    }
+  ): Promise<void> {
+    const page = this.requirePage(requestId);
+    if (!page) {
+      return;
+    }
+    // F10: the worker enforces the SAME command matrix as main — a
+    // main-only pre-request guard does not protect an already accepted
+    // multi-round login against a takeover.
+    const guard = assertCommandAllowed(
+      this.runtime.getState(),
+      "FILL_LOGIN_FORM"
+    );
+    if (!guard.ok) {
+      this.emitError(requestId, guard.errorCode, "fill blocked by session state");
+      return;
+    }
+    try {
+      // B09/A-FR-15: the ACTUAL filled credential is registered with the
+      // worker's sanitizer BEFORE any fill — every observation, action
+      // result, extraction, and log line this worker produces from now on
+      // redacts the exact value (pattern checks cannot catch an ordinary
+      // synthetic credential embedded in page text). Bounded FIFO: old
+      // values age out after later fills.
+      registerTrustedSecret(input.password);
+      const firstStep = input.recipe?.steps[0] ?? null;
+      const result = await this.loginFiller.fill(page, {
+        mode: input.mode,
+        allowedDomainSuffixes: input.allowedDomainSuffixes,
+        recipeStep: firstStep,
+        // T21: field fingerprints flow into the page function.
+        usernameField: firstStep?.usernameField ?? null,
+        passwordField: firstStep?.passwordField ?? null,
+        username: input.username,
+        password: input.password,
+        // F10: every round re-checks the command matrix so a user
+        // takeover mid-fill stops further credential rounds.
+        shouldAbort: () =>
+          !assertCommandAllowed(
+            this.runtime.getState(),
+            "FILL_LOGIN_FORM"
+          ).ok,
+      });
+      this.send({
+        ...this.base(requestId),
+        type: "LOGIN_FORM_RESULT",
+        outcome: result.outcome,
+        reasonCode: result.reasonCode ?? null,
+        // B04/A-FR-15: field-history stamps carry PAGE-AUTHORED field
+        // names/ids — the same outbound scrubbing invariant (a planted
+        // name never survives as-is); the 128-char wire cap is
+        // re-enforced after redaction.
+        filledFieldStamps: result.filledFieldStamps
+          .map((stamp) => sanitizeWorkerText(stamp, 128))
+          .slice(0, 16),
+        // R03: recipe metadata (form action, field fingerprints) is
+        // page-authored and rides the standard deep redaction before
+        // emission — the same invariant as every other outbound field.
+        recipe:
+          result.recipe != null
+            ? (redactSecrets(result.recipe) as typeof result.recipe)
+            : null,
+      });
+    } finally {
+      // A-FR-08: wipe local references to the credential.
+      // E19/A-FR-08 (honest version): JavaScript strings are immutable —
+      // `input.password = ""` does NOT write over the previous bytes, it
+      // only drops the reference; the old string survives until GC (and
+      // in a crash dump until then). The documented best-effort wipe is:
+      // (1) drop EVERY reference promptly (below, plus the local copies
+      // inside the fill call dying at its end), (2) never log, persist,
+      // or transmit the value, and (3) prefer zero-copy credential paths
+      // (CDP/autofill) where the worker never materializes the secret at
+      // all. No comment here may claim byte-level overwrite — the
+      // runtime cannot provide it.
+      input.password = "";
+      input.username = "";
+    }
+  }
+
+  /**
+   * F11: adopt a platform definition after a public→account bind. The
+   * adapter re-targets (public → generic/account), and when requested a
+   * cookie capture flows immediately — a signed_in result must carry a
+   * persistent account session, not a still-public worker.
+   */
+  public async bindPlatform(
+    requestId: string,
+    payload: {
+      platform: StartSessionPayload["platform"];
+      captureCookies: boolean;
+    }
+  ): Promise<void> {
+    const page = this.requirePage(requestId);
+    if (!page) {
+      return;
+    }
+    this.platformDefinition = payload.platform;
+    if (
+      payload.platform.platformId !== 0 &&
+      payload.platform.platformId !== 2
+    ) {
+      this.adapter = new GenericSignInAdapter({
+        platformId: payload.platform.platformId,
+        key: payload.platform.platformName,
+        allowedOrigins: payload.platform.allowedDomainSuffixes,
+        loginUrl: payload.platform.loginUrl,
+        verificationUrl: payload.platform.verificationUrl,
+      });
+    }
+    this.send({
+      ...this.base(requestId),
+      type: "SESSION_STATE_CHANGED",
+      state: this.runtime.getState(),
+      reasonCode: "platform_bound",
+    });
+    if (payload.captureCookies) {
+      await this.captureAndSendRefreshedCookies(requestId);
+    }
+  }
+
+  /** PRD D-FR-15a: pin/unpin an observation epoch (pending approvals). */
+  public pinObservation(observationId: string): boolean {
+    return this.registry.pinObservation(observationId);
+  }
+
+  public unpinObservation(observationId: string): boolean {
+    return this.registry.unpinObservation(observationId);
+  }
+
   public cancelCurrent(): void {
     // Review fix: cancelling the CURRENT request must not permanently set
     // the terminal `cancelled` flag — that bricked every later program
@@ -700,8 +999,125 @@ export class WorkerSession {
     this.currentRunActionsAbort?.abort();
   }
 
+  /**
+   * T24/C-FR-05: user Pause. Same safe-point abort as cancel (the program
+   * stops BETWEEN actions with results of executed actions preserved), but
+   * the reason travels so the module can move the session to user control
+   * without ending it. Executed-but-unreported actions keep their
+   * results; an action in flight when the abort lands follows D-FR-26.
+   */
+  public pauseCurrent(): void {
+    this.currentRunActionsAbort?.abort();
+  }
+
+  /**
+   * R01/C-FR-10: EXPLICIT user-requested window focus ("Open browser" on
+   * the session card). The ONLY sanctioned bringToFront path — launches
+   * never steal focus (C-FR-10); this exists because the user asked.
+   * Best-effort: a headless page (no window) resolves silently.
+   */
+  public async focusWindow(): Promise<boolean> {
+    // N08: the caller distinguishes a raised window from a headless/
+    // closed one — false is an honest failure the IPC surfaces.
+    if (!this.page) {
+      return false;
+    }
+    try {
+      await this.page.bringToFront();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * C04/M-FR-13: the OS-window title marker, IDEMPOTENTLY applied — the
+   * script strips ANY existing marker prefix before applying the wanted
+   * one, so document reloads never grow "[AI] [AI] ..." and a takeover
+   * actually renames the window to the user marker. Only document.title
+   * is touched (never page content).
+   */
+  /**
+   * C04/M-FR-13: RETITLE_WINDOW — best-effort; a headless page (no
+   * window) resolves silently.
+   */
+  public async retitleWindow(prefix: "ai" | "user"): Promise<boolean> {
+    if (!this.page) {
+      return false;
+    }
+    const marker = prefix === "user" ? "[You]" : "[AI]";
+    try {
+      await this.page.evaluate(
+        windowTitleMarkerScript(marker)
+      );
+      // The in-page override re-applies "[AI] ..." on every load; a
+      // takeover marker must survive navigations, so re-register it.
+      if (this.page.evaluateOnNewDocument) {
+        await this.page.evaluateOnNewDocument(
+          windowTitleMarkerScript(marker)
+        );
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** E15/D-FR-26: was input dispatched by the IN-FLIGHT program? */
+  public isInputDispatched(): boolean {
+    return this.currentDispatchFlag?.inputDispatched === true;
+  }
+
+  /**
+   * E16/A-FR-03: apply an account's cookie snapshot on the LIVE session
+   * (before a password fill) so a still-valid cookie session reaches
+   * authenticated WITHOUT typing the password.
+   */
+  public async setCookies(
+    requestId: string,
+    cookies: readonly { domain: string; name: string; value: string; expires?: number; httpOnly?: boolean; secure?: boolean; path?: string }[]
+  ): Promise<void> {
+    const page = this.page;
+    if (!page) {
+      this.emitError(requestId, "worker_exited", "no active page");
+      return;
+    }
+    try {
+      const context = this.browser?.defaultBrowserContext();
+      if (!context) {
+        this.emitError(requestId, "internal_error", "no browser context");
+        return;
+      }
+      const batch = convertCookieBatch(cookies as never);
+      let applied = 0;
+      for (const cookie of batch.accepted) {
+        try {
+          await context.setCookie(cookie as unknown as Record<string, unknown>);
+          applied++;
+        } catch {
+          /* per-cookie failure is non-fatal */
+        }
+      }
+      await page.goto("about:blank", { waitUntil: "load" }).catch(() => undefined);
+      // Re-navigate to the verification URL so the refreshed cookie state
+      // is visible (a reload of about:blank would not carry cookies).
+      await page.goto(this.adapter.verificationUrl, { waitUntil: "domcontentloaded" }).catch(() => undefined);
+      this.send({
+        ...this.base(requestId),
+        type: "SESSION_STATE_CHANGED",
+        state: this.runtime.getState(),
+        reasonCode: `cookies_applied:${applied}`,
+      });
+    } catch (error) {
+      this.emitError(requestId, "internal_error", toSafeErrorMessage(error));
+    }
+  }
+
   public async stop(requestId: string, reason: string): Promise<void> {
-    // Stop is idempotent in every state.
+    // Stop is idempotent in every state. N07/A-FR-08: the page/session
+    // lifetime is over — the registered filled credentials are dropped
+    // (plaintext references released).
+    clearTrustedSecrets();
     this.runtime.transition("stopping", reason);
     // Orderly close: capture refreshed cookies when safe (FR-COOKIE-016).
     try {
@@ -781,16 +1197,19 @@ export class WorkerSession {
       return null;
     }
     try {
-      return await page.evaluate<string | null>(
+      const key = await page.evaluate<string | null>(
         `(() => {
           const el =
             document.querySelector('.g-recaptcha[data-sitekey]') ||
             document.querySelector('[data-sitekey]');
           if (!el) return null;
-          const key = el.getAttribute('data-sitekey');
-          return key ? key.slice(0, 128) : null;
+          const extracted = el.getAttribute('data-sitekey');
+          return extracted ? extracted.slice(0, 128) : null;
         })()`
       );
+      // B06 hardening: a page script that returns undefined must never
+      // crash the challenge path downstream (`siteKey.length`).
+      return typeof key === "string" ? key : null;
     } catch {
       return null;
     }
@@ -803,14 +1222,19 @@ export class WorkerSession {
    * and invalidates every reference; a repeat within the window (redirect
    * storm) stays silent so the user sees ONE notice.
    */
-  private async detectAndReportChallenge(): Promise<boolean> {
+  private async detectAndReportChallenge(
+    // B06: a pre-computed probe result (runActions probes BEFORE building
+    // the next-step observation); omit to probe the live page.
+    precomputed?: DetectedChallenge | null
+  ): Promise<boolean> {
     const page = this.page;
     if (!page) {
       return false;
     }
-    const detection = await this.adapter
-      .detectChallenge(page)
-      .catch(() => null);
+    const detection =
+      precomputed !== undefined
+        ? precomputed
+        : await this.adapter.detectChallenge(page).catch(() => null);
     if (!detection) {
       return false;
     }
@@ -960,13 +1384,16 @@ export class WorkerSession {
   }
 
   private async buildObservation(
-    page: PuppeteerPageLike
+    page: PuppeteerPageLike,
+    // B06: a challenge observed on the page is delivered as "handoff",
+    // never as a ready page (D-FR-11: the runner must not act on it).
+    state: BrowserObservation["state"] = "ready"
   ): Promise<BrowserObservation> {
     return buildObservation({
       page,
       sessionId: this.sessionId,
       registry: this.registry,
-      state: "ready",
+      state,
     });
   }
 
@@ -1073,7 +1500,7 @@ export class WorkerSession {
   }
 
   private base(requestId: string): {
-    protocolVersion: 1;
+    protocolVersion: typeof MANAGED_BROWSER_PROTOCOL_VERSION;
     sessionId: string;
     requestId: string;
     sequence: number;

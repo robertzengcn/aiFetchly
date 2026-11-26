@@ -59,7 +59,7 @@ function operationFixture(
   };
 }
 
-function mountHistory(messageId = 42) {
+function mountHistory(messageId = 42): ReturnType<typeof mount> {
   return mount(History, {
     props: { messageId },
     global: {

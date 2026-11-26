@@ -144,6 +144,19 @@ export const SOCIAL_ACCOUNT_SHOW_PLATFORMPAGE =
   "socialaccount:show:platformpage";
 // Secure session metadata (renderer-safe: no cookie values).
 export const SOCIAL_ACCOUNT_SESSION_METADATA = "socialaccount:session:metadata";
+// Q-01/R02: per-account AI opt-in editing (read + toggle).
+// R09/Q-01: the ONE-TIME existing-account opt-in prompt (list + submit).
+export const SOCIAL_ACCOUNT_AI_OPTIN_PENDING =
+  "social-account:ai-optin-pending";
+export const SOCIAL_ACCOUNT_AI_OPTIN_SUBMIT =
+  "social-account:ai-optin-submit";
+export const SOCIAL_ACCOUNT_GET_AI_USE_ENABLED =
+  "socialaccount:get-ai-use-enabled";
+export const SOCIAL_ACCOUNT_SET_AI_USE_ENABLED =
+  "socialaccount:set-ai-use-enabled";
+// N08/S-FR-06: the SITE REGISTRY list for renderer selectors (names +
+// ids only — no secrets).
+export const BROWSER_SITE_LIST = "browser-site:list";
 // Browser-profile import (feature-flagged; see src/config/featureFlags.ts).
 export const SOCIAL_ACCOUNT_BROWSER_IMPORT_AVAILABILITY =
   "socialaccount:browser-import:availability";
@@ -758,6 +771,50 @@ export const MANAGED_BROWSER_VERIFY_MANUAL_LOGIN =
 export const MANAGED_BROWSER_RESUME = "managed-browser:resume";
 export const MANAGED_BROWSER_STOP = "managed-browser:stop";
 export const MANAGED_BROWSER_APPROVE = "managed-browser:approve";
+// PRD A-FR-05/06: secure credential card. The request event carries the
+// site domain from the MAIN process; the submit channel is renderer-only,
+// Zod-validated, single-use, and never logged (A-FR-06).
+export const MANAGED_BROWSER_CREDENTIAL_REQUEST =
+  "managed-browser:credential-request";
+export const MANAGED_BROWSER_SUBMIT_LOGIN_CREDENTIAL =
+  "managed-browser:submit-login-credential";
+// B02/A-FR-03: account picker card. The request event lists the saved
+// accounts the USER may choose; the submit channel is renderer-only and
+// single-use like the credential card.
+export const MANAGED_BROWSER_ACCOUNT_PICKER_REQUEST =
+  "managed-browser:account-picker-request";
+export const MANAGED_BROWSER_SUBMIT_ACCOUNT_PICKER =
+  "managed-browser:submit-account-picker";
+// B03/S-FR-04: extra-domain confirmation card. The proposal comes only
+// from the session's redirect ledger; the submit carries the user's
+// chosen domain subset (the token stays in the main process).
+export const MANAGED_BROWSER_SITE_CONFIRM_REQUEST =
+  "managed-browser:site-confirm-request";
+export const MANAGED_BROWSER_SUBMIT_SITE_CONFIRM =
+  "managed-browser:submit-site-confirm";
+// M-FR-04/W08: batch confirmation card. The batch preview (tasks + sites)
+// is shown BEFORE any session starts; the confirm grant is consumed by
+// the start and expires with the batch.
+export const MANAGED_BROWSER_BATCH_CONFIRM_REQUEST =
+  "managed-browser:batch-confirm-request";
+export const MANAGED_BROWSER_SUBMIT_BATCH_CONFIRM =
+  "managed-browser:submit-batch-confirm";
+// R07/M-FR-04: a pending confirmation card is retired WITHOUT a user
+// decision (parent Stop or TTL expiry) — the card is told so it can
+// remove itself immediately instead of lingering until its local TTL.
+export const MANAGED_BROWSER_BATCH_CONFIRM_CANCELLED =
+  "managed-browser:batch-confirm-cancelled";
+// R01/D-FR-18: the settings connection probe — three separate probes
+// (chat / verified JSON Schema / forced tool) reported independently.
+export const MANAGED_BROWSER_PROBE_DECISION_CAPABILITIES =
+  "managed-browser:probe-decision-capabilities";
+// PRD C-FR-04: renderer-only task control (user actions; no model tool).
+export const BROWSER_TASK_PAUSE = "browser-task:pause";
+export const BROWSER_TASK_TAKE_CONTROL = "browser-task:take-control";
+export const BROWSER_TASK_RESUME = "browser-task:resume";
+export const BROWSER_TASK_STOP = "browser-task:stop";
+export const BROWSER_BATCH_RETURN_NOW = "browser-task:batch-return-now";
+export const BROWSER_TASK_FOCUS_WINDOW = "browser-task:focus-window";
 export const MANAGED_BROWSER_CANCEL_ACTIVE = "managed-browser:cancel-active";
 export const MANAGED_BROWSER_CAPTURE_SCREENSHOT =
   "managed-browser:capture-screenshot";
@@ -779,6 +836,8 @@ export const MANAGED_BROWSER_APPROVAL_EVENT =
 export const MANAGED_BROWSER_CHAT_NOTICE_EVENT = "managed-browser:chat-notice";
 export const MANAGED_BROWSER_CACHE_PROGRESS_EVENT =
   "managed-browser:cache-progress";
+/** F21: live browser-batch task state for the batch control card. */
+export const MANAGED_BROWSER_BATCH_EVENT = "managed-browser:batch-event";
 
 // ==================== Plugin Management Channels (Design §10) ====================
 export const PLUGIN_IMPORT = "plugin:import";

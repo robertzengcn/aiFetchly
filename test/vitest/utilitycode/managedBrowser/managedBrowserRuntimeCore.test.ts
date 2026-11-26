@@ -21,7 +21,9 @@ import {
   budgetName,
   isLikelySecretKey,
   isLikelySecretValue,
+  clearTrustedSecretsForTest,
   redactSecrets,
+  registerTrustedSecret,
   summarizeInputValue,
   toSafeErrorMessage,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -232,8 +234,12 @@ describe("NavigationPolicy", () => {
 
 describe("ManagedBrowserRuntime state guards", () => {
   it("rejects actions while the user has control (FR-HANDOFF-002)", () => {
+    // F10: login_required is a NON-user-control state — automated
+    // sign-in RUNS there, so RUN_ACTIONS must be allowed.
+    expect(assertCommandAllowed("login_required", "RUN_ACTIONS").ok).toBe(
+      true
+    );
     const userControlStates = [
-      "login_required",
       "user_login_in_progress",
       "handoff",
     ] as const;
@@ -409,6 +415,31 @@ describe("ResultSanitizer", () => {
     expect(summarizeInputValue(undefined, "text")).toBeUndefined();
   });
 
+  it("re-enforces the value budget AFTER the trusted-credential redaction (R03)", () => {
+    // The trusted pass used to return early WITHOUT the budget — a long
+    // surrounding value could expand past the wire cap and reject the
+    // whole observation.
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("s3cret-value-42");
+    const value = `filler ${"x".repeat(120)} s3cret-value-42 ${"y".repeat(120)}`;
+    const out = summarizeInputValue(value, "text");
+    expect(out).toBeDefined();
+    expect(out!.length).toBeLessThanOrEqual(100);
+    expect(out).not.toContain("s3cret-value-42");
+    clearTrustedSecretsForTest();
+  });
+
+  it("redacts a trusted credential echoed into a structured KEY (R03)", () => {
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("s3cret-value-42");
+    const out = redactSecrets({
+      "note s3cret-value-42": "payload",
+    }) as Record<string, unknown>;
+    expect(Object.keys(out)[0]).not.toContain("s3cret-value-42");
+    expect(out[Object.keys(out)[0]]).toBe("payload");
+    clearTrustedSecretsForTest();
+  });
+
   it("budgets names and error messages", () => {
     expect(budgetName("x".repeat(500))).toHaveLength(200);
     expect(toSafeErrorMessage(new Error("x".repeat(1000)))).toHaveLength(200);
@@ -479,5 +510,168 @@ describe("ChallengeDetector", () => {
       )
     ).toBe("security");
     expect(classifyChallengeFlow(signals())).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A-FR-15: the sentinel scan — internal credential markers
+// (__decrypt_failed__-style) never leak through observation text as if
+// they were page content.
+// ---------------------------------------------------------------------------
+describe("A-FR-15 credential sentinel scan", () => {
+  it("redacts double-underscore sentinels from free-form text", async () => {
+    const { redactSecretsInText } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    expect(redactSecretsInText("row user is __decrypt_failed__ on retry")).toBe(
+      "row user is [redacted] on retry"
+    );
+    expect(redactSecretsInText("plain text without markers")).toBe(
+      "plain text without markers"
+    );
+  });
+
+  it("redacts sentinels in structured records too", async () => {
+    const { redactSecrets } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    const cleaned = redactSecrets({
+      user: "__decrypt_failed__",
+      note: "normal value",
+    }) as Record<string, unknown>;
+    expect(cleaned.user).toBe("[redacted]");
+    expect(cleaned.note).toBe("normal value");
+  });
+
+  // B09: a SHORT internal marker bypassed the min-length gate.
+  it("redacts short sentinels at any length", async () => {
+    const { isLikelySecretValue, redactSecretsInText } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    expect(isLikelySecretValue("__x__")).toBe(true);
+    expect(redactSecretsInText("marker __pw__ found")).toBe(
+      "marker [redacted] found"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B09/A-FR-15: TRUSTED-SECRET containment — the ACTUAL filled credential
+// is redacted by exact value from every output channel, even when it
+// looks like ordinary text. Unregistered page text passes through.
+// ---------------------------------------------------------------------------
+describe("B09 trusted-secret containment", () => {
+  it("a registered filled credential is redacted from text and records", async () => {
+    const {
+      registerTrustedSecret,
+      clearTrustedSecretsForTest,
+      redactSecretsInText,
+      redactSecrets,
+    } = await import("@/childprocess/managed-browser/ResultSanitizer");
+    clearTrustedSecretsForTest();
+    const synthetic = "summer2024!field";
+    registerTrustedSecret(synthetic);
+    // Embedded in page prose (pattern checks cannot catch it).
+    expect(
+      redactSecretsInText(`Welcome back! Your hint is ${synthetic} enjoy`)
+    ).toBe("Welcome back! Your hint is [redacted] enjoy");
+    // Structured record (extraction/observation shapes).
+    const record = redactSecrets({
+      note: `hint: ${synthetic}`,
+      title: "plain page",
+    }) as Record<string, unknown>;
+    expect(record.note).toBe("hint: [redacted]");
+    expect(record.title).toBe("plain page");
+    clearTrustedSecretsForTest();
+  });
+
+  it("UNREGISTERED ordinary text passes through (normal page output kept)", async () => {
+    const { clearTrustedSecretsForTest, redactSecretsInText } = await import(
+      "@//childprocess/managed-browser/ResultSanitizer".replace("@//", "@/")
+    );
+    clearTrustedSecretsForTest();
+    const text = "Welcome back! Your hint is summer2024!field enjoy";
+    expect(redactSecretsInText(text)).toBe(text);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// N07/A-FR-15: containment of every accepted credential length and of the
+// raw observation outbound fields (role/href/option values).
+// ---------------------------------------------------------------------------
+describe("N07 trusted-secret containment coverage", () => {
+  it("a two-character credential is contained after registration", async () => {
+    const {
+      registerTrustedSecret,
+      clearTrustedSecretsForTest,
+      redactSecretsInText,
+    } = await import("@/childprocess/managed-browser/ResultSanitizer");
+    clearTrustedSecretsForTest();
+    registerTrustedSecret("p5");
+    expect(redactSecretsInText("login hint: p5 works")).toBe(
+      "login hint: [redacted] works"
+    );
+    const { redactSecrets } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    expect(redactSecrets({ note: "pw is p5 ok" })).toMatchObject({
+      note: "pw is [redacted] ok",
+    });
+    clearTrustedSecretsForTest();
+  });
+
+  it("an option value carrying the credential is OMITTED from the shaped element", async () => {
+    const { registerTrustedSecret, clearTrustedSecretsForTest } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    const { shapeElementRecord } = await import(
+      "@/childprocess/managed-browser/BrowserObservationService"
+    );
+    clearTrustedSecretsForTest();
+    const secret = "summer2024!field";
+    registerTrustedSecret(secret);
+    const shaped = shapeElementRecord({
+      ref: "e_sel",
+      role: "combobox",
+      name: "Security question",
+      options: [
+        { l: "safe option", v: "safe-value" },
+        { l: "echoed credential", v: secret },
+        { l: "another safe", v: "another-value" },
+      ],
+    } as never);
+    const shapedRec = shaped as unknown as {
+      option_ids: string[];
+      option_values: string[];
+      option_labels: string[];
+    };
+    // The credential-bearing option is OMITTED; the safe ones keep their
+    // ORIGINAL o_N indices (executor maps o_N → el.options[N]).
+    expect(shapedRec.option_ids).toEqual(["o_0", "o_2"]);
+    expect(shapedRec.option_values).toEqual(["safe-value", "another-value"]);
+    expect(shapedRec.option_labels).toEqual(["safe option", "another safe"]);
+    expect(JSON.stringify(shapedRec)).not.toContain(secret);
+    clearTrustedSecretsForTest();
+  });
+
+  it("the role and hrefFull fields get the trusted pass", async () => {
+    const { registerTrustedSecret, clearTrustedSecretsForTest } = await import(
+      "@/childprocess/managed-browser/ResultSanitizer"
+    );
+    const { shapeElementRecord } = await import(
+      "@/childprocess/managed-browser/BrowserObservationService"
+    );
+    clearTrustedSecretsForTest();
+    const secret = "summer2024!field";
+    registerTrustedSecret(secret);
+    const shaped = shapeElementRecord({
+      ref: "e_link",
+      role: `link ${secret}`,
+      name: "harmless name",
+      hrefFull: `https://page.test/?echo=${encodeURIComponent(secret)}`,
+    } as never) as unknown as { role: string; hrefFull: string };
+    expect(shaped.role).not.toContain(secret);
+    expect(shaped.hrefFull).not.toContain(secret);
+    clearTrustedSecretsForTest();
   });
 });

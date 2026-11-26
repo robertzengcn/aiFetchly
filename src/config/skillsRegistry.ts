@@ -4819,11 +4819,22 @@ const BUILT_IN_SKILLS: SkillDefinition[] = [
           : 20;
 
       // Resolve platform name → numeric social_type_id used by the model.
+      // S-FR-06: the SITE REGISTRY is authoritative; the static list is
+      // the fallback and the source of the known-platforms hint.
       let platformId: number | undefined;
       if (platformRaw) {
-        const match = SocialPlatformList.find(
-          (p) => p.name.toLowerCase() === platformRaw
+        const { getDefaultBrowserSiteModule } = await import(
+          "@/modules/BrowserSiteModule"
         );
+        const sites = await getDefaultBrowserSiteModule().listSites();
+        const siteMatch = sites.find(
+          (s) => s.name.toLowerCase() === platformRaw
+        );
+        const match = siteMatch
+          ? { id: siteMatch.siteId }
+          : SocialPlatformList.find(
+              (p) => p.name.toLowerCase() === platformRaw
+            );
         if (!match) {
           return {
             success: false,
@@ -5251,6 +5262,10 @@ function managedBrowserToolWrapper(
   context: {
     conversationId: string;
     toolCallId: string;
+    jobId?: string;
+    ownerAgentId?: string;
+    /** B11: root (parent) conversation for sub-agent executions. */
+    rootConversationId?: string;
     skipPermissionCheck?: boolean;
     signal?: AbortSignal;
     emitProgress?: (event: {
@@ -5269,6 +5284,9 @@ function managedBrowserToolWrapper(
     skipPermissionCheck: context.skipPermissionCheck,
     emitProgress: context.emitProgress,
     signal: context.signal,
+    jobId: context.jobId,
+    ownerAgentId: context.ownerAgentId,
+    rootConversationId: context.rootConversationId,
   })
     .then((result) => ({ success: true, result }))
     .catch((error: unknown) => {
@@ -5321,6 +5339,26 @@ function managedBrowserToolEntries(): SkillDefinition[] {
             type: "string",
             description: "Optional http(s) start URL.",
           },
+          proxy: {
+            description:
+              "Optional proxy route for the session: { proxy_id } for a saved proxy (from proxy_list), { auto: true, country_code? } for automatic country selection, or \"direct\" for no proxy. Ids only — never host/port/credentials.",
+            oneOf: [
+              {
+                type: "object",
+                properties: { proxy_id: { type: "number" } },
+                required: ["proxy_id"],
+              },
+              {
+                type: "object",
+                properties: {
+                  auto: { type: "boolean", enum: [true] },
+                  country_code: { type: "string" },
+                },
+                required: ["auto"],
+              },
+              { type: "string", enum: ["direct"] },
+            ],
+          },
         },
         required: ["purpose"],
       },
@@ -5357,7 +5395,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().getStatus(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().getStatus(a, c),
           args,
           context
         ),
@@ -5411,7 +5449,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "browser",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().navigate(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().navigate(a, c),
           args,
           context
         ),
@@ -5490,34 +5528,14 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().requestHandoff(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().requestHandoff(a, c),
           args,
           context
         ),
     },
-    {
-      name: "browser_resume_after_handoff",
-      description:
-        "Resume AI control after the user finished the handoff step (login/verification).",
-      parameters: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session id." },
-        },
-        required: ["session_id"],
-      },
-      tier: "main",
-      requiresConfirmation: false,
-      permissionCategory: "automation",
-      source: "built-in",
-      timeoutClass: "network",
-      execute: async (args, context) =>
-        wrap(
-          (a) => getDefaultManagedBrowserAiToolService().resumeAfterHandoff(a),
-          args,
-          context
-        ),
-    },
+    // E04/C-FR-03: RESUME IS NOT A MODEL TOOL — only the user's dialog
+    // action (BROWSER_TASK_RESUME / the session card) may end a takeover.
+    // The service method stays for the IPC path.
     {
       // TODO-MSB-015: the PRD contract names this tool browser_screenshot;
       // registered under that name (browser_capture_screenshot retired).
@@ -5538,7 +5556,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "browser",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().captureScreenshot(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().captureScreenshot(a, c),
           args,
           context
         ),
@@ -5621,7 +5639,246 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "network",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().stopSession(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().stopSession(a, c),
+          args,
+          context
+        ),
+    },
+    {
+      name: "browser_set_proxy",
+      description:
+        "Switch the managed browser session's proxy (PRD P-FR-02). Pass { proxy_id } " +
+        "(from proxy_list), { auto: true, country_code? }, or \"direct\". Performs a " +
+        "controlled restart: the session stops and a fresh one starts under the same " +
+        "account with the new proxy. Never falls back to direct on failure; failing " +
+        "proxies return a structured reason so another proxy can be chosen.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id." },
+          proxy: {
+            description:
+              "{ proxy_id } | { auto: true, country_code? } | \"direct\".",
+          },
+        },
+        required: ["session_id", "proxy"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      timeoutClass: "browser",
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().setProxy(a, context),
+          args,
+          context
+        ),
+    },
+    {
+      name: "browser_execute_task",
+      description:
+        "Run ONE focused multi-step browser task in the managed browser without extra chat rounds " +
+        "(PRD D-FR-05). The task runner observes, decides, and executes bounded steps itself and " +
+        "returns a verified result with a compact final observation. Supply a goal, optional " +
+        "constraints, and typed completion criteria (url_contains / element_present / " +
+        "extract_nonempty / text_contains). Use for eligible multi-step tasks on one page/site; " +
+        "single inspections or one-off actions stay on browser_observe/browser_run_actions.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id you own." },
+          goal: { type: "string", description: "1-2000 chars." },
+          constraints: { type: "array", items: { type: "string" } },
+          completion_criteria: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["url_contains", "element_present", "extract_nonempty", "text_contains"] },
+                value: { type: "string" },
+              },
+              required: ["kind", "value"],
+            },
+          },
+        },
+        required: ["session_id", "goal"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      async: true,
+      resolveTimeoutClass: () => "async",
+      resolveAsync: () => true,
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().executeTask(a, context),
+          args,
+          context
+        ),
+    },
+    {
+      name: "run_browser_tasks",
+      description:
+        "Run up to 5 independent browser tasks in PARALLEL (PRD M-FR-03). Each task runs on its " +
+        "own managed-browser session via a browser-operator sub-agent and returns a compact " +
+        "result (summary, extracted data, final_url, evidence). Sub-agents do NOT perform " +
+        "consequential actions - they return needs_user proposals. Use for research across " +
+        "several sites at once; use browser_execute_task for one focused multi-step task.",
+      parameters: {
+        type: "object",
+        properties: {
+          tasks: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                goal: { type: "string" },
+                start_url: { type: "string" },
+                account_id: { type: "number" },
+                proxy_id: { type: "number" },
+                keep_open: { type: "boolean" },
+              },
+              required: ["goal"],
+            },
+          },
+          concurrency: { type: "number", description: "1-3 parallel browsers." },
+          // R04/M-FR-12: the executor switch — the parser forwards it, so
+          // the advertised schema must offer it (B03).
+          executor: {
+            type: "string",
+            enum: ["llm_agent", "fast_runner"],
+            description:
+              "llm_agent (default) runs the browser-operator sub-agent per task; " +
+              "fast_runner drives the decision runner directly without an LLM loop.",
+          },
+        },
+        required: ["tasks"],
+      },
+      tier: "main",
+      requiresConfirmation: true,
+      permissionCategory: "automation",
+      source: "built-in",
+      async: true,
+      resolveTimeoutClass: (_args: Record<string, unknown>): ReturnType<NonNullable<SkillDefinition["resolveTimeoutClass"]>> => "async",
+      resolveAsync: (): boolean => true,
+      execute: async (args: Record<string, unknown>, context: SkillExecutionContext): Promise<SkillExecutionResult> => {
+        const { browserBatchArgsSchema, runBrowserTasksForTool } = await import(
+          "@/service/agentTools/runBrowserTasksTool"
+        );
+        const parsed = browserBatchArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          return {
+            success: false,
+            result: {
+              error: "invalid_tool_arguments",
+              details: parsed.error.issues.slice(0, 5),
+            },
+          };
+        }
+        const { batchId, results, confirmed } = await runBrowserTasksForTool(
+          parsed.data.tasks,
+          parsed.data.concurrency ?? 2,
+          context.conversationId,
+          context.signal ?? new AbortController().signal,
+          {},
+          // R11/C-FR-09: the parent job id — the turn's poll deadline
+          // freezes while any batch lane sits in a user wait.
+          context.jobId,
+          // R04/M-FR-12: the executor switch; the sub-agent model comes
+          // from the settings (a custom provider must own the model).
+          {
+            executor: parsed.data.executor,
+            subAgentModel:
+              (await new (await import("@/modules/ManagedBrowserSettingsModule"))
+                .ManagedBrowserSettingsModule()
+                .getEffectiveSettings()).decisionRoute.batchSubAgentModel ??
+              null,
+          }
+        );
+        // R07/M-FR-04: a DECLINED (or cancelled) confirmation card means
+        // NOTHING ran — reporting success with an empty result set would
+        // let the model claim an approved batch that never started.
+        if (confirmed === false) {
+          return {
+            success: false,
+            result: {
+              error: "batch_confirmation_declined",
+              details:
+                "the user declined the batch confirmation card; no tasks were started",
+            },
+          };
+        }
+        return { success: true, result: { batch_id: batchId, results } };
+      },
+    },
+    {
+      name: "browser_sign_in",
+      description:
+        "Sign in to the CURRENT site with a saved account (PRD A-FR-01). Call this at a " +
+        "login wall instead of browser_request_handoff when the user likely has a saved " +
+        "account. You may pass account_id (from list_social_accounts) and username_hint. " +
+        "You NEVER provide or see the password: the app fills the credential form " +
+        "itself. If no saved account exists, the user is asked in a secure card; if " +
+        "automated sign-in fails, the existing handoff dialog opens with a reason.",
+      parameters: {
+        type: "object",
+        properties: {
+          session_id: { type: "string", description: "Session id." },
+          intent: {
+            type: "string",
+            description: "login (default) or register (needs explicit user confirmation).",
+          },
+          account_id: { type: "number", description: "Saved account id, when you must pick among several." },
+          username_hint: { type: "string", description: "Optional username pre-fill for the credential card (max 256 chars)." },
+        },
+        required: ["session_id"],
+      },
+      tier: "main",
+      requiresConfirmation: false,
+      permissionCategory: "automation",
+      source: "built-in",
+      // Async: waits for the credential card / handoff inside its job so
+      // chat rendering never blocks (A-FR-01).
+      async: true,
+      resolveTimeoutClass: () => "async",
+      resolveAsync: () => true,
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().signIn(a, context),
+          args,
+          context
+        ),
+    },
+    {
+      name: "browser_site_upsert",
+      description:
+        "Register a NEW website with the browser site registry by homepage URL " +
+        "(PRD S-FR-03). Use when a task needs a site that is not yet registered. " +
+        "The site is restricted to its own registrable domain; adding extra " +
+        "login/SSO domains always requires user confirmation — you cannot and " +
+        "must not supply domain lists.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Display name of the site." },
+          url: { type: "string", description: "HTTPS homepage URL." },
+        },
+        required: ["name", "url"],
+      },
+      tier: "main",
+      requiresConfirmation: false,
+      permissionCategory: "automation",
+      source: "built-in",
+      timeoutClass: "network",
+      execute: async (args, context) =>
+        wrap(
+          (a) =>
+            getDefaultManagedBrowserAiToolService().siteUpsert(a, context),
           args,
           context
         ),
@@ -5650,7 +5907,7 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       timeoutClass: "browser",
       execute: async (args, context) =>
         wrap(
-          (a) => getDefaultManagedBrowserAiToolService().clearCache(a),
+          (a, c) => getDefaultManagedBrowserAiToolService().clearCache(a, c),
           args,
           context
         ),

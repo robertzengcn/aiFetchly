@@ -53,6 +53,51 @@
         <v-btn :value="0" color="primary">{{ t('socialaccount.inactive') }}</v-btn>
         <v-btn :value="1" color="success">{{ t('socialaccount.active') }}</v-btn>
       </v-btn-toggle>
+
+      <!-- Q-01/B10: per-account AI opt-in (editable for existing accounts). -->
+      <div v-if="isEdit" class="mt-3" data-testid="socialaccount-ai-optin">
+        <v-checkbox
+          :model-value="aiUseEnabled"
+          :label="t('socialaccount.ai_use_enabled')"
+          :hint="t('socialaccount.ai_use_enabled_hint')"
+          persistent-hint
+          density="compact"
+          :disabled="aiUseSaving || !aiUseLoaded"
+          data-testid="socialaccount-ai-optin-checkbox"
+          @update:model-value="onAiUseToggled"
+        ></v-checkbox>
+        <v-alert
+          v-if="aiUseError !== null"
+          type="error"
+          density="compact"
+          class="mt-1"
+          data-testid="socialaccount-ai-optin-error"
+        >
+          {{ aiUseError }}
+        </v-alert>
+        <!-- R08/Q-01: a FAILED opt-in load is distinct from a confirmed
+             disabled state — the checkbox stays inert until a successful
+             read, with an explicit retry. -->
+        <div v-if="aiUseLoadError !== null" class="mt-1">
+          <v-alert
+            type="warning"
+            density="compact"
+            data-testid="socialaccount-ai-optin-load-error"
+          >
+            {{ aiUseLoadError }}
+          </v-alert>
+          <v-btn
+            size="x-small"
+            variant="text"
+            class="mt-1"
+            :disabled="aiUseLoadRetrying"
+            data-testid="socialaccount-ai-optin-retry"
+            @click="loadAiUseOptIn"
+          >
+            {{ t('socialaccount.ai_use_retry') }}
+          </v-btn>
+        </div>
+      </div>
       
       <v-autocomplete
         class="mt-3"
@@ -162,6 +207,22 @@
           >
             {{ t('socialaccount.upload_cookies_button') }}
           </v-btn>
+          <!-- R10/P-FR-01: the session's proxy route — ids only. -->
+          <v-select
+            v-if="socialaccountId > 0"
+            v-model="sessionProxyChoice"
+            :items="[
+              { title: t('socialaccount.session_proxy_default') || 'Account default', value: 'default' },
+              { title: t('socialaccount.session_proxy_direct') || 'Direct (no proxy)', value: 'direct' },
+              ...savedProxies.map((p) => ({ title: p.label, value: String(p.id) })),
+            ]"
+            item-title="title"
+            item-value="value"
+            density="compact"
+            hide-details
+            style="max-width: 220px"
+            data-testid="session-proxy-choice"
+          ></v-select>
           <v-btn
             v-if="socialaccountId > 0"
             color="secondary"
@@ -222,6 +283,9 @@ import {
   requireCookiesselecttab,
   receiveAccountLoginevent,
   getSessionMetadata,
+  getSocialAccountAiUseEnabled,
+  setSocialAccountAiUseEnabled,
+  listBrowserSites,
 } from "@/views/api/socialaccount";
 import { SOCIAL_ACCOUNT_LOGIN_MESSSAGE } from "@/config/channellist";
 import { CommonDialogMsg } from "@/entityTypes/commonType";
@@ -262,6 +326,31 @@ const email = ref("");
 // const proxy = ref(0);
 const socialaccountId = ref(0);
 const openingManagedBrowser = ref(false);
+// R10/P-FR-01: the user's proxy choice for THIS session — "default" uses
+// the account's linked proxy, "direct" forces no proxy, an explicit id
+// selects a saved proxy. Ids only — never host/port/credentials.
+const sessionProxyChoice = ref<string>("default");
+const savedProxies = ref<Array<{ id: number; label: string }>>([]);
+
+async function loadSavedProxies(): Promise<void> {
+  try {
+    const { getProxyList } = await import('@/views/api/proxy');
+    // P05/P-FR-01: the strict pagination schema accepts `size` (not
+    // `limit`) — the malformed key failed the parse and the saved-proxy
+    // list stayed empty, hiding every explicit proxy choice.
+    const result = await getProxyList({ page: 1, size: 50 });
+    savedProxies.value = (result.data ?? []).reduce<
+      Array<{ id: number; label: string }>
+    >((items, row) => {
+      if (row.id != null) {
+        items.push({ id: row.id, label: `${row.host}:${row.port}` });
+      }
+      return items;
+    }, []);
+  } catch {
+    savedProxies.value = [];
+  }
+}
 
 /** TODO-MSB-003: Tool Account entry point — start the managed browser for
  * THIS account from its detail page; the AI chat session card takes over. */
@@ -270,18 +359,108 @@ async function openManagedBrowser(): Promise<void> {
   openingManagedBrowser.value = true;
   try {
     const { startManagedBrowser } = await import('@/views/api/managedBrowser');
+    const proxyArg =
+      sessionProxyChoice.value === "default"
+        ? undefined
+        : sessionProxyChoice.value === "direct"
+          ? ("direct" as const)
+          : { proxy_id: parseInt(sessionProxyChoice.value, 10) };
     await startManagedBrowser({
       accountId: socialaccountId.value,
       purpose: 'account-page',
+      ...(proxyArg !== undefined ? { proxy: proxyArg } : {}),
     });
     await router.push('/aiworkspace');
   } catch (error) {
     console.error('[socialaccountdetail] managed browser start failed:', error);
+    // P05/P-FR-01: a failed start is VISIBLE — never a silent button.
+    alertContent.value =
+      t('socialaccount.open_managed_browser_failed') ||
+      'Opening the managed browser failed. Check the proxy settings and try again.';
+    alertcolor.value = 'error';
+    alert.value = true;
   } finally {
     openingManagedBrowser.value = false;
   }
 }
 const social_type_id = ref<number>();
+// Q-01/B10: per-account AI opt-in state (existing accounts only).
+const aiUseEnabled = ref(false);
+// N08: the checkbox is inert until the initial read finishes — loading
+// and rollback mutate the ref WITHOUT triggering a write (the write is
+// an explicit user toggle only).
+const aiUseLoaded = ref(false);
+const aiUseSaving = ref(false);
+const aiUseError = ref<string | null>(null);
+// R08/Q-01: a failed INITIAL LOAD keeps the checkbox inert — editing a
+// value we could not read would silently write unchecked.
+const aiUseLoadError = ref<string | null>(null);
+const aiUseLoadRetrying = ref(false);
+// N08: the error text type is string | undefined from the i18n fallback.
+
+// R08/Q-01: the opt-in read (initial load AND explicit retry). Success
+// unlocks editing with the loaded value; failure keeps the checkbox
+// inert and surfaces a retryable error — never "editable unchecked".
+async function loadAiUseOptIn(): Promise<void> {
+  const id = parseInt($route.params.id?.toString() ?? "", 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return;
+  }
+  aiUseLoadRetrying.value = true;
+  try {
+    const enabled = await getSocialAccountAiUseEnabled(id);
+    aiUseEnabled.value = enabled;
+    aiUseLoaded.value = true;
+    aiUseLoadError.value = null;
+    aiUseError.value = null;
+  } catch (error: unknown) {
+    aiUseEnabled.value = false;
+    aiUseLoaded.value = false;
+    aiUseLoadError.value =
+      error instanceof Error
+        ? error.message
+        : t('socialaccount.ai_use_failed') || null;
+  } finally {
+    aiUseLoadRetrying.value = false;
+  }
+}
+
+// N08: the ONLY write path is the user's checkbox change (@update:model-
+// value) — the async initial load and the failure rollback assign the ref
+// directly, so no implicit write fires.
+function onAiUseToggled(enabled: boolean | null): void {
+  const id = parseInt($route.params.id?.toString() ?? "", 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return;
+  }
+  // Vuetify can emit null while clearing — treated as unchecked.
+  const next = enabled === true;
+  if (!aiUseLoaded.value || aiUseSaving.value || next === aiUseEnabled.value) {
+    return;
+  }
+  const previous = aiUseEnabled.value;
+  aiUseSaving.value = true;
+  aiUseError.value = null;
+  setSocialAccountAiUseEnabled(id, next)
+    .then(() => {
+      // A10: the saved value is ASSIGNED after success — a true→false
+      // write leaves the ref false (previously the ref stayed true and
+      // the next toggle was dropped by the equality guard).
+      aiUseEnabled.value = next;
+      aiUseError.value = null;
+    })
+    .catch((error: unknown) => {
+      // Rollback assigns the ref directly — no write fires.
+      aiUseEnabled.value = previous;
+      aiUseError.value =
+        error instanceof Error
+          ? error.message
+          : (t('socialaccount.ai_use_failed') || null);
+    })
+    .finally(() => {
+      aiUseSaving.value = false;
+    });
+}
 const proxyValue = ref<Array<Proxy>>([]);
 const proxyValueshow = ref<Array<string>>([]);
 const loading = ref(false);
@@ -301,7 +480,6 @@ const rules = {
 
 
 const showProxytable = () => {
-  console.log("show proxy table");
   proxytableshow.value = !proxytableshow.value;
 };
 
@@ -362,11 +540,14 @@ const initialize = async () => {
   if ($route.params.id) {
     socialaccountId.value = parseInt($route.params.id.toString());
   }
+  // R10/P-FR-01: the session-proxy choices load with the page.
+  void loadSavedProxies();
 
   if (socialaccountId.value > 0) {
     //edit
     isEdit.value = true;
-    FakeAPI.fetch(parseInt(socialaccountId.value.toString())).then((res) => {
+    FakeAPI.fetch(parseInt(socialaccountId.value.toString())).then(
+      async (res) => {
       user.value = res.user;
       pass.value = res.pass ?? "";
       status.value = res.status;
@@ -392,6 +573,12 @@ const initialize = async () => {
 
       // console.log(proxyValue.value)
       social_type_id.value = res.social_type_id;
+      // Q-01/B10/N08/R08: load the per-account AI opt-in — the
+      // assignment is NOT a write (the handler only fires on user
+      // toggles), and the checkbox stays inert until this read finishes.
+      // A FAILED read is NOT a confirmed disabled state: the checkbox
+      // stays disabled and an explicit retry is offered.
+      await loadAiUseOptIn();
     });
   } else {
     //add new item
@@ -400,38 +587,48 @@ const initialize = async () => {
     // campaignId.value=parseInt($route.params.campaignId.toString());
     // }
   }
-  //get social task type
-  console.log('SocialPlatformList raw data:', SocialPlatformList);
-  console.log('SocialPlatformList type:', typeof SocialPlatformList);
-  console.log('SocialPlatformList is array:', Array.isArray(SocialPlatformList));
-  console.log('SocialPlatformList length:', SocialPlatformList?.length);
-  
-  if (SocialPlatformList && Array.isArray(SocialPlatformList) && SocialPlatformList.length > 0) {
-    platformitems.value = SocialPlatformList.map((item) => {
-      console.log('Mapping item:', item);
-      return {
+  // N08/S-FR-06: the SITE REGISTRY is the authoritative selector source —
+  // custom/registered sites appear alongside the legacy static list.
+  try {
+    const registrySites = await listBrowserSites();
+    const registryItems = registrySites.map((site) => ({
+      id: site.id,
+      name: site.name,
+      displayName: `${site.name} (${site.registrableDomain})`,
+      category: "site",
+      url: `https://${site.registrableDomain}`,
+    }));
+    const staticItems = (SocialPlatformList ?? []).map((item) => ({
+      id: item.id,
+      name: item.name,
+      displayName: `${item.name} (${item.category})`,
+      category: item.category,
+      url: item.url,
+    }));
+    // Registry entries win; static entries fill gaps (legacy ids).
+    const seen = new Set(registryItems.map((item) => item.id));
+    platformitems.value = [...registryItems, ...staticItems.filter((item) => !seen.has(item.id))];
+  } catch {
+    // Registry unavailable — the static list keeps the editor usable.
+    if (SocialPlatformList && Array.isArray(SocialPlatformList) && SocialPlatformList.length > 0) {
+      platformitems.value = SocialPlatformList.map((item) => ({
         id: item.id,
         name: item.name,
         displayName: `${item.name} (${item.category})`,
         category: item.category,
         url: item.url,
-      };
-    });
-    console.log('Platform items mapped successfully:', platformitems.value);
-  } else {
-    console.error('SocialPlatformList is not available or empty');
-    platformitems.value = [];
+      }));
+    } else {
+      platformitems.value = [];
+    }
   }
 };
 
 async function onSubmit() {
-  console.log("submit");
   if (!form.value) return;
   const { valid } = await form.value.validate();
-  // console.log(valid);
   loading.value = true;
   if (!valid) {
-    console.log("form is not valid");
     loading.value = false;
     alert.value = true;
     alertcolor.value = "error";
@@ -451,7 +648,8 @@ async function onSubmit() {
     if ($route.params.id) {
       soacc.id = parseInt($route.params.id.toString());
     }
-    console.log(soacc);
+    // B15/A-FR-15: the object carries `pass` — never print it to the
+    // renderer console (D-13: no secret in logs).
     await saveSocialAccount(soacc)
       .then((res) => {
         loading.value = false;
@@ -487,19 +685,11 @@ async function onSubmit() {
   loading.value = false;
 }
 
-// Watch platformitems to debug when they change
-watch(platformitems, (newValue) => {
-  console.log('platformitems changed:', newValue);
-  console.log('platformitems length:', newValue.length);
-}, { immediate: true, deep: true });
-
 onMounted(async () => {
   try {
-    console.log('Component mounted, initializing...');
     await initialize();
     setupUploadCookiesListener();
     void refreshMetadata();
-    console.log('Initialization complete');
   } catch (error) {
     console.error('Error during initialization:', error);
   }
@@ -526,7 +716,6 @@ const handleSelectedChanged = (newValue: ProxyListEntity[]) => {
             isexist = true;
           }
         }
-        console.log("isexist:" + isexist.toString());
         if (!isexist) {
           proxyValue.value.push({
             id: newValue[i].id,
@@ -536,7 +725,6 @@ const handleSelectedChanged = (newValue: ProxyListEntity[]) => {
             password: newValue[i].password,
             protocol: newValue[i].protocol,
           });
-          console.log(proxyValue.value);
         }
       }
     }

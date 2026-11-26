@@ -271,7 +271,11 @@ const loadTaskDetails = async () => {
           host: proxy.host,
           port: proxy.port.toString(),
           user: proxy.user || '',
-          pass: proxy.pass || '',
+          // E06/P-AC-02: the edit payload carries hasPassword — the stored
+          // secret never reaches the renderer; the field stays empty and
+          // the user types only to REPLACE it.
+          pass: '',
+          hasPassword: proxy.hasPassword ?? false,
           protocol: 'http' // Default protocol
         }));
       }
@@ -558,7 +562,9 @@ async function onSubmit() {
           host: proxy.host,
           port: parseInt(proxy.port),
           user: proxy.user,
-          pass: proxy.pass
+          // E06: submit a password ONLY when the user typed one — an
+          // omitted pass keeps the stored credential.
+          ...(proxy.pass ? { pass: proxy.pass } : {}),
         })),
         accounts: subdata.accounts,
         enableAIRecovery: subdata.enableAIRecovery

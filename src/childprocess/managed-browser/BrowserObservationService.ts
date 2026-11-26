@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { MANAGED_BROWSER_OBSERVATION_BUDGETS } from "@/config/managedBrowser";
 import type {
   BrowserElementSummary,
@@ -9,7 +10,9 @@ import { PageReferenceRegistry } from "@/childprocess/managed-browser/PageRefere
 import {
   budgetName,
   isSensitiveInputType,
+  containsTrustedSecretValue,
   redactSecretsInText,
+  redactTrustedSecrets,
   summarizeInputValue,
   truncateText,
 } from "@/childprocess/managed-browser/ResultSanitizer";
@@ -55,8 +58,17 @@ export interface CollectedElementRecord {
   readonly checked: boolean | null;
   readonly selected: boolean | null;
   readonly hrefOrigin: string | null;
+  /** B04: the normalized absolute link URL — full-URL NAVIGATE provenance. */
+  readonly hrefFull: string | null;
+  /** D-FR-13: focused/dialog control — outranks plain page controls. */
+  readonly priority?: boolean;
   readonly visible: boolean;
-}
+  /** T21/A-AC-04: filled by the privileged login filler. */
+  isCredential?: boolean;
+  /** F08: set on the LAST record when the scan window was truncated. */
+  scanTruncated?: boolean;
+  /** F14: observed SELECT options (value + label), bounded. */
+  options?: Array<{ v: string; l: string }>;}
 
 /**
  * In-page collector: runs inside the page context; returns JSON records.
@@ -74,18 +86,69 @@ export const OBS_STAMPED_SELECTOR = `[${OBS_ELEMENT_STAMP_ATTRIBUTE}]`;
 
 export const COLLECT_ELEMENTS_SCRIPT = `(() => {
   const selector = ${JSON.stringify(INTERACTIVE_ELEMENTS_SELECTOR)};
+  const CAP = ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements};
+  // F08: the raw scan window is 4×CAP so controls hidden deep in the DOM
+  // can never crowd visible targets out of the collection.
+  const SCAN_CAP = CAP * 4;
   // Strip stamps from earlier passes first: an element that left the
   // selector set must not be picked up by the stamped-handle query.
   document.querySelectorAll('[${OBS_ELEMENT_STAMP_ATTRIBUTE}]').forEach(el => el.removeAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}'));
-  const els = Array.from(document.querySelectorAll(selector)).slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements * 2});
-  const out = [];
-  els.forEach((el, obsIndex) => {
-    const htmlEl = el;
-    htmlEl.setAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}', String(obsIndex));
-    const style = window.getComputedStyle(htmlEl);
+  const all = Array.from(document.querySelectorAll(selector));
+  const scanTruncatedRaw = all.length > SCAN_CAP;
+  const scanChunk = (start, end) => all.slice(start, end).map((el, offset) => {
+    const style = window.getComputedStyle(el);
     const visible = style.display !== 'none'
       && style.visibility !== 'hidden'
-      && htmlEl.offsetParent !== null;
+      && el.offsetParent !== null
+      && !(el.tagName === 'INPUT' && el.type === 'hidden');
+    return { el, docIndex: start + offset, visible };
+  });
+  let scanned = scanChunk(0, SCAN_CAP);
+  let visibleSet = scanned.filter((entry) => entry.visible);
+  let hiddenSet = scanned.filter((entry) => !entry.visible);
+  // P1: BOUNDED CONTINUATION — a page that hides the only visible control
+  // behind more than SCAN_CAP hidden predecessors is still recoverable:
+  // one continuation pass scans the next chunk when the first found too
+  // few visible controls.
+  if (scanTruncatedRaw && visibleSet.length < CAP && all.length > SCAN_CAP) {
+    const more = scanChunk(SCAN_CAP, SCAN_CAP * 2);
+    visibleSet = visibleSet.concat(more.filter((entry) => entry.visible));
+    hiddenSet = hiddenSet.concat(more.filter((entry) => !entry.visible));
+  }
+  // P1: FOCUSED and DIALOG controls are prioritized — they outrank plain
+  // page controls for the shortlist regardless of document position.
+  const priorityEls = new Set();
+  if (
+    document.activeElement instanceof Element &&
+    document.activeElement.matches(selector)
+  ) {
+    priorityEls.add(document.activeElement);
+  }
+  document
+    .querySelectorAll('[role="dialog"], dialog[open]')
+    .forEach((dialogEl) => {
+      dialogEl.querySelectorAll(selector).forEach((el) => priorityEls.add(el));
+    });
+  const visibleOrdered = visibleSet
+    .filter((entry) => priorityEls.has(entry.el))
+    .concat(visibleSet.filter((entry) => !priorityEls.has(entry.el)));
+  const chosenVisible = visibleOrdered.slice(0, CAP);
+  const chosenHidden = hiddenSet.slice(0, CAP);
+  const chosen = chosenVisible.concat(chosenHidden)
+    .sort((a, b) => a.docIndex - b.docIndex)
+    .slice(0, CAP * 2);
+  // D-FR-13/14: priority elements carry the flag downstream — the
+  // candidate builder orders the SHORTLIST by it (the record/handle
+  // pairing above stays in document order).
+  const priorityFlagged = chosen.map((entry) =>
+    priorityEls.has(entry.el) ? { ...entry, priority: true } : entry
+  );
+  const truncated =
+    scanTruncatedRaw || visibleOrdered.length > CAP || hiddenSet.length > CAP;
+  const out = [];
+  priorityFlagged.forEach((entry, obsIndex) => {
+    const htmlEl = entry.el;
+    htmlEl.setAttribute('${OBS_ELEMENT_STAMP_ATTRIBUTE}', String(obsIndex));
     const role = htmlEl.getAttribute('role')
       || (htmlEl.tagName === 'A' ? 'link'
         : htmlEl.tagName === 'BUTTON' ? 'button'
@@ -99,17 +162,59 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       || htmlEl.getAttribute('title')
       || htmlEl.getAttribute('value')
       || '';
-    name = name.replace(/\\s+/g, ' ').trim().slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxAccessibleNameChars});
+    // R03: collect at 3x the wire bound — the main-side trusted pass
+    // runs on the FULLER value before the final budget; a 200-char cap
+    // here could SPLIT a credential echoed into an attribute and defeat
+    // the exact-value match.
+    name = name.replace(/\\s+/g, ' ').trim().slice(0, ${MANAGED_BROWSER_OBSERVATION_BUDGETS.maxAccessibleNameChars * 3});
+    const isCredential = htmlEl.getAttribute('data-mb-cred') === '1';
     const inputTypeRaw = htmlEl.getAttribute('type');
     const inputType = htmlEl.tagName === 'INPUT' || htmlEl.tagName === 'TEXTAREA' ? (inputTypeRaw || 'text') : null;
     let hrefOrigin = null;
+    let hrefFull = null;
     if (htmlEl.tagName === 'A' && htmlEl.href) {
-      try { hrefOrigin = new URL(htmlEl.href).origin; } catch (e) { hrefOrigin = null; }
+      try {
+        const u = new URL(htmlEl.href);
+        hrefOrigin = u.origin;
+        // B04: the FULL normalized URL (origin+path+query+hash) — NAVIGATE
+        // provenance is per-URL, not per-origin.
+        hrefFull = String(u.href).slice(0, 2048);
+      } catch (e) { hrefOrigin = null; hrefFull = null; }
+    }
+    // F14: observed SELECT options — bounded (20), sanitized downstream.
+    let options = null;
+    if (htmlEl.tagName === 'SELECT' && !isCredential) {
+      options = [];
+      const opts = htmlEl.querySelectorAll('option');
+      for (let oi = 0; oi < opts.length && options.length < 20; oi++) {
+        const opt = opts[oi];
+        const rawValue = String(opt.value ?? '');
+        // V05/D-FR-12/17: an option whose native value exceeds the wire
+        // bound (512) can NEVER be exactly verified at dispatch — the
+        // truncated value would mismatch the full native value and fail
+        // stale_select_option. Such options are OMITTED (explicitly
+        // unsupported) rather than offered unmatchable.
+        if (rawValue.length > 512) {
+          continue;
+        }
+        options.push({
+          // R05: exact native value (bounded by the wire schema's 512)
+          // — the value IS the option identity used for verification.
+          v: rawValue,
+          // R03: label collected at 3x the wire bound for the same
+          // split-secret reason as accessible names.
+          l: String(opt.text ?? '').replace(/\\s+/g, ' ').trim().slice(0, 600),
+        });
+      }
     }
     out.push({
       obsId: String(obsIndex),
+      ...(entry.priority === true ? { priority: true } : {}),
       tag: htmlEl.tagName.toLowerCase(),
-      role,
+      // E11/R03: role is page-authored and can exceed the wire bound
+      // (48) — collected at 3x so the main-side trusted pass sees the
+      // fuller value before the final slice.
+      role: String(role).slice(0, 144),
       name,
       inputType,
       value: inputType && !/^hidden$/.test(inputType) ? String(htmlEl.value ?? '') : null,
@@ -117,9 +222,13 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
       checked: htmlEl.checked === undefined ? null : !!htmlEl.checked,
       selected: htmlEl.tagName === 'SELECT' ? htmlEl.selectedIndex >= 0 : null,
       hrefOrigin,
-      visible,
+      hrefFull,
+      visible: entry.visible,
+      isCredential,
+      options,
+      scanTruncated: truncated && obsIndex === chosen.length - 1 ? true : undefined,
     });
-  }
+  });
   return out;
 })()`;
 
@@ -130,8 +239,16 @@ export const COLLECT_ELEMENTS_SCRIPT = `(() => {
  * attests the expected fingerprint from the latest observation; the live
  * descriptor must still match it.
  */
-export const READ_ELEMENT_DESCRIPTOR_SCRIPT = `((el) => {
-  const htmlEl = el;
+/**
+ * F02: real page function (not a string IIFE) so Puppeteer binds `el`.
+ */
+export function readElementDescriptor(el: Element): {
+  role: string;
+  name: string;
+  disabled: boolean;
+  occluded: boolean;
+} {
+  const htmlEl = el as HTMLElement;
   const role = htmlEl.getAttribute('role')
     || (htmlEl.tagName === 'A' ? 'link'
       : htmlEl.tagName === 'BUTTON' ? 'button'
@@ -139,19 +256,42 @@ export const READ_ELEMENT_DESCRIPTOR_SCRIPT = `((el) => {
       : htmlEl.tagName === 'TEXTAREA' || htmlEl.tagName === 'INPUT' ? 'textbox'
       : 'generic');
   let name = htmlEl.getAttribute('aria-label')
-    || (htmlEl.labels && htmlEl.labels[0] ? htmlEl.labels[0].innerText : '')
+    || ((htmlEl as HTMLInputElement).labels?.[0]?.innerText ?? '')
     || htmlEl.innerText
     || htmlEl.getAttribute('placeholder')
     || htmlEl.getAttribute('title')
     || htmlEl.getAttribute('value')
     || '';
-  name = name.replace(/\\s+/g, ' ').trim().slice(0, 200);
-  return { role, name };
-})()`;
+  name = name.replace(/\s+/g, ' ').trim().slice(0, 200);
+  // V06/D-FR-15: disabled/read-only state, and an elementFromPoint hit
+  // test — a control covered by an overlay (or detached mid-check) is
+  // reported occluded so the executor refuses BEFORE dispatch.
+  const disabled =
+    htmlEl.hasAttribute('disabled') ||
+    htmlEl.getAttribute('aria-disabled') === 'true' ||
+    ((htmlEl as HTMLInputElement).readOnly === true);
+  let occluded = false;
+  try {
+    const rect = htmlEl.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      occluded = true;
+    } else {
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      occluded = hit !== null && !htmlEl.contains(hit) && hit !== htmlEl;
+    }
+  } catch {
+    occluded = true;
+  }
+  return { role, name, disabled, occluded };
+}
 
 export interface LiveElementDescriptor {
   readonly role: string;
   readonly name: string;
+  readonly disabled: boolean;
+  readonly occluded: boolean;
 }
 
 export interface ObservationPageLike {
@@ -172,26 +312,114 @@ export interface BuildObservationInput {
 /** Convert a collected record into a safe summary (no secrets, budgeted). */
 export function shapeElementRecord(
   record: CollectedElementRecord
-): Pick<BrowserElementSummary, "role" | "name" | "disabled" | "checked" | "selected" | "hrefOrigin"> & {
+): Pick<
+  BrowserElementSummary,
+  | "role"
+  | "name"
+  | "disabled"
+  | "checked"
+  | "selected"
+  | "hrefOrigin"
+  | "hrefFull"
+  | "priority"
+  | "option_ids"
+  | "option_labels"
+  | "option_values"
+> & {
   readonly valueSummary?: string;
   readonly inputType: string | null;
 } {
   return {
-    role: record.role || "generic",
+    // E11: page-authored role can exceed the wire bound (48) — slice
+    // here too so the in-page collector's raw records never drop the
+    // whole observation at parse time. N07: the role is page-authored
+    // and the trusted-secret pass applies (a page can echo a filled
+    // credential into any attribute).
+    // R03: the trusted pass runs on the FULLER collected value and the
+    // wire cap is enforced AFTER redaction (a replacement can expand
+    // the field past its cap and reject the whole observation).
+    role: redactSecretsInText(redactTrustedSecrets(record.role || "generic")).slice(
+      0,
+      48
+    ),
     // Accessible names are page-authored: scrub secret-shaped content
     // BEFORE budgeting (GAP-04).
-    name: budgetName(redactSecretsInText(record.name || "")),
+    // F09/A-AC-01: credential fields also redact their accessible name —
+    // a sentinel used as a value attribute can leak through the name.
+    // F09: EVERY password-typed input masks its accessible name — not
+    // only fields our filler marked — because the name chain
+    // (aria-label/placeholder/title/value) is page-authored and can
+    // carry a secret we cannot recognize by shape.
+    name:
+      record.isCredential || record.inputType === "password"
+        ? "[credential]"
+        : budgetName(redactSecretsInText(record.name || "")),
     disabled: record.disabled,
     ...(record.checked == null ? {} : { checked: record.checked }),
     ...(record.selected == null ? {} : { selected: record.selected }),
-    ...(record.hrefOrigin ? { hrefOrigin: record.hrefOrigin } : {}),
-    ...(record.value != null && record.value !== ""
+    ...(record.hrefOrigin
+      ? { hrefOrigin: redactTrustedSecrets(record.hrefOrigin).slice(0, 512) }
+      : {}),
+    // B04: full normalized URL rides the summary for NAVIGATE provenance.
+    // N07: a page can echo a filled credential into a link (query param);
+    // the trusted pass applies before the shape heuristics.
+    ...(record.hrefFull
       ? {
-          valueSummary:
-            summarizeInputValue(record.value, record.inputType ?? undefined) ??
-            undefined,
+          hrefFull: redactSecretsInText(redactTrustedSecrets(record.hrefFull)).slice(
+            0,
+            2048
+          ),
         }
       : {}),
+    // D-FR-13: focused/dialog elements surface first in the shortlist.
+    ...(record.priority === true ? { priority: true } : {}),
+    // F14: positional option ids (o_0..) plus sanitized labels/values
+    // so the decision can pick an OBSERVED option and the runner can
+    // map it back to the real value.
+    ...(record.options && record.options.length > 0
+      ? {
+          // N07: the ids/values/labels below all come from the KEPT set —
+          // oversized and credential-bearing options are omitted together,
+          // and the o_N id preserves the original option index.
+          // R05: option VALUES stay EXACT (bounded) — they are the
+          // identity verified against the live element at dispatch;
+          // only the display LABELS are redacted.
+          // N07: an option whose value CONTAINS the actual filled
+          // credential is OMITTED entirely (same treatment as oversized
+          // options) — dispatching it would send the credential, and
+          // carrying it outbound would leak it. The worker resolves the
+          // exact value for the remaining o_N ids from its live element.
+          // The o_N id PRESERVES the original option index (the executor
+          // maps it to el.options[N] on the LIVE element) — the two arrays
+          // stay index-aligned over the KEPT options.
+          ...(() => {
+            const kept = record.options
+              .map((o, i) => ({ o, i }))
+              .filter(
+                ({ o }) =>
+                  (o.v || "").length <= 512 &&
+                  !containsTrustedSecretValue(o.v || "")
+              );
+            return {
+              option_ids: kept.map(({ i }) => `o_${i}`),
+              option_labels: kept.map(({ o }) =>
+                redactSecretsInText(redactTrustedSecrets(o.l || o.v || "")).slice(0, 200)
+              ),
+              option_values: kept.map(({ o }) => o.v || ""),
+            };
+          })(),
+        }
+      : {}),
+    ...(record.value != null && record.value !== ""
+      ? {
+          valueSummary: record.isCredential
+            ? "[credential]"
+            : (summarizeInputValue(record.value, record.inputType ?? undefined) ??
+               undefined),
+        }
+      : record.isCredential
+        ? { valueSummary: "[credential]" }
+        : {}),
     inputType: record.inputType,
   };
 }
@@ -199,6 +427,27 @@ export function shapeElementRecord(
 /** Build the safe observation from a live page. */
 export async function buildObservation(
   input: BuildObservationInput
+): Promise<BrowserObservation> {
+  // PRD D-FR-15a: one opaque identity per snapshot. All refs registered
+  // during this collection belong to this observation epoch, which the
+  // main process can pin across pending approvals/handoffs.
+  const observationId = randomUUID();
+  input.registry.beginObservation(observationId);
+  // D-FR-15a edge: a throw AFTER beginObservation but BEFORE
+  // commitObservation must not leave the bucket implicitly pinned
+  // forever — a failed build commits (closes) its epoch so the refs
+  // expire normally, then the error propagates.
+  try {
+    return await buildObservationBody(input, observationId);
+  } catch (error) {
+    input.registry.commitObservation(observationId);
+    throw error;
+  }
+}
+
+async function buildObservationBody(
+  input: BuildObservationInput,
+  observationId: string
 ): Promise<BrowserObservation> {
   const notices: BrowserNotice[] = [{ code: "untrusted_content" }];
   let records: CollectedElementRecord[] = [];
@@ -238,25 +487,56 @@ export async function buildObservation(
     0,
     MANAGED_BROWSER_OBSERVATION_BUDGETS.maxInteractiveElements
   );
+  // F08: the in-page collector reports scan truncation explicitly —
+  // hidden controls no longer silently crowd out visible targets, and
+  // a saturated scan window is surfaced instead of hidden.
   const truncatedElements =
+    records.some((r) => r.scanTruncated === true) ||
     records.filter((r) => r.visible).length > visible.length;
 
   const elements: BrowserElementSummary[] = [];
+  let registrySaturated = false;
   for (const record of visible) {
     const shaped = shapeElementRecord(record);
     const handle =
       record.obsId != null ? handles[Number(record.obsId)] : undefined;
     if (handle) {
-      const ref = input.registry.register({
-        element: handle,
-        role: shaped.role,
-        name: shaped.name,
-      });
+      // F02: register with the RAW name so the live descriptor comparison
+      // in withElement matches (the LLM summary still uses the masked
+      // name via toSummaryFields).
+      const rawName =
+        record.isCredential || record.inputType === "password"
+          ? budgetName(record.name || "")
+          : shaped.name;
+      let ref: string;
+      try {
+        ref = input.registry.register({
+          element: handle,
+          role: shaped.role,
+          name: rawName,
+        });
+      } catch (error) {
+        // F08: a saturated registry (everything pinned/pending) degrades
+        // THIS observation explicitly — it never evicts a pinned ref to
+        // admit a new one.
+        if (
+          error instanceof Error &&
+          error.name === "ReferenceRegistrySaturatedError"
+        ) {
+          registrySaturated = true;
+          elements.push({ ref: "e_nohandle", ...toSummaryFields(shaped) });
+          continue;
+        }
+        throw error;
+      }
       elements.push({ ref, ...toSummaryFields(shaped) });
     } else {
       // No handle available (budget edge): expose without a usable ref.
       elements.push({ ref: "e_nohandle", ...toSummaryFields(shaped) });
     }
+  }
+  if (registrySaturated) {
+    notices.push({ code: "truncated" });
   }
 
   const textBudget = truncateText(
@@ -266,7 +546,18 @@ export async function buildObservation(
   if (textBudget.truncated) {
     notices.push({ code: "truncated" });
   }
-  const url = sanitizeUrlForReport(input.page.url());
+  // A04: the URL pathname can carry the exact filled credential (a page
+  // can navigate to a URL embedding it) — the trusted pass applies before
+  // the report-safe shape.
+  // R03: the top-frame origin is derived from the SANITIZED URL (never
+  // the raw one) and every redacted field is re-capped to its wire
+  // bound — redaction replacement can expand a field past the cap and
+  // the schema would reject the whole observation.
+  const url = redactTrustedSecrets(sanitizeUrlForReport(input.page.url())).slice(0, 2048);
+  // R03: the trusted POLICY url — credential redacted, query PRESERVED —
+  // rides the main-process observation for exact reopen and policy
+  // decisions; the display `url` stays fully scrubbed.
+  const policyUrl = redactTrustedSecrets(input.page.url()).slice(0, 2048);
   const visibleSensitive = records.some(
     (r) => r.inputType != null && isSensitiveInputType(r.inputType)
   );
@@ -274,15 +565,26 @@ export async function buildObservation(
     notices.push({ code: "sensitive_field_visible" });
   }
 
+  input.registry.commitObservation(observationId);
   // Final payload scrub (GAP-04): free-form page text is the leak surface —
-  // planted canaries, rendered tokens, key=value pairs in prose.
-  const safeTitle = redactSecretsInText(title);
-  const safeText = redactSecretsInText(textBudget.text);
+  // planted canaries, rendered tokens, key=value pairs in prose. A04: the
+  // exact filled credential is redacted FIRST (the trusted pass applies
+  // to the FULL text — a length limit before it can cut through a known
+  // value and prevent the match).
+  const safeTitle = redactSecretsInText(redactTrustedSecrets(title));
+  // R03: redaction replacement can EXPAND the text past the wire cap —
+  // the cap is re-enforced after scrubbing so the observation survives.
+  const safeText = truncateText(
+    redactSecretsInText(redactTrustedSecrets(textBudget.text)),
+    MANAGED_BROWSER_OBSERVATION_BUDGETS.maxVisibleTextChars
+  ).text;
   return {
     sessionId: input.sessionId,
+    observationId,
     pageRevision: input.registry.currentRevision,
     url,
-    origin: extractOrigin(input.page.url()) ?? url,
+    policyUrl,
+    origin: (extractOrigin(url) ?? url).slice(0, 512),
     title: truncateText(safeTitle, 300).text,
     state: input.state,
     elements,
@@ -304,6 +606,11 @@ function toSummaryFields(
   if (shaped.checked != null) out.checked = shaped.checked;
   if (shaped.selected != null) out.selected = shaped.selected;
   if (shaped.hrefOrigin != null) out.hrefOrigin = shaped.hrefOrigin;
+  if (shaped.hrefFull != null) out.hrefFull = shaped.hrefFull;
+  if (shaped.priority != null) out.priority = shaped.priority;
+  if (shaped.option_ids != null) out.option_ids = shaped.option_ids;
+  if (shaped.option_labels != null) out.option_labels = shaped.option_labels;
+  if (shaped.option_values != null) out.option_values = shaped.option_values;
   return out as Omit<BrowserElementSummary, "ref">;
 }
 

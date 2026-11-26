@@ -1,5 +1,4 @@
 import { simpleParser, type ParsedMail } from "mailparser";
-import crypto from "crypto";
 import sanitizeHtml from "sanitize-html";
 import { SANITIZE_OPTIONS } from "@/service/emailReceive/EmailHtmlSanitizer";
 import { htmlToText } from "@/service/emailReceive/EmailBodyNormalizationService";

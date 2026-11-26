@@ -1,5 +1,6 @@
 // src/service/AgentRuntime.ts
 import { randomUUID } from "crypto";
+import { getDefaultAgentTaskControlService, registerAgentTaskLabel } from "@/service/browserAgents/AgentTaskControlService";
 import { log } from "@/modules/Logger";
 import { SkillRegistry } from "@/config/skillsRegistry";
 import type { SkillExecutionContext } from "@/entityTypes/skillTypes";
@@ -145,6 +146,16 @@ export interface AgentRuntimeDeps {
   getSkillDefinition?: AIChatQueryLoopDeps["getSkillDefinition"];
   /** Inject an event sink for streaming (foreground only). */
   eventSink?: AIChatQueryEventSink;
+  /**
+   * F06: when true, the run's active-time deadline freezes (a blocking
+   * user wait is in progress). Omit for the old wall-clock behavior.
+   */
+  /**
+   * C-FR-09: conversation-scoped wait probe — the runtime passes its OWN
+   * conversation id so a sibling's user wait never freezes this child's
+   * active-time clock.
+   */
+  isUserWaiting?: (conversationId: string) => boolean;
   /** Optional. When provided, the runtime triggers auto-dream consolidation
    * after a completed task. Failures are logged and swallowed. */
   autoDreamService?: AIAutoDreamService;
@@ -225,6 +236,17 @@ export class AgentRuntime {
 
     const agentTaskId = `agt-${randomUUID()}`;
     const agentConversationId = `agent-v2-${randomUUID()}`;
+    // B02/M-FR-08: ONE task identity — the caller's user-visible control
+    // record id (the batch card's row) owns the CONTROL SERVICE record,
+    // so user pause/take-over/stop and this loop's gate address the same
+    // record. Persistence keeps the internal agt id.
+    const controlTaskId = request.controlTaskId ?? agentTaskId;
+    // C-FR-05: the agent task joins the control service so user pause/
+    // stop reaches the loop between tool calls (not only the runner).
+    getDefaultAgentTaskControlService().register(controlTaskId, agentConversationId);
+    // W06/M-FR-08: register the user-visible label so notices published
+    // for sessions this agent owns NAME the task in the parent chat.
+    registerAgentTaskLabel(controlTaskId, request.taskLabel ?? definition.name);
     const transcript = new AgentTranscriptService(this.taskModule);
 
     // Normalize constraints — AI-generated taskPackets may omit this object.
@@ -369,6 +391,49 @@ export class AgentRuntime {
         };
       }
       executedToolCalls += 1;
+      // C-FR-05: the per-task control gate is honored before EVERY tool
+      // call — pause (user_paused) blocks at this safe point; cancel
+      // fails the call immediately so the loop wraps up.
+      const controlRecord = getDefaultAgentTaskControlService().get(controlTaskId);
+      if (controlRecord) {
+        if (controlRecord.state === "cancelled") {
+          throw new Error("task_cancelled");
+        }
+        if (controlRecord.state === "paused" || controlRecord.state === "interrupted") {
+          return {
+            tool_call_id: ctx.toolCallId,
+            tool_name: name,
+            success: false,
+            result: {
+              agentTaskPaused: true,
+              state: controlRecord.state,
+              reason: `the task is ${controlRecord.state} by the user — the agent stops making progress until resumed`,
+            },
+            execution_time_ms: Date.now() - startedAt,
+          };
+        }
+      }
+      // N03/C-FR-06: a response generated BEFORE a pause+resume must not
+      // execute its pre-pause tool calls after the gate reopened — the
+      // resume generation captured at the round top is compared here, and
+      // stale calls are held (same discard rule as the runner).
+      if (
+        typeof generationBeforeModel === "number" &&
+        getDefaultAgentTaskControlService().getResumeGeneration(controlTaskId) >
+          generationBeforeModel
+      ) {
+        return {
+          tool_call_id: ctx.toolCallId,
+          tool_name: name,
+          success: false,
+          result: {
+            agentTaskPaused: true,
+            reason:
+              "tool call predates a user pause/resume — held and discarded",
+          },
+          execution_time_ms: Date.now() - startedAt,
+        };
+      }
       const res = await executeClaudeCompatibleTool(
         name,
         args,
@@ -518,9 +583,28 @@ export class AgentRuntime {
     } else {
       deps?.signal?.addEventListener("abort", abortFromParent, { once: true });
     }
-    const timer = setTimeout(() => {
-      abortController.abort();
-    }, definition.maxRuntimeMs);
+    // F06: the runtime deadline is ACTIVE-TIME — user waits (blocking
+    // handoff/credential dialogs) freeze the budget instead of aborting
+    // a healthy wait at the wall-clock cap (D-21/C-FR-09).
+    let activeRuntimeMs = 0;
+    const deadlineTickMs = 1_000;
+    const timer = setInterval(() => {
+      if (abortController.signal.aborted) {
+        clearInterval(timer);
+        return;
+      }
+      if (deps?.isUserWaiting?.(agentConversationId)) {
+        return;
+      }
+      activeRuntimeMs += deadlineTickMs;
+      if (activeRuntimeMs >= definition.maxRuntimeMs) {
+        clearInterval(timer);
+        abortController.abort();
+      }
+    }, deadlineTickMs);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
 
     let finalText = "";
     let capturedImages: OpenAIChatImage[] | undefined;
@@ -530,9 +614,23 @@ export class AgentRuntime {
       },
     };
 
+    // N03: the resume generation at the current model round — the per-tool
+    // gate compares it so pre-pause tool calls never execute.
+    let generationBeforeModel: number | undefined = undefined;
+    // C03/C-FR-07: the transcript's resume-note delivery cursor — each
+    // generation's note is delivered to the outer model turn exactly
+    // once, independent of the runner's decision consume.
+    let resumeNotesDeliveredThroughGeneration = 0;
     try {
       const loopInput = {
         conversationId: agentConversationId,
+        // B11/M-FR-07: sub-agent identity + the ROOT conversation. Browser
+        // N01/M-FR-08: sessions started by the agent record the CONTROL
+        // task id (the batch row) — the same identity the control record,
+        // notices, handoff waits, and cleanup share. Persistence keeps the
+        // internal agt id.
+        ownerAgentId: controlTaskId,
+        rootConversationId: request.parentConversationId ?? undefined,
         assistantMessageId: `agent-assistant-${agentTaskId}`,
         messages: [systemMessage, userMessage],
         request: {
@@ -546,6 +644,85 @@ export class AgentRuntime {
         eventSink: sink,
         startRound: 0,
         isActiveTurn: () => true,
+        // W07/C-FR-05/06: the per-task control gate is consulted BEFORE
+        // every model request — a pause issued before the request is sent
+        // never sends it (no tokens spent while paused), and a stop ends
+        // the turn cancelled. The gate check is non-blocking: a response
+        // already in flight finishes, but its tool calls hit the paused
+        // branch in policyCheckedExecute below (held as a set).
+        onBeforeModelRound: async () => {
+          const record = getDefaultAgentTaskControlService().get(controlTaskId);
+          // N03: snapshot the resume generation at the round top — the
+          // per-tool gate compares it to discard pre-pause calls.
+          generationBeforeModel = getDefaultAgentTaskControlService()
+            .getResumeGeneration(controlTaskId);
+          // C03/C-FR-07: a resume that landed DURING a tool call never
+          // reached onPauseWait (the loop was inside the tool, not at a
+          // round top) — deliver each undelivered generation's note into
+          // the transcript HERE, awaited so the model request reads it.
+          const currentGeneration = generationBeforeModel;
+          if (currentGeneration > resumeNotesDeliveredThroughGeneration) {
+            const note = getDefaultAgentTaskControlService()
+              .peekResumeInstructionsSince(
+                controlTaskId,
+                resumeNotesDeliveredThroughGeneration
+              );
+            resumeNotesDeliveredThroughGeneration = Math.max(
+              resumeNotesDeliveredThroughGeneration,
+              note?.latestGeneration ?? currentGeneration
+            );
+            await transcript.appendSystemText(
+              agentTaskId,
+              `[resume ${new Date().toISOString()}] the user controlled the browser; observe before acting.` +
+                (note?.text ? ` user instructions: ${note.text}` : "")
+            );
+          }
+          if (!record) {
+            return "ok";
+          }
+          if (record.state === "cancelled") {
+            return "cancel";
+          }
+          if (record.state === "paused" || record.state === "interrupted") {
+            return "pause";
+          }
+          return "ok";
+        },
+        // R01/C-FR-04: a pause BLOCKS IN THE LOOP on the control gate —
+        // the sub-agent job stays alive and resumes safe work when the
+        // user resumes (held pre-pause tool calls were already gated per
+        // call; the gate recheck at the round top discards stale state).
+        // A rejection (cancelled/interrupted) ends the turn as before.
+        onPauseWait: async (signal: AbortSignal) => {
+          const gate = getDefaultAgentTaskControlService().getGate(controlTaskId);
+          // R01/C-FR-07: the RESUME NOTE persists in the ACTUAL agent
+          // transcript — gate reopened means the user controlled the
+          // browser; the model must observe first. The user's
+          // instructions ride the transcript entry (and are consumed by
+          // the runner through the control record).
+          await gate.waitUntilOpen(signal);
+          // B03/C-FR-07 + C03: the transcript delivery is PER GENERATION
+          // with its own cursor — the runner's decision consume no longer
+          // steals the text from the live outer model turn, and a second
+          // pause-wait exit never replays an already-delivered note.
+          const note = getDefaultAgentTaskControlService()
+            .peekResumeInstructionsSince(
+              controlTaskId,
+              resumeNotesDeliveredThroughGeneration
+            );
+          resumeNotesDeliveredThroughGeneration = Math.max(
+            resumeNotesDeliveredThroughGeneration,
+            note?.latestGeneration ??
+              getDefaultAgentTaskControlService().getResumeGeneration(
+                controlTaskId
+              )
+          );
+          await transcript.appendSystemText(
+            agentTaskId,
+            `[resume ${new Date().toISOString()}] the user controlled the browser; observe before acting.` +
+              (note?.text ? ` user instructions: ${note.text}` : "")
+          );
+        },
         // Retry transient content failures instantly. Agents run under a tight
         // maxRuntimeMs deadline (the abort timer above); spending that budget
         // on exponential backoff sleeps can starve actual work. The agent's
@@ -562,6 +739,39 @@ export class AgentRuntime {
         capturedImages = result.images;
       } else if (result.type === "cancelled") {
         finalText = result.partialContent;
+        // W07/C-FR-05/R01: a gate-reported PAUSE is not a user cancel —
+        // the task is blocked until resume. With the loop-level pause
+        // wait (onPauseWait) this branch only fires when the wait was
+        // REJECTED by an expiry/interruption; the persisted status stays
+        // waiting_user WITHOUT finishedAt (the task is not finished —
+        // a resume can still advance it).
+        if (result.agentTaskPaused) {
+          // N03/C-FR-09: an EXPIRED pause (interrupted) is a terminal
+          // state — persisted honestly, never a resumable waiting_user.
+          if (result.agentTaskInterrupted) {
+            await this.taskModule.setStatus(agentTaskId, "failed", {
+              finishedAt: new Date(),
+              errorMessage: "the pause expired before the task could resume",
+            });
+            return this.buildResult(
+              agentTaskId,
+              definition,
+              "failed",
+              finalText,
+              "the pause expired before the task could resume",
+              controlTaskId
+            );
+          }
+          await this.taskModule.setStatus(agentTaskId, "waiting_user", {});
+          return this.buildResult(
+            agentTaskId,
+            definition,
+            "blocked",
+            finalText,
+            "the task is paused by the user — no progress until resumed",
+            controlTaskId
+          );
+        }
         await this.taskModule.setStatus(agentTaskId, "cancelled", {
           finishedAt: new Date(),
         });
@@ -569,7 +779,9 @@ export class AgentRuntime {
           agentTaskId,
           definition,
           "cancelled",
-          finalText
+          finalText,
+          undefined,
+          controlTaskId
         );
       } else if (result.type === "failed") {
         finalText = result.partialContent;
@@ -583,7 +795,8 @@ export class AgentRuntime {
           definition,
           "failed",
           finalText,
-          failedMessage
+          failedMessage,
+          controlTaskId
         );
       } else {
         // paused_for_permission / paused_for_plan_question fallback. The
@@ -604,7 +817,8 @@ export class AgentRuntime {
           definition,
           "failed",
           finalText,
-          msg
+          msg,
+          controlTaskId
         );
       }
     } catch (err) {
@@ -618,10 +832,11 @@ export class AgentRuntime {
         definition,
         "failed",
         finalText,
-        msg
+        msg,
+        controlTaskId
       );
     } finally {
-      clearTimeout(timer);
+      clearInterval(timer);
       deps?.signal?.removeEventListener("abort", abortFromParent);
       // Review fix: release the live-controller registration on EVERY exit
       // path (a thrown loop.run previously leaked the entry, and a later
@@ -730,6 +945,9 @@ export class AgentRuntime {
 
     const result: AgentResult = {
       agentTaskId,
+      // N01/M-FR-08: the caller's control identity rides the completed
+      // result (the collector validates cleanup against it).
+      ...(request.controlTaskId ? { controlTaskId: request.controlTaskId } : {}),
       agentId: definition.id,
       agentVersion: definition.version,
       status: "completed",
@@ -742,38 +960,53 @@ export class AgentRuntime {
       ...(outputFilePaths ? { outputFilePaths } : {}),
       ...(outputImages ? { outputImages } : {}),
       ...(storageWarning ? { storageWarning } : {}),
-      ...(externalizedOutputIds.length > 0
-        ? { outputIds: externalizedOutputIds }
-        : {}),
     };
-    await this.taskModule.saveResult(agentTaskId, result);
-    await this.taskModule.setStatus(agentTaskId, "completed", {
-      finishedAt: new Date(),
-    });
 
-    // T15b: issue inter-agent handoff grants so the parent conversation can
-    // read the child's externalized outputs instead of re-running the tool.
-    // Best-effort: a grant failure is logged and swallowed because the
-    // parent's retrieval path will surface `OUTPUT_NOT_AVAILABLE` cleanly,
-    // and the child's own result is already durable. Only grant when the
-    // child actually externalized AND a parent conversation is wired.
+    // T15b/R07/M-FR-02: issue inter-agent handoff grants BEFORE the
+    // result is persisted, and surface ONLY the receipts whose grant
+    // actually landed — a receipt without access is OUTPUT_NOT_AVAILABLE
+    // for the parent, so it is dropped here instead of advertised. The
+    // grant presents the SAME identity the artifacts were STORED under:
+    // the loop's tool results record ownerAgentId = controlTaskId (the
+    // batch row / browser control identity), so the grant must present
+    // controlTaskId — presenting the generated agent task id refused
+    // every grant while the receipts still advertised the outputs.
+    // T15b/R07/M-FR-02: WITHOUT a parent conversation no grant is
+    // intended — the receipts surface unchanged for observability (the
+    // owner conversation can read its own outputs). WITH a parent, only
+    // receipts whose grant actually LANDED surface: the grant presents
+    // the SAME identity the artifacts were STORED under (ownerAgentId =
+    // controlTaskId, matching the loop's tool-result records), so a
+    // failed grant drops the receipt instead of advertising an output
+    // the parent cannot read (OUTPUT_NOT_AVAILABLE).
+    const grantedOutputIds: string[] = [];
     if (
       externalizedOutputIds.length > 0 &&
       request.parentConversationId &&
       toolResultModule
     ) {
+      const seen = new Set<string>();
       for (const outputId of externalizedOutputIds) {
+        if (seen.has(outputId)) {
+          continue;
+        }
+        seen.add(outputId);
         try {
           const grant = await toolResultModule.grantAccess({
             outputId,
             ownerProfileId: "default",
             ownerConversationId: agentConversationId,
-            ownerAgentId: definition.id,
+            // M-FR-02: the artifacts are STORED under controlTaskId —
+            // authorizeAccess compares this presented identity against
+            // the stored owner.
+            ownerAgentId: controlTaskId,
             granteeConversationId: request.parentConversationId,
             granteeAgentId: request.parentAgentId ?? "",
             grantReason: "child-agent-handoff",
           });
-          if (!grant.granted) {
+          if (grant.granted) {
+            grantedOutputIds.push(outputId);
+          } else {
             console.warn(
               `[agent-runtime] handoff grant failed for ${outputId}: ${grant.code ?? "unknown"}`
             );
@@ -785,7 +1018,14 @@ export class AgentRuntime {
           );
         }
       }
+      result.outputIds = grantedOutputIds;
+    } else if (externalizedOutputIds.length > 0) {
+      result.outputIds = externalizedOutputIds;
     }
+    await this.taskModule.saveResult(agentTaskId, result);
+    await this.taskModule.setStatus(agentTaskId, "completed", {
+      finishedAt: new Date(),
+    });
     const snap = await this.taskModule.getSnapshot(agentTaskId);
     result.toolCallsCount = snap?.toolCallsCount ?? 0;
     if (deps?.autoDreamService) {
@@ -932,10 +1172,13 @@ export class AgentRuntime {
     definition: AgentDefinitionView,
     status: AgentResult["status"],
     text: string,
-    errorMessage?: string
+    errorMessage?: string,
+    controlTaskId?: string
   ): AgentResult {
     return {
       agentTaskId,
+      // N01/M-FR-08: the caller's control identity rides every result.
+      ...(controlTaskId ? { controlTaskId } : {}),
       agentId: definition.id,
       agentVersion: definition.version,
       status,

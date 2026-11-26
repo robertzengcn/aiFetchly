@@ -32,4 +32,10 @@ export class SearchTaskProxyModel extends BaseDb {
     async getItemsByTaskId(taskId: number): Promise<SearchTaskProxyEntity[]> {
         return this.repository.find({ where: { task_id: taskId } });
     }
+
+    /** B09: remove every proxy row of a task (replace-on-update). */
+    async deleteByTaskId(taskId: number): Promise<number> {
+        const result = await this.repository.delete({ task_id: taskId });
+        return result.affected || 0;
+    }
 } 

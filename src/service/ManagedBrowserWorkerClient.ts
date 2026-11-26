@@ -3,6 +3,7 @@ import {
   registerOwnedProcess,
 } from "@/main-process/lifecycle/ownedSpawn";
 import * as fs from "fs";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 import * as path from "path";
 import { log } from "@/modules/Logger";
 import type { NormalizedCookie } from "@/schemas/accountCookies";
@@ -211,7 +212,7 @@ export class ManagedBrowserWorkerClient {
     const requestId = `req-${this.sessionId}-${this.requestIdCounter}`;
     this.sequence += 1;
     const full = {
-      protocolVersion: 1,
+      protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
       sessionId: this.sessionId,
       requestId,
       sequence: this.sequence,

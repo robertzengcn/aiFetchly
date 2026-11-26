@@ -45,6 +45,12 @@ export interface SafeProxySummary {
   readonly checktime?: string;
   readonly status?: ProxyBasicStatus;
   readonly googlePass?: ProxyGooglePassStatus;
+  /**
+   * R03/P-FR-07: whether the proxy is BROWSER-USABLE — a browser-usable
+   * protocol (HTTP/HTTPS, not SOCKS) whose latest basic check passed.
+   * Never includes credentials.
+   */
+  readonly browserUsable?: boolean;
 }
 
 /**
@@ -166,6 +172,12 @@ export interface ProxyCheckProgress {
   readonly basic?: "pass" | "failure";
   readonly googlePass?: "pass" | "fail";
   readonly error?: string;
+  /**
+   * W04/P-FR-04: typed failure reason (proxy_connect_failed |
+   * proxy_auth_failed | tunnel_failed | proxy_check_failed) so the
+   * switch/rollback can report WHY a proxy is unusable.
+   */
+  readonly reasonCode?: string;
 }
 
 export interface ProxyCheckItemInternal {
@@ -173,6 +185,8 @@ export interface ProxyCheckItemInternal {
   readonly basic?: "pass" | "failure";
   readonly googlePass?: "pass" | "fail";
   readonly error?: string;
+  /** W04/P-FR-04: typed failure reason threaded through switch/rollback. */
+  readonly reasonCode?: string;
 }
 
 export interface ProxyCheckBatchResult {
@@ -220,6 +234,13 @@ export function mapGooglePassStatus(
 export function mapProtocol(
   protocol: string | undefined | null
 ): ProxyProtocol | undefined {
+  // R09/P-FR: legacy rows store a NULL protocol — the browser selector
+  // and the list's browser_usable already read that as HTTP, so the AI
+  // projection unifies on the same default instead of reporting
+  // undefined for the same row.
+  if (protocol === null || protocol === undefined) {
+    return "http";
+  }
   if (typeof protocol !== "string") {
     return undefined;
   }
@@ -351,7 +372,15 @@ export function toSafeProxySummary(
     status: mapBasicStatus(input.status, hasChecktime),
     googlePass: mapGooglePassStatus(input.googlePass),
   };
-  return summary;
+  // R03/P-FR-07: browser_usable = browser-usable protocol AND the latest
+  // basic check passed. A never-checked or failed proxy is not usable.
+  const browserUsableProtocol =
+    summary.protocol !== undefined &&
+    (summary.protocol === "http" || summary.protocol === "https");
+  return {
+    ...summary,
+    browserUsable: browserUsableProtocol && summary.status === "pass" && hasChecktime,
+  };
 }
 
 // ---------------------------------------------------------------------------

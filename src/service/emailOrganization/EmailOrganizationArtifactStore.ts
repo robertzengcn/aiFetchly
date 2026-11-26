@@ -31,7 +31,7 @@ export class EmailOrganizationArtifactStore implements EmailOrganizationArtifact
 
   private async getKey(): Promise<Buffer> {
     if (this.keyPromise === null) {
-      this.keyPromise = (async () => {
+      this.keyPromise = (async (): Promise<Buffer> => {
         const { userSecretKeyService } =
           await import("@/modules/fieldCipher/UserSecretKeyService");
         return await userSecretKeyService.getKey();

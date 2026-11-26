@@ -113,7 +113,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Audit R7-03: the selection pointer is persisted in localStorage — never
   // leak it across tests (a stray pointer turns the NEXT mount's restore on).
-  localStorage.clear();
+  window.localStorage?.clear();
   bootstrapWorkspaceMock.mockResolvedValue({ workspaces: [], unassigned: [] });
   subscribeSummaryEventsMock.mockReturnValue(() => undefined);
   vi.fn().mockReturnValue(() => undefined),

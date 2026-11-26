@@ -422,6 +422,18 @@ export type AIChatQueryLoopResult =
       toolCatalogState?: ToolCatalogStateSnapshot;
       /** Recovery metadata for the cancelled turn, if any. */
       recoveryMetadata?: ChatV2RecoveryMetadata;
+      /**
+       * W07/C-FR-05: true when the turn ended because the per-task control
+       * gate reported PAUSED (not a user cancel) — the caller maps this to
+       * a blocked/paused outcome instead of a cancelled one.
+       */
+      agentTaskPaused?: boolean;
+      /**
+       * N03/C-FR-09: true when the pause wait failed because the pause
+       * EXPIRED (interrupted) — the caller persists the honest terminal
+       * state instead of a resumable waiting_user.
+       */
+      agentTaskInterrupted?: boolean;
     }
   | {
       type: "paused_for_permission";
@@ -670,6 +682,29 @@ export interface AIChatQueryLoopInput {
    */
   isActiveTurn: () => boolean;
   /**
+   * W07/C-FR-05/06: consulted at the TOP of every tool round, BEFORE the
+   * model request is sent. Returning a non-"ok" verdict ends the turn
+   * WITHOUT sending the request: "cancel" maps to the cancelled result
+   * (stop), "pause" ends the turn paused (user pause — no further tokens
+   * are spent until resume re-enters). Tool calls of a response already
+   * in flight are gated per call by the caller's executeTool wrapper.
+   */
+  onBeforeModelRound?:
+    | (() => "ok" | "pause" | "cancel")
+    // C03/C-FR-07: an async verdict lets the runtime deliver a resume
+    // note into the transcript BEFORE the model request reads it (a
+    // resume landing mid-tool never reached onPauseWait).
+    | (() => Promise<"ok" | "pause" | "cancel">);
+  /**
+   * R01/C-FR-04: when onBeforeModelRound reports "pause" AND this hook is
+   * present, the loop AWAITS it (blocking on the caller's resume gate)
+   * instead of ending the turn — the job stays alive and RESUMES safe
+   * work when the gate reopens. A rejection (cancelled/expired/interrupted
+   * while waiting) ends the turn cancelled as before. Without the hook
+   * the legacy end-paused behavior applies.
+   */
+  onPauseWait?: (signal: AbortSignal) => Promise<void>;
+  /**
    * Optional override for the transient-failure auto-retry policy. When
    * omitted the loop uses its module-level defaults (3 attempts, exponential
    * backoff from 800ms). Mainly used by tests to make retries instantaneous
@@ -738,6 +773,13 @@ export interface AIChatQueryLoopInput {
    * the parent's budget, and the two are never silently merged.
    */
   ownerAgentId?: string;
+  /**
+   * B11/M-FR-07: trusted ROOT (parent) conversation id for sub-agent
+   * turns, supplied by the engine — never tool arguments. Threaded into
+   * SkillExecutionContext.rootConversationId so browser sessions started
+   * by a sub-agent record their parent chat (drive/takeover rights).
+   */
+  rootConversationId?: string;
   /**
    * Persisted outbound-email intent decision id for this turn. Null when the
    * turn did not resolve an outbound-email intent (e.g. not marketing-related)

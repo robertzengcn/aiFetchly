@@ -390,9 +390,6 @@ export class EmailForwardDraftService extends BaseModule {
     await this.ensureConnection();
     const draft = await this.draftModule.readDraft(draftId);
     if (!draft) return;
-    const revision = draft.currentRevisionId
-      ? await this.draftModule.readRevision(draft.currentRevisionId)
-      : null;
     const discarded = await this.draftModule.markDiscarded(draftId);
     if (!discarded) {
       // A concurrent submit won the CAS; leaving approvals intact is correct.

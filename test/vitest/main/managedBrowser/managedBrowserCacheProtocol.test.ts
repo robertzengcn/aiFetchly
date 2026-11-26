@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MANAGED_BROWSER_PROTOCOL_VERSION } from "@/config/managedBrowser";
 
 import {
   bucketForDurationMs,
@@ -17,7 +18,7 @@ const TOKEN_B = "b".repeat(24);
 
 function inboundBase(): Record<string, unknown> {
   return {
-    protocolVersion: 1,
+    protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
     requestId: "req-cache-1",
     sequence: 1,
   };
@@ -25,7 +26,7 @@ function inboundBase(): Record<string, unknown> {
 
 function outboundBase(): Record<string, unknown> {
   return {
-    protocolVersion: 1,
+    protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
     requestId: "req-cache-1",
     sequence: 1,
   };
@@ -88,7 +89,7 @@ describe("cache worker inbound schema", () => {
     expect(
       schema.safeParse({
         ...inboundBase(),
-        protocolVersion: 2,
+        protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION + 1,
         type: "SHUTDOWN",
       }).success
     ).toBe(false);
@@ -139,7 +140,7 @@ describe("cache worker outbound schema", () => {
     const schema = managedBrowserCacheOutboundSchema();
     expect(
       schema.safeParse({
-        protocolVersion: 1,
+        protocolVersion: MANAGED_BROWSER_PROTOCOL_VERSION,
         requestId: "evt-cache-worker-ready",
         sequence: 1,
         type: "WORKER_READY",

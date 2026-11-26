@@ -8,7 +8,6 @@ import { ImapEmailMailboxAdapter } from "@/service/emailOrganization/ImapEmailMa
 import { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
 import { EmailOrganizationActionError } from "@/service/emailOrganization/EmailOrganizationErrors";
 import type { EmailReceiveConnectionConfig } from "@/entityTypes/emailReceiveTypes";
-import { log } from "@/modules/Logger";
 
 /**
  * Organization search (PRD FR-17, design §11): one explicitly selected

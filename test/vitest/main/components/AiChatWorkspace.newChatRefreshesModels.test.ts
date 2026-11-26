@@ -4,16 +4,13 @@ import { defineComponent } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { createI18n } from "vue-i18n";
-import { useChatModelsStore } from "@/views/store/chatModels";
-import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
-import { useSelectedConversationStore } from "@/views/store/selectedConversation";
 import { createAndSelectWorkspaceChat } from "@/views/composables/chatWorkspaceSelection";
 
 const getOpenAIChatModelsMock = vi.fn();
 const createWorkspaceConversationIdMock = vi.fn();
 
 vi.mock("@/views/api/aiChatV2", () => ({
-  getOpenAIChatModels: (...args: unknown[]) => getOpenAIChatModelsMock(...args),
+  getOpenAIChatModels: (...args: unknown[]): unknown => getOpenAIChatModelsMock(...args),
   getChatV2History: vi.fn().mockResolvedValue({ messages: [] }),
   getChatV2Conversations: vi.fn().mockResolvedValue([]),
   getChatV2ToolApprovalMode: vi.fn().mockResolvedValue("ask_for_approval"),
@@ -36,18 +33,18 @@ vi.mock("@/views/api/aiChatV2", () => ({
   answerChatV2Question: vi.fn(),
   clearChatV2Conversation: vi.fn(),
   listChatV2PendingMessages: vi.fn().mockResolvedValue([]),
-  subscribeChatV2PendingEvents: vi.fn(() => () => undefined),
+  subscribeChatV2PendingEvents: vi.fn((): (() => undefined) => () => undefined),
   exportGeneratedImage: vi.fn(),
   isHistoryUiEnabled: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("@/views/api/aiChatWorkspace", () => ({
-  createWorkspaceConversationId: (...args: unknown[]) =>
+  createWorkspaceConversationId: (...args: unknown[]): unknown =>
     createWorkspaceConversationIdMock(...args),
   bootstrapWorkspace: vi.fn().mockResolvedValue({ workspaces: [], unassigned: [] }),
-  subscribeSummaryEvents: vi.fn(() => () => undefined),
-  subscribeTitleEvents: vi.fn(() => () => undefined),
-  subscribeDetailEvents: vi.fn(() => () => undefined),
+  subscribeSummaryEvents: vi.fn((): (() => undefined) => () => undefined),
+  subscribeTitleEvents: vi.fn((): (() => undefined) => () => undefined),
+  subscribeDetailEvents: vi.fn((): (() => undefined) => () => undefined),
   unsubscribeDetail: vi.fn(),
   selectConversation: vi.fn().mockResolvedValue(null),
   startChatRun: vi.fn(),
@@ -129,7 +126,7 @@ const i18n = createI18n({
   },
 });
 
-function mountSurface() {
+function mountSurface(): ReturnType<typeof mount> {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
