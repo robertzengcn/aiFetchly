@@ -5763,9 +5763,9 @@ function managedBrowserToolEntries(): SkillDefinition[] {
       permissionCategory: "automation",
       source: "built-in",
       async: true,
-      resolveTimeoutClass: (): string => "async",
+      resolveTimeoutClass: (_args: Record<string, unknown>): ReturnType<NonNullable<SkillDefinition["resolveTimeoutClass"]>> => "async",
       resolveAsync: (): boolean => true,
-      execute: async (args, context): Promise<{ success: boolean; result?: unknown }> => {
+      execute: async (args: Record<string, unknown>, context: SkillExecutionContext): Promise<SkillExecutionResult> => {
         const { browserBatchArgsSchema, runBrowserTasksForTool } = await import(
           "@/service/agentTools/runBrowserTasksTool"
         );

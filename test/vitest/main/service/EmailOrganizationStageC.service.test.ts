@@ -458,7 +458,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     // page never fills and the service's own 1000-candidate ceiling stops
     // the scan (R6-02: the adapter's per-window `capped` bit no longer
     // fakes a ceiling).
-    adapter.searchUids = async (_c, _folder, _input): Promise<ServerSearchResult> => {
+    adapter.searchUids = async (_c, _folder, input): Promise<ServerSearchResult> => {
       const all = Array.from({ length: 1600 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -623,7 +623,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const adapter = new BulkFakeAdapter();
     // INBOX has 2 matches, Archive has 2; page size 3 must cross the
     // boundary and the cursor must resume in Archive (never re-emit it).
-    adapter.searchUids = async (_c, folder, _input): Promise<ServerSearchResult> => {
+    adapter.searchUids = async (_c, folder, input): Promise<ServerSearchResult> => {
       const all =
         folder === "INBOX"
           ? [
@@ -670,7 +670,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
     const adapter = new BulkFakeAdapter();
     // The first two candidates fail the exact UTC filter; 3 and 4 match.
     // The page fills on candidate 3 — candidate 4 must surface on page 2.
-    adapter.searchUids = async (_c, _folder, _input): Promise<ServerSearchResult> => {
+    adapter.searchUids = async (_c, _folder, input): Promise<ServerSearchResult> => {
       const all = [
         { uid: "1", fromAddress: "a@b.test", subject: "filtered 1", date: "2026-08-01T10:00:00Z", seen: false },
         { uid: "2", fromAddress: "a@b.test", subject: "filtered 2", date: "2026-08-02T10:00:00Z", seen: false },
@@ -732,7 +732,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
 
   it("R6-02: a 250-match folder pages to an EXHAUSTED end — complete:true, nextCursor:null", async () => {
     const adapter = new BulkFakeAdapter();
-    adapter.searchUids = async (_c, _folder, _input): Promise<ServerSearchResult> => {
+    adapter.searchUids = async (_c, _folder, searchInput): Promise<ServerSearchResult> => {
       const all = Array.from({ length: 250 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -740,8 +740,8 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: "2026-09-15T10:00:00Z",
         seen: false,
       }));
-      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
-      const win = matched.slice(0, input.cap);
+      const matched = all.filter((c) => Number(c.uid) > (searchInput.resumeUid ?? 0));
+      const win = matched.slice(0, searchInput.cap);
       return { status: "listed" as const, candidates: win, capped: matched.length > win.length };
     };
     const serverService = new EmailOrganizationSearchService({
@@ -909,7 +909,7 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
   it("R6-02: a dropped envelope fetch does not shift the next page (no repeats, no gaps)", async () => {
     const adapter = new BulkFakeAdapter();
     const droppedFetches = new Set(["2"]);
-    adapter.searchUids = async (_c, _folder, _input): Promise<ServerSearchResult> => {
+    adapter.searchUids = async (_c, _folder, searchInput): Promise<ServerSearchResult> => {
       const all = Array.from({ length: 300 }, (_, i) => ({
         uid: String(i + 1),
         fromAddress: "a@b.test",
@@ -917,8 +917,8 @@ describe("Stage C: selections, bulk execution, cancellation, search", () => {
         date: "2026-09-15T10:00:00Z",
         seen: false,
       }));
-      const matched = all.filter((c) => Number(c.uid) > (input.resumeUid ?? 0));
-      const window = matched.slice(0, input.cap);
+      const matched = all.filter((c) => Number(c.uid) > (searchInput.resumeUid ?? 0));
+      const window = matched.slice(0, searchInput.cap);
       const candidates = [];
       for (const candidate of window) {
         if (droppedFetches.has(candidate.uid)) {

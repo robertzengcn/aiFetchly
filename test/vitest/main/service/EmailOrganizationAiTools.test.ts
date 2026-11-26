@@ -73,7 +73,7 @@ describe("R16 — entitlement gate before parsing (review)", () => {
   ] as const) {
     it(`returns AI_DISABLED before any work for ${name} when AI is off`, async () => {
       aiEnabled.value = false;
-      const result = await call();
+      const result = (await call()) as { success: boolean; code?: string };
       expect(result.success).toBe(false);
       if (!result.success) expect(result.code).toBe("AI_DISABLED");
       expect(moveTrash).not.toHaveBeenCalled();

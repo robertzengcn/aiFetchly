@@ -69,7 +69,11 @@ class FakeConnection implements MailboxActionConnection {
     this.currentMailbox = mailbox;
     return { uidValidity: BigInt(mailbox.uidValidity) };
   }
-  async fetchOne(seq: string | number, query: Record<string, unknown>, options?: { uid?: boolean }): Promise<unknown> {
+  async fetchOne(
+    seq: string | number,
+    query: Record<string, unknown>,
+    options?: { uid?: boolean }
+  ): Promise<({ flags?: Set<string>; source?: Buffer; uid?: number; query?: Record<string, unknown>; options?: { uid?: boolean } }) | false> {
     this.calls.push({ kind: "fetchOne", args: [seq, query, options] });
     const mailbox = this.currentMailbox;
     if (!mailbox) return false;
@@ -83,7 +87,15 @@ class FakeConnection implements MailboxActionConnection {
       options,
     };
   }
-  async messageMove(range: string | number, destination: string, options?: { uid?: boolean }): Promise<unknown> {
+  async messageMove(
+    range: string | number,
+    destination: string,
+    options?: { uid?: boolean }
+  ): Promise<
+    | { path: string; destination: string; uidValidity?: bigint | number | string; uidMap?: Map<number, number> }
+    | boolean
+    | undefined
+  > {
     this.calls.push({ kind: "messageMove", args: [range, destination, options] });
     if (this.state.moveError) throw this.state.moveError;
     const mailbox = this.currentMailbox;
@@ -188,7 +200,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
     const state = makeState();
     const connectionRef: { value: FakeConnection | null } = { value: null };
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: (): FakeConnection => {
+      connectionFactory: (): MailboxActionConnection => {
         connectionRef.value = new FakeConnection(state);
         return connectionRef.value;
       },
@@ -230,7 +242,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
     const state = makeState();
     const holder: { value: FakeConnection | null } = { value: null };
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: (): FakeConnection => {
+      connectionFactory: (): MailboxActionConnection => {
         const fake = new FakeConnection(state);
         fake.search = (async (query) => {
           fake.calls.push({ kind: "search", args: [query] });
@@ -278,7 +290,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
   it("searchUids reports capped only when the window was cut before the SEARCH end (R7-02)", async () => {
     const state = makeState();
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: (): FakeConnection => {
+      connectionFactory: (): MailboxActionConnection => {
         const fake = new FakeConnection(state);
         fake.search = (async () => [1, 2, 3]) as unknown as FakeConnection["search"];
         return fake;
@@ -308,7 +320,7 @@ describe("ImapEmailMailboxAdapter (fake connection)", () => {
   it("searchUids reports PROVIDER_REJECTED when the server cannot search", async () => {
     const state = makeState();
     const adapter = new ImapEmailMailboxAdapter({
-      connectionFactory: (): FakeConnection => {
+      connectionFactory: (): MailboxActionConnection => {
         const fake = new FakeConnection(state);
         fake.search = (async () => false) as unknown as FakeConnection["search"];
         return fake;

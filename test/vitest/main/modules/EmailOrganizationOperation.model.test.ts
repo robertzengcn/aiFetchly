@@ -33,7 +33,7 @@ async function seedMessage(id: number): Promise<void> {
 function createInput(
   operationId: string,
   messageIds: number[]
-): Parameters<EmailOrganizationOperationModel["createPendingOperation"]>[0] {
+): Parameters<EmailOrganizationOperationModel["createOperation"]>[0] {
   return {
     operationId,
     kind: "trash" as const,

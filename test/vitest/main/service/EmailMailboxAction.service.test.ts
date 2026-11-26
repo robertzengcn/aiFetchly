@@ -12,6 +12,7 @@ import type {
   MailboxLocation,
   MoveResult,
   PresenceResult,
+  SentCopyAppendResult,
   ServerSearchResult,
 } from "@/service/emailOrganization/EmailMailboxAdapter";
 import type { EmailOrganizationCapabilityService } from "@/service/emailOrganization/EmailOrganizationCapabilityService";
@@ -708,7 +709,7 @@ describe("EmailMailboxActionService (trash/restore/recovery)", () => {
     const realModule = replyModule.replyDraftModule;
     // BOTH the invalidation AND the guard-row insert fail (the same DB fault).
     replyModule.replyDraftModule = {
-      invalidateUnsentDraftsForMessage: (): Promise<void> => Promise.reject(new Error("invalidation failed")),
+      invalidateUnsentDraftsForMessage: (): Promise<number> => Promise.reject(new Error("invalidation failed")),
       resolveInvalidationObligations: (): Promise<void> => Promise.resolve(),
       hasOpenInvalidationObligation: (): Promise<boolean> => Promise.resolve(false),
       recordInvalidationObligation: (): Promise<void> => Promise.reject(new Error("obligation insert failed")),
