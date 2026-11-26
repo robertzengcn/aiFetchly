@@ -470,16 +470,6 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         message: targetMsg,
       };
     }
-    // R12: organization mutation results render the shared operation
-    // card (progress, recipient outcomes, Undo/Restore).
-    const orgOperationId = organizationOperationIdFromMessage(targetMsg);
-    if (orgOperationId !== null) {
-      return {
-        kind: "email-organization",
-        key: `email-organization-${targetMsg.id}`,
-        operationId: orgOperationId,
-      };
-    }
     if (isSkillInstallResult(targetMsg)) {
       return {
         kind: "skill-install",
