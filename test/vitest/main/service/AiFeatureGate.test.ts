@@ -15,7 +15,7 @@ vi.mock('@/modules/token', () => ({
 let mockResolution: { canUse: boolean; reason?: string; message?: string } | null = null;
 vi.mock('@/service/aiProvider/AIProviderResolver', () => ({
   AIProviderResolver: class {
-    resolveForChat() {
+    resolveForChat(): NonNullable<typeof mockResolution> {
       if (mockResolution) return mockResolution;
       return {
         canUse: tokenStore['user_ai_enabled'] === 'true',

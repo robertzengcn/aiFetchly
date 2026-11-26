@@ -47,7 +47,7 @@ const browserModuleSpies = {
   })),
 };
 vi.mock("@/modules/ManagedBrowserModule", () => ({
-  getDefaultManagedBrowserModule: () => browserModuleSpies,
+  getDefaultManagedBrowserModule: (): typeof browserModuleSpies => browserModuleSpies,
 }));
 
 // Fake the cache module singleton + the typed error class. The class must
@@ -84,7 +84,7 @@ const cacheModuleSpies = {
   })),
 };
 vi.mock("@/modules/ManagedBrowserCacheModule", () => ({
-  getDefaultManagedBrowserCacheModule: () => cacheModuleSpies,
+  getDefaultManagedBrowserCacheModule: (): typeof cacheModuleSpies => cacheModuleSpies,
   ManagedBrowserCacheError: FakeCacheError,
 }));
 

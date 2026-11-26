@@ -24,7 +24,6 @@ import {
   MANAGED_BROWSER_CACHE_PROGRESS_EVENT,
 } from "@/config/channellist";
 import {
-  registerAiValidatedHandler,
   registerChatOrAiValidatedHandler,
   registerValidatedHandler,
 } from "@/main-process/communication/_shared/registerValidatedHandler";

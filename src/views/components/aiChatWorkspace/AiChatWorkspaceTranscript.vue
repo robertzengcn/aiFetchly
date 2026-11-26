@@ -452,6 +452,17 @@ const projectedItems = computed<ProjectedItem[]>(() => {
         draftId: replyId,
       };
     }
+    // R12/T14: organization mutation results render the shared operation
+    // card (progress, recipient outcomes, Undo/Restore) — for the anchor and
+    // every tool message of the group sequence alike.
+    const orgOperationId = organizationOperationIdFromMessage(targetMsg);
+    if (orgOperationId !== null) {
+      return {
+        kind: "email-organization",
+        key: `email-organization-${targetMsg.id}`,
+        operationId: orgOperationId,
+      };
+    }
     if (isOutboundBatchResultMessage(targetMsg)) {
       return {
         kind: "outbound-batch",
@@ -676,6 +687,10 @@ function streamStatusForMessage(
 ): "idle" | "streaming" | "cancelled" | "error" | undefined {
   if (props.activeAssistantMessageId === message.id) {
     return props.streamStatus;
+  }
+  if (message.role === "assistant") {
+    if (message.metadata?.error) return "error";
+    if (message.metadata?.cancelled) return "cancelled";
   }
   return undefined;
 }

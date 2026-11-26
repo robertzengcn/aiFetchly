@@ -4,7 +4,6 @@ import * as fs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import { log } from "@/modules/Logger";
 import { Token } from "@/modules/token";
-import { USER_AI_ENABLED } from "@/config/usersetting";
 import { isAiOrProviderEnabled } from "@/service/AiFeatureGate";
 import {
   MANAGED_BROWSER_ACTION_LIMITS,
@@ -22,7 +21,6 @@ import { ManagedBrowserSettingsModule } from "@/modules/ManagedBrowserSettingsMo
 import {
   ManagedBrowserLeaseService,
   getDefaultManagedBrowserLeaseService,
-  type AcquireLeaseResult,
 } from "@/service/ManagedBrowserLeaseService";
 import {
   ManagedBrowserSupervisor,

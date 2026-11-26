@@ -755,7 +755,12 @@ describe("enforceEvictionLimits (GAP-10)", () => {
     h.maintenance.planEviction = async function (
       this: unknown,
       _input: unknown
-    ) {
+    ): Promise<{
+      status: "ok";
+      planId: string;
+      plannedBytes: number;
+      entries: ReadonlyArray<{ scopeToken: string }>;
+    }> {
       invokedWithMaintenance = this === h.maintenance;
       return {
         status: "ok" as const,

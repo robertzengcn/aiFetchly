@@ -89,6 +89,19 @@ beforeEach(() => {
 });
 
 describe("AiChatV2Composer layout (chat-first shell design §10)", () => {
+  it("places the workspace chooser above the input inside the composer panel", () => {
+    const wrapper = mountComposer(
+      { workspace: '<button data-testid="slot-workspace">Choose workspace</button>' },
+      { isStreaming: false, workspaceLayout: true }
+    );
+    const panel = wrapper.get('[data-testid="chat-composer-panel"]');
+    const chooser = panel.get('[data-testid="slot-workspace"]').element;
+    const input = panel.get("textarea").element;
+    expect(chooser.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panel.find('[data-testid="ai-chat-attach"]').exists()).toBe(true);
+    expect(panel.find('[data-testid="ai-chat-send"]').exists()).toBe(true);
+  });
+
   it("renders a textarea that starts at two visible rows", () => {
     const wrapper = mountComposer();
     const textarea = wrapper.get("textarea");

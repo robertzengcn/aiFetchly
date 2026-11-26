@@ -216,6 +216,8 @@ export class AIChatGeneratedImageStorageService {
     }
     const buffer = image.b64_json
       ? Buffer.from(image.b64_json, "base64")
+      : image.url?.startsWith("data:")
+      ? decodeDataUrl(image.url)
       : await this.downloadImage(image);
     if (buffer.length === 0) {
       return image;
@@ -303,6 +305,24 @@ export class AIChatGeneratedImageStorageService {
 
 function normalizeMimeType(mimeType: string): string {
   return mimeType.toLowerCase() === "image/jpg" ? "image/jpeg" : mimeType;
+}
+
+/**
+ * Decode a base64 data URL (`data:[mime][;base64],payload`) into raw bytes.
+ *
+ * The AI server delivers generated images inline as data URLs (delivery
+ * "data_url" with no separate b64_json field); without this decode, an empty
+ * buffer was returned and the descriptor passed through un-stored, which the
+ * agent runtime's sanctioned-protocol filter then dropped ("could not be
+ * stored locally"). Malformed or non-base64 data URLs yield an empty buffer,
+ * matching downloadImage's empty-buffer contract.
+ */
+function decodeDataUrl(url: string): Buffer {
+  const match = /^data:[^,]*;base64,([\s\S]*)$/.exec(url);
+  if (!match) {
+    return Buffer.alloc(0);
+  }
+  return Buffer.from(match[1], "base64");
 }
 
 function isHttpUrl(url: string): boolean {

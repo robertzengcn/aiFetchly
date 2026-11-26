@@ -6,18 +6,43 @@
       item-value="value"
       item-title="title"
       density="compact"
-      variant="outlined"
+      :variant="compact ? 'solo' : 'outlined'"
+      :flat="compact"
+      :prepend-inner-icon="compact ? selectedIcon : undefined"
+      :menu-icon="compact ? 'mdi-chevron-down' : undefined"
+      :menu-props="compact ? { location: 'top start', minWidth: 272, maxWidth: 340 } : undefined"
+      :list-props="compact ? { lines: false } : undefined"
       hide-details
       :disabled="disabled"
+      :aria-label="compact ? approvalLabel : undefined"
+      :data-testid="compact ? 'chat-permission-selector' : undefined"
       class="v2-tool-approval-selector__select"
+      :class="{
+        'chat-composer-select': compact,
+        'v2-tool-approval-selector__select--full': compact && modelValue === 'full_access',
+      }"
       @update:model-value="onChange"
     >
       <template #prepend-item>
         <v-list-item disabled density="compact" class="text-caption text-medium-emphasis">
           <v-icon start size="small">mdi-shield-check</v-icon>
-          {{ t("aiChatV2.tool_approval_mode_label") || "Tool Approval" }}
+          {{ approvalLabel }}
         </v-list-item>
         <v-divider class="mt-1 mb-1" />
+      </template>
+      <template v-if="compact" #selection="{ item }">
+        <span class="chat-composer-select__label" :title="item.title">{{ item.title }}</span>
+      </template>
+      <template v-if="compact" #item="{ item, props: itemProps }">
+        <v-list-item
+          v-bind="itemProps"
+          role="option"
+          :aria-selected="item.value === modelValue"
+        >
+          <template #subtitle>
+            <span class="v2-tool-approval-selector__description">{{ item.raw.description }}</span>
+          </template>
+        </v-list-item>
       </template>
     </v-select>
 
@@ -50,6 +75,7 @@ import type { ChatToolApprovalMode } from "@/entityTypes/aiChatV2Types";
 
 const props = defineProps<{
   modelValue: ChatToolApprovalMode;
+  compact?: boolean;
   disabled?: boolean;
 }>();
 
@@ -62,20 +88,46 @@ const { t } = useI18n();
 const showFullAccessConfirm = ref(false);
 let pendingMode: ChatToolApprovalMode | null = null;
 
-const modeItems = computed(() => [
+interface ApprovalModeItem {
+  value: ChatToolApprovalMode;
+  title: string;
+  description: string;
+  icon: string;
+}
+
+const approvalLabel = computed(
+  (): string => t("aiChatV2.tool_approval_mode_label") || "Tool Approval",
+);
+const modeItems = computed((): ApprovalModeItem[] => [
   {
-    value: "ask_for_approval" as ChatToolApprovalMode,
+    value: "ask_for_approval",
     title: t("aiChatV2.tool_approval_mode_ask") || "Ask for approval",
+    description:
+      t("aiChatV2.tool_approval_mode_ask_desc") ||
+      "Ask before tools that need permission.",
+    icon: "mdi-shield-outline",
   },
   {
-    value: "approve_for_me" as ChatToolApprovalMode,
+    value: "approve_for_me",
     title: t("aiChatV2.tool_approval_mode_auto") || "Approve for me",
+    description:
+      t("aiChatV2.tool_approval_mode_auto_desc") ||
+      "Auto-approve trusted non-shell tools in this chat.",
+    icon: "mdi-shield-check-outline",
   },
   {
-    value: "full_access" as ChatToolApprovalMode,
+    value: "full_access",
     title: t("aiChatV2.tool_approval_mode_full") || "Full access",
+    description:
+      t("aiChatV2.tool_approval_mode_full_desc") ||
+      "Auto-approve registered tools in this chat. Safety blocks still apply.",
+    icon: "mdi-shield-alert-outline",
   },
 ]);
+const selectedIcon = computed(
+  (): string | undefined =>
+    modeItems.value.find((item) => item.value === props.modelValue)?.icon,
+);
 
 const onChange = (value: unknown): void => {
   if (
@@ -116,4 +168,18 @@ function cancelFullAccess(): void {
   min-width: 100px;
   max-width: 140px;
 }
+.v2-tool-approval-selector__select.chat-composer-select {
+  min-inline-size: 0;
+  max-inline-size: min(100%, 14rem);
+}
+.v2-tool-approval-selector__select--full {
+  --chat-select-icon-color: var(--app-warning);
+}
+.v2-tool-approval-selector__description {
+  display: block;
+  white-space: normal;
+  line-height: 1.4;
+}
 </style>
+
+<style scoped src="./composerSelect.css"></style>

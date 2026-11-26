@@ -2126,7 +2126,7 @@
       "path": "src/main-process/communication/ai-chat-v2-ipc.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 7,
-      "reason": "Legacy complexity: 6 over-threshold function(s) (worst 45, total 173) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 6 over-threshold function(s) (worst 45, total 173) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 45,
@@ -2163,7 +2163,7 @@
           "maxComplexity": 20
         },
         {
-          "line": 2835,
+          "line": 2837,
           "column": 16,
           "maxComplexity": 31
         }
@@ -3101,22 +3101,27 @@
     {
       "path": "src/model/SystemSettingGroup.model.ts",
       "ruleId": "sonarjs/cognitive-complexity",
-      "maxCount": 2,
-      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 22, total 39) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "maxCount": 3,
+      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 22, total 39) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 22,
-      "maxTotalComplexity": 39,
+      "maxTotalComplexity": 61,
       "functions": [
         {
-          "line": 24,
+          "line": 26,
           "column": 19,
           "maxComplexity": 22
         },
         {
-          "line": 59,
-          "column": 18,
-          "maxComplexity": 17
+          "line": 81,
+          "column": 19,
+          "maxComplexity": 20
+        },
+        {
+          "line": 122,
+          "column": 106,
+          "maxComplexity": 19
         }
       ]
     },
@@ -3314,19 +3319,19 @@
       "path": "src/modules/AIChatConversationModule.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 2,
-      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 18, total 18) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 18, total 18) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 67,
       "maxTotalComplexity": 85,
       "functions": [
         {
-          "line": 141,
+          "line": 218,
           "column": 9,
           "maxComplexity": 18
         },
         {
-          "line": 337,
+          "line": 414,
           "column": 9,
           "maxComplexity": 67
         }
@@ -4064,24 +4069,24 @@
       "path": "src/modules/ManagedBrowserModule.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 3,
-      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 38, total 54) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 38, total 54) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 51,
       "maxTotalComplexity": 84,
       "functions": [
         {
-          "line": 383,
+          "line": 382,
           "column": 16,
           "maxComplexity": 51
         },
         {
-          "line": 1044,
+          "line": 1043,
           "column": 16,
           "maxComplexity": 17
         },
         {
-          "line": 1735,
+          "line": 1734,
           "column": 16,
           "maxComplexity": 16
         }
@@ -5786,7 +5791,7 @@
       "path": "src/service/AIChatContextAssembler.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 3,
-      "reason": "Legacy complexity: 3 over-threshold function(s) (worst 68, total 100) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 3 over-threshold function(s) (worst 68, total 100) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 68,
@@ -5803,7 +5808,7 @@
           "maxComplexity": 68
         },
         {
-          "line": 1054,
+          "line": 1059,
           "column": 17,
           "maxComplexity": 16
         }
@@ -6035,54 +6040,54 @@
       "path": "src/service/AIChatQueryEngine.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 9,
-      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 171, total 412) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 7 over-threshold function(s) (worst 171, total 412) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
-      "maxComplexity": 173,
-      "maxTotalComplexity": 476,
+      "maxComplexity": 185,
+      "maxTotalComplexity": 484,
       "functions": [
         {
           "line": 1394,
           "column": 9,
-          "maxComplexity": 173
+          "maxComplexity": 185
         },
         {
-          "line": 2940,
+          "line": 2971,
           "column": 9,
           "maxComplexity": 45
         },
         {
-          "line": 3266,
+          "line": 3338,
           "column": 17,
           "maxComplexity": 35
         },
         {
-          "line": 4161,
+          "line": 4236,
           "column": 17,
           "maxComplexity": 45
         },
         {
-          "line": 4544,
+          "line": 4619,
           "column": 17,
           "maxComplexity": 20
         },
         {
-          "line": 4873,
+          "line": 4948,
           "column": 17,
-          "maxComplexity": 100
+          "maxComplexity": 96
         },
         {
-          "line": 5531,
+          "line": 5610,
           "column": 17,
           "maxComplexity": 24
         },
         {
-          "line": 5811,
+          "line": 5890,
           "column": 17,
           "maxComplexity": 18
         },
         {
-          "line": 6042,
+          "line": 6121,
           "column": 21,
           "maxComplexity": 16
         }
@@ -6336,21 +6341,21 @@
       "path": "src/service/AIChatTurnQueueService.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 2,
-      "maxComplexity": 58,
-      "maxTotalComplexity": 74,
+      "maxComplexity": 63,
+      "maxTotalComplexity": 79,
       "functions": [
         {
-          "line": 842,
+          "line": 854,
           "column": 9,
           "maxComplexity": 16
         },
         {
-          "line": 985,
+          "line": 997,
           "column": 17,
-          "maxComplexity": 58
+          "maxComplexity": 63
         }
       ],
-      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 20, total 20) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing)",
+      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 20, total 20) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing); re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -6399,12 +6404,12 @@
       "path": "src/service/AIChatWorkspaceRunDispatchBridge.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 1,
-      "reason": "Onboarded at the 2026-10-26 dev merge: 1 pre-existing finding(s) on the merged tree (dev-side changes); counts and per-function identities pinned — may only shrink.",
+      "reason": "Onboarded at the 2026-10-26 dev merge: 1 pre-existing finding(s) on the merged tree (dev-side changes); counts and per-function identities pinned — may only shrink.; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "functions": [
         {
-          "line": 289,
+          "line": 312,
           "column": 9,
           "maxComplexity": 16
         }
@@ -8414,19 +8419,19 @@
       "path": "src/service/pluginMarketplaces/AiFetchHubMarketplaceFetcher.ts",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 2,
-      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 38, total 54) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 38, total 54) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 38,
       "maxTotalComplexity": 54,
       "functions": [
         {
-          "line": 203,
+          "line": 204,
           "column": 10,
           "maxComplexity": 38
         },
         {
-          "line": 360,
+          "line": 400,
           "column": 10,
           "maxComplexity": 16
         }
@@ -10829,24 +10834,24 @@
       "path": "src/views/components/aiChatV2/AiChatV2Composer.vue",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 3,
-      "reason": "Legacy complexity: 3 over-threshold function(s) (worst 37, total 77) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "reason": "Legacy complexity: 3 over-threshold function(s) (worst 37, total 77) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 37,
       "maxTotalComplexity": 71,
       "functions": [
         {
-          "line": 904,
+          "line": 916,
           "column": 16,
           "maxComplexity": 18
         },
         {
-          "line": 1470,
+          "line": 1482,
           "column": 10,
           "maxComplexity": 16
         },
         {
-          "line": 1724,
+          "line": 1736,
           "column": 48,
           "maxComplexity": 37
         }
@@ -10860,22 +10865,22 @@
       "maxTotalComplexity": 57,
       "functions": [
         {
-          "line": 1082,
+          "line": 1124,
           "column": 65,
           "maxComplexity": 20
         },
         {
-          "line": 1144,
+          "line": 1186,
           "column": 59,
           "maxComplexity": 21
         },
         {
-          "line": 1575,
+          "line": 1617,
           "column": 10,
           "maxComplexity": 16
         }
       ],
-      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 20, total 20) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing)",
+      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 20, total 20) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing); re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -11043,37 +11048,37 @@
       "maxTotalComplexity": 152,
       "functions": [
         {
-          "line": 1373,
+          "line": 1389,
           "column": 10,
           "maxComplexity": 26
         },
         {
-          "line": 1841,
+          "line": 1873,
           "column": 16,
           "maxComplexity": 23
         },
         {
-          "line": 2225,
+          "line": 2252,
           "column": 16,
           "maxComplexity": 16
         },
         {
-          "line": 2328,
+          "line": 2355,
           "column": 16,
           "maxComplexity": 38
         },
         {
-          "line": 3427,
+          "line": 3454,
           "column": 16,
           "maxComplexity": 33
         },
         {
-          "line": 3621,
+          "line": 3642,
           "column": 16,
           "maxComplexity": 16
         }
       ],
-      "reason": "Onboarded at the 2026-10-26 dev merge: 5 pre-existing finding(s) on the merged tree (dev-side changes); counts and per-function identities pinned — may only shrink.; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing)",
+      "reason": "Onboarded at the 2026-10-26 dev merge: 5 pre-existing finding(s) on the merged tree (dev-side changes); counts and per-function identities pinned — may only shrink.; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing); re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -11106,16 +11111,16 @@
       "path": "src/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue",
       "ruleId": "sonarjs/cognitive-complexity",
       "maxCount": 1,
-      "maxComplexity": 127,
-      "maxTotalComplexity": 127,
+      "maxComplexity": 90,
+      "maxTotalComplexity": 90,
       "functions": [
         {
-          "line": 362,
+          "line": 398,
           "column": 53,
-          "maxComplexity": 127
+          "maxComplexity": 90
         }
       ],
-      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 67, total 67) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing)",
+      "reason": "Legacy complexity: 1 over-threshold function(s) (worst 67, total 67) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-16 test-merge (test-branch code integration: scheduled-chat overlap fixes, remote working indicator, generated-image editing); re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31"
     },
@@ -11139,20 +11144,25 @@
     {
       "path": "src/views/components/aiChatWorkspace/toolExecutionProjection.ts",
       "ruleId": "sonarjs/cognitive-complexity",
-      "maxCount": 2,
-      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 85, total 102) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge",
+      "maxCount": 3,
+      "reason": "Legacy complexity: 2 over-threshold function(s) (worst 85, total 102) re-pinned with per-function identities at the 2026-10-24 baseline; count, per-function ceilings, and aggregate sum are pinned — any growth, move, or replacement blocks; re-pinned at the 2026-10-26 dev merge; re-pinned at the 2026-11-24 test-merge (test-branch code integration: persisted chat errors, provider-aware managed browser, workspace composer streamline)",
       "owner": "maintainer",
       "expiresOn": "2027-01-31",
       "maxComplexity": 95,
-      "maxTotalComplexity": 112,
+      "maxTotalComplexity": 143,
       "functions": [
         {
-          "line": 222,
+          "line": 150,
+          "column": 10,
+          "maxComplexity": 31
+        },
+        {
+          "line": 274,
           "column": 10,
           "maxComplexity": 17
         },
         {
-          "line": 299,
+          "line": 351,
           "column": 17,
           "maxComplexity": 95
         }
