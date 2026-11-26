@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import { defineComponent } from "vue";
+import { defineComponent, ref } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { createRouter, createMemoryHistory } from "vue-router";
 import { createI18n } from "vue-i18n";
@@ -160,6 +160,7 @@ vi.mock("@/views/api/aiChatWorkspace", () => ({
   }),
   subscribeDetailEvents: vi.fn().mockReturnValue(() => undefined),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   unsubscribeDetail: vi.fn(),
   loadHistoryPage: vi.fn(),
   markConversationRead: vi.fn().mockResolvedValue(undefined),
@@ -282,6 +283,9 @@ const i18n = createI18n({
         },
         artifactExport: {
           savedToWorkspace: "Saved {fileName} to your workspace.",
+          savedAllToWorkspace: "Saved {count} images to your workspace.",
+          savedSomeToWorkspace:
+            "Saved {saved} of {total} images to your workspace.",
           saveFailed: "Could not save to workspace.",
         },
         imageTool: {
@@ -306,24 +310,27 @@ const i18n = createI18n({
   },
 });
 
-/** Composer stub renders its lower slots so control placement is testable. */
+/** Composer stub preserves the order of the composer slots and input. */
 const ComposerStub = defineComponent({
   name: "AiChatV2Composer",
-  props: [
-    "isStreaming",
-    "conversationId",
-    "voiceEnabled",
-    "voiceSettingsUnavailable",
-    "draftKey",
-    "selectedGeneratedImages",
-    "generatedImageReferenceLimit",
-    "generatedImageFocusSignal",
-  ],
+  props: {
+    isStreaming: null,
+    conversationId: null,
+    voiceEnabled: null,
+    voiceSettingsUnavailable: null,
+    workspaceLayout: Boolean,
+    draftKey: null,
+    selectedGeneratedImages: null,
+    generatedImageReferenceLimit: null,
+    generatedImageFocusSignal: null,
+  },
   emits: ["send", "stop"],
   template:
     '<div class="composer-stub" data-testid="composer-stub">' +
+    '<div data-testid="composer-workspace-stub"><slot name="workspace" /></div>' +
     '<div data-testid="composer-textarea"></div>' +
-    '<div class="composer-stub__slots"><slot name="controls" /><slot name="toolbar-actions" /></div>' +
+    '<div data-testid="composer-controls-stub"><slot name="controls" /></div>' +
+    '<div data-testid="composer-actions-stub"><slot name="toolbar-actions" /></div>' +
     "</div>",
 });
 
@@ -338,16 +345,23 @@ const HeaderStub = defineComponent({
     "runtimeStatus",
     "recovering",
     "activeToolCount",
+    "reportEnabled",
+    "reportLoading",
+    "reportDisabledReason",
   ],
-  emits: ["compact", "open-agent-tasks"],
+  emits: ["compact", "open-agent-tasks", "report"],
   template:
     '<header data-testid="conversation-header-stub">' +
     '<button data-testid="header-compact-stub" @click="$emit(\'compact\')" />' +
     '<button data-testid="header-agent-tasks-stub" @click="$emit(\'open-agent-tasks\')" />' +
+    '<button data-testid="header-report-stub" @click="$emit(\'report\')" />' +
     "<slot /></header>",
 });
 
-function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
+function mountSurface(
+  pinia: ReturnType<typeof createPinia> = createPinia(),
+  attachTo?: HTMLElement
+) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -360,6 +374,7 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
     ],
   });
   const wrapper = mount(AiChatCenterSurface, {
+    attachTo,
     global: {
       plugins: [pinia, i18n, router],
       stubs: {
@@ -380,15 +395,36 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         WorkspaceBadge: defineComponent({
           name: "WorkspaceBadge",
-          props: ["workspace", "memoryCount", "loading", "busy"],
+          props: {
+            workspace: null,
+            memoryCount: null,
+            loading: null,
+            busy: null,
+            showMemory: null,
+            compact: Boolean,
+          },
+          emits: ["request-set-workspace", "request-open-memory", "request-remove-workspace"],
           template:
-            '<div data-testid="workspace-badge-stub">{{ workspace ? workspace.rootPath || "unset" : "none" }}</div>',
+            '<button data-testid="workspace-badge-stub" @click="$emit(\'request-set-workspace\')">' +
+            '{{ workspace ? workspace.rootPath || "unset" : "none" }}</button>',
         }),
         WorkspaceRequiredCard: defineComponent({
           name: "WorkspaceRequiredCard",
           props: ["conversationId"],
           emits: ["approved", "cancel"],
-          template: '<div data-testid="workspace-required-stub" />',
+          setup(_props, { expose }) {
+            const card = ref<HTMLElement | null>(null);
+            const pickButton = ref<HTMLButtonElement | null>(null);
+            expose({
+              focusPickButton: (): void => pickButton.value?.focus(),
+              containsFocus: (): boolean => card.value?.contains(document.activeElement) ?? false,
+            });
+            return { card, pickButton };
+          },
+          template:
+            '<div ref="card" data-testid="workspace-required-stub">' +
+            '<button ref="pickButton" data-testid="workspace-pick-stub" />' +
+            '<button data-testid="workspace-cancel-stub" @click="$emit(\'cancel\')" /></div>',
         }),
         WorkspaceTrustCard: true,
         WorkspaceMemoryPanel: true,
@@ -400,19 +436,20 @@ function mountSurface(pinia: ReturnType<typeof createPinia> = createPinia()) {
         }),
         AiChatV2ModelSelector: defineComponent({
           name: "AiChatV2ModelSelector",
-          props: [
-            "modelValue",
-            "items",
-            "defaultModel",
-            "disabled",
-            "loading",
-            "noModels",
-          ],
+          props: {
+            modelValue: null,
+            items: null,
+            defaultModel: null,
+            disabled: null,
+            loading: null,
+            noModels: null,
+            compact: Boolean,
+          },
           template: '<div data-testid="model-selector-stub" />',
         }),
         AiChatV2ToolApprovalModeSelector: defineComponent({
           name: "AiChatV2ToolApprovalModeSelector",
-          props: ["modelValue", "disabled"],
+          props: { modelValue: null, disabled: null, compact: Boolean },
           emits: ["update:modelValue"],
           template:
             '<div data-testid="approval-mode-selector-stub">{{ modelValue }}</div>',
@@ -564,21 +601,23 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(vi.mocked(startCompaction)).toHaveBeenCalledTimes(1);
   });
 
-  it("places the workspace strip above the composer and below the transcript", async () => {
+  it("keeps workspace setup above the composer and below the transcript", async () => {
     const wrapper = mountSurface();
     const chatWorkspace = useChatWorkspaceStore();
     chatWorkspace.setSelected("conv-1");
     await flushPromises();
+    wrapper.findComponent({ name: "WorkspaceBadge" }).vm.$emit("request-set-workspace");
+    await flushPromises();
 
-    const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
+    const setup = wrapper.get('[data-testid="workspace-required-stub"]').element;
     const transcript = wrapper.get('[data-testid="transcript-stub"]').element;
     const composer = wrapper.get('[data-testid="composer-stub"]').element;
     expect(
-      transcript.compareDocumentPosition(strip) &
+      transcript.compareDocumentPosition(setup) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     expect(
-      strip.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
+      setup.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   });
 
@@ -1157,23 +1196,13 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       return wrapper;
     }
 
-    it("returns the composer selector to chat mode after a successful approval (FR-PLN-006 P2)", async () => {
+    it("sends an approved plan continuation in chat mode without a mode selector", async () => {
       vi.mocked(approveChatV2Plan).mockResolvedValueOnce({
         planId: "plan-1",
         currentVersion: 2,
         status: "approved",
       } as never);
       const wrapper = await mountWithPlan();
-
-      // Journey 17.3: the user flips the selector to plan mode before
-      // deciding. The approval binds the decision to the selector ONLY
-      // while the card is open.
-      const selector = wrapper.findComponent({ name: "AiChatV2ModeSelector" });
-      selector.vm.$emit("update:modelValue", "plan");
-      await flushPromises();
-      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
-        "plan"
-      );
 
       const transcript = wrapper.findComponent({
         name: "AiChatWorkspaceTranscript",
@@ -1184,12 +1213,8 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       await flushPromises();
 
-      // The continuation rode modeOverride:"chat"; the selector must ALSO
-      // return to chat so the user's next manual send is not silently plan
-      // mode (the audit defect: only the payload was overridden).
-      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
-        "chat"
-      );
+      expect(startChatRunMock.mock.calls[0][0].mode).toBe("chat");
+      expect(wrapper.find('[data-testid="mode-selector-stub"]').exists()).toBe(false);
     });
 
     it("starts exactly one execution continuation after a persisted approval (FR-PLN-006)", async () => {      const approveMock = vi.mocked(approveChatV2Plan);
@@ -1689,11 +1714,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       expect(approvalSelector.props("disabled")).toBeFalsy();
 
-      // The mode selector intentionally KEEPS its busy lock (v2 parity):
-      // the composer mode is a per-turn override resolved at send time, so
-      // a mid-run change could never affect the in-flight turn.
-      const modeSelector = mounted.findComponent({ name: "AiChatV2ModeSelector" });
-      expect(modeSelector.props("disabled")).toBe(true);
+      expect(mounted.findComponent({ name: "AiChatV2ModeSelector" }).exists()).toBe(false);
     });
 
     it("persists a tool-approval-mode change mid-run so it applies to the in-flight turn", async () => {
@@ -1723,12 +1744,12 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
   describe("report and generated-image actions", () => {
     /** R9 B04: captured for the remount-preservation test (same session). */
     let pinia: ReturnType<typeof createPinia> | null = null;
-    async function mountWithSelection(): Promise<
-      ReturnType<typeof mountSurface>
-    > {
+    async function mountWithSelection(
+      attachTo?: HTMLElement
+    ): Promise<ReturnType<typeof mountSurface>> {
       pinia = createPinia();
       setActivePinia(pinia);
-      const wrapper = mountSurface(pinia);
+      const wrapper = mountSurface(pinia, attachTo);
       const chatWorkspace = useChatWorkspaceStore();
       chatWorkspace.setSelected("conv-1");
       await flushPromises();
@@ -1768,9 +1789,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       const transcript = wrapper.findComponent({
         name: "AiChatWorkspaceTranscript",
       });
+      // Report entry moved into the header overflow menu: emit the same
+      // event the real menu item emits.
       wrapper
-        .findComponent({ name: "AIConversationReportButton" })
-        .vm.$emit("open");
+        .findComponent({ name: "AiChatConversationHeader" })
+        .vm.$emit("report");
       await flushPromises();
       const dialog = wrapper.findComponent({
         name: "AIConversationReportDialog",
@@ -1793,9 +1816,11 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
      */
     it("preserves reported markers across a center remount (AD-005 B04)", async () => {
       const first = await mountWithSelection();
+      // Report entry moved into the header overflow menu: emit the same
+      // event the real menu item emits.
       first
-        .findComponent({ name: "AIConversationReportButton" })
-        .vm.$emit("open");
+        .findComponent({ name: "AiChatConversationHeader" })
+        .vm.$emit("report");
       await flushPromises();
       first.findComponent({ name: "AIConversationReportDialog" }).vm.$emit(
         "submitted",
@@ -1816,6 +1841,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(transcript.props("reportedMessageIds")?.has("m-other")).toBe(
         false
       );
+    });
+
+    it("exposes the report entry only through the header menu (strip button removed)", async () => {
+      const wrapper = await mountWithSelection();
+      // The strip-level flag button is gone; the header item is the sole entry.
+      expect(wrapper.find('[data-testid="report-conversation"]').exists()).toBe(
+        false
+      );
+      const header = wrapper.findComponent({ name: "AiChatConversationHeader" });
+      // Harness leaves the capabilities channel unmocked → fail-closed
+      // disabled state with an announced reason.
+      expect(header.props("reportEnabled")).toBe(false);
+      expect(
+        String(header.props("reportDisabledReason")).length
+      ).toBeGreaterThan(0);
+      // Opening flows through the header's report event.
+      header.vm.$emit("report");
+      await flushPromises();
+      expect(
+        wrapper.findComponent({ name: "AIConversationReportDialog" }).exists()
+      ).toBe(true);
     });
 
     it("saves a generated image to the trusted workspace (FR-IMG-013)", async () => {
@@ -1841,31 +1887,88 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       expect(notice.text()).toContain("image-1.png");
     });
 
-    it("routes a workspace_required save into the workspace setup flow (FR-INT-002)", async () => {
+    it("saves every generated image from one save-all action", async () => {
       exportGeneratedImageMock.mockResolvedValue({
-        status: "workspace_required",
+        status: "exported",
+        fileName: "image-1.png",
       });
       const wrapper = await mountWithSelection();
       const transcript = wrapper.findComponent({
         name: "AiChatWorkspaceTranscript",
       });
-      transcript.vm.$emit("save-generated-image", {
+      transcript.vm.$emit("save-all-generated-images", [
+        { messageId: "m1", imageIndex: 0 },
+        { messageId: "m1", imageIndex: 1 },
+      ]);
+      await flushPromises();
+
+      expect(exportGeneratedImageMock).toHaveBeenCalledTimes(2);
+      expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(1, "conv-1", {
         messageId: "m1",
         imageIndex: 0,
       });
-      await flushPromises();
-
-      expect(
-        wrapper.find('[data-testid="workspace-load-error"]').exists()
-      ).toBe(false);
+      expect(exportGeneratedImageMock).toHaveBeenNthCalledWith(2, "conv-1", {
+        messageId: "m1",
+        imageIndex: 1,
+      });
       const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
-      expect(notice.text()).toContain("approved workspace");
-      // Setup surfaced: the required card opens for the conversation.
-      await flushPromises();
-      expect(
-        wrapper.find('[data-testid="workspace-required-stub"]').exists()
-      ).toBe(true);
+      expect(notice.text()).toContain("Saved 2 images to your workspace.");
     });
+
+    it("opens workspace setup for an export without changing the active control (FR-INT-002)", async () => {
+      exportGeneratedImageMock.mockResolvedValue({
+        status: "workspace_required",
+      });
+      const wrapper = await mountWithSelection(document.body);
+      try {
+        const chooser = wrapper.get<HTMLButtonElement>('[data-testid="workspace-badge-stub"]');
+        chooser.element.focus();
+        const transcript = wrapper.findComponent({
+          name: "AiChatWorkspaceTranscript",
+        });
+        transcript.vm.$emit("save-generated-image", {
+          messageId: "m1",
+          imageIndex: 0,
+        });
+        await flushPromises();
+
+        expect(wrapper.find('[data-testid="workspace-load-error"]').exists()).toBe(false);
+        const notice = wrapper.get('[data-testid="workspace-genimg-notice"]');
+        expect(notice.text()).toContain("approved workspace");
+        expect(wrapper.find('[data-testid="workspace-required-stub"]').exists()).toBe(true);
+        expect(document.activeElement).toBe(chooser.element);
+      } finally {
+        wrapper.unmount();
+      }
+    });
+
+    it.each([false, true])(
+      "restores an open export setup only for its owner (cancelled: %s)",
+      async (cancelled) => {
+        exportGeneratedImageMock.mockResolvedValue({ status: "workspace_required" });
+        const wrapper = await mountWithSelection();
+        const workspace = useChatWorkspaceStore();
+        wrapper.getComponent({ name: "AiChatWorkspaceTranscript" }).vm.$emit(
+          "save-generated-image",
+          { messageId: "m1", imageIndex: 0 }
+        );
+        await flushPromises();
+        const card = wrapper.getComponent({ name: "WorkspaceRequiredCard" });
+        expect(card.props("conversationId")).toBe("conv-1");
+        if (cancelled) card.vm.$emit("cancel");
+
+        workspace.setSelected("conv-2");
+        await flushPromises();
+        expect(wrapper.findComponent({ name: "WorkspaceRequiredCard" }).exists()).toBe(false);
+
+        workspace.setSelected("conv-1");
+        await flushPromises();
+        const reopened = wrapper.findComponent({ name: "WorkspaceRequiredCard" });
+        expect(reopened.exists()).toBe(!cancelled);
+        if (reopened.exists()) expect(reopened.props("conversationId")).toBe("conv-1");
+        expect(exportGeneratedImageMock).toHaveBeenCalledTimes(1);
+      }
+    );
 
     /**
      * R08: a late image-export response belongs to the conversation the save
@@ -3243,7 +3346,7 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       ).toBe(false);
     });
 
-    it("returns the selector to chat mode after a successful continuation retry (FR-PLN-006 B03)", async () => {
+    it("retries a saved plan continuation in chat mode (FR-PLN-006 B03)", async () => {
       recoverPlanContinuationMock.mockResolvedValue({
         conversationId: "conv-rec",
         planId: "plan-rec",
@@ -3255,15 +3358,6 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       const wrapper = await mountOnConv("conv-rec");
       await flushPromises();
-
-      // The user flips the selector to plan mode before retrying the saved
-      // continuation.
-      const selector = wrapper.findComponent({ name: "AiChatV2ModeSelector" });
-      selector.vm.$emit("update:modelValue", "plan");
-      await flushPromises();
-      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
-        "plan"
-      );
 
       startChatRunMock.mockResolvedValue({
         conversationId: "conv-rec",
@@ -3279,13 +3373,8 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
       });
       await flushPromises();
 
-      // The retried continuation rode modeOverride:"chat" (the request is
-      // correct) AND the visible selector must return to chat mode too —
-      // the next manual send must not silently run in plan mode.
       expect(startChatRunMock.mock.calls[0][0].mode).toBe("chat");
-      expect(wrapper.get('[data-testid="mode-selector-stub"]').text()).toBe(
-        "chat"
-      );
+      expect(wrapper.find('[data-testid="mode-selector-stub"]').exists()).toBe(false);
     });
 
     it("preserves recovered rejected/changes feedback in the retry message", async () => {
@@ -3537,33 +3626,88 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     expect(notice.text()).toContain("Selection changed");
   });
 
-  it("shows the workspace chooser above the composer with no conversation selected", async () => {
+  it("shows the compact workspace chooser above the input with no conversation selected", async () => {
     const wrapper = mountSurface();
     await flushPromises();
 
-    // Empty state — the badge (unset → Choose action) still renders and the
-    // strip sits above the composer input, never hidden.
-    expect(wrapper.findComponent({ name: "WorkspaceBadge" }).exists()).toBe(
-      true
-    );
-    const strip = wrapper.get('[data-testid="chat-workspace-strip"]').element;
-    const composer = wrapper.get('[data-testid="composer-stub"]').element;
-    expect(
-      strip.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    const workspace = wrapper.get('[data-testid="composer-workspace-stub"]');
+    expect(workspace.getComponent({ name: "WorkspaceBadge" }).props("compact")).toBe(true);
+    expect(wrapper.getComponent(ComposerStub).props("workspaceLayout")).toBe(true);
   });
 
   it("creates a chat when choosing a workspace with no conversation selected", async () => {
+    const wrapper = mountSurface(createPinia(), document.body);
+    try {
+      await flushPromises();
+      const chooser = wrapper.get<HTMLButtonElement>('[data-testid="workspace-badge-stub"]');
+      chooser.element.focus();
+      await chooser.trigger("click");
+      await flushPromises();
+
+      expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
+      expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
+      expect(document.activeElement).toBe(
+        wrapper.get('[data-testid="workspace-pick-stub"]').element
+      );
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it("returns focus to the workspace control after canceling the setup card", async () => {
+    const wrapper = mountSurface(createPinia(), document.body);
+    try {
+      useChatWorkspaceStore().setSelected("conv-1");
+      await flushPromises();
+      const chooser = wrapper.get<HTMLButtonElement>('[data-testid="workspace-badge-stub"]');
+      chooser.element.focus();
+      await chooser.trigger("click");
+      await flushPromises();
+      expect(document.activeElement).toBe(
+        wrapper.get('[data-testid="workspace-pick-stub"]').element
+      );
+
+      const cancel = wrapper.get<HTMLButtonElement>('[data-testid="workspace-cancel-stub"]');
+      cancel.element.focus();
+      await cancel.trigger("click");
+      await flushPromises();
+      expect(document.activeElement).toBe(chooser.element);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it("returns to the composer after approving the workspace from the setup card", async () => {
+    const wrapper = mountSurface(createPinia(), document.body);
+    try {
+      useChatWorkspaceStore().setSelected("conv-1");
+      await flushPromises();
+      const chooser = wrapper.get<HTMLButtonElement>('[data-testid="workspace-badge-stub"]');
+      chooser.element.focus();
+      await chooser.trigger("click");
+      await flushPromises();
+
+      const composer = wrapper.getComponent(ComposerStub);
+      const signalBefore: number = composer.props("generatedImageFocusSignal");
+      wrapper.getComponent({ name: "WorkspaceRequiredCard" }).vm.$emit("approved", 7, "/tmp/ws");
+      await flushPromises();
+      expect(composer.props("generatedImageFocusSignal")).toBe(signalBefore + 1);
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it("closes a workspace setup card on conversation switch", async () => {
     const wrapper = mountSurface();
+    const workspace = useChatWorkspaceStore();
+    workspace.setSelected("conv-1");
+    await flushPromises();
+    await wrapper.get('[data-testid="workspace-badge-stub"]').trigger("click");
     await flushPromises();
 
-    wrapper
-      .findComponent({ name: "WorkspaceBadge" })
-      .vm.$emit("request-set-workspace");
+    workspace.setSelected("conv-2");
     await flushPromises();
-
-    expect(createWorkspaceConversationIdMock).toHaveBeenCalled();
-    expect(useChatWorkspaceStore().selectedConversationId).toBe("fresh-chat");
+    expect(wrapper.find('[data-testid="workspace-required-stub"]').exists()).toBe(false);
   });
 
   it("opens the shared memory overlay through the store flag (FR-WSP-007 R8 P2)", async () => {
@@ -3579,11 +3723,13 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     chatWorkspace.setSelected("conv-1");
     await flushPromises();
 
-    // Same overlay owner as the Context-inspector entry (adapter bridge):
-    // the badge entry flips the store flag, not a surface-local ref.
-    wrapper
-      .findComponent({ name: "WorkspaceBadge" })
-      .vm.$emit("request-open-memory");
+    await wrapper.get('[data-testid="workspace-context-indicator"]').trigger("click");
+    expect(useAppInspectorStore().target).toMatchObject({
+      kind: "chat",
+      tab: "context",
+    });
+    // The Context inspector opens the shared memory dialog through the store.
+    chatWorkspace.openMemoryOverlay();
     await flushPromises();
 
     expect(chatWorkspace.memoryOverlayOpen).toBe(true);
@@ -3604,6 +3750,27 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
 
     const badge = wrapper.get('[data-testid="workspace-badge-stub"]');
     expect(badge.text()).toBe("/tmp/project");
+  });
+
+  it("never shows the memory entry in the composer-strip workspace badge", async () => {
+    getWorkspaceMock.mockResolvedValue({
+      id: 7,
+      conversationId: "conv-1",
+      rootPath: "/tmp/project",
+      label: "project",
+      approvalState: "approved",
+    });
+    const wrapper = mountSurface();
+    const chatWorkspace = useChatWorkspaceStore();
+    chatWorkspace.setSelected("conv-1");
+    await flushPromises();
+
+    // Product decision: the bottom-of-chat-area workspace strip shows no
+    // memory icon button. Workspace memory stays reachable through the
+    // Context-inspector entry (same store-owned overlay), so the badge is
+    // pinned to showMemory=false regardless of the adapter answer.
+    const badge = wrapper.findComponent({ name: "WorkspaceBadge" });
+    expect(badge.props("showMemory")).toBe(false);
   });
 
   it("removes the approved workspace through the canonical revoke channel then refreshes (FR-WSP-002)", async () => {
@@ -3637,24 +3804,31 @@ describe("AiChatCenterSurface (chat-first shell design §8–§9)", () => {
     );
   });
 
-  it("keeps next-message selectors below the composer textarea in DOM order", async () => {
+  it("keeps model and permissions in the lower toolbar before the accessory buttons", async () => {
     const wrapper = mountSurface();
     await flushPromises();
-    const textarea = wrapper.get('[data-testid="composer-textarea"]').element;
-    const modeSelector = wrapper.get(
-      '[data-testid="mode-selector-stub"]'
-    ).element;
-    const voiceToggle = wrapper.get(
-      '[data-testid="voice-toggle-stub"]'
-    ).element;
-    expect(
-      textarea.compareDocumentPosition(modeSelector) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(
-      modeSelector.compareDocumentPosition(voiceToggle) &
-        Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
+    const controls = wrapper.get('[data-testid="composer-controls-stub"]');
+    const actions = wrapper.get('[data-testid="composer-actions-stub"]');
+    expect(Array.from(controls.element.children, (child) => child.getAttribute("data-testid"))).toEqual([
+      "model-selector-stub",
+      "approval-mode-selector-stub",
+    ]);
+    expect(controls.getComponent({ name: "AiChatV2ModelSelector" }).props("compact")).toBe(true);
+    expect(controls.getComponent({ name: "AiChatV2ToolApprovalModeSelector" }).props("compact")).toBe(true);
+    expect(actions.find('[data-testid="workspace-context-indicator"]').exists()).toBe(true);
+    expect(actions.find('[data-testid="voice-toggle-stub"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="mode-selector-stub"]').exists()).toBe(false);
+  });
+
+  it("sends a regular composer message in chat mode", async () => {
+    const wrapper = mountSurface();
+    wrapper.getComponent(ComposerStub).vm.$emit("send", "Find recent leads", []);
+    await vi.waitFor(() => {
+      expect(startChatRunMock).toHaveBeenCalledWith(expect.objectContaining({
+        message: "Find recent leads",
+        mode: "chat",
+      }));
+    });
   });
 
   it("opens the chat inspector through the typed application inspector store", async () => {

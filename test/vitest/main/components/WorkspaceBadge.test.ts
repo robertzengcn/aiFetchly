@@ -54,6 +54,7 @@ function mountBadge(props: {
   memoryCount?: number;
   loading?: boolean;
   busy?: boolean;
+  compact?: boolean;
 }) {
   return mount(WorkspaceBadge, {
     props,
@@ -63,6 +64,68 @@ function mountBadge(props: {
     },
   });
 }
+
+describe("WorkspaceBadge compact composer control", () => {
+  it("uses one labeled workspace action without the unset banner", async () => {
+    const wrapper = mountBadge({ workspace: null, compact: true });
+    expect(wrapper.text()).toBe("Choose workspace");
+
+    await wrapper.get('[data-testid="workspace-badge-choose"]').trigger("click");
+    expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
+  });
+
+  it("shows the folder name as the change action and retains access to the path and remove action", async () => {
+    const activeWorkspace = workspace({ label: "Project files" });
+    const wrapper = mountBadge({ workspace: activeWorkspace, compact: true });
+    const change = wrapper.get('[data-testid="workspace-badge-path"]');
+    expect(change.text()).toBe("Project files");
+    expect(change.attributes("aria-label")).toContain("Project files");
+    expect(change.attributes("aria-label")).toContain("Change folder");
+    expect(change.attributes("title")).toContain(activeWorkspace.rootPath);
+    expect(wrapper.get(".workspace-badge__status").text()).toBe("Approved");
+    expect(wrapper.get(".workspace-badge__status .sr-only").text()).toBe(
+      "Approved"
+    );
+
+    await change.trigger("click");
+    await wrapper.get('[data-testid="workspace-badge-remove"]').trigger("click");
+    expect(wrapper.emitted("request-set-workspace")).toHaveLength(1);
+    expect(wrapper.emitted("request-remove-workspace")).toHaveLength(1);
+  });
+
+  it.each([
+    ["pending", "Pending approval"],
+    ["revoked", "Access revoked"],
+  ] as const)("keeps %s approval status visible as text", (approvalState, label) => {
+    const wrapper = mountBadge({
+      workspace: workspace({ approvalState }),
+      compact: true,
+    });
+    const status = wrapper.get(".workspace-badge__status");
+    expect(status.text()).toBe(label);
+    expect(status.find(".sr-only").exists()).toBe(false);
+  });
+
+  it("states why workspace actions are disabled during a run", async () => {
+    const wrapper = mountBadge({
+      workspace: workspace(),
+      compact: true,
+      busy: true,
+    });
+    const change = wrapper.get('[data-testid="workspace-badge-path"]');
+    const remove = wrapper.get('[data-testid="workspace-badge-remove"]');
+    expect(change.attributes("disabled")).toBeDefined();
+    expect(remove.attributes("disabled")).toBeDefined();
+    expect(wrapper.get('[data-testid="workspace-badge-busy-reason"]').text()).toBe(
+      "Available after current run"
+    );
+
+    await change.trigger("click");
+    await remove.trigger("click");
+    expect(wrapper.emitted("request-set-workspace")).toBeUndefined();
+    expect(wrapper.emitted("request-remove-workspace")).toBeUndefined();
+  });
+});
 
 describe("WorkspaceBadge (FR-WS-002/003/007 state model)", () => {
   it("renders the loading state without chooser actions", () => {

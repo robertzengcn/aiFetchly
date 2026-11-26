@@ -6,6 +6,12 @@ import { createI18n } from "vue-i18n";
 import { MessageType } from "@/entityTypes/commonType";
 import type { ChatV2MessageView } from "@/entityTypes/aiChatV2Types";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
+import en from "@/views/lang/en";
+import zh from "@/views/lang/zh";
+import es from "@/views/lang/es";
+import fr from "@/views/lang/fr";
+import de from "@/views/lang/de";
+import ja from "@/views/lang/ja";
 
 const i18n = createI18n({
   legacy: false,
@@ -14,9 +20,13 @@ const i18n = createI18n({
     en: {
       ui: { actions: { retry: "Retry" } },
       aiChatV2: {
+        ai_working: "Working…",
         generatedImageRefs: {
           useAsReference: "Use as reference",
           edit: "Edit",
+          saveToWorkspace: "Save to workspace",
+          saveAll: "Save all",
+          saveAllToWorkspace: "Save all images to workspace",
           progressSummary: "{completed} of {requested} completed",
           retryFailed: "Retry failed items",
           stopBatch: "Stop batch",
@@ -552,6 +562,57 @@ describe("AiChatWorkspaceTranscript (FR-042..050, FR-052, FR-062)", () => {
     expect(denied?.[0]?.[0]).toMatchObject({ id: permMessage.id });
   });
 
+  it("§15.5: process_artifact_batch awaiting permission renders ONE interactive permission prompt and forwards grant-permission", async () => {
+    const callMessage = msg(MessageType.TOOL_CALL, {
+      toolCallId: "tc-batch-perm",
+      toolName: "process_artifact_batch",
+    });
+    const permMessage = msg(MessageType.TOOL_RESULT, {
+      toolCallId: "tc-batch-perm",
+      toolName: "process_artifact_batch",
+      toolResult: {
+        needsPermissionPrompt: true,
+        permissionCategory: "filesystem",
+        success: true,
+      },
+    });
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [callMessage, permMessage],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    // Renders exactly ONE permission card in the DOM — no duplicate batch cards.
+    const cards = wrapper.findAll('[data-testid="ai-chat-permission-card"]');
+    expect(cards).toHaveLength(1);
+
+    // No Stop batch button while parked awaiting permission
+    expect(wrapper.find("button.v2-message__batch-stop").exists()).toBe(false);
+
+    // Clicking "ALLOW ONCE" forwards grant-permission with persistent: false
+    await wrapper
+      .find('[data-testid="ai-chat-permission-allow-once"]')
+      .trigger("click");
+    await flushPromises();
+    const granted = wrapper.emitted("grant-permission");
+    expect(granted).toBeTruthy();
+    expect(granted?.[0]?.[0]).toMatchObject({ id: permMessage.id });
+    expect(granted?.[0]?.[1]).toEqual({ persistent: false });
+
+    // Clicking "ALWAYS ALLOW" forwards grant-permission with persistent: true
+    await wrapper
+      .find('[data-testid="ai-chat-permission-always-allow"]')
+      .trigger("click");
+    await flushPromises();
+    expect(granted).toHaveLength(2);
+    expect(granted?.[1]?.[0]).toMatchObject({ id: permMessage.id });
+    expect(granted?.[1]?.[1]).toEqual({ persistent: true });
+  });
+
   it("§15.5/FR-048: permission-resumed completed group stays expanded; plain completed group collapses", async () => {
     const messages = [
       msg(MessageType.MESSAGE, {}, "assistant", "Reading the file."),
@@ -1071,6 +1132,41 @@ describe("AiChatWorkspaceTranscript generated-image reference forwarding", () =>
       "imageIndex",
       "messageId",
     ]);
+    expect(
+      wrapper.find('[data-testid="generated-image-save-all"]').exists()
+    ).toBe(false);
+  });
+
+  it("forwards save-all-generated-images for every rendered tile", async () => {
+    const message = msg(
+      MessageType.MESSAGE,
+      {
+        generatedImages: [
+          { url: "https://example.com/gen-1.png" },
+          { url: "https://example.com/gen-2.png" },
+        ],
+      },
+      "assistant",
+      "Here are the images."
+    );
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [message],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const saveAll = wrapper.get('[data-testid="generated-image-save-all"]');
+    await saveAll.trigger("click");
+
+    const events = wrapper.emitted("save-all-generated-images");
+    expect(events?.[0]?.[0]).toEqual([
+      { messageId: message.id, imageIndex: 0 },
+      { messageId: message.id, imageIndex: 1 },
+    ]);
   });
 
   it("forwards edit-generated-image from the tile button as an opaque reference", async () => {
@@ -1312,4 +1408,309 @@ it('recognizes sent reply results and rejects failed or invalid draft results', 
   for (const toolResult of [{ success: false, draftId: 42 }, { draftId: -1 }, { draftId: '42' }, {}]) {
     expect(emailReplyDraftId(msg(MessageType.TOOL_RESULT, { toolName: 'create_email_reply_draft', toolResult }))).toBeNull();
   }
+});
+
+interface LangWithAiChatV2 {
+  aiChatV2?: {
+    ai_working?: string;
+  };
+}
+
+describe("AiChatWorkspaceTranscript i18n", () => {
+  it("defines aiChatV2.ai_working across all supported languages", () => {
+    expect((en as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Working…");
+    expect((zh as LangWithAiChatV2).aiChatV2?.ai_working).toBe("处理中…");
+    expect((es as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Trabajando…");
+    expect((fr as LangWithAiChatV2).aiChatV2?.ai_working).toBe("En cours…");
+    expect((de as LangWithAiChatV2).aiChatV2?.ai_working).toBe("Wird bearbeitet…");
+    expect((ja as LangWithAiChatV2).aiChatV2?.ai_working).toBe("処理中…");
+  });
+});
+
+describe("AiChatWorkspaceTranscript remote working indicator & empty bubble suppression", () => {
+  it("suppresses empty assistant message bubble when content is empty and has no reasoning/tool", async () => {
+    const emptyAssistant: ChatV2MessageView = {
+      id: "a-empty",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [emptyAssistant],
+        activeAssistantMessageId: "a-empty",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const assistantMessages = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(assistantMessages).toHaveLength(0);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').text()).toContain("Working…");
+  });
+
+  it("renders assistant message normally once content or reasoning arrives", async () => {
+    const textAssistant: ChatV2MessageView = {
+      id: "a-text",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "Hello from LLM",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: { source: "chat-v2" },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [textAssistant],
+        activeAssistantMessageId: "a-text",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+    expect(wrapper.text()).toContain("Hello from LLM");
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+  });
+
+  it("renders assistant message with empty text if generatedImages or attachments are present", async () => {
+    const imageAssistant: ChatV2MessageView = {
+      id: "a-image",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        generatedImages: [{ url: "https://example.com/img.png", prompt: "cat" }] as never,
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [imageAssistant],
+        activeAssistantMessageId: "a-image",
+        streamStatus: "idle",
+        isRemoteWorking: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+  });
+
+  it("suppresses assistant message when content is empty and reasoning is present if showReasoning is false", async () => {
+    const reasoningAssistant: ChatV2MessageView = {
+      id: "a-reasoning",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Thinking deeply...",
+          format: "plain_text",
+          source: "server",
+        },
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [reasoningAssistant],
+        activeAssistantMessageId: "a-reasoning",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+        showReasoning: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(0);
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(true);
+  });
+
+  it("renders assistant message when content is empty and reasoning is present if showReasoning is true", async () => {
+    const reasoningAssistant: ChatV2MessageView = {
+      id: "a-reasoning-visible",
+      conversationId: "v2-test",
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+      messageType: MessageType.MESSAGE,
+      metadata: {
+        source: "chat-v2",
+        reasoning: {
+          content: "Thinking deeply...",
+          format: "plain_text",
+          source: "server",
+        },
+      },
+    };
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [reasoningAssistant],
+        activeAssistantMessageId: "a-reasoning-visible",
+        streamStatus: "streaming",
+        isRemoteWorking: true,
+        showReasoning: true,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.findAllComponents({ name: "AiChatV2Message" })).toHaveLength(1);
+  });
+
+  it("hides working indicator when remote is idle and not streaming", async () => {
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages: [],
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+        isRemoteWorking: false,
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    expect(wrapper.find('[data-testid="workspace-transcript-working"]').exists()).toBe(false);
+  });
+
+  it("renders tool execution group below each AI response when loaded from persisted chat history order", async () => {
+    const messages: ChatV2MessageView[] = [
+      {
+        id: "u1",
+        conversationId: "v2-test",
+        role: "user",
+        content: "Search for leads",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u1" },
+      },
+      {
+        id: "tc1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "web_search",
+        timestamp: "2026-08-20T10:00:02.000Z",
+        messageType: MessageType.TOOL_CALL,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u1",
+          toolCallId: "call-1",
+          toolName: "web_search",
+        },
+      },
+      {
+        id: "tr1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: '{"success":true}',
+        timestamp: "2026-08-20T10:00:03.000Z",
+        messageType: MessageType.TOOL_RESULT,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u1",
+          toolCallId: "call-1",
+          toolName: "web_search",
+          toolResult: { success: true, summary: "Found 5 leads" },
+          toolResultSummary: "Found 5 leads",
+        },
+      },
+      {
+        id: "a1",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "Here are the 5 leads I found.",
+        timestamp: "2026-08-20T10:00:04.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u1" },
+      },
+    ];
+
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const listEl = wrapper.find('[data-testid="workspace-transcript"]').element;
+    const childOrder = Array.from(listEl.children).map((el) => {
+      if (el.classList.contains("execution-group")) {
+        return "execution-group";
+      }
+      if (el.classList.contains("v2-message--user")) {
+        return "user-message";
+      }
+      if (el.classList.contains("v2-message--assistant")) {
+        return "assistant-message";
+      }
+      return "other";
+    });
+    expect(childOrder).toEqual([
+      "user-message",
+      "assistant-message",
+      "execution-group",
+    ]);
+  });
+
+  it("displays persisted AI response error when loading a failed turn with empty content from chat history", async () => {
+    const messages: ChatV2MessageView[] = [
+      {
+        id: "u-err",
+        conversationId: "v2-test",
+        role: "user",
+        content: "Hello AI",
+        timestamp: "2026-08-20T10:00:01.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: { source: "chat-v2", turnId: "turn-u-err" },
+      },
+      {
+        id: "a-err",
+        conversationId: "v2-test",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-08-20T10:00:02.000Z",
+        messageType: MessageType.MESSAGE,
+        metadata: {
+          source: "chat-v2",
+          turnId: "turn-u-err",
+          finishReason: "error",
+          error: "AI server returned 502 Bad Gateway",
+        },
+      },
+    ];
+
+    const wrapper = mount(AiChatWorkspaceTranscript, {
+      props: {
+        messages,
+        activeAssistantMessageId: null,
+        streamStatus: "idle",
+      },
+      global: { plugins: [i18n] },
+    });
+    await flushPromises();
+
+    const messageComponents = wrapper.findAllComponents({ name: "AiChatV2Message" });
+    expect(messageComponents).toHaveLength(2);
+    const errorStatus = wrapper.find(".v2-stream-status");
+    expect(errorStatus.exists()).toBe(true);
+    expect(errorStatus.text()).toContain("AI server returned 502 Bad Gateway");
+  });
 });

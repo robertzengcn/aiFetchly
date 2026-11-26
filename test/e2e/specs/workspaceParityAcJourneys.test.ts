@@ -375,12 +375,10 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
       await expect(seededRow).toBeVisible({ timeout: 30_000 });
       await seededRow.click();
 
-      const reportButton = app.mainWindow
-        .locator(
-          '[data-testid="chat-center-surface"] [data-testid="report-conversation"], ' +
-            '[data-testid="ai-chat-root"] [data-testid="report-conversation"]'
-        )
-        .first();
+      await app.mainWindow.getByTestId("workspace-header-overflow").click();
+      const reportButton = app.mainWindow.getByTestId(
+        "workspace-overflow-report"
+      );
       await expect(reportButton).toBeEnabled({ timeout: 30_000 });
       await reportButton.click();
 
@@ -427,11 +425,13 @@ test.describe("workspace capability-parity AC journeys (R8 §2)", () => {
     );
 
     await send(aiApp, "list both file sets");
-    // A's turn is live (the request has been dispatched and is mid-stream).
+    // A's turn is live (the request has been dispatched and is mid-stream);
+    // the transcript's working indicator is the authoritative live signal
+    // since the empty assistant bubble stopped rendering "Generating…".
     const transcript = aiApp.mainWindow
       .getByTestId("workspace-transcript")
       .first();
-    await expect(transcript).toContainText("Generating…", {
+    await expect(transcript).toContainText("Working…", {
       timeout: 30_000,
     });
     const liveRequests = await requestCount(fakeAi);

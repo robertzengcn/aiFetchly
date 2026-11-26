@@ -111,6 +111,23 @@ export interface BuildPackagedWorkerEnvOptions {
 }
 
 /**
+ * Env fragment forwarding the build-time login base URL to a worker whose
+ * bundle still reads `process.env.VITE_LOGIN_URL` at runtime.
+ *
+ * The packaged main process never has that env var — vite's `define` inlines
+ * it into the main bundle as a literal — so a worker that reads it dynamically
+ * (e.g. ContactExtractionAiClient before the worker-config define) would
+ * silently fall back to localhost. Spawn sites must spread this fragment into
+ * the worker env; empty when the build had no URL configured.
+ */
+export function buildWorkerLoginUrlEnv(
+  resolve: () => string | undefined
+): Record<string, string> {
+  const value = resolve()?.trim() ?? "";
+  return value ? { VITE_LOGIN_URL: value } : {};
+}
+
+/**
  * Best-effort Electron app defaults for worker env.
  *
  * Utility/taskCode workers construct Token → ElectronStoreService. That path

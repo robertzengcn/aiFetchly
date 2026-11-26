@@ -1,3 +1,4 @@
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import type {
   AIChatPendingCreateResult,
   AIChatPendingMessageEvent,
@@ -20,6 +21,8 @@ import {
   type AIChatPendingModuleErrorCode,
 } from "@/modules/AIChatPendingMessageModule";
 import { AIChatConversationModule } from "@/modules/AIChatConversationModule";
+import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { userSafeError, pendingErrorCode } from "@/service/AIChatErrorMapper";
 import { log } from "@/modules/Logger";
 import { aiChatQueueCounters } from "@/service/AIChatQueueCounters";
 import { getConfirmedBatchReferenceRegistry } from "@/service/ConfirmedBatchReferenceRegistry";
@@ -103,6 +106,16 @@ export interface AIChatTurnQueueServiceDeps {
   readonly pendingModule: AIChatPendingMessageModule;
   readonly eventSink: AIChatPendingEventSink;
   /**
+   * Chat-titles design §6: nonblocking notification after a queue-drained
+   * interactive turn durably completes. Fire-and-forget.
+   */
+  readonly onInteractiveTurnCompleted?: (input: {
+    conversationId: string;
+    assistantMessageId: string | null;
+    /** F01: provider version captured at drained-turn execution start. */
+    sourceProviderVersion: number;
+  }) => void;
+  /**
    * Builds the renderer-facing stream sink for queue-dispatched turns.
    * B06: receives the bridge's durable run id + conversation so detail
    * envelopes carry the REAL run identity (not a synthetic pending-queue
@@ -184,7 +197,12 @@ export interface AIChatTurnQueueServiceDeps {
     }): Promise<{ runId: string; admitted: boolean } | null>;
     finishRun(
       runId: string | null,
-      status: "completed" | "failed" | "cancelled" | "interrupted"
+      status: "completed" | "failed" | "cancelled" | "interrupted",
+      patch?: {
+        assistantMessageId?: string;
+        errorCode?: string | null;
+        errorSummary?: string | null;
+      }
     ): Promise<void>;
     /**
      * B05 strict variant: false when terminal persistence failed — the
@@ -192,7 +210,12 @@ export interface AIChatTurnQueueServiceDeps {
      */
     finishRunStrict?(
       runId: string | null,
-      status: "completed" | "failed" | "cancelled" | "interrupted"
+      status: "completed" | "failed" | "cancelled" | "interrupted",
+      patch?: {
+        assistantMessageId?: string;
+        errorCode?: string | null;
+        errorSummary?: string | null;
+      }
     ): Promise<boolean>;
     /** conversation_busy release: running -> queued for the next claim. */
     releaseToQueued?(runId: string | null): Promise<void>;
@@ -499,6 +522,16 @@ export class AIChatTurnQueueService {
       pendingMessageId: parked.pendingMessageId,
       status: outcome,
     });
+    // r3 G02: a parked/resumed turn that durably completes reaches the SAME
+    // title trigger as the normal drain path — cancelled/failed outcomes
+    // never notify (FR-02 exclusions).
+    if (outcome === "completed") {
+      this.deps.onInteractiveTurnCompleted?.({
+        conversationId,
+        assistantMessageId: `assistant-pending-${parked.pendingMessageId}`,
+        sourceProviderVersion: currentProviderConfigVersion(),
+      });
+    }
     return true;
   }
 
@@ -1009,6 +1042,8 @@ export class AIChatTurnQueueService {
     );
 
     const drainStartedAt = Date.now();
+    // Titles F01: bind this drained execution to the current provider.
+    const sourceProviderVersion = currentProviderConfigVersion();
     const enqueueStartedAt = row.createdAt
       ? new Date(row.createdAt).getTime()
       : NaN;
@@ -1016,6 +1051,15 @@ export class AIChatTurnQueueService {
     const lease = this.deps.tryAcquireLease({ conversationId });
     if (!lease) {
       await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
+      const queuedView = await this.deps.pendingModule.getView(
+        row.pendingMessageId
+      );
+      if (queuedView) {
+        this.emitEvent(queuedView, "queued");
+      }
+      setTimeout(() => {
+        this.scheduleDrain(conversationId);
+      }, 200);
       log.info(
         `[ai-chat-queue] lease busy — released claim conv=${conversationId}`
       );
@@ -1181,6 +1225,8 @@ export class AIChatTurnQueueService {
       const terminalGate = new AIChatTerminalGate(
         this.deps.streamSinkFactory(streamIdentity)
       );
+      let dispatchCaughtError: { code?: string; summary?: string } | null =
+        null;
       try {
         const turnInputs = await this.deps.pendingModule.rebuildTurnInputs(row);
         // Codex P1: stage the user-confirmed batch at DISPATCH — the row's
@@ -1213,10 +1259,32 @@ export class AIChatTurnQueueService {
           err
         );
         aiChatQueueCounters.increment("ai_chat_pending_failed_total");
+        const safeErr = userSafeError(err);
+        const code = pendingErrorCode(err);
+        dispatchCaughtError = { code: code ?? undefined, summary: safeErr };
+        await new AIChatV2Module()
+          .saveAssistantMessage({
+            conversationId,
+            content: "",
+            messageId: assistantMessageId,
+            metadata: {
+              source: "chat-v2",
+              turnId: `turn-${row.userMessageId}`,
+              sourceProviderVersion,
+              finishReason: "error",
+              error: safeErr,
+            },
+          })
+          .catch((persistErr: unknown) => {
+            log.error(
+              `[ai-chat-queue] failed to persist assistant error row conv=${conversationId}:`,
+              persistErr
+            );
+          });
         terminal = {
           type: "failed",
           conversationId,
-          assistantMessageId: "",
+          assistantMessageId,
         };
       }
 
@@ -1231,15 +1299,21 @@ export class AIChatTurnQueueService {
       // for explicit reconciliation instead of silently advancing.
       const bridge = this.deps.dispatchBridge;
       const persistTerminal = async (
-        status: "completed" | "failed" | "cancelled" | "interrupted"
+        status: "completed" | "failed" | "cancelled" | "interrupted",
+        patch?: {
+          assistantMessageId?: string;
+          errorCode?: string | null;
+          errorSummary?: string | null;
+        }
       ): Promise<boolean> => {
         if (bridge?.finishRunStrict) {
           return await bridge.finishRunStrict(
             bridgeRunId?.runId ?? null,
-            status
+            status,
+            patch
           );
         }
-        await bridge?.finishRun(bridgeRunId?.runId ?? null, status);
+        await bridge?.finishRun(bridgeRunId?.runId ?? null, status, patch);
         return true;
       };
       const reconcilePersistenceFailure = async (): Promise<void> => {
@@ -1269,7 +1343,11 @@ export class AIChatTurnQueueService {
         this.drainSchedulerWaiters(conversationId);
       };
       if (terminal.type === "completed") {
-        if (!(await persistTerminal("completed"))) {
+        if (
+          !(await persistTerminal("completed", {
+            assistantMessageId: terminal.assistantMessageId || undefined,
+          }))
+        ) {
           await reconcilePersistenceFailure();
           return;
         }
@@ -1279,6 +1357,13 @@ export class AIChatTurnQueueService {
           pendingMessageId: row.pendingMessageId,
           status: "completed",
           assistantMessageId: terminal.assistantMessageId,
+        });
+        // Chat-titles FR-02: queued interactive path reaches the common
+        // title trigger exactly once (durable completion first).
+        this.deps.onInteractiveTurnCompleted?.({
+          conversationId,
+          assistantMessageId: terminal.assistantMessageId ?? null,
+          sourceProviderVersion,
         });
         await terminalGate.flush();
         // B06: background summary — terminal success (bounded, no bodies).
@@ -1310,7 +1395,16 @@ export class AIChatTurnQueueService {
         // can reuse it idempotently (scheduler requeue preserves age).
         await bridge?.releaseToQueued?.(bridgeRunId?.runId ?? null);
         await model.releaseDispatchClaim(row.pendingMessageId, claimToken);
+        const queuedView = await this.deps.pendingModule.getView(
+          row.pendingMessageId
+        );
+        if (queuedView) {
+          this.emitEvent(queuedView, "queued");
+        }
         this.drainSchedulerWaiters(conversationId);
+        setTimeout(() => {
+          this.scheduleDrain(conversationId);
+        }, 200);
         return;
       }
       if (
@@ -1362,7 +1456,13 @@ export class AIChatTurnQueueService {
       // cancelled | failed
       const failedStatus =
         terminal.type === "cancelled" ? "cancelled" : "failed";
-      if (!(await persistTerminal(failedStatus))) {
+      if (
+        !(await persistTerminal(failedStatus, {
+          assistantMessageId: terminal.assistantMessageId || undefined,
+          errorCode: dispatchCaughtError?.code ?? null,
+          errorSummary: dispatchCaughtError?.summary ?? null,
+        }))
+      ) {
         await reconcilePersistenceFailure();
         return;
       }

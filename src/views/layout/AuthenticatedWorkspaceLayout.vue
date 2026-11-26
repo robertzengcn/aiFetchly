@@ -12,6 +12,7 @@
         @select="(id) => void openConversation(id)"
         @new-chat="() => void createChat()"
         @retry="() => void chatWorkspace.bootstrap()"
+        @rename="onSidebarRename"
       />
     </template>
     <!-- Narrow mode needs a visible menu action (PRD §16.3): the sidebar
@@ -36,6 +37,16 @@
     >
       {{ systemNotice }}
     </v-snackbar>
+    <!-- Chat-titles FR-06: shared rename dialog for sidebar row actions. -->
+    <AiChatRenameDialog
+      :model-value="sidebarRename.renameTargetId.value !== null"
+      :initial-title="sidebarRename.renameInitialTitle.value"
+      :saving="sidebarRename.renameSaving.value"
+      :error="sidebarRename.renameError.value"
+      @save="(title) => void sidebarRename.commitRename(title)"
+      @cancel="sidebarRename.cancelRename()"
+      @update:model-value="(v) => !v && sidebarRename.cancelRename()"
+    />
   </AppWorkspaceShell>
 </template>
 
@@ -48,6 +59,8 @@ import { useI18n } from "vue-i18n";
 import AppWorkspaceShell from "@/views/components/appShell/AppWorkspaceShell.vue";
 import AppCenterRouteHost from "@/views/components/appShell/AppCenterRouteHost.vue";
 import AiChatWorkspaceSidebar from "@/views/components/aiChatWorkspace/AiChatWorkspaceSidebar.vue";
+import AiChatRenameDialog from "@/views/components/aiChatWorkspace/AiChatRenameDialog.vue";
+import { useConversationRename } from "@/views/composables/conversationRename";
 import { useAppShellStore } from "@/views/store/appShell";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useSelectedConversationStore } from "@/views/store/selectedConversation";
@@ -76,6 +89,23 @@ import type { CommonDialogMsg } from "@/entityTypes/commonType";
 const router = useRouter();
 const { t } = useI18n();
 const shell = useAppShellStore();
+
+  // Chat-titles FR-06: sidebar rename uses the shared composable/dialog.
+  const sidebarRename = useConversationRename();
+
+  function onSidebarRename(conversationId: string): void {
+    const conversation = chatWorkspace.conversationsById.get(conversationId);
+    // F14: focus returns to the row's STABLE menu activator button (the
+    // transient menu item closes with the dialog and must not be targeted).
+    const activator = document.querySelector<HTMLElement>(
+      `[data-testid="workspace-row-menu-${conversationId}"]`
+    );
+    sidebarRename.openRename(
+      conversationId,
+      conversation?.title ?? "",
+      activator
+    );
+  }
 const innerPageShell = useInnerPageShellFlag();
 const chatWorkspace = useChatWorkspaceStore();
 const selectedStore = useSelectedConversationStore();
@@ -240,7 +270,7 @@ onUnmounted(() => {
   );
   windowRemoveListener(SYSTEM_MESSAGE, onRawSystemMessage);
   if (systemNoticeTimer !== null) clearTimeout(systemNoticeTimer);
-  chatWorkspace.teardown();
+  chatWorkspace.resetForScopeChange(); // B23: full scope reset incl. teardown
   // Authentication ended (expiry / account switch in the same renderer):
   // clear the selected conversation's buffers and detail subscription so the
   // next account never sees this transcript (review: auth-lifecycle fix).

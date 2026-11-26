@@ -15,6 +15,7 @@ vi.mock("@/views/utils/apirequest", () => ({
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: vi.fn().mockReturnValue(() => undefined),
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   cancelChatRun: vi.fn(),
   createClientRequestId: vi.fn().mockReturnValue("req-b07"),
   loadHistoryPage: vi.fn(),

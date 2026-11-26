@@ -1,5 +1,5 @@
 import { BaseDb } from "@/model/Basedb";
-import { LessThan, Repository } from "typeorm";
+import { IsNull, Not, Repository } from "typeorm";
 import { AiMessageTaskRunEntity } from "@/entity/AiMessageTaskRun.entity";
 import type { AiMessageTaskRunStatus } from "@/entityTypes/aiMessageTaskTypes";
 import { assertNotWorker } from "@/model/workerDbGuard";
@@ -161,23 +161,89 @@ export class AiMessageTaskRunModel extends BaseDb {
   }
 
   /**
-   * Mark running/waiting occurrence rows older than the cutoff as interrupted.
+   * Mark running/waiting/pending occurrence rows older than the cutoff as interrupted.
    * Used during startup recovery to clear stale in-memory leases after a crash
    * or restart. Returns the number of rows affected.
    */
   async markInterruptedRuns(cutoff: Date): Promise<number> {
     assertNotWorker("markInterruptedRuns");
-    const result = await this.repository.update(
-      {
-        status: "running" as AiMessageTaskRunStatus,
-        started_at: LessThan(cutoff),
-      },
-      {
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(AiMessageTaskRunEntity)
+      .set({
         status: "interrupted",
         error_code: "RUN_INTERRUPTED",
         finished_at: new Date(),
-      }
-    );
+      })
+      .where("status IN (:...statuses)", {
+        statuses: ["running", "waiting_for_conversation", "pending"],
+      })
+      .andWhere(
+        "(started_at < :cutoff OR (started_at IS NULL AND updatedAt < :cutoff))",
+        { cutoff }
+      )
+      .execute();
     return result.affected ?? 0;
+  }
+
+  /** Find scheduled-loop runs currently waiting on a busy conversation. */
+  async findWaitingIntervalRuns(
+    limit = 50
+  ): Promise<AiMessageTaskRunEntity[]> {
+    assertNotWorker("findWaitingIntervalRuns");
+    return this.repository.find({
+      where: {
+        status: "waiting_for_conversation",
+        schedule_id: Not(IsNull()),
+      },
+      order: { id: "ASC" },
+      take: limit,
+    });
+  }
+
+  /**
+   * Atomically claim a `waiting_for_conversation` run for retry if it is still
+   * waiting and under `maxTotalAttempts`.
+   */
+  async claimWaitingRunForRetry(
+    runId: number,
+    now: Date,
+    maxTotalAttempts: number
+  ): Promise<boolean> {
+    assertNotWorker("claimWaitingRunForRetry");
+    const result = await this.repository
+      .createQueryBuilder()
+      .update(AiMessageTaskRunEntity)
+      .set({
+        status: "pending",
+        error_code: null,
+        started_at: now,
+        attempt: () => "attempt + 1",
+      })
+      .where("id = :id", { id: runId })
+      .andWhere("status = :status", { status: "waiting_for_conversation" })
+      .andWhere("attempt < :maxTotalAttempts", { maxTotalAttempts })
+      .execute();
+    return (result.affected ?? 0) > 0;
+  }
+
+  /** Retire a `waiting_for_conversation` run so it no longer blocks or retries. */
+  async retireWaitingRun(
+    runId: number,
+    reasonCode: string,
+    now: Date = new Date()
+  ): Promise<void> {
+    assertNotWorker("retireWaitingRun");
+    await this.repository
+      .createQueryBuilder()
+      .update(AiMessageTaskRunEntity)
+      .set({
+        status: "coalesced",
+        error_code: reasonCode,
+        finished_at: now,
+      })
+      .where("id = :id", { id: runId })
+      .andWhere("status = :status", { status: "waiting_for_conversation" })
+      .execute();
   }
 }

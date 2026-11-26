@@ -49,7 +49,7 @@ export const pluginToolPolicySchema = z.object({
 export const pluginHostRequirementsSchema = z.object({
   contractVersion: z.literal(1),
   /** Capability name → minimum contract version the plugin requires. */
-  capabilities: z.record(z.number().int().min(1)),
+  capabilities: z.record(z.string(), z.number().int().min(1)),
 });
 
 export const pluginCapabilitiesSchema = z.object({

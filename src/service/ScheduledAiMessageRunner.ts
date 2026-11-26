@@ -398,87 +398,17 @@ export class ScheduledAiMessageRunner {
     // the run proceeds with the legacy blind mapping (no consult, no
     // missing-outcome rejection) — the scheduled turn itself must never crash
     // on policy plumbing. Flag-off: skipped entirely.
-    let policyBinding: ScheduledLoopPolicyBinding | undefined;
     // Snapshot captured at enrollment so finalizeChatRun can CAS-finalize the
-    // execution row after the turn ends. Fresh scheduled executions start at
-    // execution_state_version = 0; T03 evidence writes bump it during the run,
-    // so finalizeScheduledPolicyRun re-reads the version before finalizing.
+    // execution row after the turn ends. Initialized here and populated AFTER
+    // the conversation turn lease is acquired so busy-lease deferrals never leave
+    // orphan execution ledger rows.
+    let policyBinding: ScheduledLoopPolicyBinding | undefined;
     let policyExecution: {
       readonly executionId: string;
       readonly expectedVersion: number;
       readonly idempotencyKey: string;
     } | null = null;
-    // T02 (D1): the loop binding built by the enroller, passed into
-    // submitMessage so the loop's maybeConsultPolicy consults for scheduled
-    // turns identically to manual ones.
     let loopBinding: LoopTaskExecutionBinding | undefined;
-    if (isAiTaskCompletionPolicyV1Enabled()) {
-      try {
-        const enrollResult = await enrollScheduledExecution({
-          conversationId,
-          sourceUserMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
-          taskMessage: task.message || "",
-          taskId,
-          runId,
-          scheduleId,
-          occurrence,
-          occurrenceKey:
-            input.idempotencyKey ??
-            `scheduled-loop:${scheduleId}:${occurrence}`,
-          budgetLimits: buildScheduledBudgetLimits({
-            maxContinueCalls: task.max_continue_calls,
-            maxToolCalls: task.max_tool_calls,
-            maxRuntimeMs: task.max_runtime_ms,
-          }),
-          // T04: thread the run-scoped abort signal into the consult closure
-          // so the checker dispatch races Stop / run-cancel + a deadline.
-          getAbortSignal: () => abortController.signal,
-        });
-        if (enrollResult.status === "created") {
-          policyBinding = enrollResult.policyBinding;
-          policyExecution = enrollResult.policyExecution ?? null;
-          loopBinding = enrollResult.loopBinding;
-        } else if (enrollResult.status === "reused") {
-          // Crash-retry of the same occurrence: the execution row already
-          // exists (same occurrence key). No fresh binding — the existing
-          // row's status is authoritative and its finalization already
-          // happened (or belongs to another attempt). Finalize the run row
-          // with the existing state so the claim is not stuck "running".
-          console.log(
-            `[scheduled-loop] occurrence already enrolled (runId=${runId}) — transport retry, no fresh consult`
-          );
-          return this.finalizeChatRun({
-            runId,
-            taskId,
-            scheduleId,
-            startedAt,
-            outcome: { kind: "failed", errorMessage: "OCCURRENCE_ALREADY_ENROLLED" },
-            errorCode: "OCCURRENCE_ALREADY_ENROLLED",
-            conversationId,
-            // A crash-retry duplicate is NOT a task failure: the original
-            // attempt's outcome is authoritative. Counting it would
-            // terminalize a healthy schedule after 3 transport retries
-            // (PRD §advice L276: "interruption remains distinct").
-            incrementFailure: false,
-          });
-        } else if (enrollResult.status === "skipped") {
-          // T02 (D5): the resolver classified the task message as not
-          // actionable (response_only/preparation). No execution row, no
-          // consult — run the turn with the legacy blind mapping and record
-          // the honest reason on the run row.
-          console.log(
-            `[scheduled-loop] occurrence not actionable (route=${enrollResult.skipReason}, runId=${runId}) — skipping enrollment`
-          );
-        } else {
-          console.error(
-            `[scheduled-loop] occurrence enrollment conflict (runId=${runId}) — skipping consult`
-          );
-        }
-      } catch (err) {
-        console.error("[scheduled-loop] completion-policy enrollment failed:", err);
-        policyBinding = undefined;
-      }
-    }
 
     const engineRegistry = ScheduledLoopEngineRegistry.getInstance();
     let permissionBackstopHandle: ReturnType<typeof setTimeout> | null = null;
@@ -508,6 +438,7 @@ export class ScheduledAiMessageRunner {
     };
 
     let outcome: ScheduledTurnOutcome;
+    let registeredEngine = false;
     try {
       try {
         lease = await coordinator.acquire({
@@ -536,6 +467,72 @@ export class ScheduledAiMessageRunner {
         };
       }
 
+      // Unit 6 (GAP-S2 #8/#9) + T02: enroll this occurrence AFTER acquiring the
+      // conversation turn lease, through the SAME trusted decision boundary as
+      // manual runs (resolver → criteria compile → contract freeze → startScheduled).
+      // Enrolling post-acquire guarantees CONVERSATION_BUSY never orphans an
+      // execution ledger row blocking subsequent retries or occurrences.
+      if (isAiTaskCompletionPolicyV1Enabled()) {
+        try {
+          const enrollResult = await enrollScheduledExecution({
+            conversationId,
+            sourceUserMessageId: `scheduled-user-${scheduleId}-${occurrence}`,
+            taskMessage: task.message || "",
+            taskId,
+            runId,
+            scheduleId,
+            occurrence,
+            occurrenceKey:
+              input.idempotencyKey ??
+              `scheduled-loop:${scheduleId}:${occurrence}`,
+            budgetLimits: buildScheduledBudgetLimits({
+              maxContinueCalls: task.max_continue_calls,
+              maxToolCalls: task.max_tool_calls,
+              maxRuntimeMs: task.max_runtime_ms,
+            }),
+            // T04: thread the run-scoped abort signal into the consult closure
+            // so the checker dispatch races Stop / run-cancel + a deadline.
+            getAbortSignal: () => abortController.signal,
+          });
+          if (enrollResult.status === "created") {
+            policyBinding = enrollResult.policyBinding;
+            policyExecution = enrollResult.policyExecution ?? null;
+            loopBinding = enrollResult.loopBinding;
+          } else if (enrollResult.status === "reused") {
+            console.log(
+              `[scheduled-loop] occurrence already enrolled (runId=${runId}) — transport retry, no fresh consult`
+            );
+            return this.finalizeChatRun({
+              runId,
+              taskId,
+              scheduleId,
+              startedAt,
+              outcome: {
+                kind: "failed",
+                errorMessage: "OCCURRENCE_ALREADY_ENROLLED",
+              },
+              errorCode: "OCCURRENCE_ALREADY_ENROLLED",
+              conversationId,
+              incrementFailure: false,
+            });
+          } else if (enrollResult.status === "skipped") {
+            console.log(
+              `[scheduled-loop] occurrence not actionable (route=${enrollResult.skipReason}, runId=${runId}) — skipping enrollment`
+            );
+          } else {
+            console.error(
+              `[scheduled-loop] occurrence enrollment conflict (runId=${runId}) — skipping consult`
+            );
+          }
+        } catch (err) {
+          console.error(
+            "[scheduled-loop] completion-policy enrollment failed:",
+            err
+          );
+          policyBinding = undefined;
+        }
+      }
+
       // 6-9. Execute through the query engine; the engine persists user +
       // assistant messages in the originating conversation. Tool execution is
       // task-scoped (FR-16): only allowlisted policy-approved tools run. The
@@ -558,6 +555,7 @@ export class ScheduledAiMessageRunner {
         scheduleId,
         clearPermissionBackstop,
       });
+      registeredEngine = true;
       const assistantMessageId = `scheduled-assistant-${scheduleId}-${occurrence}`;
       const ownerSink = new ScheduledLoopEventSink(
         (event) => {
@@ -784,7 +782,9 @@ export class ScheduledAiMessageRunner {
       clearPermissionBackstop();
       clearResumeTimeout();
       this.runRegistry.unregister(runId);
-      engineRegistry.unregister(conversationId);
+      if (registeredEngine) {
+        engineRegistry.unregister(conversationId, runId);
+      }
       if (lease) lease.release();
     }
 
@@ -1403,6 +1403,7 @@ export class ScheduledAiMessageRunner {
     const outboundSendPreAuthorized =
       await this.resolveOutboundSendPreAuthorized(conversationId, policy);
 
+    let registeredEngine = false;
     try {
       try {
         lease = await coordinator.acquire({
@@ -1437,6 +1438,7 @@ export class ScheduledAiMessageRunner {
         scheduleId: scheduleKey,
         clearPermissionBackstop,
       });
+      registeredEngine = true;
       // BUGFIX 2026-11-02: standalone scheduled runs never advanced the
       // workspace sidebar projection — a brand-new task conversation had no
       // ai_chat_conversations row at all, so Run Now's workspace folder
@@ -1677,7 +1679,9 @@ export class ScheduledAiMessageRunner {
       clearPermissionBackstop();
       clearResumeTimeout();
       this.runRegistry.unregister(runId);
-      engineRegistry.unregister(conversationId);
+      if (registeredEngine) {
+        engineRegistry.unregister(conversationId, runId);
+      }
       if (lease) lease.release();
     }
 

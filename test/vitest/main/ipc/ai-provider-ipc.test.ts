@@ -45,8 +45,11 @@ type Resp = {
   msg: string;
   data: {
     mode?: string;
+    autoChatTitlesEnabled?: boolean;
+    localAIEnabled?: boolean;
     localProvider?: {
       apiKeyConfigured?: boolean;
+      titleModel?: string;
       capabilities?: { chat?: string; streaming?: string; tools?: string };
       lastTestStatus?: string;
       lastTestMessage?: string;
@@ -81,6 +84,64 @@ describe("ai-provider-ipc", () => {
     expect(res.status).toBe(true);
     expect(res.data.mode).toBe("hosted");
     expect(res.data.localProvider).toBeNull();
+  });
+
+  it("B19: a mode-less toggle-only save never switches the active provider", async () => {
+    // Establish local mode with a provider.
+    const setup = await call(AI_PROVIDER_SETTINGS_SAVE, undefined, {
+      mode: "local",
+      localProvider: VALID_PROVIDER,
+    });
+    expect(setup.status).toBe(true);
+    // Toggle-only save: NO mode field (the renderer's possibly-stale cache
+    // is not authoritative).
+    const res = await call(AI_PROVIDER_SETTINGS_SAVE, undefined, {
+      autoChatTitlesEnabled: false,
+    });
+    expect(res.status).toBe(true);
+    expect(res.data.mode).toBe("local"); // provider unchanged
+    expect(res.data.autoChatTitlesEnabled).toBe(false);
+    // The stored provider config survives untouched.
+    expect(res.data.localAIEnabled).toBe(true);
+  });
+
+  it("B20: an identity-change save with a visible title model counts as explicit selection", async () => {
+    // Contract (design §8.1): the panel always sends its visible titleModel
+    // field; supplying it in the same save as an endpoint change is the
+    // documented "explicitly supplied with the new provider" exception.
+    const withModel = await call(AI_PROVIDER_SETTINGS_SAVE, undefined, {
+      mode: "local",
+      localProvider: {
+        ...VALID_PROVIDER,
+        baseUrl: "http://localhost:11435",
+        titleModel: "llama3.1:3b",
+      },
+    });
+    expect(withModel.status).toBe(true);
+    expect(withModel.data.localProvider?.titleModel).toBe("llama3.1:3b");
+
+    // Identity change WITH the (re-supplied) model keeps it.
+    const moved = await call(AI_PROVIDER_SETTINGS_SAVE, undefined, {
+      mode: "local",
+      localProvider: {
+        ...VALID_PROVIDER,
+        baseUrl: "http://localhost:11436",
+        titleModel: "llama3.1:3b",
+      },
+    });
+    expect(moved.status).toBe(true);
+    expect(moved.data.localProvider?.titleModel).toBe("llama3.1:3b");
+
+    // Identity change WITHOUT the field clears it (binding rule).
+    const cleared = await call(AI_PROVIDER_SETTINGS_SAVE, undefined, {
+      mode: "local",
+      localProvider: {
+        ...VALID_PROVIDER,
+        baseUrl: "http://localhost:11437",
+      },
+    });
+    expect(cleared.status).toBe(true);
+    expect(cleared.data.localProvider?.titleModel).toBeUndefined();
   });
 
   it("settings save stores the API key but never returns it", async () => {

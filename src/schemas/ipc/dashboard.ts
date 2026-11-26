@@ -19,9 +19,11 @@ const dateString = z
   .min(1)
   .refine(
     (s) => !isNaN(new Date(s).getTime()),
-    (s) => ({
-      message: `Invalid date format: "${s}". Use ISO 8601 (YYYY-MM-DD).`,
-    })
+    {
+      // zod v4: 动态报错文案用 error 回调（收到 issue，input 为被校验值）
+      error: (iss) =>
+        `Invalid date format: "${String(iss.input)}". Use ISO 8601 (YYYY-MM-DD).`,
+    }
   );
 
 const dateRangeBase = lazySchema(() =>

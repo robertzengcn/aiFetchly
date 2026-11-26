@@ -73,6 +73,23 @@ const CONTACT_WORKER_OBSERVE_MS = 2_000;
 export function createShutdownParticipants(
   deps: BackgroundShutdownDeps
 ): ShutdownParticipant[] {
+  const chatTitles: ShutdownParticipant = {
+    id: "chat-titles",
+    freeze: () => {
+      // F05 (titles design §6/§8.5): seal background naming at exit entry.
+      // Dynamic import — an unused service is never instantiated; a used
+      // one drops queued work, aborts in-flight dispatch, and any future
+      // singleton is created already-disposed.
+      void import("@/service/aiChatWorkspaceRuntime").then(
+        ({ sealSharedAIChatTitleServiceForShutdown }) => {
+          sealSharedAIChatTitleServiceForShutdown();
+        }
+      );
+    },
+    stop: async () => undefined,
+    finalize: async () => undefined,
+  };
+
   const toolJobs: ShutdownParticipant = {
     id: "tool-jobs",
     freeze: () => {
@@ -351,6 +368,7 @@ export function createShutdownParticipants(
   };
 
   return [
+    chatTitles,
     toolJobs,
     managedBrowsers,
     contactExtraction,

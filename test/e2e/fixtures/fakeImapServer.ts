@@ -32,6 +32,11 @@ import * as net from "node:net";
 export interface FakeImapMessage {
   readonly uid: number;
   readonly flags: readonly string[];
+  /**
+   * Org journeys: the raw RFC-822 source served for `BODY.PEEK[]` fetches
+   * (forward materialization). Absent = metadata-only message.
+   */
+  readonly source?: string;
 }
 
 export interface FakeImapFolder {
@@ -54,14 +59,25 @@ export interface FakeImapServer {
   readonly authAttempts: Readonly<
     { user: string; pass: string; accepted: boolean }[]
   >;
+  /**
+   * Email-organization journeys: every UID MOVE the production action
+   * adapter issued (source folder, source uid, destination folder, and the
+   * destination uid the server assigned).
+   */
+  readonly moveLog: Readonly<
+    { from: string; uid: number; to: string; destinationUid: number }[]
+  >;
   close(): Promise<void>;
 }
 
 const CRLF = "\r\n";
 
-/** ` \Sent` suffix for the Sent folder so LIST-based special-use parses. */
+/** ` \Sent` / ` \Trash` suffixes so LIST-based special-use parses. */
 function listSpecialUse(folderPath: string): string {
-  return folderPath.toLowerCase() === "sent" ? " \\Sent" : "";
+  const lower = folderPath.toLowerCase();
+  if (lower === "sent") return " \\Sent";
+  if (lower === "trash") return " \\Trash";
+  return "";
 }
 
 /** Match an IMAP LIST remainder against `*`/`%` patterns (case-insensitive). */
@@ -93,6 +109,8 @@ export function startFakeImapServer(
   options: FakeImapServerOptions
 ): Promise<FakeImapServer> {
   const authAttempts: { user: string; pass: string; accepted: boolean }[] = [];
+  const moveLog: { from: string; uid: number; to: string; destinationUid: number }[] = [];
+  let destinationUidCounter = 9000;
   let connectionCount = 0;
 
   const server = net.createServer((socket) => {
@@ -110,7 +128,7 @@ export function startFakeImapServer(
     };
 
     write(
-      "* OK [CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS] e2e-fake-imap ready"
+      "* OK [CAPABILITY IMAP4rev1 MOVE LITERAL+ SASL-IR LOGIN-REFERRALS] e2e-fake-imap ready"
     );
     socket.setEncoding("utf8");
     let buffer = "";
@@ -141,7 +159,7 @@ export function startFakeImapServer(
 
       switch (verb) {
         case "CAPABILITY": {
-          write("* CAPABILITY IMAP4rev1 LITERAL+ SASL-IR LOGIN-REFERRALS");
+          write("* CAPABILITY IMAP4rev1 MOVE LITERAL+ SASL-IR LOGIN-REFERRALS");
           write(`${tag} OK capability completed`);
           return;
         }
@@ -254,7 +272,9 @@ export function startFakeImapServer(
       if (subVerb === "FETCH") {
         // UID FETCH <uid> (<attrs>) — serve FLAGS/INTERNALDATE for a
         // configured message; unknown UIDs yield no data (expunged).
-        const match = rest.match(/^FETCH\s+(\d+)\s+\((.*)\)\s*$/i);
+        // imapflow sends both shapes: `UID FETCH 1 (UID)` and
+        // `UID FETCH 1 UID` (bare attr list) — accept either.
+        const match = rest.match(/^FETCH\s+(\d+)\s+\(?([^)]*)\)?\s*$/i);
         const uid = match ? Number(match[1]) : NaN;
         const attrs = (match?.[2] ?? "").toUpperCase();
         const folder =
@@ -269,9 +289,64 @@ export function startFakeImapServer(
           if (attrs.includes("INTERNALDATE")) {
             outAttrs.push(`INTERNALDATE "15-Oct-2026 00:00:00 +0000"`);
           }
+          if (message.source !== undefined && attrs.includes("BODY")) {
+            // Org forward journeys: the raw RFC-822 source as an IMAP
+            // literal (BODY[] / BODY.PEEK[]).
+            const literal = message.source;
+            socket.write(
+              `* ${seq} FETCH (${outAttrs.join(" ")} BODY[] {${Buffer.byteLength(literal, "utf8")}}${CRLF}` +
+                literal +
+                `)` + CRLF
+            );
+            write(`${tag} OK fetch completed`);
+            return;
+          }
           write(`* ${seq} FETCH (${outAttrs.join(" ")})`);
         }
         write(`${tag} OK fetch completed`);
+        return;
+      }
+      if (subVerb === "MOVE") {
+        // UID MOVE <uid> <destination> — native MOVE only (the production
+        // adapter refuses servers without the MOVE capability). Mutates the
+        // fake mailbox state and records the move for journey assertions.
+        const moveMatch = rest.match(/^MOVE\s+(\d+)\s+(.+)$/i);
+        if (!moveMatch) {
+          write(`${tag} BAD malformed MOVE`);
+          return;
+        }
+        const uid = Number(moveMatch[1]);
+        const destination = moveMatch[2].replace(/^"|"$/g, "");
+        const sourceFolder = selected !== null ? options.folders[selected] : undefined;
+        if (selected === null || sourceFolder === undefined) {
+          write(`${tag} NO no mailbox selected`);
+          return;
+        }
+        const idx = sourceFolder.messages.findIndex((m) => m.uid === uid);
+        if (idx === -1) {
+          write(`${tag} NO message not found`);
+          return;
+        }
+        const destinationFolder = options.folders[destination];
+        if (!destinationFolder) {
+          write(`${tag} NO no such destination mailbox`);
+          return;
+        }
+        const [moved] = sourceFolder.messages.splice(idx, 1);
+        destinationUidCounter += 1;
+        const messages = destinationFolder.messages as Array<{ uid: number; flags: readonly string[]; source?: string }>;
+        messages.push({ uid: destinationUidCounter, flags: moved.flags, source: moved.source });
+        moveLog.push({
+          from: selected,
+          uid,
+          to: destination,
+          destinationUid: destinationUidCounter,
+        });
+        write(`* ${sourceFolder.messages.length} EXISTS`);
+        // COPYUID rides the TAGGED response (imapflow parses the response
+        // code of the command completion). RFC 4315 separates the three
+        // fields with SPACES (colons are range separators within a set).
+        write(`${tag} OK [COPYUID ${destinationFolder.uidValidity} ${uid} ${destinationUidCounter}] move completed`);
         return;
       }
       write(`${tag} BAD unsupported UID subcommand in e2e-fake-imap`);
@@ -289,6 +364,11 @@ export function startFakeImapServer(
       }
       resolve({
         port: address.port,
+        get moveLog(): Readonly<
+          { from: string; uid: number; to: string; destinationUid: number }[]
+        > {
+          return moveLog;
+        },
         get connections(): number {
           return connectionCount;
         },

@@ -32,10 +32,10 @@ test('workspace email card remains above composer and sends only after approval'
   const approve = card.getByRole('button', { name: 'Approve and send' });
   await approve.scrollIntoViewIfNeeded();
   const buttonBox = await approve.boundingBox();
-  const stripBox = await aiApp.mainWindow.getByTestId('chat-workspace-strip').boundingBox();
+  const composerBox = await aiApp.mainWindow.getByTestId('chat-composer-panel').boundingBox();
   expect(buttonBox).not.toBeNull();
-  expect(stripBox).not.toBeNull();
-  expect(buttonBox!.y + buttonBox!.height).toBeLessThanOrEqual(stripBox!.y);
+  expect(composerBox).not.toBeNull();
+  expect(buttonBox!.y + buttonBox!.height).toBeLessThanOrEqual(composerBox!.y);
   await approve.click();
   await expect(card).toContainText('Email sent');
   await expect(approve).toHaveCount(0);

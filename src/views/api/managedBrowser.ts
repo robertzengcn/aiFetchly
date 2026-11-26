@@ -186,16 +186,17 @@ export async function updateBrowserPreferences(patch: {
   parallelAgentsEnabled?: boolean;
   browserDecisionEnabled?: boolean;
   /** N01/design 5.3: the decision-route patch (merged into the store). */
-  decisionRoute?: {
-    mode?: "follow_chat" | "native_profile";
-    chatDecisionModel?: string | null;
-    nativeProfile?: {
-      displayName: string;
-      baseUrl: string;
-      model: string;
-      apiKeyRef: "chat" | "none";
-    } | null;
-    requestTimeoutMs?: number | null;
+    decisionRoute?: {
+      mode?: "follow_chat" | "native_profile";
+      chatDecisionModel?: string | null;
+      batchSubAgentModel?: string | null;
+      nativeProfile?: {
+        displayName: string;
+        baseUrl: string;
+        model: string;
+        apiKeyRef: "chat" | "none";
+      } | null;
+      requestTimeoutMs?: number | null;
     /** R01/D-FR-18: probed chat output capabilities. */
     chatCapabilities?: {
       structuredJsonSchema: boolean;
@@ -290,6 +291,7 @@ export interface BrowserBatchEvent {
   readonly state?:
     | "running"
     | "waiting_for_user"
+    | "queued"
     | "paused"
     | "cancelling"
     | "completed"
@@ -299,6 +301,7 @@ export interface BrowserBatchEvent {
     // W02: a partial runner ending reaches the card as its own state.
     | "partial";
   readonly summary?: string;
+  readonly sessionId?: string;
 }
 
 export function onManagedBrowserBatchEvent(

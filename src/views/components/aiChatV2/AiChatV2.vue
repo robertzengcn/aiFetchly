@@ -243,6 +243,7 @@
         @use-generated-image="onUseGeneratedImage"
         @edit-generated-image="onEditGeneratedImage"
         @save-generated-image="onSaveGeneratedImage"
+        @save-all-generated-images="onSaveAllGeneratedImages"
         @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @stop-batch="onStop"
         @report="onSingleReportRequest"
@@ -1487,6 +1488,79 @@ async function onSaveGeneratedImage(
 ): Promise<void> {
   const conversationId = activeConversationId.value ?? ensureWorkspaceConversationId();
   await attemptGeneratedImageExport(conversationId, reference);
+}
+
+/** Serializes save-all so a second click cannot start a parallel copy. */
+let saveAllGeneratedImagesInFlight = false;
+
+function generatedImageExportErrorDetail(err: unknown): string {
+  return err instanceof Error && err.message.length > 0 ? err.message : "";
+}
+
+/**
+ * Save every rendered image from one assistant turn. Stops at the first
+ * missing workspace and queues the rest for the existing approval retry.
+ */
+async function onSaveAllGeneratedImages(
+  references: readonly ChatV2GeneratedImageReference[]
+): Promise<void> {
+  if (references.length === 0 || saveAllGeneratedImagesInFlight) return;
+  saveAllGeneratedImagesInFlight = true;
+  const conversationId =
+    activeConversationId.value ?? ensureWorkspaceConversationId();
+  try {
+    let saved = 0;
+    let failureDetail = "";
+    for (let index = 0; index < references.length; index += 1) {
+      const reference = references[index];
+      if (!reference) continue;
+      try {
+        const result = await exportGeneratedImage(conversationId, reference);
+        if (result.status === "workspace_required") {
+          for (const remaining of references.slice(index)) {
+            enqueuePendingGeneratedImageExport(conversationId, remaining);
+          }
+          ensureWorkspaceConversationId();
+          conversationWorkspace.requestSetup();
+          showGeneratedImageToast(
+            t("aiChatV2.imageTool.errors.workspaceRequired") ||
+              "An approved workspace is required first."
+          );
+          return;
+        }
+        saved += 1;
+      } catch (err: unknown) {
+        if (failureDetail.length === 0) {
+          failureDetail = generatedImageExportErrorDetail(err);
+        }
+      }
+    }
+    if (saved === references.length) {
+      showGeneratedImageToast(
+        t("aiChatV2.artifactExport.savedAllToWorkspace", { count: saved }) ||
+          `Saved ${saved} images to your workspace.`
+      );
+      return;
+    }
+    if (saved > 0) {
+      showGeneratedImageToast(
+        t("aiChatV2.artifactExport.savedSomeToWorkspace", {
+          saved,
+          total: references.length,
+        }) ||
+          `Saved ${saved} of ${references.length} images to your workspace.`
+      );
+      return;
+    }
+    showGeneratedImageToast(
+      failureDetail.length > 0
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${failureDetail})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+            "Could not save to workspace."
+    );
+  } finally {
+    saveAllGeneratedImagesInFlight = false;
+  }
 }
 
 /**
@@ -3393,8 +3467,34 @@ const pinnedPermissionPrompt = computed<ChatV2MessageView | null>(() => {
 
 const visibleMessages = computed<ChatV2MessageView[]>(() => {
   const pinnedId = pinnedPermissionPrompt.value?.id;
-  if (!pinnedId) return messages.value;
-  return messages.value.filter((message) => message.id !== pinnedId);
+  const filtered = pinnedId
+    ? messages.value.filter((message) => message.id !== pinnedId)
+    : messages.value;
+
+  return filtered.filter((msg) => {
+    if (msg.role !== "assistant") return true;
+    const hasContent = Boolean(msg.content && msg.content.length > 0);
+    const hasReasoning = Boolean(
+      showReasoning.value &&
+        msg.metadata?.reasoning?.content &&
+        msg.metadata.reasoning.content.length > 0
+    );
+    const hasActionableMetadata = Boolean(
+      msg.metadata?.error ||
+        msg.metadata?.cancelled ||
+        msg.metadata?.artifact ||
+        msg.metadata?.toolResult ||
+        msg.metadata?.toolCallId ||
+        (Array.isArray(msg.metadata?.generatedImages) &&
+          msg.metadata.generatedImages.length > 0) ||
+        (Array.isArray(msg.metadata?.generatedImageReferences) &&
+          msg.metadata.generatedImageReferences.length > 0) ||
+        (Array.isArray(msg.metadata?.attachments) &&
+          msg.metadata.attachments.length > 0) ||
+        msg.metadata?.planStateView
+    );
+    return hasContent || hasReasoning || hasActionableMetadata;
+  });
 });
 
 const pinnedPermissionToolResult = computed<Record<string, unknown>>(
@@ -3485,26 +3585,14 @@ const pinnedPermissionResumeInFlight = computed(() => {
 // Also shows during tool execution rounds (after tool_call/tool_result, before
 // the next text token) so the user sees the AI is still working.
 //
-// Only fires for INTERACTIVE streams. A scheduled turn sets
-// `authoritativeRuntimeStatus` to "running" (its submitMessage registers in
-// the engine's activeTurns) but never sets `isStreaming`; its tokens stream
-// into a normal assistant message via handleScheduledStream, which already
-// shows its own "Generating…" stream status. Showing the typing dots here too
-// would render a redundant "running label" below the file list during every
-// scheduled run, so we gate on `isStreaming` (interactive) — not
-// `chatIsRunning`, which includes the scheduled turn's own "running" state.
+// True whenever the remote is running or working (stream in flight, pending tool
+// executions, tool rounds, or scheduled stream running). The dedicated working indicator
+// in AiChatV2Messages replaces the legacy empty assistant bubble and in-bubble "Generating…".
 const showTypingIndicator = computed(() => {
   if (hasLoadedPendingToolExecution.value) return true;
-  if (!isStreaming.value) return false;
-  if (!receivedFirstResponse.value) return true;
-  // Between tool rounds: last message is a tool call/result with no
-  // active text streaming — show dots so the user knows the AI is processing.
-  const last = messages.value[messages.value.length - 1];
-  if (!last) return true;
-  return (
-    last.messageType === MessageType.TOOL_CALL ||
-    last.messageType === MessageType.TOOL_RESULT
-  );
+  if (chatIsRunning.value || liveScheduledAssistant.value !== null) return true;
+  if (isStreaming.value) return true;
+  return false;
 });
 
 // Plan Mode state

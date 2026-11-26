@@ -12,6 +12,30 @@
 // modules whose behavior they actually assert on.
 import { vi, beforeAll } from "vitest";
 
+class MockStorage {
+  private store: Map<string, string> = new Map();
+  get length(): number { return this.store.size; }
+  clear(): void { this.store.clear(); }
+  getItem(key: string): string | null { return this.store.has(key) ? this.store.get(key)! : null; }
+  setItem(key: string, value: string): void { this.store.set(key, String(value)); }
+  removeItem(key: string): void { this.store.delete(key); }
+  key(index: number): string | null { return Array.from(this.store.keys())[index] ?? null; }
+}
+
+const mockLocalStorage = new MockStorage();
+if (typeof window !== "undefined") {
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    writable: true,
+    value: mockLocalStorage,
+  });
+}
+Object.defineProperty(globalThis, "localStorage", {
+  configurable: true,
+  writable: true,
+  value: mockLocalStorage,
+});
+
 beforeAll(() => {
   // P1-fix (CI flake): under Node 26 + happy-dom `window.localStorage` can
   // be UNDEFINED on some workers, and the global `localStorage` binding

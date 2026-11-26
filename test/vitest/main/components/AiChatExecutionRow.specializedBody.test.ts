@@ -132,6 +132,21 @@ describe("specialized-result body suppression (R8 P3)", () => {
     expect(hasSpecializedSurface(imageResult)).toBe(true);
   });
 
+  it("does NOT flag a process_artifact_batch result as specialized batch card when awaiting permission", () => {
+    const permResult = toolResult("tc-img-perm", "process_artifact_batch", {
+      needsPermissionPrompt: true,
+      permissionCategory: "shell",
+    });
+    expect(isBatchToolCard(permResult)).toBe(false);
+    expect(hasSpecializedSurface(permResult)).toBe(false);
+    const groups = buildToolExecutionGroups([
+      toolCall("tc-img-perm", "process_artifact_batch"),
+      permResult,
+    ]);
+    expect(groups[0].executions[0].status).toBe("awaiting_permission");
+    expect(groups[0].executions[0].hasSpecializedCard).toBe(false);
+  });
+
   it("does NOT flag an ordinary tool result as specialized", () => {
     const plain = toolResult("tc-plain", "send_email", { ok: true });
     expect(hasSpecializedSurface(plain)).toBe(false);

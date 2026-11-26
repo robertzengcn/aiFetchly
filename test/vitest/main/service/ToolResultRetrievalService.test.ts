@@ -1397,7 +1397,10 @@ describe("UI vs model page-budget (T18 regression)", () => {
     // tokenByteCeiling = floor(2000 * 0.8) = 1600. The model page must not
     // exceed it (decodeUtf8Window may trim to a code-point boundary, so the
     // bound is an upper bound, not equality).
-    expect(outcome.page.text.length).toBeLessThanOrEqual(1600);
+    expect(outcome.page.text.length).toBeLessThanOrEqual(
+      Math.floor(TOOL_RESULT_CONFIG.readMaxTokens * 0.8)
+    );
+    expect(outcome.page.text.length).toBeGreaterThan(0);
   });
 
   it("a byte-only (UI) read with no explicit maxBytes defaults to the UI byte ceiling, not the token ceiling", async () => {

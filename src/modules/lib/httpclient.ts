@@ -17,9 +17,19 @@ import {
   MAX_RESPONSE_BODY_BYTES,
   MAX_RETRY_AFTER_MS,
 } from "@/modules/lib/httpResponseError";
+import { triggerSignoutOnAuthShapedFailure } from "@/service/AuthSessionExpiryGuard";
 // Re-export for callers (and tests) that still import the error type from
 // this module's pre-extraction location.
 export { HttpResponseError } from "@/modules/lib/httpResponseError";
+
+/**
+ * Titles B05 (design §5.1/§8.5): strict single-dispatch requests opt out of
+ * auth-refresh replay. A 401/403 surfaces as a typed error instead of a
+ * second POST — an already-attempted completion is never replayed.
+ */
+export interface NoReplayRequestInit extends RequestInit {
+  noAuthReplay?: boolean;
+}
 
 /**
  * Decide whether a refresh failure is auth-shaped versus a transient/network
@@ -44,7 +54,12 @@ export function isRefreshTokenInvalidError(error: unknown): boolean {
     msg.includes("refresh token has expired") ||
     msg.includes("refresh token is invalid") ||
     msg.includes("refresh token rejected") ||
-    msg.includes("http error: 401")
+    msg.includes("failed to refresh access token") ||
+    msg.includes("token refresh failed") ||
+    msg.includes("failed to refresh token") ||
+    msg.includes("no row found") ||
+    msg.includes("http error: 401") ||
+    msg.includes("http error: 403")
   );
 }
 
@@ -57,6 +72,8 @@ export class HttpClient {
   private _headers: Record<string, string> = {};
   private baseUrl: string;
   private _isWorker = false;
+  private _tokenInitPromise: Promise<void>;
+  private _hasExplicitAuthHeader = false;
   constructor() {
     const resolved = resolveViteLoginBase();
     let loginUrl: string | undefined = resolved?.value;
@@ -85,8 +102,9 @@ export class HttpClient {
       if (workerToken && workerToken.trim().length > 0) {
         this.setHeader("Authorization", "Bearer " + workerToken);
       }
+      this._tokenInitPromise = Promise.resolve();
     } else {
-      void this.setheaderToken();
+      this._tokenInitPromise = this.setheaderToken();
     }
     // const tokenModel=new Token()
     // const tokenval=tokenModel.getValue("social-market-token")
@@ -118,9 +136,9 @@ export class HttpClient {
     const tokenModel = new Token();
     const tokenval = tokenModel.getValue(TOKENNAME);
     //log.info("prepare to set token:"+tokenval)
-    if (tokenval) {
+    if (tokenval && !this._hasExplicitAuthHeader) {
       //config.headers.Authorization = 'Bearer ' + tokenval
-      this.setHeader("Authorization", "Bearer " + tokenval);
+      this._headers["Authorization"] = "Bearer " + tokenval;
     }
   }
 
@@ -145,9 +163,11 @@ export class HttpClient {
    * in-flight refresh promise, so the backend's refresh-token rotation never
    * races.
    *
-   * Sign-out policy: refresh failures never clear local auth state. The current
-   * remote request fails, and later requests can retry refresh when the backend
-   * or network recovers.
+   * Sign-out policy: definitive auth-shaped refresh failures (refresh token
+   * rejected/expired, retry still 401/403, no refresh token stored) trigger a
+   * sign-out via {@link triggerSignoutOnAuthShapedFailure} so the user can
+   * re-login. Transient failures (network, HTTP 5xx) never clear local auth
+   * state — later requests can retry refresh when the backend recovers.
    *
    * Prevents infinite refresh loops by checking the isRetry flag.
    */
@@ -166,12 +186,15 @@ export class HttpClient {
 
     // Prevent infinite refresh loops: if we already retried once and the
     // retried request still hit 401/403, refresh did not help. Fail this
-    // request but keep local auth state for offline/local features.
+    // request; the session cannot recover → sign out so the user can
+    // re-login (session-expiry re-login requirement).
     if (isRetry) {
-      log.warn("Token refresh retry still failed; keeping local session");
-      throw new Error(
+      log.warn("Token refresh retry still failed; triggering sign-out");
+      const err = new Error(
         "Authentication failed after token refresh retry (HTTP 401/403)."
       );
+      triggerSignoutOnAuthShapedFailure(err);
+      throw err;
     }
 
     try {
@@ -182,11 +205,10 @@ export class HttpClient {
       const refreshResult = await TokenRefreshService.refreshOnce();
 
       if (refreshResult.status && refreshResult.data) {
-        // Update access token in headers
-        this.setHeader(
-          "Authorization",
-          "Bearer " + refreshResult.data.accessToken
-        );
+        // Update access token in headers without marking it as caller-explicit
+        // so subsequent getFirstParty() calls can still sync newer stored tokens.
+        this._headers["Authorization"] =
+          "Bearer " + refreshResult.data.accessToken;
 
         // The new session may have a different secret key; drop the cached one.
         userSecretKeyService.invalidate();
@@ -201,10 +223,11 @@ export class HttpClient {
     } catch (error) {
       log.error("Token refresh error:", error);
 
-      // Do not sign out on refresh failure. Auth-shaped failures can be caused
-      // by backend/proxy instability; keep local session state and fail only
-      // this remote request.
+      // Definitive auth-shaped refresh failure (refresh token rejected /
+      // expired): the session cannot recover → sign out so the user can
+      // re-login. Transient failures (network, 5xx) keep the local session.
       if (isRefreshTokenInvalidError(error)) {
+        triggerSignoutOnAuthShapedFailure(error);
         throw error;
       }
 
@@ -221,7 +244,9 @@ export class HttpClient {
     isRetry = false,
     absolute = false
   ): Promise<unknown> {
-    // await this.setheaderToken()
+    if (!this._isWorker) {
+      await this._tokenInitPromise;
+    }
     // `absolute` = first-party full URL (Plugin Hub): used as-is instead of
     // baseUrl + endpoint. Only reachable via getFirstParty(), which enforces
     // the hub-origin allowlist, so the Bearer token never leaves first-party.
@@ -240,6 +265,11 @@ export class HttpClient {
     // 401 the same as 403 here — otherwise a genuinely expired access token
     // forces a re-login instead of a transparent refresh (B5 fix).
     if (res.status === 401 || res.status === 403) {
+      // Titles B05: never replay a strict single-dispatch request after a
+      // token refresh — the retry would spend a second provider call.
+      if ((options as NoReplayRequestInit).noAuthReplay === true) {
+        throw await this._buildHttpResponseError(res);
+      }
       log.warn(`Received ${res.status} - Attempting token refresh`);
       const { Token } = await import("@/modules/token");
       const tokenModel = new Token();
@@ -275,14 +305,17 @@ export class HttpClient {
         // Try to refresh token and retry request
         return this._refreshTokenAndRetry(endpoint, options, isRetry, absolute);
       } else {
-        // No refresh token available. Fail this request but keep local auth
-        // state so local features remain usable.
+        // No refresh token stored: the session cannot recover via refresh.
+        // Sign out so the user can re-login (session-expiry re-login
+        // requirement) — local features keep working until tokens clear.
         log.warn(
           "[HttpClient] No refresh token available; keeping local session"
         );
-        throw new Error(
+        const err = new Error(
           `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );
+        triggerSignoutOnAuthShapedFailure(err);
+        throw err;
       }
     }
 
@@ -366,6 +399,9 @@ export class HttpClient {
   }
 
   setHeader(key: string, value: string) {
+    if (key.toLowerCase() === "authorization") {
+      this._hasExplicitAuthHeader = true;
+    }
     this._headers[key] = value;
     return this;
   }
@@ -375,11 +411,13 @@ export class HttpClient {
   }
 
   setBasicAuth(username: string, password: string) {
+    this._hasExplicitAuthHeader = true;
     this._headers["Authorization"] = `Basic ${btoa(`${username}:${password}`)}`;
     return this;
   }
 
   setBearerAuth(token: string) {
+    this._hasExplicitAuthHeader = true;
     this._headers["Authorization"] = `Bearer ${token}`;
     return this;
   }
@@ -495,7 +533,7 @@ export class HttpClient {
   public async postJson<T = any>(
     endpoint: string,
     data: unknown,
-    options = {}
+    options: NoReplayRequestInit = {}
   ): Promise<T> {
     // Preserve caller-supplied headers (e.g. X-AiFetchly-Install-Id), then
     // default to the standard JSON accept/content-type. The hard-coded
@@ -519,6 +557,9 @@ export class HttpClient {
     options: RequestInit = {},
     isRetry = false
   ): Promise<Response> {
+    if (!this._isWorker) {
+      await this._tokenInitPromise;
+    }
     const res = await fetch(this.baseUrl + endpoint, {
       ...options,
       body: JSON.stringify(data),
@@ -552,13 +593,16 @@ export class HttpClient {
         );
       }
 
-      // Prevent infinite refresh loops: already retried once. Fail this request
-      // but keep local auth state.
+      // Prevent infinite refresh loops: already retried once. Fail this
+      // request; the session cannot recover → sign out so the user can
+      // re-login (session-expiry re-login requirement).
       if (isRetry) {
-        log.warn("Token refresh retry still failed; keeping local session");
-        throw new Error(
+        log.warn("Token refresh retry still failed; triggering sign-out");
+        const err = new Error(
           `Authentication failed after token refresh retry (HTTP ${res.status}).`
         );
+        triggerSignoutOnAuthShapedFailure(err);
+        throw err;
       }
 
       // Check if refresh token exists
@@ -575,11 +619,9 @@ export class HttpClient {
           const refreshResult = await TokenRefreshService.refreshOnce();
 
           if (refreshResult.status && refreshResult.data) {
-            // Update access token in headers
-            this.setHeader(
-              "Authorization",
-              "Bearer " + refreshResult.data.accessToken
-            );
+            // Update access token in headers without marking it as caller-explicit
+            this._headers["Authorization"] =
+              "Bearer " + refreshResult.data.accessToken;
 
             // The new session may have a different secret key; drop the cached one.
             userSecretKeyService.invalidate();
@@ -592,9 +634,11 @@ export class HttpClient {
         } catch (error) {
           log.error("Token refresh error:", error);
 
-          // Do not sign out on refresh failure. Keep local session state and
-          // fail only this stream request.
+          // Definitive auth-shaped refresh failure (refresh token rejected /
+          // expired): the session cannot recover → sign out so the user can
+          // re-login. Transient failures (network, 5xx) keep the session.
           if (isRefreshTokenInvalidError(error)) {
+            triggerSignoutOnAuthShapedFailure(error);
             throw error;
           }
 
@@ -602,12 +646,15 @@ export class HttpClient {
           throw error;
         }
       } else {
-        // No refresh token available. Fail this request but keep local auth
-        // state so local features remain usable.
+        // No refresh token stored: the session cannot recover via refresh.
+        // Sign out so the user can re-login (session-expiry re-login
+        // requirement).
         log.warn("No refresh token available; keeping local session");
-        throw new Error(
+        const err = new Error(
           `Authentication failed: refresh token unavailable (HTTP ${res.status}).`
         );
+        triggerSignoutOnAuthShapedFailure(err);
+        throw err;
       }
     }
 

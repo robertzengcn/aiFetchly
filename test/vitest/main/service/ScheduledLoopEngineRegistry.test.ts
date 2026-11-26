@@ -106,4 +106,28 @@ describe("ScheduledLoopEngineRegistry", () => {
     });
     expect(backstop).not.toHaveBeenCalled();
   });
+
+  it("unregister(conversationId, runId) ignores a mismatched runId so an un-acquired run cannot evict an active run", () => {
+    const registry = ScheduledLoopEngineRegistry.getInstance();
+    const activeEngine = {} as never;
+    registry.register({
+      conversationId: "v2-guard",
+      engine: activeEngine,
+      runId: 10,
+      scheduleId: 5,
+    });
+    registry.setPendingPermission("v2-guard", { toolId: "tool-10" });
+
+    // Second run fails before registering and tries to clean up with its own runId.
+    registry.unregister("v2-guard", 11);
+
+    expect(registry.getByConversation("v2-guard")?.runId).toBe(10);
+    expect(registry.getByConversation("v2-guard")?.engine).toBe(activeEngine);
+    expect(registry.hasPendingPermission("v2-guard", "tool-10")).toBe(true);
+
+    // Matching runId removes both engine and pending permission.
+    registry.unregister("v2-guard", 10);
+    expect(registry.getByConversation("v2-guard")).toBeUndefined();
+    expect(registry.hasPendingPermission("v2-guard", "tool-10")).toBe(false);
+  });
 });

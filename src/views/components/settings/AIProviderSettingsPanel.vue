@@ -118,6 +118,24 @@
         </v-col>
       </v-row>
 
+      <v-row dense>
+        <v-col cols="12">
+          <v-combobox
+            v-model="titleModel"
+            :items="modelItems"
+            item-value="id"
+            item-title="id"
+            :label="t('aiProvider.chatTitles.customModelLabel') || 'Title model (optional)'"
+            :hint="t('aiProvider.chatTitles.customModelHint') || 'Used to name new chats automatically. Uses your configured provider.'"
+            :persistent-hint="true"
+            density="compact"
+            variant="outlined"
+            :return-object="false"
+            data-testid="ai-provider-title-model"
+          />
+        </v-col>
+      </v-row>
+
       <div class="d-flex flex-wrap gap-2 mb-4">
         <v-btn
           variant="outlined"
@@ -205,6 +223,8 @@ const apiKeyConfigured = ref(false);
 const showApiKey = ref(false);
 const defaultModel = ref("");
 const contextSize = ref<number | null>(null);
+/** Chat-titles FR-08: explicit title model; empty means "not configured". */
+const titleModel = ref("");
 const capabilities = ref<LocalAIProviderCapabilities | null>(null);
 const lastTestedAt = ref("");
 const lastTestStatus = ref<"passed" | "failed" | "partial" | "untested">(
@@ -234,6 +254,9 @@ function buildInput(): LocalAIProviderConfigInput {
     name: name.value,
     baseUrl: baseUrl.value,
     defaultModel: defaultModel.value,
+    // Always explicit from the form so clearing the field clears storage
+    // (empty string = explicit clear per the validator contract).
+    titleModel: titleModel.value.trim(),
     ...(apiKey.value.trim().length > 0
       ? { apiKey: apiKey.value.trim() }
       : {}),
@@ -268,6 +291,7 @@ async function loadSettings(): Promise<void> {
       name.value = cfg.name;
       baseUrl.value = cfg.baseUrl;
       defaultModel.value = cfg.defaultModel;
+      titleModel.value = cfg.titleModel ?? "";
       contextSize.value = typeof cfg.contextSize === "number" ? cfg.contextSize : null;
       apiKeyConfigured.value = !!cfg.apiKeyConfigured;
       // Never hydrate the plaintext API key from storage.

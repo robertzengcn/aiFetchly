@@ -44,6 +44,7 @@ vi.mock("@/modules/AIChatV2Module", () => ({
   AIChatV2Module: vi.fn().mockImplementation(function () {
     return {
       saveUserMessage: mockSaveUserMessage,
+stampUserMessageTurnIdentity: vi.fn().mockResolvedValue(undefined),
       getConversationMessages: mockGetConversationMessages,
       getRecentMessages: mockGetRecentMessages,
       saveAssistantMessage: mockSaveAssistantMessage,
@@ -1008,8 +1009,10 @@ describe("AIChatQueryEngine", () => {
       });
       expect(result.ok).toBe(true);
       // The continuation is owner-observed and gated by the required-save
-      // barrier (TODO-02); settle microtasks before asserting its transcript.
-      await new Promise((r) => setTimeout(r, 20));
+      // barrier (TODO-02); wait for the resumed loop to run.
+      await vi.waitFor(() => {
+        expect(capturedMessages).toBeDefined();
+      }, { timeout: 3000 });
 
       const serialized = JSON.stringify(capturedMessages ?? []);
       // The model-only handoff carrying the prepared image reaches the loop.
@@ -1078,8 +1081,10 @@ describe("AIChatQueryEngine", () => {
       });
       expect(result.ok).toBe(true);
       // The continuation is owner-observed and gated by the required-save
-      // barrier (TODO-02); settle microtasks before asserting its transcript.
-      await new Promise((r) => setTimeout(r, 20));
+      // barrier (TODO-02); wait for the resumed loop to run.
+      await vi.waitFor(() => {
+        expect(capturedSeed).toBeDefined();
+      }, { timeout: 3000 });
 
       // Without seeding, images produced by the directly-executed approved
       // tool would never reach the resumed turn's result.images (and so never
@@ -1142,8 +1147,10 @@ describe("AIChatQueryEngine", () => {
 
       expect(result.ok).toBe(true);
       // The continuation is owner-observed and gated by the required-save
-      // barrier (TODO-02); settle microtasks before asserting its input.
-      await new Promise((r) => setTimeout(r, 20));
+      // barrier (TODO-02); wait for the resumed loop to run.
+      await vi.waitFor(() => {
+        expect(resumedInput).toBeDefined();
+      }, { timeout: 3000 });
       expect(resumedInput?.sourceUserMessageId).toBe(
         "user-confirmation-message"
       );
@@ -1993,5 +2000,20 @@ describe("AIChatQueryEngine reactive compaction sentinel", () => {
     // It must still clear the threshold gate (>= the resolved context window,
     // which is >= 0.8 * window). The recovery default (128k) is the floor.
     expect(input.promptTokens).toBeGreaterThanOrEqual(128_000);
+
+    // Even when partialContent is empty (""), the failed assistant response
+    // must be persisted with finishReason="error" and error metadata so loading
+    // the conversation from chat history surfaces the failure.
+    expect(mockSaveAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "v2-reactive",
+        messageId: "assistant-reactive",
+        content: "",
+        metadata: expect.objectContaining({
+          finishReason: "error",
+          error: expect.stringContaining("context too large"),
+        }),
+      })
+    );
   });
 });

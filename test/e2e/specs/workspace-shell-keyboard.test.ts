@@ -38,7 +38,10 @@ async function activeFocus(page: import("@playwright/test").Page): Promise<{
     const el = document.activeElement as HTMLElement | null;
     if (!el) return { testid: null, role: null, label: null };
     return {
-      testid: el.getAttribute("data-testid"),
+      testid:
+        el.getAttribute("data-testid") ??
+        el.closest('[data-testid="chat-model-selector"], [data-testid="chat-permission-selector"]')
+          ?.getAttribute("data-testid") ?? null,
       role: el.getAttribute("role"),
       label:
         el.getAttribute("aria-label") ??
@@ -80,7 +83,18 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     ).toBeVisible({ timeout: 10_000 });
     expect(await textarea.inputValue()).toContain("Keyboard-only message");
 
-    // --- Tab order: textarea -> selectors -> spoken toggle -> send -------
+    // A model catalog request may still be loading after the first turn.
+    // Tab through the available selector or the settled provider action.
+    const modelInput = page.getByTestId("chat-model-selector").getByRole("textbox", {
+      name: "Model",
+      exact: true,
+    });
+    const providerSettings = page.getByTestId("model-open-settings");
+    await expect.poll(async () =>
+      (await providerSettings.isVisible()) || (await modelInput.isEnabled())
+    ).toBe(true);
+
+    // --- Tab order through the composer ----------------------------------
     await textarea.focus();
     const encountered: string[] = [];
     for (let step = 0; step < 14; step += 1) {
@@ -94,15 +108,14 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
       if (focus.testid === "ai-chat-send") break;
     }
     const joined = encountered.join(" | ");
-    // Keyboard focus follows the design §10.1 order below the textarea:
-    // microphone (when voice input is enabled) -> mode/model/tool-approval
-    // selector activators (Vuetify v-select inputs; implicit roles, so they
-    // surface here via their accessible labels) -> context indicator ->
-    // spoken-response toggle -> send.
-    const modelIdx = joined.indexOf("Model");
-    expect(modelIdx).toBeGreaterThan(-1);
+    // Model (or provider setup) precedes permissions, context, voice and Send.
+    expect(joined).not.toContain("workspace-badge-choose");
+    const modelIdx = joined.search(/chat-model-selector|model-open-settings/);
+    expect(modelIdx, joined).toBeGreaterThanOrEqual(0);
+    const permissionIdx = joined.indexOf("chat-permission-selector");
+    expect(permissionIdx, joined).toBeGreaterThan(modelIdx);
     const contextIdx = joined.indexOf("workspace-context-indicator");
-    expect(contextIdx).toBeGreaterThan(modelIdx);
+    expect(contextIdx).toBeGreaterThan(permissionIdx);
     const spokenIdx = joined.indexOf("spoken-response-toggle");
     expect(spokenIdx).toBeGreaterThan(contextIdx);
     expect(joined.lastIndexOf("ai-chat-send")).toBeGreaterThan(spokenIdx);
@@ -133,10 +146,10 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     await expect(row).toHaveAttribute("aria-selected", "true", {
       timeout: 10_000,
     });
+    await expect(textarea).toBeFocused();
 
     // --- Inner page via keyboard and back via keyboard --------------------
-    await page.getByTestId("workspace-insights").focus();
-    await page.keyboard.press("Enter");
+    await page.getByTestId("workspace-insights").press("Enter");
     await expect(page.getByTestId("workspace-insights")).toHaveAttribute(
       "aria-current",
       "page"
@@ -146,6 +159,7 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     await page.getByTestId("workspace-new-chat").focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("chat-center-surface")).toBeVisible();
+    await expect(textarea).toBeFocused();
 
     // --- Narrow drawer: keyboard open, trapped Tab, Escape + restore -------
     await page.setViewportSize({ width: 700, height: 800 });
@@ -195,18 +209,19 @@ test.describe("keyboard-only critical path (FR-QUAL-005 / AC 42)", () => {
     // keyboard; opening the picker card is observable without choosing.
     const choose = page.getByTestId("workspace-badge-choose");
     await expect(choose).toBeVisible({ timeout: 10_000 });
-    await choose.focus();
+    await textarea.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(choose).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("workspace-required").first()).toBeVisible({
-      timeout: 10_000,
-    });
-
-    // The card's Cancel is keyboard-operable and keeps state unchanged.
     const card = page.getByTestId("workspace-required").first();
-    await card.getByRole("button", { name: /cancel/i }).focus();
+    await expect(card.getByRole("button", { name: /pick folder/i })).toBeFocused();
+
+    // The card's Cancel is reachable from Pick folder and restores focus.
+    await page.keyboard.press("Shift+Tab");
+    await expect(card.getByRole("button", { name: /cancel/i })).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("workspace-required")).toBeHidden();
-    await expect(page.getByTestId("workspace-badge-choose")).toBeVisible();
+    await expect(card).toBeHidden();
+    await expect(choose).toBeFocused();
 
     // --- Voice controls via keyboard (FR-QUAL-005) -------------------------
     // The spoken-response toggle is focusable and keyboard-operable. In the

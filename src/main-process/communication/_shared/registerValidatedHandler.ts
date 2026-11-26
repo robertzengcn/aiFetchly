@@ -1,8 +1,11 @@
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
-import type { ZodType, ZodTypeDef } from "zod";
+import type { ZodType } from "zod";
 import { log } from "@/modules/Logger";
-import { ensureHostedAiEnabled } from "@/service/AiFeatureGate";
+import {
+  ensureHostedAiEnabled,
+  ensureAiOrProviderEnabled,
+} from "@/service/AiFeatureGate";
 import { formatZodValidationError } from "@/utils/zodErrors";
 import type { CommonMessage } from "@/entityTypes/commonType";
 
@@ -17,7 +20,7 @@ import type { CommonMessage } from "@/entityTypes/commonType";
  */
 async function dispatchValidated<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  schema: () => ZodType<TInput, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>,
   event: IpcMainInvokeEvent,
   raw: unknown
@@ -161,7 +164,7 @@ function extractStructuredFailure(err: unknown): {
  */
 export function registerValidatedHandler<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  schema: () => ZodType<TInput, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
@@ -181,7 +184,7 @@ export function registerValidatedHandler<TInput, TOutput>(
  */
 export function registerAiValidatedHandler<TInput, TOutput>(
   channel: string,
-  schema: () => ZodType<TInput, ZodTypeDef, unknown>,
+  schema: () => ZodType<TInput, unknown>,
   handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
 ): void {
   ipcMain.handle(channel, async (event, raw) => {
@@ -204,6 +207,31 @@ export function registerAiValidatedHandler<TInput, TOutput>(
     }
 
     // 2. + 3. payload 解析、schema 校验、业务执行（与 registerValidatedHandler 同一实现）
+    return await dispatchValidated(channel, schema, handler, event, raw);
+  });
+}
+
+/**
+ * Provider-aware AI 功能专用 wrapper（Chat、Managed Browser、AI Tools 等）。
+ *
+ * 检查 hosted AI 订阅 OR 用户已配置的 local/custom AI provider。
+ * 允许配置了自定义 AI provider 的用户正常使用 AI 自动化功能。
+ */
+export function registerChatOrAiValidatedHandler<TInput, TOutput>(
+  channel: string,
+  schema: () => ZodType<TInput, unknown>,
+  handler: (input: TInput, event: IpcMainInvokeEvent) => Promise<TOutput>
+): void {
+  ipcMain.handle(channel, async (event, raw) => {
+    if (!(await ensureAiOrProviderEnabled())) {
+      log.warn(`[${channel}] blocked: AI feature is not enabled`);
+      return {
+        status: false,
+        msg: "AI feature is not enabled",
+        data: null,
+      } satisfies CommonMessage<null>;
+    }
+
     return await dispatchValidated(channel, schema, handler, event, raw);
   });
 }

@@ -35,6 +35,7 @@ const i18n = createI18n({
     en: {
       workspaceMemory: {
         title: "Workspace memory",
+        titleRevision: 0,
         memoryAction: "Memory",
       },
     },
@@ -49,6 +50,7 @@ const conversation: WorkspaceConversationSummary = {
   conversationId: "conv-1",
   workspaceKey: "w-key",
   title: "T",
+  titleRevision: 0,
   preview: "",
   lastActivityAt: "",
   unread: false,

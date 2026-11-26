@@ -6,6 +6,7 @@ import {
   PLUGIN_HUB_CATALOG_PATH,
   resolvePluginHubBase,
 } from "@/config/pluginHubUrl";
+import { resolveViteLoginBase } from "@/config/viteLoginUrl";
 import type { PluginCommunityAccess } from "@/entityTypes/communityPluginTypes";
 import type { PluginMarketplaceEntrySource } from "@/entityTypes/pluginMarketplaceTypes";
 import {
@@ -278,6 +279,37 @@ function normalizeEntrySource(
  * traffic (and the marketing JWT) to another origin. Auth + 401-refresh are
  * handled by HttpClient.getFirstParty.
  */
+function isPrivateIp(host: string): boolean {
+  return (
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)
+  );
+}
+
+function isLoginOriginMatch(parsed: URL): boolean {
+  const loginBase = resolveViteLoginBase();
+  if (!loginBase) return false;
+  try {
+    const parsedLogin = new URL(loginBase.value);
+    if (parsedLogin.protocol === "http:") {
+      if (parsed.hostname === parsedLogin.hostname) return true;
+      const hubParts = parsed.hostname.split(".");
+      const loginParts = parsedLogin.hostname.split(".");
+      if (
+        hubParts.length >= 2 &&
+        loginParts.length >= 2 &&
+        hubParts.slice(-2).join(".") === loginParts.slice(-2).join(".")
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 export class AiFetchHubMarketplaceFetcher implements PluginMarketplaceFetcher {
   readonly kind = "aifetch-hub" as const;
 
@@ -301,11 +333,19 @@ export class AiFetchHubMarketplaceFetcher implements PluginMarketplaceFetcher {
     const isLocalDev =
       parsedBase.protocol === "http:" &&
       (parsedBase.hostname === "localhost" ||
-        parsedBase.hostname === "127.0.0.1");
+        parsedBase.hostname === "127.0.0.1" ||
+        parsedBase.hostname === "::1" ||
+        parsedBase.hostname.startsWith("local.") ||
+        parsedBase.hostname.endsWith(".local") ||
+        isPrivateIp(parsedBase.hostname) ||
+        isLoginOriginMatch(parsedBase) ||
+        process.env.NODE_ENV === "development" ||
+        process.env.AIFETCHLY_ALLOW_HTTP_HUB === "1" ||
+        process.env.VITE_ALLOW_HTTP_HUB === "1");
     if (parsedBase.protocol !== "https:" && !isLocalDev) {
       return fail(
         "marketplace-source-invalid",
-        "Plugin Hub URL must be https (or localhost for dev)."
+        "Plugin Hub URL must be https (or localhost/development for dev)."
       );
     }
 

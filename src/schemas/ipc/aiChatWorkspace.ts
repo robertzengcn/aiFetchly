@@ -201,9 +201,30 @@ export const markConversationReadRequestSchema = z
 export const renameConversationRequestSchema = z
   .object({
     conversationId: conversationIdSchema,
-    title: z.string().min(1).max(200),
+    title: z
+      .string()
+      .min(1)
+      .max(200)
+      // Chat-titles FR-06: canonical normalization shared with the Module
+      // boundary — trim, collapse inner whitespace/newlines, reject empty.
+      .transform((value) => value.replace(/\s+/g, " ").trim())
+      .refine((value) => value.length > 0, {
+        message: "Title must not be empty or whitespace-only",
+      }),
   })
   .strict();
+
+/**
+ * Chat-titles design §10.1: authoritative post-commit rename response. A
+ * missing conversation is a STABLE FAILURE, never success-with-renamed=false.
+ */
+export interface RenameConversationResponse {
+  readonly renamed: true;
+  readonly conversationId: string;
+  readonly title: string;
+  readonly titleRevision: number;
+  readonly titleSource: "user";
+}
 
 /** Confirmed destructive deletion (PRD §11.5) — renderer confirms first. */
 export const deleteConversationRequestSchema = z

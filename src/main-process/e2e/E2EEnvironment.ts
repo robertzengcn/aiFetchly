@@ -76,6 +76,14 @@ export interface E2EStateManifest {
    * (E2EStateSeeder applies them verbatim via Token.setValue).
    */
   readonly tokenOverrides?: Readonly<Record<string, string>>;
+  /**
+   * Chat-titles E2E (PRD FR-03): when true the local provider is seeded with
+   * an explicit titleModel so automatic naming dispatches against the fake
+   * server. Absent/false leaves titleModel unset — custom mode then makes
+   * ZERO title requests, preserving request-count contracts of unrelated
+   * specs.
+   */
+  readonly chatTitles?: boolean;
 }
 
 export interface E2EDialogResponse {
@@ -92,6 +100,7 @@ const ALLOWED_MANIFEST_KEYS: ReadonlySet<string> = new Set([
   "workspacePath",
   "dialogResponses",
   "tokenOverrides",
+  "chatTitles",
 ]);
 
 /**
@@ -342,6 +351,12 @@ export function parseStateManifest(stateFilePath: string): E2EStateManifest {
     throw new E2EEnvironmentError(
       "state manifest workspacePath must be a string"
     );
+  }
+  if (
+    obj.chatTitles !== undefined &&
+    typeof obj.chatTitles !== "boolean"
+  ) {
+    throw new E2EEnvironmentError("state manifest chatTitles must be boolean");
   }
   if (obj.tokenOverrides !== undefined) {
     if (

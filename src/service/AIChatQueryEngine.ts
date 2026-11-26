@@ -1,5 +1,6 @@
 // src/service/AIChatQueryEngine.ts
 import { AIChatV2Module } from "@/modules/AIChatV2Module";
+import { currentProviderConfigVersion } from "@/service/aiProvider/AIProviderConfigVersion";
 import { checkChatMessageForCredentials } from "@/service/ChatCredentialGuard";
 import { AIChatPlanModule } from "@/modules/AIChatPlanModule";
 import { AIChatAttachmentModule } from "@/modules/AIChatAttachmentModule";
@@ -140,8 +141,37 @@ import { openAIContentToString } from "@/api/aiChatApi";
 import { isPlanStatusPlanningActive } from "@/entityTypes/aiChatPlanTypes";
 import type {
   AIChatPlanStateView,
+  AIChatPlanQuestionView,
   AskUserQuestionAnswer,
 } from "@/entityTypes/aiChatPlanTypes";
+
+/**
+ * Loop events that publish a plan lifecycle transition (PRD §12.4). Each one
+ * carries the authoritative `planState` view, so the persisting event sink
+ * can write the matching durable display row (see `savePlanEventMessage`).
+ */
+const PLAN_LOOP_EVENT_TYPES = new Set<string>([
+  "plan_state",
+  "ask_user_question",
+  "plan_submitted",
+  "plan_approved",
+  "plan_rejected",
+  "plan_changes_requested",
+  "plan_blocked_tool",
+]);
+
+/**
+ * One queued event-save of the persisting sink. `strict` keeps the Stage A
+ * §3.3 contract for tool receipts (a failed save gates execution); plan
+ * lifecycle rows are presentation aids and never gate.
+ */
+type PersistedEventSave = {
+  readonly kind: "tool_call" | "tool_result" | "plan_event";
+  readonly strict?: boolean;
+  readonly toolCallId: string;
+  readonly promise: Promise<unknown>;
+};
+
 import type {
   ToolCatalog,
   ToolCatalogModeDecision,
@@ -757,11 +787,7 @@ export class AIChatQueryEngine {
   private readonly streamImplementation: AIChatStreamImplementationConfigProvider;
   private readonly pendingEventSaves = new WeakMap<
     AIChatQueryEventSink,
-    Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }>
+    PersistedEventSave[]
   >();
   /** Tracks which conversations have already fired SessionStart. */
   private readonly startedConversations = new Set<string>();
@@ -1993,6 +2019,11 @@ export class AIChatQueryEngine {
 
       // Build user-message metadata (source + attachments + @-mentions).
       const userMetadata: ChatV2MessageMetadata = {
+      // Titles B01: raw visible typed text (bounded) — persisted BEFORE any
+      // attachment/mention/pasted enrichment so naming never sees it.
+      safeTypedText: (request.message ?? "").slice(0, 2000),
+        // r3 G01: bind the user row to the provider executing its turn.
+        sourceProviderVersion: currentProviderConfigVersion(),
         source: scheduledContext ? "scheduled-loop" : "chat-v2",
         ...(generatedImageRefMetadata
           ? { generatedImageReferences: generatedImageRefMetadata }
@@ -2025,7 +2056,11 @@ export class AIChatQueryEngine {
         pastedTextResolution.pastedBlocks.length > 0 ||
         !!scheduledContext ||
         !!generatedImageRefMetadata ||
-        selectionResolution.metadata.length > 0;
+        selectionResolution.metadata.length > 0 ||
+        // Titles F04/B01: the safe typed-text projection must persist on the
+        // plain direct-save path too — without metadata the titles Module
+        // refuses raw content and a plain typed request can never be named.
+        (request.message ?? "").trim().length > 0;
 
       // Save user message (display text = attachment-enriched message; the
       // @-mention context block lives only in modelUserMessage for the model).
@@ -2784,15 +2819,46 @@ export class AIChatQueryEngine {
       }
       this.clearActiveTurnState(request.conversationId ?? "");
       void redirectToLoginOnAuthExpired(err);
+      if (
+        sourceUserMessageId &&
+        prepAssistantMessageId &&
+        request.conversationId
+      ) {
+        await new AIChatV2Module()
+          .saveAssistantMessage({
+            conversationId: request.conversationId,
+            content: "",
+            messageId: prepAssistantMessageId,
+            metadata: {
+              source: "chat-v2",
+              ...(prepTurnId ? { turnId: prepTurnId } : {}),
+              sourceProviderVersion: currentProviderConfigVersion(),
+              finishReason: "error",
+              error: userSafeError(err),
+            },
+          })
+          .catch((persistErr: unknown) => {
+            log.error(
+              "[ai-chat-v2] pre-stream error persistence failed:",
+              persistErr
+            );
+          });
+      }
       eventSink.emit({
         type: "error",
         conversationId: request.conversationId ?? "",
+        ...(sourceUserMessageId && prepAssistantMessageId
+          ? { messageId: prepAssistantMessageId }
+          : {}),
         errorMessage: userSafeError(err),
       });
       return {
         type: "failed",
         conversationId: request.conversationId ?? "",
-        assistantMessageId: "",
+        assistantMessageId:
+          sourceUserMessageId && prepAssistantMessageId
+            ? prepAssistantMessageId
+            : "",
       };
     }
 
@@ -2917,7 +2983,12 @@ export class AIChatQueryEngine {
     this.captureStreamMode(input.savedUser.conversationId);
     const { eventSink, request, savedUser, modelContent } = input;
     const conversationId = savedUser.conversationId;
+    const assistantMessageId =
+      input.assistantMessageId ??
+      `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const turnId = `turn-${savedUser.messageId}`;
     const planModule = new AIChatPlanModule();
+    const module = new AIChatV2Module();
 
     let planState: AIChatPlanStateView | null = null;
     try {
@@ -2946,15 +3017,34 @@ export class AIChatQueryEngine {
         // handle its own plan tools.
         log.error("[ai-chat-v2] queued plan ensure failed:", err);
         void redirectToLoginOnAuthExpired(err);
+        await module
+          .saveAssistantMessage({
+            conversationId,
+            content: "",
+            messageId: assistantMessageId,
+            metadata: {
+              source: "chat-v2",
+              turnId,
+              sourceProviderVersion: currentProviderConfigVersion(),
+              finishReason: "error",
+              error: userSafeError(err),
+            },
+          })
+          .catch((persistErr: unknown) => {
+            log.error(
+              "[ai-chat-v2] queued plan error persistence failed:",
+              persistErr
+            );
+          });
         eventSink.emit({
           type: "error",
           conversationId,
+          messageId: assistantMessageId,
           errorMessage: userSafeError(err),
         });
-        return { type: "failed", conversationId, assistantMessageId: "" };
+        return { type: "failed", conversationId, assistantMessageId };
       }
     }
-    const module = new AIChatV2Module();
 
     // Queue-dispatched turns bypass submitMessage's persistence path, so bind
     // outbound-email intent here as well. This preserves the trusted
@@ -3144,17 +3234,33 @@ export class AIChatQueryEngine {
     } catch (err) {
       log.error("[ai-chat-v2] persisted-turn assembly error:", err);
       void redirectToLoginOnAuthExpired(err);
+      await module
+        .saveAssistantMessage({
+          conversationId,
+          content: "",
+          messageId: assistantMessageId,
+          metadata: {
+            source: "chat-v2",
+            turnId,
+            sourceProviderVersion: currentProviderConfigVersion(),
+            finishReason: "error",
+            error: userSafeError(err),
+          },
+        })
+        .catch((persistErr: unknown) => {
+          log.error(
+            "[ai-chat-v2] persisted-turn assembly error persistence failed:",
+            persistErr
+          );
+        });
       eventSink.emit({
         type: "error",
         conversationId,
+        messageId: assistantMessageId,
         errorMessage: userSafeError(err),
       });
-      return { type: "failed", conversationId, assistantMessageId: "" };
+      return { type: "failed", conversationId, assistantMessageId };
     }
-
-    const assistantMessageId =
-      input.assistantMessageId ??
-      `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     return await this.runPersistedTurn({
       historySelectionAcceptedIds,
@@ -3171,6 +3277,7 @@ export class AIChatQueryEngine {
       scheduledContext: undefined,
       sourceUserMessageId: savedUser.messageId,
       intentDecisionId: queuedIntentDecisionId,
+      turnId,
     });
   }
 
@@ -3257,6 +3364,20 @@ export class AIChatQueryEngine {
     /** T15 route classification, threaded from runTurn. */
     readonly taskRoute?: TaskExecutionRoute;
   }): Promise<AIChatTurnTerminalEvent> {
+    // r3 G01: the queue promotes the durable user row BEFORE the engine
+    // assigns the turn — stamp the association onto that row so the
+    // exchange identity is complete on both sides (best-effort bounded
+    // metadata merge; failure degrades association to role order only).
+    if (input.turnId && input.sourceUserMessageId) {
+      const module0 = new AIChatV2Module();
+      await module0
+        .stampUserMessageTurnIdentity(
+          input.sourceUserMessageId,
+          input.turnId,
+          currentProviderConfigVersion()
+        )
+        .catch(() => undefined);
+    }
     const {
       conversationId,
       assistantMessageId,
@@ -3511,6 +3632,7 @@ export class AIChatQueryEngine {
 
     // B11 early return above already handled reused/conflict/denied without
     // touching activeTurns; reaching here means a fresh dispatch.
+    let loopResultHandled = false;
     try {
       // R04 (FR-018/AC-14): READ the acceptance-time pin — recapturing here
       // (after async preparation) let a provider change mid-preparation flip
@@ -3521,6 +3643,7 @@ export class AIChatQueryEngine {
         loopInput,
         streamMode
       );
+      loopResultHandled = true;
       await this.handleLoopResult(result, module, streamEventSink, {
         ownerNotifiesTerminal: ownerNotifiesTerminal === true,
         ...(onSegmentDurable ? { onSegmentDurable } : {}),
@@ -3550,7 +3673,8 @@ export class AIChatQueryEngine {
         conversationId,
         assistantMessageId,
         eventSink,
-        taskExecutionBinding
+        taskExecutionBinding,
+        loopResultHandled
       );
       return { type: "failed", conversationId, assistantMessageId };
     } finally {
@@ -4836,6 +4960,37 @@ export class AIChatQueryEngine {
     taskExecutionBinding?: LoopTaskExecutionBinding
   ): Promise<void> {
     await this.flushEventSaves(eventSink);
+    // r3 G01: durable exchange identity for every terminal assistant save —
+    // the still-registered active turn carries the turnId this exchange was
+    // executed under (cleared only after these saves).
+    // (r3 G01) Only terminal variants carry a conversationId; pause variants
+    // persist via their resumed turn instead.
+    const g01ConversationId =
+      result.type === "completed" ||
+      result.type === "cancelled" ||
+      result.type === "failed"
+        ? result.conversationId
+        : null;
+    const g01TurnId = g01ConversationId
+      ? this.activeTurns.get(g01ConversationId)?.turnId
+      : undefined;
+    const g01ProviderVersion = currentProviderConfigVersion();
+    // Scheduled turns reuse their stable user message id (`scheduled-user-…`,
+    // ScheduledAiMessageRunner §14.2) as the turn id — their terminal rows
+    // must never masquerade as interactive chat-v2.
+    const g01Source: "chat-v2" | "scheduled-loop" = g01TurnId?.startsWith(
+      "scheduled-user-"
+    )
+      ? "scheduled-loop"
+      : "chat-v2";
+    /** Spread into each terminal assistant metadata block below. */
+    const g01Identity: {
+      turnId?: string;
+      sourceProviderVersion: number;
+    } = {
+      ...(g01TurnId ? { turnId: g01TurnId } : {}),
+      sourceProviderVersion: g01ProviderVersion,
+    };
     // Persist deferred-catalog discovered state on terminal results so it
     // survives app restart / conversation reload (FR-5/AC-8). Pause variants
     // carry the snapshot on `pending` and persist via the resumed turn.
@@ -4871,7 +5026,8 @@ export class AIChatQueryEngine {
             model: result.model,
             tokensUsed: result.totalTokens,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: result.finishReason,
               ...buildReasoningMetadata(result.reasoningContent, result.model),
@@ -5096,7 +5252,8 @@ export class AIChatQueryEngine {
             messageId: assistantMessageId,
             model: result.model,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: "cancelled",
               cancelled: true,
@@ -5189,21 +5346,27 @@ export class AIChatQueryEngine {
         const needsReactiveCompaction =
           result.error instanceof RecoverableHistoryError &&
           result.error.code === "CONTEXT_REQUIRED_CONTENT_TOO_LARGE";
-        if (result.partialContent.length > 0) {
-          await module.saveAssistantMessage({
+        await module
+          .saveAssistantMessage({
             conversationId,
             content: result.partialContent,
             messageId: assistantMessageId,
             model: result.model,
             metadata: {
-              source: "chat-v2",
+              source: g01Source,
+              ...g01Identity,
               openaiResponseId: result.responseId,
               finishReason: "error",
               error: userSafeError(result.error),
               ...buildReasoningMetadata(result.reasoningContent, result.model),
             },
+          })
+          .catch((persistErr: unknown) => {
+            log.error(
+              "[ai-chat-v2] failed-turn assistant save failed:",
+              persistErr
+            );
           });
-        }
         // T12: durable finalization gate for the FAILED path. An enrolled
         // execution whose loop failed must NOT stay `running` — the row gets
         // a `failed` outcome (or honors a recorded finish decision) BEFORE
@@ -5261,8 +5424,7 @@ export class AIChatQueryEngine {
         eventSink.emit({
           type: "error",
           conversationId,
-          messageId:
-            result.partialContent.length > 0 ? assistantMessageId : undefined,
+          messageId: assistantMessageId,
           errorMessage: userSafeError(result.error),
           // Stable image-edit codes let the renderer localize provider edit
           // failures distinctly from invalid references and transient issues.
@@ -5945,11 +6107,12 @@ export class AIChatQueryEngine {
     // STRICT — flush() rejects with AIChatRequiredPersistenceError so the
     // loop's persist-before-execute barrier blocks dependent work. The emit
     // path still forwards first so the UI stays responsive.
-    const saves: Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }> = [];
+    // Plan lifecycle rows (PRD §12.4) are PRESENTATION aids and therefore
+    // NON-strict: a failed plan-row write logs and continues — the durable
+    // plan tables remain authoritative for decisions, and a later transition
+    // persists a fresh row.
+    // Each save entry declares its own strictness; the flush reads it.
+    const saves: PersistedEventSave[] = [];
     // Track the latest server-reported usage so it can be attributed to
     // intermediate tool_call messages. Without this, every tool_call row
     // is persisted with null tokensUsed/model, losing per-round cost data.
@@ -5973,6 +6136,7 @@ export class AIChatQueryEngine {
         if (event.type === "tool_call") {
           saves.push({
             kind: "tool_call",
+            strict: true,
             toolCallId: event.toolCallId,
             promise: module.saveToolCallMessage({
               conversationId: event.conversationId,
@@ -6003,6 +6167,7 @@ export class AIChatQueryEngine {
           // AIChatRequiredPersistenceError so dependent execution blocks.
           saves.push({
             kind: "tool_result",
+            strict: true,
             toolCallId: event.toolCallId,
             promise: module.saveToolResultMessage({
               conversationId: event.conversationId,
@@ -6017,6 +6182,34 @@ export class AIChatQueryEngine {
             }),
           });
         }
+        if (PLAN_LOOP_EVENT_TYPES.has(event.type)) {
+          // FR-12 (PRD §12.4): the plan lifecycle surface is a projection of
+          // the transcript — persist the transition as a durable display row
+          // so a re-seeded snapshot (reload, reopen, notification click)
+          // keeps rendering the decision card / question / receipt. The
+          // deterministic row id upserts replays of the same transition.
+          const planState = (event as { planState?: AIChatPlanStateView })
+            .planState;
+          const question = (event as { question?: AIChatPlanQuestionView })
+            .question;
+          if (planState?.planId) {
+            saves.push({
+              kind: "plan_event",
+              strict: false,
+              toolCallId: "",
+              promise: module.savePlanEventMessage({
+                conversationId: event.conversationId,
+                eventType: event.type as Parameters<
+                  typeof module.savePlanEventMessage
+                >[0]["eventType"],
+                planState,
+                ...(event.type === "ask_user_question" && question
+                  ? { question }
+                  : {}),
+              }),
+            });
+          }
+        }
       },
       flush: async () => {
         await this.flushPendingEventSaves(saves);
@@ -6027,11 +6220,7 @@ export class AIChatQueryEngine {
   }
 
   private async flushPendingEventSaves(
-    saves: Array<{
-      readonly kind: "tool_call" | "tool_result";
-      readonly toolCallId: string;
-      readonly promise: Promise<unknown>;
-    }>
+    saves: PersistedEventSave[]
   ): Promise<void> {
     if (saves.length === 0) {
       return;
@@ -6040,20 +6229,32 @@ export class AIChatQueryEngine {
     const settled = await Promise.allSettled(
       batch.map((save) => save.promise)
     );
-    const failedIndex = settled.findIndex((r) => r.status === "rejected");
-    if (failedIndex >= 0) {
-      const failed = settled[failedIndex];
+    // Plan lifecycle rows are non-strict presentation aids (PRD §12.4): a
+    // rejected write is logged and swallowed — the durable plan tables stay
+    // authoritative and the next transition writes a fresh row. Tool
+    // receipts keep the strict Stage A contract (first failure gates).
+    for (let i = 0; i < settled.length; i += 1) {
+      const entry = settled[i];
+      if (entry.status !== "rejected") continue;
+      const meta = batch[i];
+      if (meta.kind === "plan_event" || meta.strict === false) {
+        log.warn(
+          `[ai-chat-v2] non-required ${meta.kind} save failed:`,
+          entry.status === "rejected" ? entry.reason : undefined
+        );
+        continue;
+      }
       const reason =
-        failed.status === "rejected" ? failed.reason : undefined;
+        entry.status === "rejected" ? entry.reason : undefined;
       log.error(
-        `[ai-chat-v2] required ${batch[failedIndex].kind} save failed:`,
+        `[ai-chat-v2] required ${meta.kind} save failed:`,
         reason
       );
       throw new AIChatRequiredPersistenceError(
-        batch[failedIndex].kind === "tool_call"
+        meta.kind === "tool_call"
           ? "tool_call_persist_failed"
           : "tool_result_persist_failed",
-        batch[failedIndex].toolCallId,
+        meta.toolCallId,
         reason
       );
     }
@@ -6182,24 +6383,29 @@ export class AIChatQueryEngine {
     conversationId: string,
     assistantMessageId: string,
     eventSink: AIChatQueryEventSink,
-    taskExecutionBinding?: LoopTaskExecutionBinding
+    taskExecutionBinding?: LoopTaskExecutionBinding,
+    alreadyPersistedTerminal = false
   ): Promise<void> {
     this.dispatchStop(conversationId, "error");
     log.error("[ai-chat-v2] engine failure:", err);
     void redirectToLoginOnAuthExpired(err);
-    // TODO-09 (FR-015/017): preserve the safe partial history the user
-    // already saw. Attempt the write through the normal module path; a
-    // further storage failure is logged but never replaces the primary
+    // TODO-09 (FR-015/017): preserve the error and any safe partial history
+    // the user already saw. Attempt the write through the normal module path;
+    // a further storage failure is logged but never replaces the primary
     // error (the error event below still fires first-hand).
-    const partial = this.activeTurns.get(conversationId)?.partialContent;
-    if (partial && partial.length > 0) {
-      void new AIChatV2Module()
+    const activeTurn = this.activeTurns.get(conversationId);
+    const partial = activeTurn?.partialContent ?? "";
+    const turnId = activeTurn?.turnId;
+    if (!alreadyPersistedTerminal && assistantMessageId) {
+      await new AIChatV2Module()
         .saveAssistantMessage({
           conversationId,
           content: partial,
           messageId: assistantMessageId,
           metadata: {
             source: "chat-v2",
+            ...(turnId ? { turnId } : {}),
+            sourceProviderVersion: currentProviderConfigVersion(),
             finishReason: "error",
             error: userSafeError(err),
           },

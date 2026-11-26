@@ -32,6 +32,35 @@ export class AIChatModule extends BaseModule {
   /**
    * Save a chat message to database
    */
+  /**
+   * r3 G01: stamp durable turn identity onto an ALREADY-persisted user row
+   * (queue promotion happens before the engine assigns the turn). Merges
+   * turnId/sourceProviderVersion into the row's JSON metadata without
+   * touching content; idempotent; a miss is a no-op.
+   */
+  async stampUserMessageTurnIdentity(
+    messageId: string,
+    turnId: string,
+    sourceProviderVersion: number
+  ): Promise<void> {
+    if (!messageId) return;
+    await this.ensureConnection();
+    const repo = this.chatMessageModel.repository;
+    const row = await repo.findOne({ where: { messageId } });
+    if (!row) return;
+    let meta: Record<string, unknown> = {};
+    if (row.metadata) {
+      try {
+        meta = JSON.parse(row.metadata) as Record<string, unknown>;
+      } catch {
+        meta = {};
+      }
+    }
+    if (meta.turnId === turnId) return;
+    row.metadata = JSON.stringify({ ...meta, turnId, sourceProviderVersion });
+    await repo.save(row);
+  }
+
   async saveMessage(options: SaveMessageOptions): Promise<AIChatMessageEntity> {
     const existing = await this.chatMessageModel.getMessageByMessageId(
       options.messageId

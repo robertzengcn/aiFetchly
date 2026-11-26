@@ -40,6 +40,7 @@ vi.mock("@/views/api/aiChatV2", () => ({
 vi.mock("@/views/api/aiChatWorkspace", () => ({
   bootstrapWorkspace: vi.fn(),
   subscribeSummaryEvents: () => () => undefined,
+  subscribeTitleEvents: vi.fn().mockReturnValue(() => undefined),
   cancelChatRun: vi.fn(),
   createClientRequestId: vi.fn().mockReturnValue("req-r7-overflow"),
   loadHistoryPage: vi.fn(),

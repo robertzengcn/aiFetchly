@@ -244,6 +244,9 @@ export class AIChatQueryEngineFactory {
     return SkillExecutor.execute(name, args, {
       ...context,
       skipPermissionCheck: true,
+      // R03: trusted host state for the service-level scheduled-origin guard
+      // in organization mutation tools. Never a model/tool argument.
+      scheduledOrigin: true,
     });
   }
 

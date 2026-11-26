@@ -339,10 +339,14 @@ async function loadSavedProxies(): Promise<void> {
     // `limit`) — the malformed key failed the parse and the saved-proxy
     // list stayed empty, hiding every explicit proxy choice.
     const result = await getProxyList({ page: 1, size: 50 });
-    savedProxies.value = (result.data ?? []).map((row) => ({
-      id: row.id,
-      label: `${row.host}:${row.port}`,
-    }));
+    savedProxies.value = (result.data ?? []).reduce<
+      Array<{ id: number; label: string }>
+    >((items, row) => {
+      if (row.id != null) {
+        items.push({ id: row.id, label: `${row.host}:${row.port}` });
+      }
+      return items;
+    }, []);
   } catch {
     savedProxies.value = [];
   }

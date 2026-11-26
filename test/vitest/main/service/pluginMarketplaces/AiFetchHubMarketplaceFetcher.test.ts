@@ -136,6 +136,57 @@ describe("AiFetchHubMarketplaceFetcher", () => {
     );
   });
 
+  test("allows non-localhost http hub base in development mode", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITE_PLUGIN_HUB_URL", "http://plugin.marketsystemui.com");
+    getFirstParty.mockResolvedValueOnce({ plugins: [] });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    expect(getFirstParty.mock.calls[0][0]).toBe(
+      "http://plugin.marketsystemui.com/api/v1/plugins/catalog"
+    );
+  });
+
+  test("allows non-localhost http hub base when AIFETCHLY_ALLOW_HTTP_HUB is set", async () => {
+    vi.stubEnv("AIFETCHLY_ALLOW_HTTP_HUB", "1");
+    vi.stubEnv("VITE_PLUGIN_HUB_URL", "http://plugin.marketsystemui.com");
+    getFirstParty.mockResolvedValueOnce({ plugins: [] });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    expect(getFirstParty.mock.calls[0][0]).toBe(
+      "http://plugin.marketsystemui.com/api/v1/plugins/catalog"
+    );
+  });
+
+  test("allows http hub base matching http login URL domain", async () => {
+    vi.stubEnv("VITE_LOGIN_URL", "http://local.marketsystemui.com:8083");
+    vi.stubEnv("VITE_PLUGIN_HUB_URL", "http://plugin.marketsystemui.com");
+    getFirstParty.mockResolvedValueOnce({ plugins: [] });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    expect(getFirstParty.mock.calls[0][0]).toBe(
+      "http://plugin.marketsystemui.com/api/v1/plugins/catalog"
+    );
+  });
+
+  test("allows http hub base on private network IP", async () => {
+    vi.stubEnv("VITE_PLUGIN_HUB_URL", "http://192.168.1.100:8080");
+    getFirstParty.mockResolvedValueOnce({ plugins: [] });
+    const result = await makeFetcher().fetch({
+      source: { kind: "aifetch-hub", uri: "" },
+    });
+    expect(result.success).toBe(true);
+    expect(getFirstParty.mock.calls[0][0]).toBe(
+      "http://192.168.1.100:8080/api/v1/plugins/catalog"
+    );
+  });
+
   test("returns marketplace-fetch-failed for an invalid hub payload", async () => {
     getFirstParty.mockResolvedValueOnce({
       plugins: [{ slug: "no-access-field" }],

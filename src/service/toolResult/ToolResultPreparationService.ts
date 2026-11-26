@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import {
+  BATCH_PREVIEW_TOOL_NAMES,
   TOOL_RESULT_CONFIG,
   TOOL_RESULT_POLICY_VERSION,
   type ToolResultConfig,
@@ -162,6 +163,27 @@ export class ToolResultPreparationService {
     // another receipt whose preview hides next_cursor.
     if (TOOL_RESULT_RETRIEVAL_TOOL_NAMES.has(deps.context.toolName)) {
       return this.prepareBoundedRetrieval(outcome, operationStatus);
+    }
+
+    // Batch aggregate receipts are ALWAYS externalized. The renderer's batch
+    // progress card unwraps the aggregate record from the durable receipt's
+    // `toolOutputPreview` (PRD §13.3; commit 8eb008caa), and the inline wire
+    // shape carries no preview — so a batch body that happens to fit the
+    // inline budget must still take the externalized path, or the durable
+    // row drops the envelope contract and the card cannot render after a
+    // reload. The batch preview budget is applied here, at the shared
+    // boundary, so no caller can forget to pass it.
+    if (BATCH_PREVIEW_TOOL_NAMES.has(deps.context.toolName)) {
+      return await this.externalize(
+        {
+          ...outcome,
+          previewMaxBytes:
+            outcome.previewMaxBytes ?? config.batchPreviewMaxBytes,
+        },
+        deps,
+        operationStatus,
+        control
+      );
     }
 
     // Small results keep their existing wire shape (AC-01): no needless
@@ -502,7 +524,11 @@ export class ToolResultPreparationService {
       // Outer trusted status, never a producer-provided value.
       operationStatus: input.operationStatus,
       success: input.outcome.success,
-      executionTimeMs: Math.max(0, Math.floor(input.outcome.executionTimeMs)),
+      // An async tool's bare SkillExecutionResult (resume path) carries no
+      // execution_time_ms; NaN would fail the receipt schema and turn a
+      // good result into a publication failure. The boundary re-bounds
+      // producer data — an absent duration becomes 0, never NaN.
+      executionTimeMs: Math.max(0, Math.floor(Number(input.outcome.executionTimeMs) || 0)),
       summary: input.outcome.summary
         ? boundString(input.outcome.summary, 500)
         : undefined,

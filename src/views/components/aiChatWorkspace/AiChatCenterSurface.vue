@@ -16,6 +16,10 @@
       @open-agent-tasks="onOpenAgentTasks"
       @clear="onClear"
       @delete="onDelete"
+      :report-enabled="conversationReportEnabled"
+      :report-loading="reportCapabilitiesLoading"
+      :report-disabled-reason="conversationReportDisabledReason"
+      @report="onOpenConversationReport"
       :goal-objective="
         sharedOrchestrationEnabled ? activeGoalObjective : null
       "
@@ -87,6 +91,7 @@
         :messages="[...selectedStore.messages]"
         :active-assistant-message-id="selectedStore.activeAssistantMessageId"
         :stream-status="streamStatusForMessages"
+        :is-remote-working="selectedStore.runtimeStatus === 'running' || selectedStore.streamStatus === 'streaming'"
         :error-message="localizedBannerError ?? undefined"
         :show-reasoning="showReasoning"
         :plan-submit-error="planSubmitError"
@@ -95,6 +100,7 @@
         :reported-message-ids="reportedMessageIds"
         @report="onSingleReportRequest"
         @save-generated-image="onSaveGeneratedImage"
+        @save-all-generated-images="onSaveAllGeneratedImages"
         @stop-batch="onStopBatch"
         @retry-generated-image-batch="onRetryGeneratedImageBatch"
         @approve-plan="onLegacyPlanAction('approve-plan')"
@@ -120,45 +126,9 @@
       </button>
     </div>
 
-    <!-- Conversation workspace chooser (design §9.2): directly above the
-         composer input, below the transcript, inside the center — the
-         workspace applies to the message being composed. -->
+    <!-- Keep workspace setup, trust and recovery messages above the input. -->
     <div class="chat-center__workspace-strip" data-testid="chat-workspace-strip">
-      <!-- The workspace badge is always visible above the composer: with no
-           conversation selected it renders its unset state (Choose action),
-           which creates a chat on demand via onRequestWorkspaceSetup. -->
-      <WorkspaceBadge
-        :workspace="conversationWorkspace.workspace.value"
-        :memory-count="conversationWorkspace.memoryCount.value"
-        :loading="conversationWorkspace.loading.value"
-        :busy="workspaceChangesBlocked"
-        :show-memory="voiceMemoryEnabled"
-        @request-set-workspace="onRequestWorkspaceSetup"
-        @request-open-memory="openWorkspaceMemory"
-        @request-remove-workspace="onRequestWorkspaceRemove"
-      />
       <template v-if="conversationId">
-        <AIConversationReportButton
-          :enabled="conversationReportEnabled"
-          :loading="reportCapabilitiesLoading"
-          :disabled-reason="conversationReportDisabledReason"
-          compact
-          @open="onOpenConversationReport"
-        />
-        <!-- FR-HIS-001/005 (history rollout flag): archive search entry and
-             compaction progress/retry/cancel, reachable while the inspector
-             is closed. -->
-        <button
-          v-if="historyUiEnabled"
-          type="button"
-          class="chat-center__history-toggle"
-          data-testid="workspace-history-toggle"
-          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
-          :aria-label="t('aiChatHistory.drawer_title') || 'Conversation History'"
-          @click="showHistoryDrawer = true"
-        >
-          <v-icon size="small">mdi-book-search-outline</v-icon>
-        </button>
         <AiChatCompactionStatus
           v-if="historyUiEnabled"
           :status="compactionStatus"
@@ -214,9 +184,11 @@
         </p>
         <WorkspaceRequiredCard
           v-if="conversationWorkspace.setupOpen.value && conversationId"
+          :key="conversationId"
+          ref="workspaceRequiredCard"
           :conversation-id="conversationId"
           @approved="onWorkspaceApproved"
-          @cancel="conversationWorkspace.closeSetup()"
+          @cancel="onWorkspaceSetupCancel"
         />
         <WorkspaceTrustCard
           v-if="
@@ -251,10 +223,8 @@
       @resume="onResumePending"
     />
 
-    <!-- Composer with next-message controls BELOW the textarea (design §10):
-         mode/model/tool approval/context live in the lower `controls` slot,
-         the spoken-response toggle in `toolbar-actions`. -->
     <AiChatV2Composer
+      workspace-layout
       :is-streaming="selectedStore.isBusy"
       :conversation-id="conversationId"
       :workspace-id="conversationWorkspace.workspace.value?.id ?? null"
@@ -275,7 +245,7 @@
       :generated-image-focus-signal="composerFocusSignal"
       @send="onComposerSend"
       @stop="onPrimaryStop"
-      @request-workspace="onRequestWorkspaceSetup"
+      @request-workspace="onInteractiveWorkspaceSetup"
       @remove-generated-image="onRemoveGeneratedImage"
       @clear-generated-images="onClearGeneratedImages"
       @reorder-generated-images="onReorderGeneratedImages"
@@ -285,10 +255,21 @@
       @stop-speaking="voice.stopSpeaking"
       @open-voice-settings="openVoiceSettings"
     >
+      <template #workspace>
+        <WorkspaceBadge
+          compact
+          :workspace="conversationWorkspace.workspace.value"
+          :loading="conversationWorkspace.loading.value"
+          :busy="workspaceChangesBlocked"
+          :show-memory="false"
+          @request-set-workspace="onInteractiveWorkspaceSetup"
+          @request-remove-workspace="onRequestWorkspaceRemove"
+        />
+      </template>
       <template #controls>
-        <AiChatV2ModeSelector v-model="mode" :disabled="selectedStore.isBusy" />
         <AiChatV2ModelSelector
           v-model="selectedModel"
+          compact
           :items="availableModels"
           :default-model="defaultModelId"
           :loading="!modelsLoaded"
@@ -297,11 +278,14 @@
         />
         <AiChatV2ToolApprovalModeSelector
           v-model="toolApprovalMode"
+          compact
           @update:model-value="onToolApprovalModeChange"
         />
+      </template>
+      <template #toolbar-actions>
         <button
           type="button"
-          class="context-indicator"
+          class="chat-center__toolbar-button"
           data-testid="workspace-context-indicator"
           :aria-label="t('workspaceChat.inspector.context') || 'Context'"
           @click="workspaceStore.openInspector('context')"
@@ -311,8 +295,17 @@
             :used-tokens="contextUsedTokens"
           />
         </button>
-      </template>
-      <template #toolbar-actions>
+        <button
+          v-if="conversationId && historyUiEnabled"
+          type="button"
+          class="chat-center__toolbar-button"
+          data-testid="workspace-history-toggle"
+          :title="t('aiChatHistory.drawer_title') || 'Conversation History'"
+          :aria-label="t('aiChatHistory.drawer_title') || 'Conversation History'"
+          @click="showHistoryDrawer = true"
+        >
+          <v-icon size="small" aria-hidden="true">mdi-book-search-outline</v-icon>
+        </button>
         <AiChatVoiceOutputToggle
           v-if="voiceMemoryEnabled"
           :enabled="voice.spokenResponseEnabled.value"
@@ -522,8 +515,17 @@
         />
       </v-card>
     </v-dialog>
-
-    <!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
+    <!-- Chat-titles FR-06: shared rename dialog (header overflow action). -->
+    <AiChatRenameDialog
+      :model-value="headerRename.renameTargetId.value !== null"
+      :initial-title="headerRename.renameInitialTitle.value"
+      :saving="headerRename.renameSaving.value"
+      :error="headerRename.renameError.value"
+      @save="(title) => void headerRename.commitRename(title)"
+      @cancel="headerRename.cancelRename()"
+      @update:model-value="(v) => !v && headerRename.cancelRename()"
+    />
+<!-- Agent-task status/cancellation (FR-INT-004, shared dialog). The
          old bottom-left icon-button activator is gone: the task list now
          opens from the conversation-header overflow menu and anchors to
          the header "..." button. -->
@@ -607,16 +609,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, getCurrentInstance,
+} from "vue";
 import { buildUploadedAttachments } from "@/views/components/aiChatV2/aiChatV2Attachment";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import AiChatWorkspaceTranscript from "@/views/components/aiChatWorkspace/AiChatWorkspaceTranscript.vue";
+import AiChatRenameDialog from "./AiChatRenameDialog.vue";
 import AiChatConversationHeader from "@/views/components/aiChatWorkspace/AiChatConversationHeader.vue";
 
 import AiChatV2Composer from "@/views/components/aiChatV2/AiChatV2Composer.vue";
 import AiChatV2QueuedMessages from "@/views/components/aiChatV2/AiChatV2QueuedMessages.vue";
-import AiChatV2ModeSelector from "@/views/components/aiChatV2/AiChatV2ModeSelector.vue";
 import AiChatV2ModelSelector from "@/views/components/aiChatV2/AiChatV2ModelSelector.vue";
 import AiChatV2ToolApprovalModeSelector from "@/views/components/aiChatV2/AiChatV2ToolApprovalModeSelector.vue";
 import AiChatV2ContextBadge from "@/views/components/aiChatV2/AiChatV2ContextBadge.vue";
@@ -713,7 +716,6 @@ import {
 import type {
   ChatV2GeneratedImageReference,
   ChatV2MessageView,
-  ChatV2Mode,
   ChatV2RuntimeStatus,
   ChatToolApprovalMode,
 } from "@/entityTypes/aiChatV2Types";
@@ -721,13 +723,16 @@ import type { GeneratedImageReferenceView } from "@/views/components/aiChatV2/ge
 import { MessageType } from "@/entityTypes/commonType";
 import type { AskUserQuestionAnswer } from "@/entityTypes/aiChatPlanTypes";
 import {
-  renameConversation,
+
   deleteConversation,
   duplicateConversation,
   exportConversation,
+
 } from "@/views/api/aiChatWorkspace";
+import { useConversationRename } from "@/views/composables/conversationRename";
 import { useChatWorkspaceStore } from "@/views/store/chatWorkspace";
 import { useChatModelsStore } from "@/views/store/chatModels";
+import { AI_PROVIDER_SETTINGS_CHANGED_EVENT } from "@/views/api/aiProvider";
 import { useChatReportState } from "@/views/store/chatReportState";
 import { recordWorkspaceActionCount } from "@/views/api/aiChatWorkspaceActions";
 import {
@@ -737,7 +742,6 @@ import {
 } from "@/views/store/composerDrafts";
 import { usePendingMessagesStore } from "@/views/store/pendingMessages";
 import { useHistorySelectionStore } from "@/views/store/historySelection";
-import AIConversationReportButton from "@/views/components/aiContentReport/AIConversationReportButton.vue";
 import AIConversationReportDialog from "@/views/components/aiContentReport/AIConversationReportDialog.vue";
 import AIContentReportDialog from "@/views/components/aiContentReport/AIContentReportDialog.vue";
 import type { ReportableOutputDescriptor } from "@/views/components/aiContentReport/reportableOutput";
@@ -772,6 +776,8 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const workspaceStore = useChatWorkspaceStore();
+const chatModelsStore = useChatModelsStore();
+const headerRename = useConversationRename();
 const selectedStore = useSelectedConversationStore();
 const inspector = useAppInspectorStore();
 // A02 (design §23.1): independent rollout adapter controls — each answer
@@ -823,43 +829,72 @@ const voiceTtsInstallPrompt = computed({
     voice.ttsInstallPrompt.value = value;
   },
 });
-// R8 P2 (FR-WSP-007): the dialog's open state moved to the workspace store
-// (`memoryOverlayOpen`) so both the badge entry and the Context-inspector
-// entry drive the same overlay.
-
-function openWorkspaceMemory(): void {
-  // A02 (§23.1): the voice/memory adapter off removes the memory surface —
-  // workspace mapping itself stays untouched (durable state, no removal).
-  if (!voiceMemoryEnabled.value) {
-    return;
-  }
-  const workspace = conversationWorkspace.workspace.value;
-  if (!workspace || workspace.approvalState !== "approved") {
-    workspaceStore.setMemoryOverlayOpen(false);
-    return;
-  }
-  workspaceStore.openMemoryOverlay();
-}
-
 /**
  * FR-WS-007: while a workspace-backed tool may be running, changing the
  * workspace is unsafe (approvals and watches are bound to the current root).
  * Entry points are disabled with a visible localized reason instead.
  */
 const workspaceChangesBlocked = computed(() => selectedStore.isBusy);
+const workspaceRequiredCard = ref<InstanceType<typeof WorkspaceRequiredCard> | null>(null);
+let workspaceSetupFocus: {
+  conversation: string | null;
+  trigger: HTMLElement | null;
+} | null = null;
 
-/** Workspace setup needs a conversation id first (classic-chat parity). */
+/** Background exports may open the setup card without interrupting input. */
 function onRequestWorkspaceSetup(): void {
-  if (workspaceChangesBlocked.value) return; // FR-WS-007 safety gate
-  if (!conversationId.value) {
-    void onNewChat();
-  }
+  if (workspaceChangesBlocked.value || !conversationId.value) return;
   conversationWorkspace.requestSetup();
+}
+
+async function onInteractiveWorkspaceSetup(): Promise<void> {
+  if (workspaceChangesBlocked.value || workspaceSetupFocus?.conversation === null) return;
+  const request = {
+    conversation: conversationId.value,
+    trigger: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  };
+  workspaceSetupFocus = request;
+  let target: string;
+  try {
+    target = request.conversation ?? await onNewChat();
+  } catch (error: unknown) {
+    if (workspaceSetupFocus === request) workspaceSetupFocus = null;
+    throw error;
+  }
+  if (workspaceSetupFocus !== request) return;
+  if (conversationId.value !== target || workspaceChangesBlocked.value) {
+    workspaceSetupFocus = null;
+    return;
+  }
+  onRequestWorkspaceSetup();
+  await nextTick();
+  if (workspaceSetupFocus === request) workspaceRequiredCard.value?.focusPickButton();
+}
+
+function restoreWorkspaceSetupFocus(restoreTrigger: boolean): void {
+  const trigger = restoreTrigger ? workspaceSetupFocus?.trigger : null;
+  workspaceSetupFocus = null;
+  if (!workspaceRequiredCard.value?.containsFocus()) return;
+  const target = conversationId.value;
+  void nextTick(() => {
+    if (conversationId.value !== target || conversationWorkspace.setupOpen.value) return;
+    if (trigger?.isConnected) {
+      trigger.focus();
+      if (document.activeElement === trigger) return;
+    }
+    composerFocusSignal.value += 1;
+  });
 }
 
 /** The required-card flow created + approved a workspace in the main process. */
 function onWorkspaceApproved(workspaceId: number, rootPath: string): void {
   conversationWorkspace.applyApprovedWorkspace(workspaceId, rootPath);
+  restoreWorkspaceSetupFocus(false);
+}
+
+function onWorkspaceSetupCancel(): void {
+  conversationWorkspace.closeSetup();
+  restoreWorkspaceSetupFocus(true);
 }
 
 /** FR-WSP-002 remove affordance: revoking the binding is unsafe while a
@@ -872,7 +907,11 @@ function onRequestWorkspaceRemove(): void {
 // --- Header + run strip projection ------------------------------------------
 const headerTitle = computed(() => {
   const summary = workspaceStore.selectedConversation;
-  return summary?.title || selectedStore.selectedTitle;
+  // F12: an AUTHORITATIVE summary with an intentionally empty title (cleared
+  // nonmanual name) must NOT fall back to the old selection snapshot — the
+  // header shows the localized placeholder instead.
+  if (summary) return summary.title;
+  return selectedStore.selectedTitle;
 });
 
 const recovering = computed(() => selectedStore.recovery !== null);
@@ -1691,12 +1730,28 @@ function clearImageNotice(): void {
 }
 
 /**
- * R08: conversations whose queued export returned `workspace_required`
- * while ANOTHER chat was selected. The setup card opens when the owner is
- * re-selected (consumed exactly once), never for the chat the response
- * happened to land in (FR-INT-002).
+ * R08: conversations with a pending export setup while another chat is
+ * selected. The setup card opens when its owner is selected again (FR-INT-002).
  */
 const deferredImageExportSetupIds = ref(new Set<string>());
+
+watch(conversationId, (next, previous) => {
+  // The empty-state chooser may create its own chat. Other selections
+  // invalidate focus and close the old card before the next chat renders.
+  if (workspaceSetupFocus?.conversation === null && !previous && next) {
+    workspaceSetupFocus.conversation = next;
+  } else {
+    workspaceSetupFocus = null;
+  }
+  if (
+    previous &&
+    conversationWorkspace.setupOpen.value &&
+    pendingImageExports.value.get(previous)?.length
+  ) {
+    requestWorkspaceForImageExport(previous);
+  }
+  conversationWorkspace.closeSetup();
+}, { flush: "sync" });
 
 /**
  * Finish a deferred setup request for the re-selected owner. R04-style
@@ -1793,6 +1848,94 @@ async function onSaveGeneratedImage(
   await attemptGeneratedImageExport(conversation, reference);
 }
 
+/** Serializes save-all so a second click cannot start a parallel copy. */
+let saveAllGeneratedImagesInFlight = false;
+
+function generatedImageExportErrorDetail(err: unknown): string {
+  return err instanceof Error && err.message.length > 0 ? err.message : "";
+}
+
+function requestWorkspaceForImageExport(conversation: string): void {
+  if (conversationId.value === conversation) {
+    onRequestWorkspaceSetup();
+    return;
+  }
+  deferredImageExportSetupIds.value = new Set([
+    ...deferredImageExportSetupIds.value,
+    conversation,
+  ]);
+}
+
+/**
+ * Save every rendered image from one message. A missing workspace queues the
+ * unsaved remainder and opens the same setup card as a single save.
+ */
+async function onSaveAllGeneratedImages(
+  references: readonly ChatV2GeneratedImageReference[]
+): Promise<void> {
+  const conversation = conversationId.value;
+  if (!conversation || references.length === 0 || saveAllGeneratedImagesInFlight) {
+    return;
+  }
+  saveAllGeneratedImagesInFlight = true;
+  try {
+    let saved = 0;
+    let failureDetail = "";
+    for (let index = 0; index < references.length; index += 1) {
+      const reference = references[index];
+      if (!reference) continue;
+      try {
+        const result = await exportGeneratedImage(conversation, reference);
+        if (result.status === "workspace_required") {
+          for (const remaining of references.slice(index)) {
+            enqueuePendingImageExport(conversation, remaining);
+          }
+          queueDeferredImageNotice(
+            conversation,
+            t("aiChatV2.imageTool.errors.workspaceRequired") ||
+              "An approved workspace is required first."
+          );
+          requestWorkspaceForImageExport(conversation);
+          return;
+        }
+        saved += 1;
+      } catch (err: unknown) {
+        if (failureDetail.length === 0) {
+          failureDetail = generatedImageExportErrorDetail(err);
+        }
+      }
+    }
+    if (saved === references.length) {
+      queueDeferredImageNotice(
+        conversation,
+        t("aiChatV2.artifactExport.savedAllToWorkspace", { count: saved }) ||
+          `Saved ${saved} images to your workspace.`
+      );
+      return;
+    }
+    if (saved > 0) {
+      queueDeferredImageNotice(
+        conversation,
+        t("aiChatV2.artifactExport.savedSomeToWorkspace", {
+          saved,
+          total: references.length,
+        }) ||
+          `Saved ${saved} of ${references.length} images to your workspace.`
+      );
+      return;
+    }
+    queueDeferredImageNotice(
+      conversation,
+      failureDetail.length > 0
+        ? `${t("aiChatV2.artifactExport.saveFailed") || "Could not save to workspace."} (${failureDetail})`
+        : t("aiChatV2.artifactExport.saveFailed") ||
+            "Could not save to workspace."
+    );
+  } finally {
+    saveAllGeneratedImagesInFlight = false;
+  }
+}
+
 /** FR-IMG-012: stop preserves completed outputs; the run cancel owns the rest. */
 function onStopBatch(): void {
   // R8 §2: batch stop action count (labels only).
@@ -1820,7 +1963,6 @@ function onRetryGeneratedImageBatch(payload: {
 
 // --- Next-message settings (owned here, rendered below the textarea) --------
 const LAST_MODEL_STORAGE_KEY = "ai-chat-v2-last-model";
-const mode = ref<ChatV2Mode>("chat");
 const selectedModel = ref<string | undefined>(undefined);
 const availableModels = ref<OpenAIModel[]>([]);
 const defaultModelId = ref<string | undefined>(undefined);
@@ -1869,44 +2011,57 @@ async function onToolApprovalModeChange(next: ChatToolApprovalMode): Promise<voi
  * no-model state, never an indefinite spinner.
  */
 const modelsLoaded = ref(false);
+let loadModelsPromise: Promise<void> | null = null;
 
 async function loadModels(): Promise<void> {
-  try {
-    const resp = await getOpenAIChatModels();
-    const data = resp?.data;
-    if (!Array.isArray(data)) return;
-    const validModels = data.filter(
-      (m) => m && typeof m.id === "string" && m.id.length > 0
-    );
-    availableModels.value = validModels;
-    defaultModelId.value = resp?.default_model;
-    const map = new Map<string, number>();
-    for (const model of validModels) {
-      const window =
-        model.context_size ??
-        model.context_window ??
-        model.context_length ??
-        DEFAULT_CONTEXT_WINDOW;
-      if (typeof window === "number" && window > 0) {
-        map.set(model.id, window);
-      }
-    }
-    modelContextWindows.value = map;
-    const saved = localStorage.getItem(LAST_MODEL_STORAGE_KEY) ?? undefined;
-    const usable =
-      saved && validModels.some((m) => m.id === saved)
-        ? saved
-        : defaultModelId.value ?? validModels[0]?.id;
-    selectedModel.value = usable;
-    // R8 P2-11 (FR-REC-005): publish to the shared store so the Context
-    // inspector (app-shell mount, no surface props) resolves the SAME
-    // denominator as this badge.
-    useChatModelsStore().publishModelCatalog(map, usable, resp?.default_model);
-  } catch {
-    // Model list unavailable — "Auto" fallback; sending still works.
-  } finally {
-    modelsLoaded.value = true;
+  if (loadModelsPromise) {
+    return loadModelsPromise;
   }
+  loadModelsPromise = (async () => {
+    try {
+      const resp = await getOpenAIChatModels();
+      const data = resp?.data;
+      if (!Array.isArray(data)) return;
+      const validModels = data.filter(
+        (m) => m && typeof m.id === "string" && m.id.length > 0
+      );
+      availableModels.value = validModels;
+      defaultModelId.value = resp?.default_model;
+      const map = new Map<string, number>();
+      for (const model of validModels) {
+        const window =
+          model.context_size ??
+          model.context_window ??
+          model.context_length ??
+          DEFAULT_CONTEXT_WINDOW;
+        if (typeof window === "number" && window > 0) {
+          map.set(model.id, window);
+        }
+      }
+      modelContextWindows.value = map;
+      const saved = localStorage.getItem(LAST_MODEL_STORAGE_KEY) ?? undefined;
+      // Preserve the user's chosen model if still present in the refreshed catalog.
+      const currentValid =
+        selectedModel.value && validModels.some((m) => m.id === selectedModel.value);
+      const usable =
+        currentValid
+          ? selectedModel.value
+          : saved && validModels.some((m) => m.id === saved)
+            ? saved
+            : defaultModelId.value ?? validModels[0]?.id;
+      selectedModel.value = usable;
+      // R8 P2-11 (FR-REC-005): publish to the shared store so the Context
+      // inspector (app-shell mount, no surface props) resolves the SAME
+      // denominator as this badge.
+      chatModelsStore.publishModelCatalog(map, usable, resp?.default_model);
+    } catch {
+      // Model list unavailable — "Auto" fallback; sending still works.
+    } finally {
+      modelsLoaded.value = true;
+      loadModelsPromise = null;
+    }
+  })();
+  return loadModelsPromise;
 }
 
 const contextUsedTokens = computed(() => {
@@ -1932,17 +2087,32 @@ const contextPercent = computed(() =>
 watch(
   () => selectedModel.value,
   (next) => {
-    useChatModelsStore().setSelectedModelId(next);
+    chatModelsStore.setSelectedModelId(next);
+    if (typeof next === "string" && next.length > 0) {
+      try {
+        localStorage.setItem(LAST_MODEL_STORAGE_KEY, next);
+      } catch {
+        // Storage unavailable — session-only preference.
+      }
+    }
   }
 );
 
-// --- Selection (layout-provided, local fallback) ----------------------------
-async function onNewChat(): Promise<void> {
-  if (selectionApi) {
-    await selectionApi.createChat();
-    return;
+// Re-query models whenever a catalog refresh is requested (e.g. New chat).
+watch(
+  () => chatModelsStore.refreshSeq,
+  () => {
+    void loadModels();
   }
-  await createAndSelectWorkspaceChat();
+);
+
+function handleProviderSettingsChanged(): void {
+  void loadModels();
+}
+
+// --- Selection (layout-provided, local fallback) ----------------------------
+function onNewChat(): Promise<string> {
+  return selectionApi ? selectionApi.createChat() : createAndSelectWorkspaceChat();
 }
 
 watch(conversationId, (id, previous) => {
@@ -2322,7 +2492,7 @@ async function performOrdinarySend(
     localizeError: (raw) => localizeWorkspaceError(raw, (key) => t(key)).text,
     model: selectedModel.value,
     // A command-derived turn (goal plan prompt) overrides the surface mode.
-    mode: options?.modeOverride ?? mode.value,
+    mode: options?.modeOverride ?? "chat",
     toolApprovalMode: toolApprovalMode.value,
     attachments: uploadedFiles,
     generatedImageReferences:
@@ -3040,22 +3210,35 @@ function openProviderSettings(): void {
   void router.push({ name: "system_setting_ai_provider" });
 }
 
-async function onRename(): Promise<void> {
-  if (!conversationId.value) return;
-  const next = await appPrompt(
-    t("workspaceChat.header.renamePrompt") || "Rename chat",
-    headerTitle.value ?? ""
+function headerRenameActivator(): HTMLElement | null {
+  // r3 G10: getCurrentInstance() is NULL inside a DOM event handler —
+  // capture the component proxy at SETUP time instead.
+  const el = surfaceRootEl;
+  return (
+    el?.querySelector<HTMLElement>(
+      '[data-testid="workspace-header-overflow"]'
+    ) ?? null
   );
-  if (!next || !next.trim()) return;
-  try {
-    await renameConversation({
-      conversationId: conversationId.value,
-      title: next.trim(),
-    });
-    await workspaceStore.bootstrap();
-  } catch {
-    // Non-fatal — the title stays unchanged.
-  }
+}
+
+const surfaceSetupInstance = getCurrentInstance();
+const surfaceRootEl: HTMLElement | null = (() => {
+  const el = surfaceSetupInstance?.proxy?.$el ?? null;
+  return el instanceof HTMLElement ? el : null;
+})();
+
+function onRename(): void {
+  if (!conversationId.value) return;
+  // Chat-titles FR-06: shared dialog/composable; explicit save errors stay
+  // visible and the draft is preserved on failure (no silent swallow).
+  // F14: focus returns to the STABLE overflow activator (the menu item
+  // closes with the dialog and is never a valid target).
+  const overflowActivator = headerRenameActivator();
+  headerRename.openRename(
+    conversationId.value,
+    headerTitle.value ?? "",
+    overflowActivator
+  );
 }
 
 async function onCompact(): Promise<void> {
@@ -3431,12 +3614,6 @@ async function onLegacyPlanAction(
       // must not suppress a future decision for this conversation.
       clearPlanContinuationDismissal(targetConversationId);
       pendingPlanContinuation.value = null;
-      // R8 P2 (FR-PLN-006, journey 17.3 step 5): the decision succeeded and
-      // the chat-mode continuation was accepted — return the selector to
-      // chat mode too. Only the continuation payload carried
-      // modeOverride:"chat" before, so a user who had flipped the selector
-      // to plan stayed in plan mode for the next manual send.
-      mode.value = "chat";
     } else {
       refreshPendingPlanContinuation();
       if (!planDecisionError.value) {
@@ -3520,10 +3697,6 @@ async function onRetryPlanContinuation(): Promise<void> {
       // future NEW decision must resurface without a stale suppression.
       clearPlanContinuationDismissal(intent.conversationId);
       pendingPlanContinuation.value = null;
-      // R9 B03 (FR-PLN-006): apply the SAME mode transition as the initial
-      // approval — the chat-mode continuation was accepted, so the selector
-      // returns to chat mode for the next manual send.
-      mode.value = "chat";
     } else {
       refreshPendingPlanContinuation();
     }
@@ -3556,16 +3729,26 @@ function onDismissPlanContinuation(): void {
 
 // --- Inspector bridge (design §12.3) -----------------------------------------
 // chatWorkspace keeps the persisted open/tab/width preferences; the typed
-// appInspector store owns target identity and route lifetime.
+// appInspector store owns target identity and route lifetime. The bridge
+// re-opens the target whenever the persisted OPEN state, the selected
+// conversation, or the SELECTED TAB changes (Review full plan → Activity):
+// the ChatInspectorAdapter already binds the tab preference reactively, but
+// re-issuing the typed open also refreshes appInspector.target so no stale
+// tab can ever sit behind an already-open inspector.
 watch(
-  [() => workspaceStore.inspectorOpen, conversationId],
+  [
+    () => workspaceStore.inspectorOpen,
+    () => workspaceStore.inspectorTab,
+    conversationId,
+  ],
   ([open]) => {
     if (open) {
       const target = inspector.target;
       const stale =
         !target ||
         target.kind !== "chat" ||
-        target.conversationId !== conversationId.value;
+        target.conversationId !== conversationId.value ||
+        target.tab !== workspaceStore.inspectorTab;
       if (stale) {
         inspector.open({
           kind: "chat",
@@ -3601,6 +3784,10 @@ onMounted(async () => {
   window.addEventListener(
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     onReasoningVisibilityChanged
+  );
+  window.addEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
   );
   unsubscribeStartAck = selectedStore.onStartAck(onEngineStartAck);
   unsubscribeLiveToolResult = selectedStore.onLiveToolResult((chunk) => {
@@ -3648,6 +3835,10 @@ onUnmounted(() => {
     AI_CHAT_REASONING_VISIBILITY_CHANGED_EVENT,
     onReasoningVisibilityChanged
   );
+  window.removeEventListener(
+    AI_PROVIDER_SETTINGS_CHANGED_EVENT,
+    handleProviderSettingsChanged
+  );
   unsubscribeStartAck?.();
   unsubscribeStartAck = null;
   unsubscribeLiveToolResult?.();
@@ -3679,6 +3870,10 @@ onUnmounted(() => {
   gap: 8px;
   padding: 0 12px 6px;
   flex-shrink: 0;
+}
+
+.chat-center__workspace-strip:empty {
+  display: none;
 }
 
 .chat-center__workspace-error {
@@ -3714,26 +3909,34 @@ onUnmounted(() => {
   padding-top: 6px;
 }
 
-.chat-center__history-toggle {
+.chat-center__toolbar-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  min-inline-size: 40px;
+  min-block-size: 40px;
+  padding: 0 4px;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--app-radius-control);
   background: transparent;
-  color: rgba(var(--v-theme-on-surface), 0.7);
+  color: var(--app-text-soft);
   cursor: pointer;
 }
 
-.chat-center__history-toggle:hover {
-  background: rgba(var(--v-theme-on-surface), 0.08);
+.chat-center__toolbar-button:hover {
+  background: var(--app-surface-variant);
+  color: var(--app-text);
 }
 
-.chat-center__history-toggle:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 1px;
+.chat-center__toolbar-button:focus-visible {
+  outline: 2px solid var(--app-focus);
+  outline-offset: -2px;
+}
+
+.chat-center__toolbar-button :deep(.ctx-badge--low) {
+  color: var(--app-text-soft);
+  background: var(--app-surface-variant);
+  border-color: var(--app-border);
 }
 
 .chat-center__recovery-detail {
@@ -3791,20 +3994,6 @@ onUnmounted(() => {
 .load-older:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.context-indicator {
-  border: none;
-  background: none;
-  padding: 0;
-  cursor: pointer;
-  margin-left: auto;
-}
-
-.context-indicator:focus-visible {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 2px;
-  border-radius: 999px;
 }
 
 .chat-center__tts-notice {

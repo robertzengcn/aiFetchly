@@ -33,6 +33,7 @@ const messageModuleStub = {
   ensureConnection: vi.fn(),
   read: vi.fn(),
   listByEmailService: vi.fn(),
+  readByIds: vi.fn(),
   markRead: vi.fn(),
 };
 // Approved-draft re-confirm path retires prior approvals in bulk before the
@@ -90,9 +91,9 @@ vi.mock("@/modules/EmailReceivedMessageModule", () => ({
     return messageModuleStub;
   },
 }));
-// G02: fetch_unread_emails uses EmailReceiveSyncService.syncUnread then loads
-// stored rows via listByEmailService. Mock the sync service so the fetch
-// integration test can drive the evidence-projection path without a mailbox.
+// G02 + review BUG-02: fetch_unread_emails uses EmailReceiveSyncService.syncUnread
+// then loads EXACTLY the fetched ids via readByIds. Mock the sync service so the
+// fetch integration test can drive the evidence-projection path without a mailbox.
 const syncServiceStub = {
   syncUnread: vi.fn(),
 };
@@ -1040,20 +1041,19 @@ describe("fetchUnreadEmails — summaries carry reply evidence (G02)", () => {
       fetched: 2,
       stored: 2,
       messageIds: [201, 202],
+      folder: "INBOX",
     });
-    messageModuleStub.listByEmailService.mockResolvedValue({
-      records: [
-        storedRow({
-          id: 201,
-          replyStatus: "not_started",
-          replyDetectedAt: new Date("2026-10-04T00:00:00Z"),
-          replyDetectionSource: "sent_search",
-          isAnswered: 1,
-          answeredFlagCheckedAt: new Date("2026-10-04T00:00:00Z"),
-        }),
-        storedRow({ id: 202, replyStatus: "not_started" }),
-      ],
-    });
+    messageModuleStub.readByIds.mockResolvedValue([
+      storedRow({
+        id: 201,
+        replyStatus: "not_started",
+        replyDetectedAt: new Date("2026-10-04T00:00:00Z"),
+        replyDetectionSource: "sent_search",
+        isAnswered: 1,
+        answeredFlagCheckedAt: new Date("2026-10-04T00:00:00Z"),
+      }),
+      storedRow({ id: 202, replyStatus: "not_started" }),
+    ]);
   });
 
   it("returns one evidence object per message, projection-correct", async () => {
@@ -1070,6 +1070,75 @@ describe("fetchUnreadEmails — summaries carry reply evidence (G02)", () => {
     expect(pos.replyEvidence.replyDetectionSource).toBe("sent_search");
     expect(legacy.replyEvidence.replied).toBeNull();
     expect(legacy.replyEvidence.answeredFlagObserved).toBe(false);
+    // Summaries are restricted to the fetched ids (BUG-02).
+    expect(messageModuleStub.readByIds).toHaveBeenCalledWith([201, 202]);
+    expect(result.folder).toBe("INBOX");
+  });
+
+  it("returns an empty message list on a zero-result fetch (BUG-02)", async () => {
+    syncServiceStub.syncUnread.mockResolvedValue({
+      fetched: 0,
+      stored: 0,
+      messageIds: [],
+      folder: "INBOX",
+    });
+    const result = await fetchUnreadEmails({
+      email_service_id: 10,
+      limit: 10,
+      since: "2026-11-01T00:00:00Z",
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.fetched).toBe(0);
+    expect(result.messages).toEqual([]);
+    expect(messageModuleStub.readByIds).not.toHaveBeenCalled();
+  });
+
+  it("passes an explicit folder override through sync and reports the scope (BUG-01)", async () => {
+    // The stub echoes the requested folder the way the real sync reports
+    // the folder it actually read.
+    syncServiceStub.syncUnread.mockImplementation(
+      async (
+        _emailServiceId: number,
+        options: { folder?: string }
+      ) => ({
+        fetched: 1,
+        stored: 1,
+        messageIds: [203],
+        folder: options.folder ?? "INBOX",
+      })
+    );
+    const result = await fetchUnreadEmails({
+      email_service_id: 10,
+      folder: "Receipts",
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(syncServiceStub.syncUnread).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({ folder: "Receipts" })
+    );
+    expect(result.folder).toBe("Receipts");
+  });
+
+  it("orders summaries by the fetched sequence, not by recency (BUG-02)", async () => {
+    // The provider fetched 202 before 201; the summary order must follow.
+    syncServiceStub.syncUnread.mockResolvedValue({
+      fetched: 2,
+      stored: 2,
+      messageIds: [202, 201],
+      folder: "INBOX",
+    });
+    const rowsById = new Map(
+      [201, 202].map((id) => [id, storedRow({ id, replyStatus: "not_started" })])
+    );
+    messageModuleStub.readByIds.mockImplementation(async (ids: number[]) =>
+      ids.map((id) => rowsById.get(id))
+    );
+    const result = await fetchUnreadEmails({ email_service_id: 10 });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.messages.map((message) => message.id)).toEqual([202, 201]);
   });
 });
 

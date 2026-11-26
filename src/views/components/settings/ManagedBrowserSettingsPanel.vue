@@ -700,6 +700,7 @@ async function persist(patch: {
   decisionRoute?: {
     mode?: "follow_chat" | "native_profile";
     chatDecisionModel?: string | null;
+    batchSubAgentModel?: string | null;
     nativeProfile?: {
       displayName: string;
       baseUrl: string;

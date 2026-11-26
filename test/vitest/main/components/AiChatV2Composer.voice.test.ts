@@ -66,9 +66,7 @@ const i18n = createI18n({
   },
 });
 
-// VTextarea stub mirrors v-model so we can read the draft via props, and
-// renders the named append-inner slot so the mic button (slot content) is in
-// the DOM and clickable.
+// VTextarea stub mirrors v-model and renders the classic microphone slot.
 const TextareaStub = defineComponent({
   name: "VTextarea",
   props: { modelValue: { type: String, default: "" } },
@@ -142,6 +140,14 @@ describe("AiChatV2Composer voice controls", () => {
   it("shows the mic button when voice input is enabled", () => {
     const wrapper = mountComposer({ voiceEnabled: true });
     expect(wrapper.find(".v2-composer__voice-button").exists()).toBe(true);
+  });
+
+  it("places the microphone in the workspace toolbar and keeps the classic input action", () => {
+    const workspace = mountComposer({ voiceEnabled: true, workspaceLayout: true });
+    expect(workspace.get(".v2-composer__actions").find('[data-testid="ai-chat-microphone"]').exists()).toBe(true);
+
+    const classic = mountComposer({ voiceEnabled: true });
+    expect(classic.get('[data-testid="composer-input"]').element.parentElement?.querySelector('[data-testid="ai-chat-microphone"]')).not.toBeNull();
   });
 
   it("keeps the mic button visible as a setup affordance when voice input is disabled", () => {
