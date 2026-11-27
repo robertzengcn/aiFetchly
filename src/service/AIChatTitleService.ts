@@ -18,6 +18,7 @@ import { SMALL_MODEL_ALIAS } from "@/service/aiProvider/SmallModelAlias";
 import { isAutoChatTitlesEnabled } from "@/config/aiChatTitlesSettings";
 import { currentTitlePolicyEpoch } from "@/service/aiChatTitle/AIChatTitlePolicyGate";
 import { log } from "@/modules/Logger";
+import { HttpResponseError } from "@/modules/lib/httpResponseError";
 
 /** Provider snapshot pinned for one dispatch (titles design §8.3). */
 export type ResolvedTitleProvider =
@@ -822,8 +823,11 @@ export class AIChatTitleService {
         this.recordFailure(code);
       }
       const message = err instanceof Error ? err.message : String(err);
+      const httpStatus = err instanceof HttpResponseError ? String(err.status) : "none";
+      const serverCode =
+        err instanceof HttpResponseError && err.serverCode ? err.serverCode : "none";
       log.warn(
-        `[ai-chat-title] title generation failed conv=${conversationId} code=${code}: ${message}`
+        `[ai-chat-title] title generation failed conv=${conversationId} code=${code} http=${httpStatus} serverCode=${serverCode}: ${message}`
       );
     } finally {
       // B24: bounded duration sample (last 50 dispatches).
